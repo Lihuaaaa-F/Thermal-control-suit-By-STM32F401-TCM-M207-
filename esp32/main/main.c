@@ -147,19 +147,14 @@ static void test_restart10(void)
     ESP_LOGI(TAG, "[TEST] S6 完成: 连续 10 次启动显示路径全部正常");
 }
 #elif CONFIG_EPAPER_TEST_MODE == 5
-/* ============ 接线发现模式(裸屏直连无示波器时的自动化穷举) ============
- * 前提: 面板 6 信号线接在这 6 个 devkit 引脚上但顺序未知(错位/颠倒场景)。
- * 阶段1: 每个候选 RST 引脚打复位脉冲,其余引脚上拉输入找 LOW 忙相 -> 定 RST/BUSY 对
- * 阶段2: 剩余 4 引脚的 24 种 CLK/MOSI/CS/DC 排列逐个发 PON,BUSY 出现忙相即命中
- * 全程无命中 => 电源级问题(VCC/GND/接触),只能人工处理 */
-#include "driver/spi_master.h"
-static const gpio_num_t WIRING[6] = {11, 12, 13, 14, 21, 39};   /* 原 CLK MOSI CS DC RST BUSY 位置 */
-static const char *WNAME[6] = {"CLK", "MOSI", "CS", "DC", "RST", "BUSY"};
-
-static bool busy_low_pulse(gpio_num_t busy, int ms)
+/* ============ 接线发现模式(全引脚版): 面板无示波器时的最后手段 ============
+ * 每个安全 GPIO 依次当复位候选打脉冲,其余全部引脚上拉输入监视忙相(开漏,忙=拉低)。
+ * 覆盖"信号线接到了任意引脚"的分支;禁区(19/20 USB、26-37 Flash/PSRAM、0/3/45/46 strap)不碰。
+ * 全扫描零应答 => 面板未上电(VCC/GND)或面板损坏,只能人工处理;有命中 => 按日志映射改 Kconfig */
+static bool busy_low_pulse(int gpio, int ms)
 {
     for (int i = 0; i < ms / 5; i++) {
-        if (gpio_get_level(busy) == 0) return true;   /* 开漏忙=拉低 */
+        if (gpio_get_level((gpio_num_t)gpio) == 0) return true;
         vTaskDelay(pdMS_TO_TICKS(5));
     }
     return false;
@@ -167,78 +162,31 @@ static bool busy_low_pulse(gpio_num_t busy, int ms)
 
 static void wire_discovery(void)
 {
-    /* 全候选拉高输入(除当前 RST 输出外) */
-    for (int i = 0; i < 6; i++) {
-        gpio_config_t io = { .pin_bit_mask = 1ULL << WIRING[i], .mode = GPIO_MODE_INPUT,
-                             .pull_up_en = GPIO_PULLUP_ENABLE };
-        gpio_config(&io);
+    static const int ALL[] = {1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,21,
+                              38,39,40,41,42,47,48};
+    const int NALL = (int)(sizeof(ALL) / sizeof(ALL[0]));
+    gpio_config_t in_up = { .mode = GPIO_MODE_INPUT, .pull_up_en = GPIO_PULLUP_ENABLE };
+    for (int i = 0; i < NALL; i++) {
+        in_up.pin_bit_mask = 1ULL << ALL[i];
+        gpio_config(&in_up);
     }
-    /* 阶段 1: 找 RST/BUSY 对 */
-    int rst_i = -1, busy_i = -1;
-    for (int r = 0; r < 6 && rst_i < 0; r++) {
-        gpio_set_pull_mode(WIRING[r], GPIO_FLOATING);
-        gpio_config_t io = { .pin_bit_mask = 1ULL << WIRING[r], .mode = GPIO_MODE_OUTPUT };
-        gpio_config(&io);
-        gpio_set_level(WIRING[r], 1); vTaskDelay(pdMS_TO_TICKS(200));
-        gpio_set_level(WIRING[r], 0); vTaskDelay(pdMS_TO_TICKS(2));
-        gpio_set_level(WIRING[r], 1);
-        for (int b = 0; b < 6; b++) {
+    for (int r = 0; r < NALL; r++) {
+        gpio_config_t out = { .pin_bit_mask = 1ULL << ALL[r], .mode = GPIO_MODE_OUTPUT };
+        gpio_config(&out);
+        gpio_set_level((gpio_num_t)ALL[r], 1); vTaskDelay(pdMS_TO_TICKS(50));
+        gpio_set_level((gpio_num_t)ALL[r], 0); vTaskDelay(pdMS_TO_TICKS(2));
+        gpio_set_level((gpio_num_t)ALL[r], 1);
+        for (int b = 0; b < NALL; b++) {
             if (b == r) continue;
-            if (busy_low_pulse(WIRING[b], 1200)) {
-                rst_i = r; busy_i = b;
-                ESP_LOGI(TAG, "[DISCOVER] RST=GPIO%d(%s) BUSY=GPIO%d(位置%s)",
-                         WIRING[r], WNAME[r], WIRING[b], WNAME[b]);
-                break;
+            if (busy_low_pulse(ALL[b], 1200)) {
+                ESP_LOGW(TAG, "[DISCOVER] 命中: RST=GPIO%d BUSY=GPIO%d —— 据此改 Kconfig 默认引脚并人工核对其余 4 线", ALL[r], ALL[b]);
+                return;
             }
         }
-        if (rst_i < 0) {
-            gpio_set_pull_mode(WIRING[r], GPIO_PULLUP_ONLY);
-            gpio_config_t io = { .pin_bit_mask = 1ULL << WIRING[r], .mode = GPIO_MODE_INPUT,
-                                 .pull_up_en = GPIO_PULLUP_ENABLE };
-            gpio_config(&io);
-        }
+        in_up.pin_bit_mask = 1ULL << ALL[r];
+        gpio_config(&in_up);   /* 还原输入上拉,试下一个候选 */
     }
-    if (rst_i < 0) {
-        ESP_LOGW(TAG, "[DISCOVER] 阶段1 无命中: 6 引脚上均无复位应答 => 电源级问题(VCC/GND 反接/未接/接触不良),需人工核线");
-        return;
-    }
-    /* 阶段 2: 4 根线全排列找 SPI */
-    int rest[4], n = 0;
-    for (int i = 0; i < 6; i++) if (i != rst_i && i != busy_i) rest[n++] = i;
-    int perm[4][4] = {{0,1,2,3},{0,1,3,2},{0,2,1,3},{0,2,3,1},{0,3,1,2},{0,3,2,1},
-                      {1,0,2,3},{1,0,3,2},{1,2,0,3},{1,2,3,0},{1,3,0,2},{1,3,2,0},
-                      {2,0,1,3},{2,0,3,1},{2,1,0,3},{2,1,3,0},{2,3,0,1},{2,3,1,0},
-                      {3,0,1,2},{3,0,2,1},{3,1,0,2},{3,1,2,0},{3,2,0,1},{3,2,1,0}};
-    spi_bus_config_t bus; spi_device_handle_t dev = NULL; int found = -1;
-    for (int p = 0; p < 24 && found < 0; p++) {
-        int clk = rest[perm[p][0]], mosi = rest[perm[p][1]], cs = rest[perm[p][2]], dc = rest[perm[p][3]];
-        memset(&bus, 0, sizeof(bus));
-        bus.mosi_io_num = WIRING[mosi]; bus.sclk_io_num = WIRING[clk];
-        bus.quadwp_io_num = -1; bus.quadhd_io_num = -1;
-        if (spi_bus_initialize(SPI2_HOST, &bus, SPI_DMA_CH_AUTO) != ESP_OK) continue;
-        spi_device_interface_config_t d = { .clock_speed_hz = 1000000, .mode = 0, .spics_io_num = -1, .queue_size = 2 };
-        if (spi_bus_add_device(SPI2_HOST, &d, &dev) == ESP_OK) {
-            gpio_set_direction(WIRING[cs], GPIO_MODE_OUTPUT); gpio_set_level(WIRING[cs], 1);
-            gpio_set_direction(WIRING[dc], GPIO_MODE_OUTPUT); gpio_set_level(WIRING[dc], 0);
-            uint8_t pon = 0x04;
-            spi_transaction_t t1 = { .length = 8, .tx_buffer = &pon };
-            gpio_set_level(WIRING[cs], 0);
-            if (spi_device_polling_transmit(dev, &t1) == ESP_OK) {}
-            gpio_set_level(WIRING[cs], 1);
-            if (busy_low_pulse(WIRING[busy_i], 1200)) {
-                found = p;
-                ESP_LOGI(TAG, "[DISCOVER] 命中: CLK=GPIO%d MOSI=GPIO%d CS=GPIO%d DC=GPIO%d RST=GPIO%d BUSY=GPIO%d",
-                         WIRING[clk], WIRING[mosi], WIRING[cs], WIRING[dc], WIRING[rst_i], WIRING[busy_i]);
-            }
-            spi_bus_remove_device(dev); dev = NULL;
-        }
-        spi_bus_free(SPI2_HOST);
-    }
-    if (found < 0) {
-        ESP_LOGW(TAG, "[DISCOVER] 阶段2 无命中: RST/BUSY 对存在但 24 种 SPI 排列均无应答 => 查 DIN/CLK 接触或芯片供电");
-    } else {
-        ESP_LOGI(TAG, "[DISCOVER] 完成上方映射后: 改 Kconfig 默认引脚 -> 重建 -> TEST_MODE=1 过 S1");
-    }
+    ESP_LOGW(TAG, "[DISCOVER] 全引脚扫描(%d 候选×1.2s)零应答 => 面板未上电(VCC/GND 反接/未插实)或面板损坏,只能人工核线", NALL);
 }
 #endif
 

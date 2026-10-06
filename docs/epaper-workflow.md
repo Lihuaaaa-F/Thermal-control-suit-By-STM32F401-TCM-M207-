@@ -1,6 +1,10 @@
-# 墨水屏驱动移植工作流 v1.2（已审核锁定）
+# 墨水屏驱动移植工作流 v1.3（已审核锁定）
 
-> 状态：**锁定，执行中**（2026-10-07）。v1.2 自审修正三缺陷：S1 改最小命令交换（防 BUSY 误判）、首帧指标重定义（防与全刷 15s 矛盾）、S5 重定义（官方驱动无局部刷）。决策记录见 §7，进度见 §8。
+> 状态：**执行中，S0 起硬件阻塞**（2026-10-07）。v1.3 = 真板诊断轮：
+> ①撤回"屏已接好"误判（S1 首次 PASS 系悬空引脚噪声，判别实验证实 BUSY 无任何驱动源）；
+> ②实证 BUSY 需上拉（裸屏直连无转接板上拉，代码已启用内部上拉，busy=低/空闲=高 开漏语义）；
+> ③S2-S6 代码全部完成且逐模式编译通过，唯刷新忙相验证被 S0 阻塞。
+> **解除阻塞的唯一动作：人工核对 8 线接线（重点 VCC/GND 与 FPC 引脚顺序）**。
 > 本文件是 S0-S6 全程的执行依据；改流程先改这里。
 
 ## 1. 对象与路线
@@ -69,12 +73,24 @@ io 层     epaper.c：SPI 传输 / 手动 CS / DC / RST / BUSY 等待(带超时)
 
 ## 8. 执行进度
 
-- [x] `feature/epaper-driver` 分支创建 + 骨架 commit（db81537）
-- [x] porting-ref 源码拉取核实（bc 与 b_V4 双蓝本，双平面签名确认）
-- [x] 本工作流文档（v1.2：自审修正 D1/D2/D3 三缺陷）
-- [x] 双平面 API + io 层命令原语(cmd/data) + S1 自检(PON/POF 版)
-- [x] TEST_MODE 测试框架
-- [x] **S0 门 PASS**（屏已接线，八线全通——由 S1 证据反证）
-- [x] **S1 门 PASS**（2026-10-07 真板：PON→BUSY 拉高回落→POF，三色屏面板活+命令通路通）
-- [ ] S2：移植 Init/Clear/Display/Sleep 命令序列（下一单元）
-- [ ] S3：三色条首屏
+- [x] `feature/epaper-driver` 分支 + 骨架 commit（db81537）
+- [x] porting-ref 双蓝本拉取核实（bc / b_V4，双平面签名确认）
+- [x] 工作流 v1.2（三缺陷修正）→ v1.3（诊断轮修正）
+- [x] chip 层 uc8151_bc.c：Init/Clear/Display/Sleep 全序列移植（busy 全带超时）
+- [x] paint 层 epaper_paint.c：双平面绘制 + 七段数字渲染（免字库）
+- [x] S6 代码：display_task + 队列 + change-driven(<0.5°C 跳过) + 温度样例
+- [x] 测试框架：TEST_MODE 0-6 全模式逐个编译通过（0/2/3/4/6 五连 PASS）
+- [x] BUSY 硬件事实定论：开漏需上拉（判别实验：下拉 0/100、上拉 100/100 钉死）→ 代码已启用内部上拉
+- [x] 诊断记录：复位/PON/PSR/POF 后 BUSY 零跳变、刷新 30s 无忙相 → 命令未达芯片
+- [ ] **S0 硬件静态——未过（阻塞项）**：BUSY 无驱动源 = 屏未通电或关键线未通；需人工核对 8 线接线（重点：VCC/GND 是否接反、FPC 引脚顺序 vs epaper.h 接线表）
+- [ ] S1-S6 门禁验证：等 S0 解除后按 §3 顺序执行（命令已全部就绪）
+
+## 9. 解除阻塞后的一条龙命令
+
+```bash
+source ~/.claude/skills/embedded-dev-loop/platforms/esp32/scripts/activate_idf.sh
+cd /d/Espressif/ws/tcs/esp32
+# S1: 总线活化(见 BUSY 忙相轨迹即通)
+echo "CONFIG_EPAPER_TEST_MODE=1" >> sdkconfig && bash ~/.claude/skills/embedded-dev-loop/platforms/esp32/scripts/esp_loop.sh all && sed -i '/CONFIG_EPAPER_TEST_MODE=1/d' sdkconfig
+# S2+S3+S4 同理切 TEST_MODE=3/2/4(4 需先 menuconfig 级把 SPI_HZ 提 4.5M)
+```

@@ -1,11 +1,21 @@
 menu "E-Paper Display (Waveshare 2.9\" B 三色, UC8151)"
 
     config EPAPER_TEST_MODE
-        int "Test mode: 0=正常app, 1=S1总线活化, 2=S3三色条, 3=纯白"
+        int "Test mode: 0=正常app(display_task), 1=S1总线, 2=S3三色条, 3=S2白屏+睡眠唤醒, 4=S4老化N次, 6=S6重启x10"
         default 0
-        range 0 3
+        range 0 6
         help
-            工作流门禁测试载体(docs/epaper-workflow.md §4)。menuconfig 切换重编译即换测试。
+            工作流门禁测试载体(docs/epaper-workflow.md §4)。
+
+    config EPAPER_SPI_HZ
+        int "SPI clock (Hz): 2000000 首屏求稳 / 4500000 S4 验收"
+        default 2000000
+        range 1000000 4800000
+
+    config EPAPER_AGING_COUNT
+        int "TEST_MODE=4 老化循环次数"
+        default 10
+        range 1 2000
 
     config EPAPER_SCLK_GPIO
         int "SPI SCLK (CLK) GPIO"

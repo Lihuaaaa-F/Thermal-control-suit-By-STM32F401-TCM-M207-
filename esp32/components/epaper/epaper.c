@@ -75,7 +75,29 @@ esp_err_t epaper_init(void)
     return ESP_OK;
 }
 
-/* S1 门自检: 复位脉冲(Waveshare 时序 高10ms→低10ms→高)后观察 BUSY,上限 3.2s */
+/* ---- UC8151 命令原语(io 层): 手动 CS 跨事务,DC 区分命令/数据 ---- */
+static esp_err_t uc8151_write_cmd(uint8_t cmd)
+{
+    spi_transaction_t t = { .length = 8, .tx_buffer = &cmd };
+    gpio_set_level(CONFIG_EPAPER_CS_GPIO, 0);
+    gpio_set_level(CONFIG_EPAPER_DC_GPIO, 0);
+    esp_err_t err = spi_device_polling_transmit(s_spi, &t);
+    gpio_set_level(CONFIG_EPAPER_CS_GPIO, 1);
+    return err;
+}
+
+static esp_err_t uc8151_write_data(uint8_t data)
+{
+    spi_transaction_t t = { .length = 8, .tx_buffer = &data };
+    gpio_set_level(CONFIG_EPAPER_CS_GPIO, 0);
+    gpio_set_level(CONFIG_EPAPER_DC_GPIO, 1);
+    esp_err_t err = spi_device_polling_transmit(s_spi, &t);
+    gpio_set_level(CONFIG_EPAPER_CS_GPIO, 1);
+    return err;
+}
+
+/* S1 门自检(v1.2): 复位脉冲后发最小命令交换 PON(0x04)→等 BUSY 拉高回落→POF(0x02)。
+ * 只复位不发命令会误判——UC8151 的 BUSY 需 PON 才拉起(工作流 D1 修正) */
 esp_err_t epaper_selftest_bus(epaper_bus_test_t *out)
 {
     if (!out) {
@@ -90,6 +112,13 @@ esp_err_t epaper_selftest_bus(epaper_bus_test_t *out)
     gpio_set_level(CONFIG_EPAPER_RST_GPIO, 0);
     vTaskDelay(pdMS_TO_TICKS(10));
     gpio_set_level(CONFIG_EPAPER_RST_GPIO, 1);
+    vTaskDelay(pdMS_TO_TICKS(10));
+
+    esp_err_t err = uc8151_write_cmd(0x04);   /* PON: power on */
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "[TEST] PON 发送失败: %s", esp_err_to_name(err));
+        return err;
+    }
 
     bool saw_high = false, ready_after_high = false;
     for (int i = 0; i < 320; i++) {   /* 320 x 10ms = 3.2s */
@@ -101,6 +130,7 @@ esp_err_t epaper_selftest_bus(epaper_bus_test_t *out)
         }
         vTaskDelay(pdMS_TO_TICKS(10));
     }
+    uc8151_write_cmd(0x02);   /* POF: power off(无论结果都收尾,不留带电态) */
 
     if (ready_after_high) {
         *out = EPAPER_BUS_OK;
@@ -109,9 +139,9 @@ esp_err_t epaper_selftest_bus(epaper_bus_test_t *out)
     } else {
         *out = EPAPER_BUS_NO_ACTIVITY;
     }
-    ESP_LOGI(TAG, "[TEST] S1 bus selftest: %s",
-             *out == EPAPER_BUS_OK ? "OK(面板活)" :
-             *out == EPAPER_BUS_STUCK_BUSY ? "STUCK_BUSY(3s不回落,查接线)" : "NO_ACTIVITY(未接线/无响应)");
+    ESP_LOGI(TAG, "[TEST] S1 bus selftest(PON/POF): %s",
+             *out == EPAPER_BUS_OK ? "OK(面板活+命令通)" :
+             *out == EPAPER_BUS_STUCK_BUSY ? "STUCK_BUSY(3s不回落,查接线)" : "NO_ACTIVITY(芯片对命令零响应=未接/坏)");
     return ESP_OK;
 }
 

@@ -1,15 +1,19 @@
-# 墨水屏驱动移植工作流 v1.3（已审核锁定）
+# 墨水屏驱动移植工作流 v1.4（已审核锁定）
 
-> 状态：**执行中，S0 起硬件阻塞**（2026-10-07）。v1.3 = 真板诊断轮：
+> 状态：**执行中，S0 起硬件阻塞**（2026-10-07）。v1.4 = 规格书核验轮：
 > ①撤回"屏已接好"误判（S1 首次 PASS 系悬空引脚噪声，判别实验证实 BUSY 无任何驱动源）；
-> ②实证 BUSY 需上拉（裸屏直连无转接板上拉，代码已启用内部上拉，busy=低/空闲=高 开漏语义）；
-> ③S2-S6 代码全部完成且逐模式编译通过，唯刷新忙相验证被 S0 阻塞。
-> **解除阻塞的唯一动作：人工核对 8 线接线（重点 VCC/GND 与 FPC 引脚顺序）**。
+> ②实证 BUSY 需上拉（busy=低/空闲=高 开漏语义，代码已启用内部上拉）；
+> ③S2-S6 代码全部完成且逐模式编译通过，唯刷新忙相验证被 S0 阻塞；
+> ④**规格书核验（Rev3.1, UC8151D，PDF 已存 porting-ref/）：裸屏 FPC 为 24 脚，接口脚 9-14、
+>   电源 15-17、升压脚(2/3/5/20-24)外置——旧"8 脚 FPC"接线认知作废**；BUSY_N 低有效、
+>   BS=L 选 4 线 SPI、写 SPI 上限 20MHz，全部与现有代码吻合。
+> **解除阻塞路径：docs/wiring-check.md 第⓪步先判明手上是模块还是裸屏；裸屏无驱动板则需补购 Module (B)/Driver HAT**。
 > 本文件是 S0-S6 全程的执行依据；改流程先改这里。
 
 ## 1. 对象与路线
 
-- **屏**：微雪 WFT0290CZ10 = 2.9" (B) **红/黑/白三色**裸屏，296×128，SPI，UC8151 类控制器（GDEH029Z13 等效），[官方页](https://www.waveshare.com/2.9inch-e-paper-b.htm)
+- **屏**：微雪 WFT0290CZ10 = 2.9" (B) **红/黑/白三色**裸屏，296×128，SPI，**UC8151D**（规格书 Rev3.1 已核，PDF 存 porting-ref/），[官方页](https://www.waveshare.com/2.9inch-e-paper-b.htm)
+- **裸屏物理事实**（v1.4 规格书核验）：FPC **24 脚**；MCU 接口脚 = 8(BS→GND)/9(BUSY_N)/10(RST_N)/11(DC)/12(CSB)/13(SCL)/14(SDA)，电源 = 15(VDDIO)/16(VCI)/17(GND)；升压引脚(2 GDR/3 RESE/5 VDHR/20-24 高压轨)外置在驱动板上 → **裸屏必须经含升压电路的 Module (B)/Driver HAT 接入；8 线接线表指驱动板排针，不是 FPC 脚序**
 - **蓝本**（已拉取核实，存 `esp32/components/epaper/porting-ref/`）：
   - `EPD_2in9bc.c/h` —— 经典 B 屏（API：`Init/Clear/Display(blackimage, ryimage)/Sleep`，**双平面签名已确认**）
   - `EPD_2in9b_V4.c/h` —— B 屏 V4 版（额外有 `Init_Fast/Clear_Fast/Display_Fast`）
@@ -75,7 +79,7 @@ io 层     epaper.c：SPI 传输 / 手动 CS / DC / RST / BUSY 等待(带超时)
 
 - [x] `feature/epaper-driver` 分支 + 骨架 commit（db81537）
 - [x] porting-ref 双蓝本拉取核实（bc / b_V4，双平面签名确认）
-- [x] 工作流 v1.2（三缺陷修正）→ v1.3（诊断轮修正）
+- [x] 工作流 v1.2（三缺陷修正）→ v1.3（诊断轮修正）→ v1.4（规格书核验轮）
 - [x] chip 层 uc8151_bc.c：Init/Clear/Display/Sleep 全序列移植（busy 全带超时）
 - [x] paint 层 epaper_paint.c：双平面绘制 + 七段数字渲染（免字库）
 - [x] S6 代码：display_task + 队列 + change-driven(<0.5°C 跳过) + 温度样例
@@ -83,12 +87,13 @@ io 层     epaper.c：SPI 传输 / 手动 CS / DC / RST / BUSY 等待(带超时)
 - [x] BUSY 硬件事实定论：开漏需上拉（判别实验：下拉 0/100、上拉 100/100 钉死）→ 代码已启用内部上拉
 - [x] 诊断记录：复位/PON/PSR/POF 后 BUSY 零跳变、刷新 30s 无忙相 → 命令未达芯片
 - [x] 接线发现模式（TEST_MODE=5）：RST 六候选×复位探测全无应答 → **坐实电源级问题**（VCC/GND 反接/未接实/接触不良），非信号线错位；该模式留作核线后的复测工具
-- [ ] **S0 硬件静态——未过（阻塞项）**：BUSY 无驱动源 = 屏未通电或关键线未通；需人工核对 8 线接线（重点：VCC/GND 是否接反、FPC 引脚顺序 vs epaper.h 接线表）
+- [x] 规格书核验（v1.4）：2.9(B) 裸屏 = **24 脚 FPC + UC8151D**，升压电路外置；旧"8 脚 FPC 圆点=1 脚"认知作废（1 脚实为 NC）；规格书 PDF 已存 porting-ref/
+- [ ] **S0 硬件静态——未过（阻塞项）**：BUSY 无驱动源。按 docs/wiring-check.md 第⓪步判明单元：模块/驱动板形态 → ①②③核线后复测；纯裸屏 → 补购 Module (B) 或 Driver HAT 后再核线
 - [ ] S1-S6 门禁验证：等 S0 解除后按 §3 顺序执行（命令已全部就绪）
 
 ## 9. 解除阻塞后的一条龙命令
 
-**接线核对完成后（断电操作!）：VCC→3V3、GND、DIN→11、CLK→12、CS→13、DC→14、RST→21、BUSY→39；FPC 圆点=1 脚方向对照 epaper.h。然后：**
+**前提（断电操作!）：按 docs/wiring-check.md 第⓪步确认是"模块/裸屏+驱动板"形态（纯裸屏无法杜邦线直连，先补驱动板）；排针 VCC→3V3、GND、DIN→11、CLK→12、CS→13、DC→14、RST→21、BUSY→39。然后：**
 
 ```bash
 source ~/.claude/skills/embedded-dev-loop/platforms/esp32/scripts/activate_idf.sh

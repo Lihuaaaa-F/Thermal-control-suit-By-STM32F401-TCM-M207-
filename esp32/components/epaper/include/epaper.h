@@ -5,7 +5,9 @@
  * 三色屏物理: 全刷 ~15s; 黑白局部 ~1.8s(仅黑白内容); 无 0.3s 快刷。
  * 感知性能靠 app 层 change-driven"少刷"策略 —— docs/epaper-workflow.md §6
  *
- * 接线 8 线: VCC->3V3(勿接5V) | GND | DIN->GPIO11 | CLK->GPIO12 | CS->GPIO13
+ * 接线 8 线(指模块/驱动板排针; 裸屏 FPC 实为 24 脚须经含升压电路的驱动板,
+ *           见 porting-ref/2.9inch-e-paper-b-v3-specification.pdf):
+ *           VCC->3V3(勿接5V) | GND | DIN->GPIO11 | CLK->GPIO12 | CS->GPIO13
  *           DC->GPIO14 | RST->GPIO21 | BUSY->GPIO39 (Kconfig 可改)
  */
 #include <stdint.h>

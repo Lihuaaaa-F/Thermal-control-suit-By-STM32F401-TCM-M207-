@@ -8,7 +8,9 @@
 
 - **模块版**（2.9inch e-Paper Module (B)）：屏贴在一块小 PCB 上，板边一排 **8 根 2.54mm 排针**，丝印 VCC GND DIN CLK CS DC RST BUSY → 走 ①②③
 - **裸屏 + 驱动板**：屏是独立的，另有一块含升压电路的转接/驱动板 → 接好驱动板后走 ①②③
-- **只有裸屏**（2.9inch e-Paper (B)，型号 WFT0290CZ10）：仅一条 0.5mm 24 脚 FPC 金手指、无任何 PCB → **停止核线**。升压前级（GDR/RESE/VDHR/VGH/VGL/VDL/VCOM 的产生电路）在驱动板上，杜邦线无法替代，需购 Module (B) 或 Driver HAT（微雪产品页原话：raw display without driver board, recommends Module (B) or Driver HAT）
+- **只有裸屏**（2.9inch e-Paper (B)，型号 WFT0290CZ10）：仅一条 0.5mm 24 脚 FPC 金手指、无任何 PCB → **停止核线**。升压前级（GDR/RESE/VDHR/VGH/VGL/VDL/VCOM 的产生电路）在驱动板上，杜邦线无法替代，需配驱动板（微雪产品页原话：raw display without driver board, recommends Module (B) or Driver HAT）。购置指引（两款均已到官方页核实）：
+  - **首选：2.9inch e-Paper Module (B)** —— 屏已贴在驱动板上，8 针排针信号序 **VCC GND DIN CLK CS DC RST BUSY 与本工程 Kconfig 映射逐字相同**，板载电平转换、3.3V 兼容、随附 8Pin 线，**到手即插即用，零代码改动**；现裸屏留作备件
+  - **备选：Universal e-Paper Driver HAT**（官方支持表含 2.9(B) 裸屏，经转接板 + GH1.25 9P 线接入，屏不浪费）——注意它比模块多一根 **PWR 电源使能脚**，需按其 wiki 使能供电（或在本工程 Kconfig 增配一个 GPIO），接入成本略高
 - 分不清：数金手指/排针数量，**8 = 模块形态可用，24 = 裸屏**
 
 ## ① 万用表蜂鸣档：电源通路（模块形态最可能命中）

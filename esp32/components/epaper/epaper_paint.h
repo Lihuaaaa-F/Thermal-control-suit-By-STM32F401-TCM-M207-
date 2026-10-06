@@ -6,7 +6,7 @@
 
 #define PAINT_W 128
 #define PAINT_H 296
-#define PAINE_STRIDE (PAINT_W / 8)
+#define PAINT_STRIDE (PAINT_W / 8)
 
 void paint_fill_rect(uint8_t *plane, int x, int y, int w, int h, bool ink);
 void paint_clear(uint8_t *plane, bool white);        /* white=true 全 0xFF */

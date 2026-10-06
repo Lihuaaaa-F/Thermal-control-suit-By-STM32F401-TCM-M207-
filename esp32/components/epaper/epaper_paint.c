@@ -16,15 +16,15 @@ void paint_fill_rect(uint8_t *plane, int x, int y, int w, int h, bool ink)
         for (int xx = x; xx < x + w; xx++) {
             if (xx < 0 || xx >= PAINT_W) continue;
             uint8_t mask = 0x80 >> (xx & 7);
-            if (ink) plane[yy * PAINE_STRIDE + (xx >> 3)] &= ~mask;   /* 0=墨 */
-            else     plane[yy * PAINE_STRIDE + (xx >> 3)] |= mask;    /* 1=白 */
+            if (ink) plane[yy * PAINT_STRIDE + (xx >> 3)] &= ~mask;   /* 0=墨 */
+            else     plane[yy * PAINT_STRIDE + (xx >> 3)] |= mask;    /* 1=白 */
         }
     }
 }
 
 void paint_clear(uint8_t *plane, bool white)
 {
-    for (int i = 0; i < PAINT_H * PAINE_STRIDE; i++) {
+    for (int i = 0; i < PAINT_H * PAINT_STRIDE; i++) {
         plane[i] = white ? 0xFF : 0x00;
     }
 }

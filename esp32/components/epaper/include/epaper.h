@@ -26,7 +26,7 @@ typedef enum {
 } epaper_bus_test_t;
 esp_err_t epaper_selftest_bus(epaper_bus_test_t *out);
 
-/* ---- chip 层桩(S2 移植后生效, 当前返回 ESP_ERR_NOT_SUPPORTED) ---- */
+/* ---- 刷屏 API(chip 层 uc8151_bc.c 已实现;屏幕未通电时将以超时/无忙相错误呈现) ---- */
 esp_err_t epaper_clear(void);   /* 全白 */
 /* 三色全刷 ~15s: black_plane/red_plane 各 EPAPER_PLANE_BYTES, 1bit/像素 */
 esp_err_t epaper_draw_full(const uint8_t *black_plane, const uint8_t *red_plane);

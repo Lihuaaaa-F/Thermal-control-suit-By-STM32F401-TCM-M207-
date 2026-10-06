@@ -1,0 +1,30 @@
+menu "E-Paper Display (Waveshare 2.9\" V2, UC8151)"
+
+    config EPAPER_SCLK_GPIO
+        int "SPI SCLK (CLK) GPIO"
+        default 12
+        help
+            红线避开: GPIO33-37(Octal PSRAM)/26-32(Flash)/19,20(USB)/0,3,45,46(strap)。
+            GPIO1-10 预留给 ADC1(未来 NTC 测温),数字外设走 11-21 区。
+
+    config EPAPER_MOSI_GPIO
+        int "SPI MOSI (DIN) GPIO"
+        default 11
+
+    config EPAPER_CS_GPIO
+        int "SPI CS GPIO"
+        default 13
+
+    config EPAPER_DC_GPIO
+        int "Data/Command (DC) GPIO"
+        default 14
+
+    config EPAPER_RST_GPIO
+        int "Reset (RST) GPIO"
+        default 21
+
+    config EPAPER_BUSY_GPIO
+        int "Busy GPIO(输入)"
+        default 39
+
+endmenu

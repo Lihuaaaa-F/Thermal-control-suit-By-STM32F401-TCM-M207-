@@ -88,10 +88,18 @@ io 层     epaper.c：SPI 传输 / 手动 CS / DC / RST / BUSY 等待(带超时)
 
 ## 9. 解除阻塞后的一条龙命令
 
+**接线核对完成后（断电操作!）：VCC→3V3、GND、DIN→11、CLK→12、CS→13、DC→14、RST→21、BUSY→39；FPC 圆点=1 脚方向对照 epaper.h。然后：**
+
 ```bash
 source ~/.claude/skills/embedded-dev-loop/platforms/esp32/scripts/activate_idf.sh
 cd /d/Espressif/ws/tcs/esp32
-# S1: 总线活化(见 BUSY 忙相轨迹即通)
-echo "CONFIG_EPAPER_TEST_MODE=1" >> sdkconfig && bash ~/.claude/skills/embedded-dev-loop/platforms/esp32/scripts/esp_loop.sh all && sed -i '/CONFIG_EPAPER_TEST_MODE=1/d' sdkconfig
-# S2+S3+S4 同理切 TEST_MODE=3/2/4(4 需先 menuconfig 级把 SPI_HZ 提 4.5M)
+
+# 第一步: 复测接线(出现 [DISCOVER] 命中 = 接线找回;仍无命中 = 还有线没通)
+echo "CONFIG_EPAPER_TEST_MODE=5" >> sdkconfig
+bash ~/.claude/skills/embedded-dev-loop/platforms/esp32/scripts/esp_loop.sh all
+sed -i '/CONFIG_EPAPER_TEST_MODE=5/d' sdkconfig
+
+# 第二步: 一条命令连跑全部门禁(S1→S2→S3→S4→S6,失败即停)
+bash run_gates.sh
 ```
+发现模式命中后若引脚映射与默认不同，把命中日志里的 6 个 GPIO 改进 components/epaper/Kconfig 默认值再跑 run_gates.sh。

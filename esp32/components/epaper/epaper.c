@@ -1,6 +1,8 @@
 #include "epaper.h"
 #include "sdkconfig.h"
 #include "esp_log.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
 #include "driver/spi_master.h"
 #include "driver/gpio.h"
 
@@ -20,17 +22,17 @@ esp_err_t epaper_init(void)
         .quadwp_io_num = -1,
         .quadhd_io_num = -1,
     };
-    /* 已经被别的外设占用时(INVALID_STATE)视为可复用,不视为错误 */
+    /* 已被别的外设占用(INVALID_STATE)视为可复用 */
     esp_err_t err = spi_bus_initialize(SPI2_HOST, &bus, SPI_DMA_CH_AUTO);
     if (err != ESP_OK && err != ESP_ERR_INVALID_STATE) {
         ESP_LOGE(TAG, "spi_bus_initialize: %s", esp_err_to_name(err));
         return err;
     }
 
-    /* CS 用手动 GPIO 而非硬件片选: UC8151 一次操作 = "DC=0 发命令 + DC=1 发数据"
-     * 的多字节序列,CS 须跨事务保持低;硬件 CS 每事务结束自动拉高,会把序列截断 */
+    /* CS 用手动 GPIO 而非硬件片选: UC8151 一次操作 = "DC=0 命令 + DC=1 数据"
+     * 多字节序列,CS 须跨事务保持低;硬件 CS 每事务结束自动拉高会截断序列 */
     spi_device_interface_config_t dev = {
-        .clock_speed_hz = 2 * 1000 * 1000,   /* 首屏走 2M 求稳(UC8151 上限约 4.5M),点亮后再上调 */
+        .clock_speed_hz = 2 * 1000 * 1000,   /* 首屏 2M 求稳,UC8151 规格上限约 4.5M,S4 门升频 */
         .mode = 0,
         .spics_io_num = -1,
         .queue_size = 4,
@@ -51,13 +53,12 @@ esp_err_t epaper_init(void)
         .intr_type = GPIO_INTR_DISABLE,
     };
     ESP_ERROR_CHECK(gpio_config(&out));
-    /* 初始电平显式声明: CS=1(未选中) / DC=0 / RST=0(保持复位态,驱动移植第一步做复位脉冲) */
+    /* 初始电平显式: CS=1(未选中) DC=0 RST=0(保持复位,自检/驱动先做复位脉冲) */
     gpio_set_level(CONFIG_EPAPER_CS_GPIO, 1);
     gpio_set_level(CONFIG_EPAPER_DC_GPIO, 0);
     gpio_set_level(CONFIG_EPAPER_RST_GPIO, 0);
 
-    /* BUSY: UC8151 高电平=忙、低=空闲(注意 SSD1680/1681 系相反是低=忙;移植认准 V2 wiki)。
-     * 面板会主动驱动此脚,不加上下拉;读恒 0 且无动作 = 屏未接 */
+    /* BUSY: UC8151 高电平=忙、低=空闲(SSD1680/1681 系相反,勿混)。面板主动驱动,不加上下拉 */
     gpio_config_t in = {
         .pin_bit_mask = 1ULL << CONFIG_EPAPER_BUSY_GPIO,
         .mode = GPIO_MODE_INPUT,
@@ -71,11 +72,50 @@ esp_err_t epaper_init(void)
     ESP_LOGI(TAG, "[DISPLAY] bus ready: SCLK=%d MOSI=%d CS=%d DC=%d RST=%d BUSY=%d",
              CONFIG_EPAPER_SCLK_GPIO, CONFIG_EPAPER_MOSI_GPIO, CONFIG_EPAPER_CS_GPIO,
              CONFIG_EPAPER_DC_GPIO, CONFIG_EPAPER_RST_GPIO, CONFIG_EPAPER_BUSY_GPIO);
-    ESP_LOGI(TAG, "[DISPLAY] %dx%d, draw ops 为桩(待移植 UC8151 命令序列)", EPAPER_WIDTH_PX, EPAPER_HEIGHT_PX);
     return ESP_OK;
 }
 
-/* ---- 桩实现: 屏到手后移植微雪 EPD_2in9_V2 命令序列,替换以下四个函数 ---- */
+/* S1 门自检: 复位脉冲(Waveshare 时序 高10ms→低10ms→高)后观察 BUSY,上限 3.2s */
+esp_err_t epaper_selftest_bus(epaper_bus_test_t *out)
+{
+    if (!out) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    if (!s_bus_ready) {
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    gpio_set_level(CONFIG_EPAPER_RST_GPIO, 1);
+    vTaskDelay(pdMS_TO_TICKS(10));
+    gpio_set_level(CONFIG_EPAPER_RST_GPIO, 0);
+    vTaskDelay(pdMS_TO_TICKS(10));
+    gpio_set_level(CONFIG_EPAPER_RST_GPIO, 1);
+
+    bool saw_high = false, ready_after_high = false;
+    for (int i = 0; i < 320; i++) {   /* 320 x 10ms = 3.2s */
+        if (gpio_get_level(CONFIG_EPAPER_BUSY_GPIO)) {
+            saw_high = true;
+        } else if (saw_high) {
+            ready_after_high = true;
+            break;
+        }
+        vTaskDelay(pdMS_TO_TICKS(10));
+    }
+
+    if (ready_after_high) {
+        *out = EPAPER_BUS_OK;
+    } else if (saw_high) {
+        *out = EPAPER_BUS_STUCK_BUSY;
+    } else {
+        *out = EPAPER_BUS_NO_ACTIVITY;
+    }
+    ESP_LOGI(TAG, "[TEST] S1 bus selftest: %s",
+             *out == EPAPER_BUS_OK ? "OK(面板活)" :
+             *out == EPAPER_BUS_STUCK_BUSY ? "STUCK_BUSY(3s不回落,查接线)" : "NO_ACTIVITY(未接线/无响应)");
+    return ESP_OK;
+}
+
+/* ---- chip 层桩: S2 移植 porting-ref 命令序列后替换 ---- */
 
 esp_err_t epaper_clear(void)
 {
@@ -83,15 +123,9 @@ esp_err_t epaper_clear(void)
     return ESP_ERR_NOT_SUPPORTED;
 }
 
-esp_err_t epaper_draw_full(const uint8_t *fb)
+esp_err_t epaper_draw_full(const uint8_t *black_plane, const uint8_t *red_plane)
 {
-    ESP_LOGW(TAG, "epaper_draw_full: 桩(未移植驱动), fb=%p", fb);
-    return ESP_ERR_NOT_SUPPORTED;
-}
-
-esp_err_t epaper_draw_partial(const uint8_t *fb)
-{
-    ESP_LOGW(TAG, "epaper_draw_partial: 桩(未移植驱动), fb=%p", fb);
+    ESP_LOGW(TAG, "epaper_draw_full: 桩(未移植驱动), black=%p red=%p", black_plane, red_plane);
     return ESP_ERR_NOT_SUPPORTED;
 }
 

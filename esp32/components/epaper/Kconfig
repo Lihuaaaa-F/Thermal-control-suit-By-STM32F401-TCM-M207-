@@ -1,4 +1,11 @@
-menu "E-Paper Display (Waveshare 2.9\" V2, UC8151)"
+menu "E-Paper Display (Waveshare 2.9\" B 三色, UC8151)"
+
+    config EPAPER_TEST_MODE
+        int "Test mode: 0=正常app, 1=S1总线活化, 2=S3三色条, 3=纯白"
+        default 0
+        range 0 3
+        help
+            工作流门禁测试载体(docs/epaper-workflow.md §4)。menuconfig 切换重编译即换测试。
 
     config EPAPER_SCLK_GPIO
         int "SPI SCLK (CLK) GPIO"

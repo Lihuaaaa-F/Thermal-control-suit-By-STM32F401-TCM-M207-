@@ -31,13 +31,27 @@ void app_main(void)
     }
     ESP_LOGI(TAG, "[SYSTEM] boot ok, free heap=%u", (unsigned)esp_get_free_heap_size());
 
-    /* 墨水屏总线初始化(微雪 2.9" V2;刷屏驱动待屏到手后移植) */
+    /* 墨水屏总线初始化(微雪 2.9" B 三色;chip 层驱动 S2 移植) */
     ESP_ERROR_CHECK(epaper_init());
 
-    /* TODO(显示): 屏到手后移植 EPD_2in9_V2 -> epaper_clear() 白屏验收
+#if CONFIG_EPAPER_TEST_MODE == 1
+    /* S1 门: 总线活化自检 */
+    epaper_bus_test_t bus;
+    ESP_ERROR_CHECK(epaper_selftest_bus(&bus));
+#elif CONFIG_EPAPER_TEST_MODE == 2
+    /* S3 门: 三色条(chip 层移植前为桩) */
+    static uint8_t black[EPAPER_PLANE_BYTES], red[EPAPER_PLANE_BYTES];
+    ESP_LOGI(TAG, "[TEST] S3 三色条: %s", esp_err_to_name(epaper_draw_full(black, red)));
+#elif CONFIG_EPAPER_TEST_MODE == 3
+    ESP_LOGI(TAG, "[TEST] S3 纯白: %s", esp_err_to_name(epaper_clear()));
+#else
+    ESP_LOGI(TAG, "[DISPLAY] test_mode=0 正常 app 路径");
+#endif
+
+    /* TODO(S2): 移植 porting-ref EPD_2in9bc/b_V4 命令序列 -> 白屏验收
      * TODO(WiFi): recipes/wifi_sta.md —— 事件循环 + esp_wifi_start,凭据存 NVS
      * TODO(BLE):  recipes/ble_peripheral.md —— NimBLE 广播,接收配网写入 NVS
-     * TODO(业务): 收 STM32 端温控帧 -> 上云/下发控制指令 */
+     * TODO(业务): 收 STM32 端温控帧 -> change-driven 刷新显示 */
     while (1) {
         vTaskDelay(pdMS_TO_TICKS(1000));
     }

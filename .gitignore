@@ -1,0 +1,4 @@
+
+# project_tcs 构建产物与测试中间件
+project_tcs/build/
+*.exe

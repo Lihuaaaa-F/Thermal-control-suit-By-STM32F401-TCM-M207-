@@ -22,6 +22,8 @@ CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions-16mb.csv"
 # --- WiFi + BLE 共存 ---
 CONFIG_ESP_COEX_ENABLED=y
 
-# --- BLE 用 NimBLE(S3 无经典蓝牙,省 RAM)---
-CONFIG_BT_ENABLED=y
-CONFIG_BT_NIMBLE_ENABLED=y
+# --- BLE 非目标（任务书 §9），关闭省 RAM/编译时间 ---
+CONFIG_BT_ENABLED=n
+
+# --- HTTP Server WebSocket（/ws 推送）---
+CONFIG_HTTPD_WS_SUPPORT=y

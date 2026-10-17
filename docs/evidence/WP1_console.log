@@ -1,0 +1,40 @@
+>>> ver
+[SYSTEM] boot reset-src=PIN (RSR=0x05460000)
+[SYSTEM] boot project_tcs fw=v1.0.0 HCLK=480 MHz
+[SYSTEM] ltdc init rv=0 ready=1
+[SYSTEM] ft54[SYSTEM] boot reset-src=PIN (RSR=0x04460000)
+[SYSTEM] boot project_tcs fw=v1.0.0 HCLK=480 MHz
+[SYSTEM] ltdc init rv=0 ready=1
+[SYSTEM] ft54
+>>> stat
+
+>>> p list
+
+>>> p set 0x01 30.5
+[SYSTEM] boot reset-src=PIN (RSR=0x04460000)
+[SYSTEM] boot project_tcs fw=v1.0.0 HCLK=480 MHz
+[SYSTEM] ltdc init rv=0 ready=1
+[SYSTEM] ft5
+>>> p set 0x03 36.0
+
+>>> p set 0x04 37.6
+[SYSTEM] boot reset-src=PIN (RSR=0x04460000)
+[SYSTEM] boot project_tcs fw=v1.0.0 HCLK=480 MHz
+[SYSTEM] ltdc init rv=0 ready=1
+[SYSTEM] ft54
+>>> p list
+
+>>> mode 1
+
+>>> estop
+[SYSTEM] boot reset-src=PIN (RSR=0x04460000)
+[SYSTEM] boot project_tcs fw=v1.0.0 HCLK=480 MHz
+[SYSTEM] ltdc init rv=0 ready=1
+[SYSTEM] ft54
+>>> ack
+
+>>> stat
+[SYSTEM] boot reset-src=PIN (RSR=0x04460000)
+[SYSTEM] boot project_tcs fw=v1.0.0 HCLK=480 MHz
+[SYSTEM] ltdc init rv=0 ready=1
+[SYSTEM] ft5

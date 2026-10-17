@@ -1,0 +1,277 @@
+/**
+ * tcs_proto.h — 调温服 H743↔ESP32-S3 链路协议（双端共用一份，任务书 §4.2）
+ *
+ * 跑在 proto.c 帧层（AA 55|Len|Payload|CRC8）+ comm.c ARQ（500ms 超时×3 重传）之上。
+ * 本头文件只定义消息号、载荷布局与 编码/解码 静态内联函数：
+ *   - 零 HAL 依赖，仅 <stdint.h>/<string.h>，PC/H743/ESP32 三端同编译（§5.1 tcs_proto 跨端单测）
+ *   - 多字节字段一律小端（任务书 §4.2 "字节级，小端"）
+ *
+ * 消息号段 0x10-0x16 / 0x90-0x91（与 GS 无人机协议 0x01-0x05/0x81-0x85 无冲突）。
+ *
+ * ⚠️ 长度核对记录（2026-10-18）：STATUS 逐字段相加 = 1+4+2+2+2+1+1+1+1+2+1+1 = 19B。
+ *    任务书 §4.2 表尾标注 "17B" 为算术口径（漏加 online+rfu 两字节）；字段清单为准，
+ *    双端同源本头文件 + proto_ref.py 同布局，字节级一致由单测保证。
+ */
+#ifndef TCS_PROTO_H
+#define TCS_PROTO_H
+
+#include <stdint.h>
+#include <stddef.h>
+#include <string.h>
+
+/* ====== 协议版本（STATUS.ver；不匹配→网页黄条不拒绝服务）====== */
+#define TCS_PROTO_VER       1U
+
+/* ====== 消息号 ====== */
+#define MT_TCS_STATUS          0x10  /* H743→ESP 500ms 周期 */
+#define MT_TCS_PARAM           0x11  /* H743→ESP 变更即推 + 握手全量 */
+#define MT_TCS_SET_PARAM       0x12  /* ESP→H743 ACK 必达 */
+#define MT_TCS_GET_REGISTRY    0x13  /* ESP→H743 无载荷 */
+#define MT_TCS_REGISTRY_ENTRY  0x14  /* H743→ESP ×N 条 */
+#define MT_TCS_CMD             0x15  /* ESP→H743 ACK 必达 */
+#define MT_TCS_ACK             0x90  /* 双向 */
+
+/* TCS_CMD 命令码（§4.2）*/
+#define TCS_CMD_TEC1_ON        1
+#define TCS_CMD_TEC1_OFF       2
+#define TCS_CMD_TEC2_ON        3
+#define TCS_CMD_TEC2_OFF       4
+#define TCS_CMD_FAN_TOGGLE     5
+#define TCS_CMD_MODE_AUTO      6
+#define TCS_CMD_MODE_MANUAL    7
+#define TCS_CMD_ESTOP          8
+#define TCS_CMD_ALARM_ACK      9
+
+/* TCS_ACK status */
+#define TCS_ACK_OK             0
+#define TCS_ACK_CLAMP          1
+#define TCS_ACK_BAD_ID         2
+#define TCS_ACK_BUSY           3
+
+/* 0x10 online 位定义 */
+#define TCS_ONLINE_M207        0x01
+#define TCS_ONLINE_BODY_SENSOR 0x02
+#define TCS_ONLINE_ESP_LINK    0x04
+
+/* alarm_bits（§6.2）*/
+#define ALM_BODY_SENSOR        0x0001
+#define ALM_M207               0x0002
+#define ALM_ESTOP              0x0004
+#define ALM_OVERTEMP           0x0008
+#define ALM_EEPROM             0x0010
+
+/* ====== 0x10 TCS_STATUS（19B 小端）====== */
+typedef struct {
+    uint8_t  ver;        /* TCS_PROTO_VER */
+    uint32_t seq;        /* 发送序号 */
+    float    tc1_act;    /* 编解码按 i16÷10 传输（°C）*/
+    float    tc2_act;
+    float    body;
+    uint8_t  tec1, tec2, fan, mode;
+    uint16_t alarm;
+    uint8_t  online;     /* TCS_ONLINE_* 位或 */
+    uint8_t  rfu;
+} tcs_status_pl_t;
+
+#define TCS_STATUS_PL_LEN   19
+
+/* ====== 0x11/0x12 PARAM（7B 小端）====== */
+typedef struct {
+    uint16_t id;
+    uint8_t  type;       /* 0=f32 1=u8 2=u16（与 param_registry 一致）*/
+    uint32_t value;      /* f32 按 IEEE754 位型小端存 */
+} tcs_param_pl_t;
+
+#define TCS_PARAM_PL_LEN    7
+
+/* ====== 0x15 CMD（1B）====== */
+#define TCS_CMD_PL_LEN      1
+
+/* ====== 0x90 TCS_ACK（7B 小端）====== */
+typedef struct {
+    uint8_t  acked_seq;
+    uint8_t  acked_mt;
+    uint8_t  status;
+    float    ret;        /* SET_PARAM 回实际写入值 */
+} tcs_ack_pl_t;
+
+#define TCS_ACK_PL_LEN      7
+
+/* ====== 0x14 REGISTRY_ENTRY（变长：count+idx 头 + 条目）====== */
+typedef struct {
+    uint8_t  count;      /* 本批总条数 */
+    uint8_t  idx;        /* 本帧条目序号 0..count-1 */
+    uint16_t id;
+    uint8_t  type;
+    uint8_t  flags;
+    float    min, max, step;
+    char     key[24];
+    char     name[48];   /* UTF-8 */
+    char     unit[8];
+} tcs_reg_entry_t;
+
+/* 编一条 0x14 载荷。返回载荷字节数；cap 不够返回 0（上层应拆帧）。 */
+static inline size_t tcs_pl_registry_entry(uint8_t *out, size_t cap,
+                                           const tcs_reg_entry_t *e)
+{
+    size_t kl = strlen(e->key), nl = strlen(e->name), ul = strlen(e->unit);
+    size_t need = 2 + 2 + 1 + 1 + 12 + 1 + kl + 1 + nl + 1 + ul;
+    if (cap < need || kl > 200 || nl > 200 || ul > 200) return 0;
+    size_t o = 0;
+    out[o++] = e->count;
+    out[o++] = e->idx;
+    out[o++] = (uint8_t)(e->id & 0xFF);
+    out[o++] = (uint8_t)(e->id >> 8);
+    out[o++] = e->type;
+    out[o++] = e->flags;
+    memcpy(&out[o], &e->min, 4); o += 4;   /* float 位型小端（ARM/PC 均小端）*/
+    memcpy(&out[o], &e->max, 4); o += 4;
+    memcpy(&out[o], &e->step, 4); o += 4;
+    out[o++] = (uint8_t)kl;
+    memcpy(&out[o], e->key, kl); o += kl;
+    out[o++] = (uint8_t)nl;
+    memcpy(&out[o], e->name, nl); o += nl;
+    out[o++] = (uint8_t)ul;
+    memcpy(&out[o], e->unit, ul); o += ul;
+    return o;
+}
+
+/* 解 0x14 载荷 → 条目。返回 0=ok，-1=长度不合法。 */
+static inline int tcs_scan_registry_entry(const uint8_t *pl, size_t len,
+                                          tcs_reg_entry_t *e)
+{
+    if (len < 22) return -1;
+    size_t o = 0;
+    e->count = pl[o++];
+    e->idx   = pl[o++];
+    e->id    = (uint16_t)(pl[o] | ((uint16_t)pl[o + 1] << 8)); o += 2;
+    e->type  = pl[o++];
+    e->flags = pl[o++];
+    memcpy(&e->min,  &pl[o], 4); o += 4;
+    memcpy(&e->max,  &pl[o], 4); o += 4;
+    memcpy(&e->step, &pl[o], 4); o += 4;
+    uint8_t kl = pl[o++];
+    if (o + kl > len) return -1;
+    if (kl >= sizeof(e->key)) return -1;
+    memcpy(e->key, &pl[o], kl); e->key[kl] = 0; o += kl;
+    uint8_t nl = pl[o++];
+    if (o + nl > len) return -1;
+    if (nl >= sizeof(e->name)) return -1;
+    memcpy(e->name, &pl[o], nl); e->name[nl] = 0; o += nl;
+    uint8_t ul = pl[o++];
+    if (o + ul > len) return -1;
+    if (ul >= sizeof(e->unit)) return -1;
+    memcpy(e->unit, &pl[o], ul); e->unit[ul] = 0; o += ul;
+    return 0;
+}
+
+/* ====== 通用小端打包/解包 ====== */
+static inline void tcs_put_u16(uint8_t *p, uint16_t v)
+{ p[0] = (uint8_t)(v & 0xFF); p[1] = (uint8_t)(v >> 8); }
+
+static inline uint16_t tcs_get_u16(const uint8_t *p)
+{ return (uint16_t)(p[0] | ((uint16_t)p[1] << 8)); }
+
+static inline void tcs_put_u32(uint8_t *p, uint32_t v)
+{ p[0]=(uint8_t)v; p[1]=(uint8_t)(v>>8); p[2]=(uint8_t)(v>>16); p[3]=(uint8_t)(v>>24); }
+
+static inline uint32_t tcs_get_u32(const uint8_t *p)
+{ return (uint32_t)p[0] | ((uint32_t)p[1] << 8) | ((uint32_t)p[2] << 16) | ((uint32_t)p[3] << 24); }
+
+static inline void tcs_put_i16(uint8_t *p, int16_t v)
+{ tcs_put_u16(p, (uint16_t)v); }
+
+static inline int16_t tcs_get_i16(const uint8_t *p)
+{ return (int16_t)tcs_get_u16(p); }
+
+/* float ↔ 位型（无硬件浮点依赖的纯位操作）*/
+static inline uint32_t tcs_f2b(float f) { uint32_t u; memcpy(&u, &f, 4); return u; }
+static inline float    tcs_b2f(uint32_t u) { float f; memcpy(&f, &u, 4); return f; }
+
+/* ====== 0x10 STATUS 编解码 ====== */
+static inline size_t tcs_pl_status(uint8_t *out, size_t cap, const tcs_status_pl_t *s)
+{
+    if (cap < TCS_STATUS_PL_LEN) return 0;
+    size_t o = 0;
+    out[o++] = s->ver;
+    tcs_put_u32(&out[o], s->seq); o += 4;
+    tcs_put_i16(&out[o], (int16_t)(s->tc1_act * 10.0f + ((s->tc1_act < 0) ? -0.5f : 0.5f))); o += 2;
+    tcs_put_i16(&out[o], (int16_t)(s->tc2_act * 10.0f + ((s->tc2_act < 0) ? -0.5f : 0.5f))); o += 2;
+    tcs_put_i16(&out[o], (int16_t)(s->body     * 10.0f + ((s->body     < 0) ? -0.5f : 0.5f))); o += 2;
+    out[o++] = s->tec1;
+    out[o++] = s->tec2;
+    out[o++] = s->fan;
+    out[o++] = s->mode;
+    tcs_put_u16(&out[o], s->alarm); o += 2;
+    out[o++] = s->online;
+    out[o++] = s->rfu;
+    return o;
+}
+
+static inline int tcs_scan_status(const uint8_t *pl, size_t len, tcs_status_pl_t *s)
+{
+    if (len < TCS_STATUS_PL_LEN) return -1;
+    size_t o = 0;
+    s->ver = pl[o++];
+    s->seq = tcs_get_u32(&pl[o]); o += 4;
+    s->tc1_act = (float)tcs_get_i16(&pl[o]) / 10.0f; o += 2;
+    s->tc2_act = (float)tcs_get_i16(&pl[o]) / 10.0f; o += 2;
+    s->body    = (float)tcs_get_i16(&pl[o]) / 10.0f; o += 2;
+    s->tec1 = pl[o++];
+    s->tec2 = pl[o++];
+    s->fan  = pl[o++];
+    s->mode = pl[o++];
+    s->alarm = tcs_get_u16(&pl[o]); o += 2;
+    s->online = pl[o++];
+    s->rfu = pl[o++];
+    return 0;
+}
+
+/* ====== 0x11/0x12 PARAM 编解码 ====== */
+static inline size_t tcs_pl_param(uint8_t *out, size_t cap, const tcs_param_pl_t *p)
+{
+    if (cap < TCS_PARAM_PL_LEN) return 0;
+    tcs_put_u16(&out[0], p->id);
+    out[2] = p->type;
+    tcs_put_u32(&out[3], p->value);
+    return TCS_PARAM_PL_LEN;
+}
+
+static inline int tcs_scan_param(const uint8_t *pl, size_t len, tcs_param_pl_t *p)
+{
+    if (len < TCS_PARAM_PL_LEN) return -1;
+    p->id   = tcs_get_u16(&pl[0]);
+    p->type = pl[2];
+    p->value = tcs_get_u32(&pl[3]);
+    return 0;
+}
+
+/* ====== 0x15 CMD / 0x90 ACK ====== */
+static inline size_t tcs_pl_cmd(uint8_t *out, size_t cap, uint8_t cmd)
+{
+    if (cap < 1) return 0;
+    out[0] = cmd;
+    return 1;
+}
+
+static inline size_t tcs_pl_ack(uint8_t *out, size_t cap, const tcs_ack_pl_t *a)
+{
+    if (cap < TCS_ACK_PL_LEN) return 0;
+    out[0] = a->acked_seq;
+    out[1] = a->acked_mt;
+    out[2] = a->status;
+    tcs_put_u32(&out[3], tcs_f2b(a->ret));
+    return TCS_ACK_PL_LEN;
+}
+
+static inline int tcs_scan_ack(const uint8_t *pl, size_t len, tcs_ack_pl_t *a)
+{
+    if (len < TCS_ACK_PL_LEN) return -1;
+    a->acked_seq = pl[0];
+    a->acked_mt  = pl[1];
+    a->status    = pl[2];
+    a->ret       = tcs_b2f(tcs_get_u32(&pl[3]));
+    return 0;
+}
+
+#endif /* TCS_PROTO_H */

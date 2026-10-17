@@ -1,9 +1,9 @@
 # Name,     Type, SubType,  Offset,   Size,     Flags
-# S3-N16R8 16MB 分区表: factory + 双 OTA + 5M 数据区 + coredump
+# 调温服 v2 分区表（任务书 §4.4：nvs 24K + otadata 8K + 双 OTA 3M + www 512K + 剩余 user）
+# otadata 8K 使 ota_0 起点让到 0x20000（app 需 0x10000 对齐）；首期只做 esp_ota 写入接口自测
 nvs,        data, nvs,      0x9000,   0x6000,
-phy_init,   data, phy,      0xf000,   0x1000,
-factory,    app,  factory,  0x10000,  3M,
-ota_0,      app,  ota_0,    ,         3M,
+otadata,    data, ota,      0xf000,   0x2000,
+ota_0,      app,  ota_0,    0x20000,  3M,
 ota_1,      app,  ota_1,    ,         3M,
-storage,    data, fat,      ,         5M,
-coredump,   data, coredump, ,         64K,
+www,        data, spiffs,   ,         512K,
+user,        data, fat,      ,         0x960000,

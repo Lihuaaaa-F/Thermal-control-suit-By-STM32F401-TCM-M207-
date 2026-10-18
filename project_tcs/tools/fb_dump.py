@@ -26,6 +26,48 @@ def read_words(addr: int, nwords: int) -> list:
     out = subprocess.run(
         ["probe-rs", "read", "--chip", CHIP, "--probe", PROBE, "b32",
          hex(addr), str(nwords)],
+        capture_output=True, text=True, timeout=300, check=True).stdout
+    words = []
+    for line in out.stdout.splitlines():
+        m = re.match(r'^[0-9a-fA-F]+:\s*(.*)$', line)
+        if not m:
+            continue
+        for tok in m.group(1).split():
+            words.append(int(tok, 16))
+    if len(words) < nwords:
+        raise RuntimeError(f"read short: got {len(words)} of {nwords} words")
+    return words[:nwords]
+
+
+def current_fb_addr() -> int:
+    """取当前屏上显示的帧缓冲地址。WP-C.5 真双缓冲（CFBAR 乒乓）后固定地址会读
+    到陈旧缓冲——LTDC 寄存器经调试口读数不可靠（实测恒 0），固件在 RAM 暴露
+    g_shown_fb（gfx_flip 维护），经 nm 定位直读，可靠。"""
+    elf = Path("build/tcs_main.elf")
+    try:
+        nm = subprocess.run(["arm-none-eabi-nm", str(elf)], capture_output=True,
+                            text=True, check=True, timeout=60).stdout
+        m = re.search(r'^([0-9a-fA-F]{8}) \w+ g_shown_fb$', nm, re.M)
+        if m:
+            addr = int(m.group(1), 16)
+            out = subprocess.run(
+                ["probe-rs", "read", "--chip", CHIP, "--probe", PROBE, "b32",
+                 hex(addr), "1"],
+                capture_output=True, text=True, timeout=120, check=True).stdout
+            for line in out.splitlines():
+                if ':' in line:
+                    v = int(line.split(':', 1)[1].split()[0], 16)
+                    if 0xC0000000 <= v < 0xC0300000:
+                        return v
+    except Exception as e:
+        print(f"[fb_dump][WARN] g_shown_fb unavailable ({e}), fallback 0xC0000000")
+    return FB_ADDR
+
+
+def read_words(addr: int, nwords: int) -> list:
+    out = subprocess.run(
+        ["probe-rs", "read", "--chip", CHIP, "--probe", PROBE, "b32",
+         hex(addr), str(nwords)],
         capture_output=True, text=True, timeout=300, check=True)
     words = []
     for line in out.stdout.splitlines():
@@ -61,8 +103,9 @@ def main():
     nrows = int(sys.argv[3]) if len(sys.argv) > 3 else H
     if y0 < 0 or nrows <= 0 or y0 + nrows > H:
         raise SystemExit("bad rows")
+    base = current_fb_addr()
     nwords = nrows * WORDS_PER_LINE
-    words = read_words(FB_ADDR + y0 * W * 2, nwords)
+    words = read_words(base + y0 * W * 2, nwords)
     rgb565_to_png(words, out, y0, nrows)
 
 

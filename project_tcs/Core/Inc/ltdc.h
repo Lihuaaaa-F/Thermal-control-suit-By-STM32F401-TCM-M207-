@@ -76,7 +76,10 @@ void gfx_draw_char(int x, int y, char c, uint16_t fg, uint16_t bg);
 /* 画字符串 */
 void gfx_draw_string(int x, int y, const char *s, uint16_t fg, uint16_t bg);
 
-/* back → front 翻转（M2 单 buffer memcpy + write-through，最稳不花屏）*/
+/* back → front 翻转（WP-C.5 真双缓冲：LTDC CFBAR 乒乓 + 消隐期重载，零拷贝）*/
 void gfx_flip(void);
+
+/* 整页重绘后同步另一缓冲（乒乓局部重绘语义保障；日常局部重绘勿调）*/
+void gfx_sync_buffers(void);
 
 #endif /* LTDC_H */

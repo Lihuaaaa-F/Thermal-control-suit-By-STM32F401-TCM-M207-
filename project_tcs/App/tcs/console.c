@@ -150,6 +150,21 @@ static void cmd_exec(char *line)
                (unsigned long)s_tx_drop_cnt);
         return;
     }
+    /* --- perf：DWT 实测（WP-C.5）--- */
+    if (strcmp(argv[0], "perf") == 0) {
+        uint32_t up_s = HAL_GetTick() / 1000u;
+        uint32_t rate = up_s ? (g_stat_loop_passes / up_s) : 0;
+        printf("work avg=%luus max=%luus ovf=%lu | ui_full=%lu.%lu ms | "
+               "touch max=%luus | loop=%lu rate=%lu/s up=%lus\n",
+               (unsigned long)g_stat_work_us_avg, (unsigned long)g_stat_work_us_max,
+               (unsigned long)g_stat_tick_ovf,
+               (unsigned long)(g_stat_ui_ms_x10 / 10u),
+               (unsigned long)(g_stat_ui_ms_x10 % 10u),
+               (unsigned long)g_stat_touch_us_max,
+               (unsigned long)g_stat_loop_passes, (unsigned long)rate,
+               (unsigned long)up_s);
+        return;
+    }
     /* --- p ... --- */
     if (strcmp(argv[0], "p") == 0 && argc >= 2) {
         if (strcmp(argv[1], "list") == 0) {
@@ -231,11 +246,11 @@ static void cmd_exec(char *line)
         printf("touch cal set\n");
         return;
     }
-    /* --- wdttest：死循环 3s 不喂狗 → IWDG 复位（M3/F5 实验命令）--- */
+    /* --- wdttest：死循环不喂狗 → IWDG 2s 复位（WP-C.1 实验命令）--- */
     if (strcmp(argv[0], "wdttest") == 0) {
-        tcs_log("[SYSTEM]", "IWDG test: busy-loop 35s");
+        tcs_log("[SYSTEM]", "IWDG test: busy-loop 5s (timeout=2s)");
         uint32_t t0 = HAL_GetTick();
-        while (HAL_GetTick() - t0 < 35000u) { }
+        while (HAL_GetTick() - t0 < 5000u) { }
         return;
     }
     /* --- scrtest：屏诊断（WP-A.2d 噪声二分：纯 DMA2D 清屏/标定文本/触摸计数）--- */
@@ -321,16 +336,18 @@ void console_init(UART_HandleTypeDef *huart)
     HAL_UART_Receive_IT(s_uart, &s_rx_byte, 1);
 }
 
-/* ====== 复位源解析（§3.9：复位后首行日志）====== */
+/* ====== 复位源解析（§3.9：复位后首行日志）======
+ * WP-C.4：IWDG1RSTF 优先于 PIN——IWDG 复位时 NRST 也被拉低，PINRSTF 同样置位，
+ * 按 PIN 优先会误报。其余位照常见义。 */
 void console_print_reset_source(void)
 {
     uint32_t rs = RCC->RSR;
     const char *s = "unknown";
-    if (rs & RCC_RSR_PINRSTF)        s = "PIN";
-    else if (rs & RCC_RSR_BORRSTF)   s = "BOR";
-    else if (rs & RCC_RSR_SFTRSTF)   s = "SOFT";
-    else if (rs & RCC_RSR_IWDG1RSTF) s = "IWDG";
+    if (rs & RCC_RSR_IWDG1RSTF)      s = "IWDG";
     else if (rs & RCC_RSR_WWDG1RSTF) s = "WWDG";
+    else if (rs & RCC_RSR_SFTRSTF)   s = "SOFT";
+    else if (rs & RCC_RSR_BORRSTF)   s = "BOR";
+    else if (rs & RCC_RSR_PINRSTF)   s = "PIN";
     else if (rs & RCC_RSR_LPWRRSTF)  s = "LPWR";
     tcs_log("[SYSTEM]", "boot reset-src=%s (RSR=0x%08lx)", s, (unsigned long)rs);
     __HAL_RCC_CLEAR_RESET_FLAGS();

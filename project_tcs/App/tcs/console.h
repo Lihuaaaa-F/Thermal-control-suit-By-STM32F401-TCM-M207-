@@ -15,6 +15,12 @@ extern "C" {
 
 /* 主循环活性圈数（main.c 定义自增；stat 命令显示 + wp_check 活性判定，H2/H8）*/
 extern volatile uint32_t g_stat_loop_passes;
+/* WP-C.5 DWT 性能计数（main.c 定义；ui_ms_x10 = ms×10 保 1 位小数）*/
+extern volatile uint32_t g_stat_work_us_max;
+extern volatile uint32_t g_stat_work_us_avg;
+extern volatile uint32_t g_stat_ui_ms_x10;
+extern volatile uint32_t g_stat_touch_us_max;
+extern volatile uint32_t g_stat_tick_ovf;
 
 void console_init(UART_HandleTypeDef *huart);
 void console_isr_push(uint8_t b);       /* ISR：RX 单字节入环形缓冲 */

@@ -29,7 +29,6 @@
 #include "fan.h"
 #include "eeprom.h"
 #include "iwdg.h"
-#include "blackbox.h"
 #include <string.h>
 
 /* ====== 全局句柄 ====== */
@@ -44,6 +43,20 @@ uint32_t millis(void) { return g_tick_ms; }
 
 /* 主循环活性圈数（H2/wp_check 活性证据用；volatile 供 probe-rs 直读）*/
 volatile uint32_t g_stat_loop_passes = 0;
+/* WP-C.5 DWT 性能计数（us；ui_ms 为 ms×10 保留 1 位小数）*/
+volatile uint32_t g_stat_work_us_max = 0;
+volatile uint32_t g_stat_work_us_avg = 0;
+volatile uint32_t g_stat_ui_ms_x10 = 0;
+volatile uint32_t g_stat_touch_us_max = 0;
+volatile uint32_t g_stat_tick_ovf = 0;
+
+static void perf_sample_work(uint32_t cy)
+{
+    uint32_t us = cy / (SystemCoreClock / 1000000u);
+    if (us > g_stat_work_us_max) g_stat_work_us_max = us;
+    g_stat_work_us_avg = (g_stat_work_us_avg * 7u + us) / 8u;
+    if (us > 10000u) g_stat_tick_ovf++;
+}
 
 /* SysTick 1ms 双递增覆盖（GS 工程移植时曾丢失本函数 → 主循环卡死在节拍等待，
  * IWDG 32.7s 复位循环；根因记录 docs/evidence/WP6_iwdg_defect.md） */
@@ -434,9 +447,8 @@ static void MX_I2C1_Init(void)
 
 void Error_Handler(void)
 {
-    blackbox_fault(0xE110u, 0, 0, 0, 0);   /* T1：留痕后停摆等狗 */
     __disable_irq();
-    SEGGER_RTT_WriteString("ERROR_HANDLER\n");
+    SEGGER_RTT_WriteString("[ERROR] ERROR_HANDLER entered (WP-C: blackbox removed)\n");
     while (1) {
         HAL_GPIO_TogglePin(LED1_GPIO_Port, LED1_Pin);
         for (volatile int i = 0; i < 1000000; i++) {}
@@ -470,8 +482,6 @@ int main(void)
 {
     HAL_Init();
     SEGGER_RTT_Init();
-
-    blackbox_boot();   /* T1 黑匣子：抢在 console 清 RSR 之前抓复位源与上轮现场 */
 
     SystemClock_Config();
     MX_GPIO_Init();
@@ -542,13 +552,17 @@ int main(void)
     uint8_t led = 0;
     static uint32_t last_led_ms = 0;
 
+    /* WP-C.5：DWT 周期计数器使能（每拍工作/UI 重绘/触摸轮询实测）*/
+    CoreDebug->DEMCR |= CoreDebug_DEMCR_TRCENA_Msk;
+    DWT->CYCCNT = 0;
+    DWT->CTRL |= DWT_CTRL_CYCCNTENA_Msk;
+
     while (1) {
         uint32_t now = g_tick_ms;
+        uint32_t cy0 = DWT->CYCCNT;
         g_stat_loop_passes++;
 
         iwdg_refresh();
-        blackbox_loop_tick();
-        blackbox_heartbeat(now);
         comm_poll_tx(&g_link);           /* 链路 TX 串行消费（唯一 HAL_UART_Transmit 处之一）*/
         console_poll();
         m207_poll(now);
@@ -564,6 +578,7 @@ int main(void)
         status_tx(now);
         kill_key_poll();
 
+        perf_sample_work(DWT->CYCCNT - cy0);
         if (g_link_down_flag) {
             g_link_down_flag = 0;
             tcs_log("[NET]", "esp link down (3 retries)");

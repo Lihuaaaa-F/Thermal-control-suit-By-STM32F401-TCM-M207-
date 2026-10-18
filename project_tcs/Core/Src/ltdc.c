@@ -28,6 +28,15 @@ static FMC_SDRAM_CommandTypeDef sdcmd;
  * 为 0 时所有 gfx_* 直接返回，避免访问 0xC0000000 触发 BusFault。*/
 static int g_lcd_ok = 0;
 
+/* WP-C.5 真双缓冲：绘制目标指针，flip 时与 LTDC CFBAR 乒乓切换（零拷贝）。
+ * flip 后 s_back 指向刚离屏的旧帧=上一帧，脏区增量重绘语义不变（逐帧脏区
+ * 在 flip 时全部冲刷，两帧内容除脏区外一致）。*/
+static uint16_t *s_back = LCD_BACK_BUF;
+
+/* 当前屏上显示的缓冲地址（probe-rs/fb_dump 取证用；RAM 变量可可靠直读，
+ * LTDC 寄存器经调试口读数不可靠——WP-C.5 实测恒 0）*/
+volatile uint32_t g_shown_fb = (uint32_t)LCD_BACK_BUF;
+
 /* ====== 内置 8×16 ASCII 字库（ASCII 0x20-0x7E）======
  * 16 行 × 8 位，每字节一行（bit7=最左像素）。仅含可见 ASCII。*/
 static const uint8_t font8x16[][16] = {
@@ -260,8 +269,12 @@ int ltdc_init(void)
                       (unsigned)((GPIOB->MODER >> 10) & 3U), (unsigned)((GPIOB->ODR >> 5) & 1U));
 
     g_lcd_ok = 1;
+    /* 双缓冲初始状态：两个缓冲都清黑，第一帧起 CFBAR 乒乓（WP-C.5）*/
     gfx_clear(COLOR_BLACK);
-    SEGGER_RTT_printf(0, "RTT: ltdc init rv=0 g_lcd_ok=%d\n", g_lcd_ok);
+    gfx_flip();
+    gfx_clear(COLOR_BLACK);
+    gfx_flip();
+    SEGGER_RTT_printf(0, "RTT: ltdc init rv=0 g_lcd_ok=%d double_buf=1\n", g_lcd_ok);
     return 0;
 }
 
@@ -403,93 +416,14 @@ void HAL_LTDC_MspInit(LTDC_HandleTypeDef *h)
 }
 
 /* ===================================================================== */
-/*                §0C.2 DMA2D R2M（抄官方例程 ltdc_fill）                */
-/* ===================================================================== */
-/* 寄存器直写，每次用前先开 DMA2D 时钟（例程写法）。RGB565。
- * ⚠ WP-A.2d 根因（2026-10-18 帧缓冲取证实测）：本片 DMA2D 多行 R2M 每行实际
- * 步进 = NLW + OOR + 32px（行尾 64B 突发残留），逐行漏一条 32px 斜带——旧行内容
- * 从漏带透出即"红线/花屑"（OOR 补偿对满宽填充会下溢取负，不可用）。
- * 处置：h>1 一律拆成逐行 h=1 填充（h=1 无行跳转，零误差）；性能损失经 DWT 实测
- * 可接受（见 docs/results/WP-C.md）。*/
-static void dma2d_fill_rect(uint16_t *dst, int w, int h, int pitch, uint16_t color)
-{
-    /* TCS 加固（2026-10-18 运行时实证）：TC 忙等曾观测到不死等 → 主循环 >2s 卡死
-     * → IWDG 复位循环。改为：空矩形防御 + TC 超时（约 5ms@HCLK480M）→ 软复位
-     * DMA2D 恢复总线，缺一块填充优于整机复位。其余逻辑原样。*/
-    __HAL_RCC_DMA2D_CLK_ENABLE();
-    if (w <= 0 || h <= 0) return;
-    for (int row = 0; row < h; row++) {
-        uint32_t guard = 2000000u;                /* ~5ms 级循环上限 */
-        DMA2D->CR = DMA2D_R2M;                    /* Register-to-Memory */
-        DMA2D->OPFCCR = LTDC_PIXEL_FORMAT_RGB565; /* 0x02 */
-        DMA2D->OOR = 0;                           /* h=1 无行跳转 */
-        DMA2D->OMAR = (uint32_t)(dst + (size_t)row * pitch);
-        DMA2D->NLR = (uint32_t)w | (1U << 16);    /* 宽 w × 高 1（NLH=0 则不启动传输!）*/
-        DMA2D->OCOLR = color;
-        DMA2D->IFCR |= DMA2D_FLAG_TC;             /* 先清旧 TC 再启动 */
-        DMA2D->CR |= DMA2D_CR_START;
-        while ((DMA2D->ISR & DMA2D_FLAG_TC) == 0) {
-            if (--guard == 0) {
-                __HAL_RCC_DMA2D_FORCE_RESET();
-                __HAL_RCC_DMA2D_RELEASE_RESET();
-                __HAL_RCC_DMA2D_CLK_ENABLE();
-                SEGGER_RTT_WriteString("[WARN] dma2d TC timeout -> soft reset");
-                return;
-            }
-        }
-        DMA2D->IFCR |= DMA2D_FLAG_TC;
-    }
-}
-
-/* ===================================================================== */
 /*                          基础绘图                                      */
 /* ===================================================================== */
-static void dma2d_m2m_copy(const uint16_t *src, uint16_t *dst, int w, int h);
-
-void gfx_clear(uint16_t color)
-{
-    if (!g_lcd_ok) return;
-    dma2d_fill_rect(LCD_BACK_BUF, LCD_WIDTH, LCD_HEIGHT, LCD_WIDTH, color);
-}
-
-void gfx_draw_pixel(int x, int y, uint16_t color)
-{
-    if (!g_lcd_ok) return;
-    if (x < 0 || x >= LCD_WIDTH || y < 0 || y >= LCD_HEIGHT) return;
-    LCD_BACK_BUF[y * LCD_WIDTH + x] = color;
-}
-
-void gfx_draw_hline(int x0, int x1, int y, uint16_t color)
-{
-    if (!g_lcd_ok) return;
-    if (y < 0 || y >= LCD_HEIGHT) return;
-    if (x0 > x1) { int t = x0; x0 = x1; x1 = t; }
-    if (x0 < 0) x0 = 0;
-    if (x1 >= LCD_WIDTH) x1 = LCD_WIDTH - 1;
-    /* DMA2D R2M 填水平线（1 行）*/
-    dma2d_fill_rect(&LCD_BACK_BUF[y * LCD_WIDTH + x0], x1 - x0 + 1, 1, LCD_WIDTH, color);
-}
-
-void gfx_draw_vline(int x, int y0, int y1, uint16_t color)
-{
-    if (!g_lcd_ok) return;
-    if (x < 0 || x >= LCD_WIDTH) return;
-    if (y0 > y1) { int t = y0; y0 = y1; y1 = t; }
-    if (y0 < 0) y0 = 0;
-    if (y1 >= LCD_HEIGHT) y1 = LCD_HEIGHT - 1;
-    /* 垂直线：宽1，高(y1-y0+1)，pitch=LCD_WIDTH（DMA2D 行间跳）*/
-    dma2d_fill_rect(&LCD_BACK_BUF[y0 * LCD_WIDTH + x], 1, y1 - y0 + 1, LCD_WIDTH, color);
-}
-
-void gfx_draw_rect(int x0, int y0, int x1, int y1, uint16_t color)
-{
-    if (!g_lcd_ok) return;
-    gfx_draw_hline(x0, x1, y0, color);
-    gfx_draw_hline(x0, x1, y1, color);
-    gfx_draw_vline(x0, y0, y1, color);
-    gfx_draw_vline(x1, y0, y1, color);
-}
-
+/* WP-C.5 终版：填充走 CPU 写穿透 32 位 store，不再用 DMA2D。
+ * 依据（2026-10-18 实测）：
+ *  a) 本片 DMA2D 多行 R2M 每行步进 +32px（斜带漏色，WP-A.2d）；单次多行 R2M
+ *     更会挂死系统总线（scrtest raw 实验 → 主循环假死 → IWDG 复位救回）；
+ *  b) DMA2D 小搬运每次 ~18µs 固定开销（LTDC 抢占总线），整页重绘 ~85ms 超
+ *     "UI ≤25ms"预算 3 倍；CPU 写穿透整页 ~10ms 级且天然无一致性/斜带问题。*/
 void gfx_fill_rect(int x0, int y0, int x1, int y1, uint16_t color)
 {
     if (!g_lcd_ok) return;
@@ -499,8 +433,50 @@ void gfx_fill_rect(int x0, int y0, int x1, int y1, uint16_t color)
     if (y0 < 0) y0 = 0;
     if (x1 >= LCD_WIDTH) x1 = LCD_WIDTH - 1;
     if (y1 >= LCD_HEIGHT) y1 = LCD_HEIGHT - 1;
-    dma2d_fill_rect(&LCD_BACK_BUF[y0 * LCD_WIDTH + x0],
-                    x1 - x0 + 1, y1 - y0 + 1, LCD_WIDTH, color);
+    if (x0 > x1 || y0 > y1) return;
+
+    uint32_t c32 = (uint32_t)color << 16 | color;
+    int w = x1 - x0 + 1;
+    for (int y = y0; y <= y1; y++) {
+        uint16_t *p = &s_back[(size_t)y * LCD_WIDTH + x0];
+        int n = w;
+        while (n >= 1 && ((uintptr_t)p & 3u)) { *p++ = color; n--; }  /* 对齐到 32 位 */
+        uint32_t *p32 = (uint32_t *)(void *)p;
+        while (n >= 8) { p32[0]=c32; p32[1]=c32; p32[2]=c32; p32[3]=c32; p32 += 4; n -= 8; }
+        while (n >= 2) { *p32++ = c32; n -= 2; }
+        if (n) *(uint16_t *)p32 = color;
+    }
+}
+
+void gfx_clear(uint16_t color)
+{
+    gfx_fill_rect(0, 0, LCD_WIDTH - 1, LCD_HEIGHT - 1, color);
+}
+
+void gfx_draw_pixel(int x, int y, uint16_t color)
+{
+    if (!g_lcd_ok) return;
+    if (x < 0 || x >= LCD_WIDTH || y < 0 || y >= LCD_HEIGHT) return;
+    s_back[y * LCD_WIDTH + x] = color;
+}
+
+void gfx_draw_hline(int x0, int x1, int y, uint16_t color)
+{
+    gfx_fill_rect(x0, y, x1, y, color);
+}
+
+void gfx_draw_vline(int x, int y0, int y1, uint16_t color)
+{
+    gfx_fill_rect(x, y0, x, y1, color);
+}
+
+void gfx_draw_rect(int x0, int y0, int x1, int y1, uint16_t color)
+{
+    if (!g_lcd_ok) return;
+    gfx_draw_hline(x0, x1, y0, color);
+    gfx_draw_hline(x0, x1, y1, color);
+    gfx_draw_vline(x0, y0, y1, color);
+    gfx_draw_vline(x1, y0, y1, color);
 }
 
 void gfx_draw_char(int x, int y, char c, uint16_t fg, uint16_t bg)
@@ -531,37 +507,30 @@ void gfx_draw_string(int x, int y, const char *s, uint16_t fg, uint16_t bg)
 void gfx_flip(void)
 {
     if (!g_lcd_ok) return;
-    /* back 由 DMA2D 写（绕过 D-Cache），CPU memcpy 读前必须作废 back 的 cache 行，
-     * 否则命中陈旧行会把旧帧内容涂进 front（write-through 下 CPU 写 front 无此问题）。*/
-    SCB_InvalidateDCache_by_Addr((uint32_t *)(void *)LCD_BACK_BUF, LCD_FBSIZE);
-    memcpy((void *)LCD_FRONT_BUF, (void *)LCD_BACK_BUF, LCD_FBSIZE);
+    /* WP-C.5 真双缓冲：CFBAR 指向刚画完的缓冲 + 垂直消隐期重载（零拷贝、无撕裂）。
+     * 原 memcpy 版 1.2MB 写穿透实测 ~100ms/次，是"UI 全屏 ≤25ms"预算的元凶；
+     * flip 后 s_back 指向旧帧（=屏上上一帧），脏区增量重绘语义不变。*/
+    LTDC_Layer1->CFBAR = (uint32_t)s_back;
+    LTDC->SRCR = LTDC_SRCR_VBR;   /* 垂直消隐期重载，防撕裂 */
+    g_shown_fb = (uint32_t)s_back;
+    s_back = (s_back == LCD_FRONT_BUF) ? LCD_BACK_BUF : LCD_FRONT_BUF;
 }
 
-/* DMA2D M2M 整帧搬运——已弃用（WP-A.2d 实测同一 +32px/行步进异常，见 dma2d_fill_rect
- * 注释）。保留实现备查，不再被 gfx_flip 调用。*/
-static void dma2d_m2m_copy(const uint16_t *src, uint16_t *dst, int w, int h)
+void gfx_sync_buffers(void)
 {
-    __HAL_RCC_DMA2D_CLK_ENABLE();
-    if (w <= 0 || h <= 0) return;
-    DMA2D->CR = 0x00000000U;                  /* M2M 模式 */
-    DMA2D->OPFCCR = LTDC_PIXEL_FORMAT_RGB565;
-    DMA2D->FGPFCCR = LTDC_PIXEL_FORMAT_RGB565;
-    DMA2D->OMAR = (uint32_t)dst;
-    DMA2D->FGMAR = (uint32_t)src;
-    DMA2D->OOR = 0;
-    DMA2D->FGOR = 0;
-    DMA2D->NLR = (uint32_t)w | ((uint32_t)h << 16);
-    DMA2D->IFCR |= DMA2D_FLAG_TC;
-    DMA2D->CR |= DMA2D_CR_START;
-    uint32_t guard = 2000000u;
-    while ((DMA2D->ISR & DMA2D_FLAG_TC) == 0) {
-        if (--guard == 0) {
-            __HAL_RCC_DMA2D_FORCE_RESET();
-            __HAL_RCC_DMA2D_RELEASE_RESET();
-            __HAL_RCC_DMA2D_CLK_ENABLE();
-            SEGGER_RTT_WriteString("[WARN] dma2d M2M TC timeout -> soft reset");
-            return;
-        }
-    }
-    DMA2D->IFCR |= DMA2D_FLAG_TC;
+    if (!g_lcd_ok) return;
+    /* 切页等"整页重绘"后把新帧同步到另一缓冲：乒乓下 s_back=上一帧，
+     * 若上一帧属于别的页面，后续局部重绘（如顶栏时间）会把旧页内容带回来
+     * （WP-C.5 上板实测翻车：主页顶栏一刷，整页退回调参页）。
+     * 仅整页重绘后调用一次（+~15ms），日常局部重绘仍零拷贝。*/
+    void *other = (s_back == LCD_FRONT_BUF) ? (void *)LCD_BACK_BUF
+                                            : (void *)LCD_FRONT_BUF;
+    memcpy(other, s_back, LCD_FBSIZE);
 }
+
+/* 历史记录（WP-A.2d/WP-C.5 实验结论，代码已移除防误用）：
+ *  - DMA2D R2M 多行填充在本片存在 +32px/行步进异常（斜带漏色）；
+ *  - 单次多行 R2M（scrtest raw 实验）会挂死系统总线（LTDC 同时在跑时），
+ *    主循环假死由 IWDG 复位救回；
+ *  - DMA2D M2M 同样 +32px/行，且小搬运 ~18µs/次开销不可接受。
+ *  → 显示写路径全部改 CPU 写穿透（gfx_fill_rect）+ CFBAR 乒乓（gfx_flip）。*/

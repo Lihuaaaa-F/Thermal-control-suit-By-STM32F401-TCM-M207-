@@ -193,9 +193,10 @@ static void ui_char64(int x, int y, unsigned int cp, uint16_t fg, uint16_t bg)
                 run++;
             }
             if (bit || bg != 0xFFFF) {
-                int x0 = x + col * 2, x1 = x + (col + run) * 2 - 1;
-                gfx_draw_hline(x0, x1, y + row * 2,     bit ? fg : bg);
-                gfx_draw_hline(x0, x1, y + row * 2 + 1, bit ? fg : bg);
+                /* 2px 宽 × 2px 高一次填充（h=2 合并相邻两行，DMA2D 调用减半）*/
+                gfx_fill_rect(x + col * 2, y + row * 2,
+                              x + (col + run) * 2 - 1, y + row * 2 + 1,
+                              bit ? fg : bg);
             }
             col += run;
         }
@@ -431,9 +432,31 @@ static void draw_home_buttons(void)
     ui_btn(748, 544, 260, 56, "急停", C_ALARM, 1);
 }
 
+/* 页底色：只填卡片/按钮未覆盖的空白区（WP-C.5：省 1.2MB 全屏清，写带宽让给内容）*/
+static void draw_home_bg(void)
+{
+    gfx_fill_rect(0, 48, 1023, 55, C_BG);              /* 顶栏-卡片间 */
+    gfx_fill_rect(0, 56, 15, 279, C_BG);               /* 卡片行两侧与中缝 */
+    gfx_fill_rect(496, 56, 527, 279, C_BG);
+    gfx_fill_rect(1008, 56, 1023, 279, C_BG);
+    gfx_fill_rect(0, 280, 1023, 295, C_BG);            /* 两行卡片之间 */
+    gfx_fill_rect(0, 296, 15, 447, C_BG);
+    gfx_fill_rect(496, 296, 527, 447, C_BG);
+    gfx_fill_rect(1008, 296, 1023, 447, C_BG);
+    gfx_fill_rect(0, 448, 1023, 543, C_BG);            /* 卡片-按钮间 */
+    gfx_fill_rect(0, 544, 15, 599, C_BG);              /* 按钮间缝隙 */
+    gfx_fill_rect(236, 544, 251, 599, C_BG);
+    gfx_fill_rect(472, 544, 487, 599, C_BG);
+    gfx_fill_rect(708, 544, 747, 599, C_BG);
+    gfx_fill_rect(1008, 544, 1023, 599, C_BG);
+}
+
 static void draw_home(void)
 {
-    gfx_clear(C_BG);
+    uint32_t t0 = DWT->CYCCNT;
+    int page_switched = (s_page != UI_PAGE_HOME);   /* 切页才需要缓冲同步（WP-C.5）*/
+    s_page = UI_PAGE_HOME;
+    draw_home_bg();
     draw_topbar();
     draw_tc_card(16, "贴身水箱", 0);
     draw_tc_card(528, "环境水箱", 1);
@@ -441,6 +464,8 @@ static void draw_home(void)
     draw_fan_card();
     draw_home_buttons();
     gfx_flip();
+    if (page_switched) gfx_sync_buffers();   /* 仅切页同步（同页重绘两缓冲本就同页）*/
+    g_stat_ui_ms_x10 = (DWT->CYCCNT - t0) / (SystemCoreClock / 10000u);
     s_dirty = 0;
 }
 
@@ -457,6 +482,9 @@ static int tune_items(int *ids, int max)
 
 static void draw_tune(void)
 {
+    uint32_t t0 = DWT->CYCCNT;
+    int page_switched = (s_page != UI_PAGE_TUNE);   /* 切页才需要缓冲同步（WP-C.5）*/
+    s_page = UI_PAGE_TUNE;
     int ids[16];
     int n = tune_items(ids, 16);
     gfx_clear(C_BG);
@@ -508,6 +536,8 @@ static void draw_tune(void)
     ui_btn(16, 544, 200, 56, "返回", C_ACCENT, 0);
     ui_btn(700, 544, 324, 56, "保存并返回", C_ACCENT, 1);   /* 主操作=实底蓝字白 */
     gfx_flip();
+    if (page_switched) gfx_sync_buffers();
+    g_stat_ui_ms_x10 = (DWT->CYCCNT - t0) / (SystemCoreClock / 10000u);
     s_dirty = 0;
 }
 
@@ -542,6 +572,7 @@ static void draw_dialog(void)
         ui_btn(612, 300, 200, 64, "取消", C_ACCENT, 0);
     }
     gfx_flip();
+    gfx_sync_buffers();   /* 弹窗帧同步（关闭后另一缓冲不得残留遮罩/卡片）*/
 }
 
 /* ====== 调参动作（touch 路径，含 F4 二次确认）====== */
@@ -757,17 +788,29 @@ void tcs_ui_init(void)
     s_tune_step = 0.1f;
     s_step_granted = 0;
     s_dirty = D_ALL;
-    if (lcd_ready()) draw_home();
+    if (lcd_ready()) {
+        draw_home();
+        gfx_sync_buffers();   /* boot：另一缓冲尚是启动黑屏，需同步 */
+    }
     tcs_log("[APP]", "ui init page=home lcd=%d touch=%d", lcd_ready(), touch_ready());
 }
 
 #ifdef TCS_DEBUG_UI
-/* T1 调试页脚（WP-A.2b：默认关；WP-C 删 blackbox 后本块改挂 stat 计数器）*/
-#include "blackbox.h"
+/* T1 调试页脚（WP-A.2b：默认关；WP-C.2：blackbox 已删，改挂 DWT stat 计数器）*/
 static void draw_debug_footer(uint32_t now)
 {
+    (void)now;
+    char ln[104];
+    snprintf(ln, sizeof(ln),
+             "L=%lu Wmax=%luus Wavg=%luus UI=%lu.%lums T=%luus OVF=%lu",
+             (unsigned long)g_stat_loop_passes,
+             (unsigned long)g_stat_work_us_max, (unsigned long)g_stat_work_us_avg,
+             (unsigned long)(g_stat_ui_ms_x10 / 10u),
+             (unsigned long)(g_stat_ui_ms_x10 % 10u),
+             (unsigned long)g_stat_touch_us_max,
+             (unsigned long)g_stat_tick_ovf);
     gfx_fill_rect(0, 583, 1023, 599, 0x0000);
-    gfx_draw_string(8, 583, blackbox_footer_text(now), 0xFFFF, 0x0000);
+    gfx_draw_string(8, 583, ln, 0xFFFF, 0x0000);
 }
 #else
 static void draw_debug_footer(uint32_t now) { (void)now; }
@@ -842,7 +885,10 @@ void tcs_ui_screen_stress(int mode, int n)
 
 void tcs_ui_poll(uint32_t now)
 {
+    uint32_t t0 = DWT->CYCCNT;
     touch_poll(now);
+    uint32_t us = (DWT->CYCCNT - t0) / (SystemCoreClock / 1000000u);
+    if (us > g_stat_touch_us_max) g_stat_touch_us_max = us;   /* 单次轮询耗时(WP-C.5) */
 
     /* 500ms 状态扫描 → 脏区；顶栏时间每秒刷 */
     static uint32_t last_sync = 0;

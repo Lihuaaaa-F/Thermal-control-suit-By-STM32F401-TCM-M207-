@@ -1,7 +1,0 @@
-{
-	"InstallScripts" : 
-	[
-		"D:/Espressif/ws/tcs/project_tcs/build-sim/cmake_install.cmake"
-	],
-	"Parallel" : false
-}

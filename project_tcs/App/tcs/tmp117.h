@@ -18,6 +18,8 @@ extern "C" {
 
 #define TMP117_ADDR7        0x48
 #define TMP117_REG_TEMP     0x00
+#define TMP117_REG_DEVID    0x0F    /* Device ID 寄存器（期望 0x0117，H6 POST）*/
+#define TMP117_DEVID_EXPECT 0x0117u
 #define TMP117_LSB_C        0.0078125f
 #define TMP117_SAMPLE_MS    100u
 #define TMP117_AVG_WIN      8
@@ -46,6 +48,7 @@ void tmp117_health_step(tmp117_health_t *h, int step, void (*alarm_raise)(void))
 
 void  tmp117_init(I2C_HandleTypeDef *hi2c);
 void  tmp117_poll(uint32_t now_ms);   /* 主循环 100ms 节拍调用；更新 g_tcs.body_temp/body_sensor_ok */
+int   tmp117_read_devid(uint16_t *id);/* POST 用：读 0x0F Device ID（期望 0x0117），0=ok */
 
 /* WP-G 板内仿真（TCS_SIM 构建才实现）*/
 void tmp117_sim_set(float v);         /* 假体温注入 */

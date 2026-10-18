@@ -532,13 +532,14 @@ void gfx_use_hidden_buffer(void)
 void gfx_sync_buffers(void)
 {
     if (!g_lcd_ok) return;
-    /* 切页等"整页重绘"后把新帧同步到另一缓冲：乒乓下 s_back=上一帧，
-     * 若上一帧属于别的页面，后续局部重绘（如顶栏时间）会把旧页内容带回来
-     * （WP-C.5 上板实测翻车：主页顶栏一刷，整页退回调参页）。
+    /* 切页等"整页重绘"后把新帧同步到另一缓冲：乒乓下 flip 后 s_back=旧帧、
+     * g_shown_fb=刚画好的新帧。同步方向必须是 新帧→旧帧缓冲（H1 修正：
+     * 原实现 memcpy(other, s_back) 反向拷贝，把旧帧盖到新帧上——按下残影
+     * 与页面切换残留的根因；WP-C.5 的"顶栏带回旧页"症状实为同源问题）。
      * 仅整页重绘后调用一次（+~15ms），日常局部重绘仍零拷贝。*/
     void *other = (s_back == LCD_FRONT_BUF) ? (void *)LCD_BACK_BUF
                                             : (void *)LCD_FRONT_BUF;
-    memcpy(other, s_back, LCD_FBSIZE);
+    memcpy(s_back, other, LCD_FBSIZE);   /* 新帧(显示中) → 旧帧缓冲 */
 }
 
 /* 历史记录（WP-A.2d/WP-C.5 实验结论，代码已移除防误用）：

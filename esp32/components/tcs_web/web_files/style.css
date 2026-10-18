@@ -32,7 +32,7 @@ header {
 #curve { width: 100%; margin-top: 8px; }
 .switches { display: flex; gap: 8px; margin-top: 10px; }
 .sw {
-  flex: 1; padding: 10px 0; border: 0; border-radius: 8px;
+  flex: 1; padding: 10px 0; border: 0; border-radius: 8px; min-height: 44px;
   background: var(--dis); color: #fff; font-size: 14px;
 }
 .sw.on { background: var(--ok); }
@@ -41,10 +41,10 @@ header {
 .prow { margin: 10px 0; }
 .prow .pname { display: flex; justify-content: space-between; font-size: 14px; }
 .prow .pval { color: var(--value); }
-.prow input[type=range] { width: 100%; accent-color: var(--accent); }
+.prow input[type=range] { width: 100%; height: 44px; accent-color: var(--accent); }
 .stepper { display: flex; gap: 6px; margin-top: 4px; }
 .stepper button {
-  min-width: 44px; height: 32px; border: 0; border-radius: 6px;
+  min-width: 44px; height: 44px; border: 0; border-radius: 6px;
   background: var(--accent); color: #fff; font-size: 18px;
   padding: 0 10px; white-space: nowrap;
 }
@@ -55,7 +55,11 @@ details summary { cursor: pointer; }
   width: 100%; padding: 18px 0; border: 0; border-radius: 12px;
   background: var(--alarm); color: #fff; font-size: 22px; font-weight: 700; letter-spacing: 8px;
 }
-.mini { border: 0; border-radius: 6px; padding: 6px 10px; font-size: 13px; color: #fff; }
+.mini { border: 0; border-radius: 6px; padding: 6px 10px; min-height: 44px; font-size: 13px; color: #fff; }
+.csv {
+  width: 100%; margin-top: 8px; padding: 10px 0; min-height: 44px;
+  border: 0; border-radius: 8px; background: var(--accent); color: #fff; font-size: 14px;
+}
 .mini.ok { background: var(--ok); }
 
 .overlay {

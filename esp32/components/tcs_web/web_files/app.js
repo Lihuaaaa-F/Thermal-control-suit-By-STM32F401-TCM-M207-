@@ -39,9 +39,19 @@ function wsConnect() {
     else if (m.t === "reg") { registry = m.list || []; buildParams(); }
   };
 }
+/* H2 重连加固：指数退避 1,2,4,8,10,10…s（上限 10s）；
+ * 连败 RELOAD_AFTER 次(~95s)自动整页刷新——清前端 JS 态（F-1 待决清账：
+ * WS 卡死类停摆刷新即恢复；AP 整体离线时刷新失败由用户恢复，属物理边界）*/
+const RETRY_CAP_S = 10;
+const RELOAD_AFTER = 12;
 function scheduleRetry() {
   overlay(true, ++retry);
-  const wait = Math.min(5, retry);
+  if (retry >= RELOAD_AFTER) {
+    $("conn").textContent = "自动刷新…";
+    location.reload();
+    return;
+  }
+  const wait = Math.min(RETRY_CAP_S, 1 << Math.min(retry - 1, 4));
   $("conn").textContent = `重连(${wait}s)`;
   retryTimer = setTimeout(wsConnect, wait * 1000);
 }
@@ -127,6 +137,7 @@ function valOf(id) { return document.querySelector(`.pval[data-v="${id}"]`); }
 function fmtVal(id, v) {
   const p = registry.find((x) => x.id === id);
   if (id === 6) return v !== 0 ? "自动" : "手动";
+  if (id === 8) return v == 1 ? "强制布防" : v == 2 ? "强制不布防" : "自动";
   return p && p.unit ? `${(+v).toFixed(1)} ${p.unit}` : (+v).toFixed(1);
 }
 function curVal(id) {
@@ -150,7 +161,11 @@ function bindParamEvents() {
   });
   document.querySelectorAll("button[data-step]").forEach((btn) => {
     btn.addEventListener("click", () => {
-      const id = +btn.parentElement.querySelector("input") ? +btn.parentElement.querySelector("input").dataset.id : 0;
+      /* H7 修复：input 与 .stepper 是兄弟（都在 .prow 下），
+       * 原 parentElement 查询和 `+querySelector` NaN 双重失效，步进从未生效 */
+      const inp = btn.closest(".prow") && btn.closest(".prow").querySelector("input");
+      if (!inp) return;
+      const id = +inp.dataset.id;
       const p = registry.find((x) => x.id === id);
       if (!p) return;
       const dir = btn.dataset.step === "+" ? 1 : -1;
@@ -173,6 +188,7 @@ function bindButtons() {
   $("sw-fan").onclick = () => send({ t: "cmd", c: 5 });
   $("sw-mode").onclick = () => send({ t: "cmd", c: $("sw-mode").classList.contains("on") ? 7 : 6 });
   $("btn-ack").onclick = () => send({ t: "cmd", c: 9 });
+  $("btn-csv").onclick = exportCsv;
   $("btn-estop").onclick = () => {
     /* 与屏同一 tcs_emergency_stop 语义：TEC 全停 + 风扇全开 + 手动 + ALM_ESTOP */
     if (confirm("确认急停？TEC 将全部停止，风扇全开")) send({ t: "cmd", c: 8 });
@@ -242,6 +258,19 @@ function startUptime() {
     const t = lastStatus.boot_s;
     $("uptime").textContent = `${String(Math.floor(t / 3600)).padStart(2, "0")}:${String(Math.floor(t / 60) % 60).padStart(2, "0")}:${String(t % 60).padStart(2, "0")}`;
   }, 1000);
+}
+
+/* ====== H7：CSV 导出（曲线原始采样 → tcs_body_log.csv）====== */
+function exportCsv() {
+  const rows = ["unix_time_s,body_temp_c"];
+  for (const p of curvePts) rows.push(`${p.x.toFixed(1)},${p.y.toFixed(2)}`);
+  const blob = new Blob([rows.join("\n") + "\n"], { type: "text/csv" });
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = "tcs_body_log.csv";
+  a.click();
+  URL.revokeObjectURL(a.href);
+  toast(`已导出 ${curvePts.length} 行`);
 }
 
 /* HTTP 兜底：WS 起不来时先拉一次快照/注册表 */

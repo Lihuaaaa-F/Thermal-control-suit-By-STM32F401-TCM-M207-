@@ -13,6 +13,7 @@
  */
 #include "control.h"
 #include "param_registry.h"
+#include "post.h"
 
 static control_ops_t s_ops;
 static ctrl_state_t  s_state = CTRL_IDLE;
@@ -128,12 +129,13 @@ void control_on_mode_change(uint8_t m)
     (void)m;   /* 手动进出不强制改输出；自动评估在下一拍 control_poll 接管 */
 }
 
-/* WP-A.5：布防开关（0x08 commissioned，默认 0 未布防）。
- * 未布防：传感器类异常（体温失联/M207 失联）只记状态沿，不上横幅不进 SAFE；
- * 布防=1：恢复完整 FMEA。ALM_OVERTEMP 与急停不受布防影响（安全红线不变）。 */
+/* H6 动态布防：FMEA 判据由 post 三态机裁决（0x08=0 auto/1 强制布防/2 强制不布防；
+ * UNARMED_ABSENT/ARMED_ONLINE/LOST_ALARM 见 post.h）。判据语义不变：
+ * 未布防：传感器类异常只记状态沿，不上横幅不进 SAFE；布防：完整 FMEA。
+ * ALM_OVERTEMP 与急停不受布防影响（安全红线不变）。 */
 static uint8_t commissioned(void)
 {
-    return param_get(PARAM_ID_COMMISSIONED) > 0.5f;
+    return post_armed();
 }
 
 /* ====== 500ms 评估 ====== */

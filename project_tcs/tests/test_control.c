@@ -6,6 +6,7 @@
 #include <string.h>
 #include "control.h"
 #include "param_registry.h"
+#include "post.h"
 
 static int g_pass, g_fail;
 #define CHECK(cond, name) do { \
@@ -16,6 +17,12 @@ static int g_pass, g_fail;
 /* param_load_eeprom 引用的 eeprom 桩（本测试不调用，仅满足链接）*/
 int eeprom_ready(void) { return 0; }
 int eeprom_read_image(uint8_t img[EE_IMG_SIZE]) { (void)img; return -1; }
+
+/* H6：布防判据已迁移到 post 三态机（control 经 post_armed() 读取），测试直写状态 */
+static void set_armed(uint8_t a)
+{
+    post_arm_commit(a ? POST_ARM_ARMED_ONLINE : POST_ARM_UNARMED_ABSENT);
+}
 
 /* ====== 输出记录桩 ====== */
 static int fan_calls, tec_calls, temp_calls;
@@ -41,7 +48,7 @@ static void enter_auto_healthy(void)
         .fan_set = stub_fan, .tec_sw = stub_tec, .tec_temp = stub_temp, .on_state = 0,
     });
     param_registry_init(&(param_hooks_t){0});
-    (void)param_set(PARAM_ID_COMMISSIONED, 1.0f, 4);   /* WP-A.5：布防=完整 FMEA */
+    set_armed(1);                                      /* H6：布防=完整 FMEA */
     g_tcs.body_sensor_ok = 1;
     g_tcs.m207_online = 1;
     g_tcs.tc1_act = 25.0f;
@@ -132,7 +139,7 @@ int main(void)
         .fan_set = stub_fan, .tec_sw = stub_tec, .tec_temp = stub_temp, .on_state = 0,
     });
     param_registry_init(&(param_hooks_t){0});
-    (void)param_set(PARAM_ID_COMMISSIONED, 1.0f, 4);   /* WP-A.5：布防 */
+    set_armed(1);
     g_tcs.body_sensor_ok = 1;
     g_tcs.m207_online = 0;
     s_now = 1000u;
@@ -171,7 +178,7 @@ int main(void)
 
     /* ====== WP-A.5 未布防（默认 0）：传感器类异常只记状态沿，不上横幅不进 SAFE ====== */
     enter_auto_healthy();
-    (void)param_set(PARAM_ID_COMMISSIONED, 0.0f, 4);   /* 拆防 */
+    set_armed(0);
     reset_stubs();
     g_tcs.body_temp = 37.0f;                           /* 带内温度：FSM 无动作可断言 */
     g_tcs.body_sensor_ok = 0;                          /* 拔体温传感器 */
@@ -186,7 +193,7 @@ int main(void)
     CHECK(control_state() != CTRL_SAFE, "unarmed: m207 loss no SAFE");
 
     /* 重新布防 → 同一异常立即进完整 FMEA */
-    (void)param_set(PARAM_ID_COMMISSIONED, 1.0f, 4);
+    set_armed(1);
     tick();
     CHECK(control_state() == CTRL_SAFE, "re-arm -> full FMEA SAFE");
     CHECK(tcs_alarm_active(ALM_M207) == 1, "re-arm: ALM_M207 set");
@@ -194,14 +201,14 @@ int main(void)
 
     /* 急停不受布防影响（安全边界）*/
     enter_auto_healthy();
-    (void)param_set(PARAM_ID_COMMISSIONED, 0.0f, 4);
+    set_armed(0);
     tcs_emergency_stop();
     CHECK(control_state() == CTRL_SAFE && tcs_alarm_active(ALM_ESTOP) == 1,
           "unarmed: estop still SAFE+alarm");
 
     /* 过热硬阈值不受布防影响（安全边界）*/
     enter_auto_healthy();
-    (void)param_set(PARAM_ID_COMMISSIONED, 0.0f, 4);
+    set_armed(0);
     g_tcs.tc1_act = 48.5f;
     tick();
     CHECK(tcs_alarm_active(ALM_OVERTEMP) == 1, "unarmed: overtemp still raises");

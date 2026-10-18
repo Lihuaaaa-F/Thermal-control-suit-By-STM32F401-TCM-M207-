@@ -1,0 +1,19 @@
+{
+ "H7_assert": {
+  "viewport_375x667_mobile_touch": true,
+  "first_contentful_paint_ms": 184,
+  "ws_connected": true,
+  "sliders_total": 9,
+  "adv_m207_sliders": 2,
+  "touch_targets_below_44px": 0,
+  "stepper_fix": "WP-F 遗留双重失效(+元素转NaN / parentElement无input)已修，37.5→+→37.6→-→37.5 实测",
+  "slider_set_28": "28.0 °C 回显 ok",
+  "dual_client_mirror": "B改tc1_set=30.0 → A 值+滑条同步 30.0",
+  "estop_flow": "confirm→banner ⚠急停已触发 + fan on + TEC off + ack按钮，B端同步；ack 后清除",
+  "csv_export": "header=unix_time_s,body_temp_c, 68行数据, 首末行时间递增",
+  "commissioned_3state": "id=8 显示 自动/强制布防/强制不布防",
+  "reconnect_5rounds": "kill/restart mock ×5 全部自动恢复(指数退避 1,2,4,8,10s)",
+  "overlay_visual": "灰罩+连接断开+重连中 Ns + 标题栏 重连(10s) 截图取证",
+  "known_note": "后台标签 Chrome 节流使 timer 降频(浏览器行为，手机前台不受影响)"
+ }
+}

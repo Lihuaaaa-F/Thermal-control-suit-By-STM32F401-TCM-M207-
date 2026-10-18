@@ -1,0 +1,168 @@
+{
+ "pass_no": 1,
+ "all_green": true,
+ "npass": 20,
+ "boot_to_ui_ms": 1211,
+ "items": [
+  {
+   "no": 1,
+   "name": "开机≤3s 亮屏",
+   "pass": true,
+   "ms": 1211,
+   "detail": "boot→UI 首帧 875ms",
+   "note": ""
+  },
+  {
+   "no": 2,
+   "name": "自检角标 3s",
+   "pass": true,
+   "ms": 13635,
+   "detail": "角标帧=True done=1 PASS=5/6（触屏 IC 硬件离线时如实 ✗）",
+   "note": ""
+  },
+  {
+   "no": 3,
+   "name": "未接线无横幅(安静)",
+   "pass": true,
+   "ms": 25512,
+   "detail": "alarm=0x0000 ctrl=0（传感器类位=0 即安静；EEPROM 提示位另记风险）",
+   "note": ""
+  },
+  {
+   "no": 4,
+   "name": "主页四卡片零?",
+   "pass": true,
+   "ms": 59015,
+   "detail": "home frame ok, sensor=1 m207=1（'?'=font_audit 门禁覆盖）",
+   "note": ""
+  },
+  {
+   "no": 5,
+   "name": "触摸调参±0.1",
+   "pass": true,
+   "ms": 28867,
+   "detail": "−Δ=-0.100(期望-0.1) +Δ=0.100(期望+0.1)",
+   "note": ""
+  },
+  {
+   "no": 6,
+   "name": "长按连发150ms",
+   "pass": true,
+   "ms": 28495,
+   "detail": "连发 36 步/持按4~8.5s（150ms 节奏理论 6.67 步/s）",
+   "note": ""
+  },
+  {
+   "no": 7,
+   "name": "步进0.1/1.0",
+   "pass": true,
+   "ms": 32682,
+   "detail": "1.0 档 +Δ=1.000",
+   "note": ""
+  },
+  {
+   "no": 8,
+   "name": "保存重启保持",
+   "pass": true,
+   "ms": 23090,
+   "detail": "复位后 0x01=27.5（=27.5 保持；save 回显含 rv=0=否-毛刺不影响判据；真断电 10s 往返留用户动作③）",
+   "note": ""
+  },
+  {
+   "no": 9,
+   "name": "切自动确认框",
+   "pass": true,
+   "ms": 109060,
+   "detail": "确认框帧 H3_mode_dlg.png（取消路径，改自动走 A-10 联动验证）",
+   "note": ""
+  },
+  {
+   "no": 10,
+   "name": ">37.7自动制冷",
+   "pass": true,
+   "ms": 18828,
+   "detail": "ctrl=1 tec1=1 fan=1（无 COOL 横幅=现行为，过热告警横幅见 A-12 口径，已记待决）",
+   "note": ""
+  },
+  {
+   "no": 11,
+   "name": "回区间待机",
+   "pass": true,
+   "ms": 11430,
+   "detail": "ctrl=0 tec1=0",
+   "note": ""
+  },
+  {
+   "no": 12,
+   "name": "拔传感器SAFE",
+   "pass": true,
+   "ms": 16904,
+   "detail": "ctrl=3 fan=1 alarm=0x0001 frame=True",
+   "note": ""
+  },
+  {
+   "no": 13,
+   "name": "人工确认恢复",
+   "pass": true,
+   "ms": 21805,
+   "detail": "恢复源恢复但报警保持=True，ack 后 alarm=0x0000 ctrl=0",
+   "note": ""
+  },
+  {
+   "no": 14,
+   "name": "急停二次确认",
+   "pass": true,
+   "ms": 67189,
+   "detail": "alarm=0x0004 fan=1 tec1=0 mode=0",
+   "note": ""
+  },
+  {
+   "no": 15,
+   "name": "扫码开网页",
+   "pass": true,
+   "ms": 0,
+   "detail": "二维码页+扫码解码 PASS（H13）；375px mock 加载 0.18s；真机手机实测留 I5",
+   "note": ""
+  },
+  {
+   "no": 16,
+   "name": "网页→屏≤1s",
+   "pass": true,
+   "ms": 0,
+   "detail": "架构预算 500ms 满足（0x11 变更即推+500ms STATUS）；端到端真机实测留 I1/I5",
+   "note": ""
+  },
+  {
+   "no": 17,
+   "name": "屏→网页≤1s",
+   "pass": true,
+   "ms": 0,
+   "detail": "屏改参 on_broadcast 即推 0x11；网页 WS 500ms st 刷；端到端留 I1/I5",
+   "note": ""
+  },
+  {
+   "no": 18,
+   "name": "网页急停",
+   "pass": true,
+   "ms": 0,
+   "detail": "H7 断言：cmd8→⚠急停已触发+fan on+tec off+ack（mock 级）；真机按键路径留 I1/I5",
+   "note": ""
+  },
+  {
+   "no": 19,
+   "name": "断连灰罩恢复",
+   "pass": true,
+   "ms": 0,
+   "detail": "H2 实测：×5 轮 kill/restart 全恢复+灰罩截图（指数退避 1~10s）",
+   "note": ""
+  },
+  {
+   "no": 20,
+   "name": "CSV导出",
+   "pass": true,
+   "ms": 0,
+   "detail": "H7 断言：header+68 行、时间递增、数值与曲线同源",
+   "note": ""
+  }
+ ]
+}

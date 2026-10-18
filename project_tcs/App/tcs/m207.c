@@ -7,6 +7,7 @@
  * TX：主循环阻塞 HAL_UART_Transmit（铁律：禁止 ISR 内发送）。
  */
 #include "m207.h"
+#include "post.h"
 #include <string.h>
 #include <stdlib.h>
 #include <stdio.h>
@@ -92,6 +93,17 @@ int m207_parse_line(const char *line, m207_reply_t *out)
     return 1;
 }
 
+/* ====== H10 映射表模板格式化（纯函数）====== */
+int m207_map_format(const m207_map_entry_t *e, float v, char *out, size_t cap)
+{
+    if (!e || !out || e->ch < 1 || e->ch > 2 || e->cmd[0] == '\0') return -1;
+    if (e->decimals > 6) return -1;
+    int n = snprintf(out, cap, "TC%u:%s=%.*f\r",
+                     (unsigned)e->ch, e->cmd, (int)e->decimals, (double)v);
+    if (n < 0 || (size_t)n >= cap) return -1;
+    return 0;
+}
+
 /* ===================================================================== */
 /*                          目标机驱动                                    */
 /* ===================================================================== */
@@ -126,9 +138,20 @@ static uint8_t  s_fail_cnt;
 static uint8_t  s_poll_ch = 1;                 /* 1↔2 交替 */
 static uint8_t  s_online;
 static float    s_last_temp[3];                /* [1]=tc1 [2]=tc2 */
+static uint32_t s_last_temp_ms[3];             /* H6.7：上回值时刻（合理性滤波）*/
+static uint8_t  s_have_temp[3];
 
-/* 待确认下发（回读校验）：同一时刻最多 2 条（每通道 1 条）*/
+/* 待确认下发（回读校验）：每通道 1 条 */
 static m207_setpend_t s_pend[2];
+
+/* ====== H10 参数映射表（占位；M207 文档到达=填表+向量，扩展成本一行）======
+ * 0x100/0x101 为假参数占位（PIDKP/PIDKI 非真指令名），验证通用通道
+ * 下发→回读确认→NAK 重发全链；真参数到达后替换 cmd 字段即可。 */
+static const m207_map_entry_t s_map[] = {
+    { 0x100, 1, "PIDKP", 3 },
+    { 0x101, 1, "PIDKI", 3 },
+};
+#define M207_MAP_N  (sizeof(s_map) / sizeof(s_map[0]))
 
 /* TX 命令队列（SPSC：生产者全在主循环上下文，消费者 m207_poll）*/
 static char    s_txq[M207_TXQ_DEPTH][M207_TXQ_LEN];
@@ -160,10 +183,13 @@ static struct {
     uint8_t wrong_echo;
     float   setpoint[3];
     float   act[3];
+    uint8_t drop_pct;      /* H11：回包丢弃率 0-100（间歇丢包注入）*/
 } s_m207_sim;
 
 static void sim_push_line(const char *line)
 {
+    if (s_m207_sim.drop_pct > 0 && (rand() % 100) < s_m207_sim.drop_pct)
+        return;                       /* H11：间歇丢包（回包静默丢弃）*/
     for (const char *p = line; *p; p++) m207_isr_push((uint8_t)*p);
 }
 
@@ -214,6 +240,12 @@ void m207_sim_wrong_echo(void)
     s_m207_sim.wrong_echo = 1;
     tcs_log("[SIM]", "next setpoint echo will be WRONG (resend path)");
 }
+
+void m207_sim_drop(uint8_t pct)
+{
+    s_m207_sim.drop_pct = (pct > 100) ? 100u : pct;
+    tcs_log("[SIM]", "reply drop rate = %u%%", (unsigned)s_m207_sim.drop_pct);
+}
 #endif /* TCS_SIM */
 
 static void m207_tx_raw(const char *cmd)
@@ -243,6 +275,8 @@ void m207_init(UART_HandleTypeDef *huart)
     s_fail_cnt = 0;
     s_online = 0;
     s_last_temp[1] = s_last_temp[2] = 0.0f;
+    s_last_temp_ms[1] = s_last_temp_ms[2] = 0;
+    s_have_temp[1] = s_have_temp[2] = 0;
     memset(s_pend, 0, sizeof(s_pend));
     s_txq_head = s_txq_tail = 0;
     g_tcs.m207_online = 0;
@@ -269,6 +303,9 @@ int m207_set_temp(uint8_t ch, float v)
     p->ch = ch;
     p->retries = 0;
     p->active = 1;
+    strncpy(p->param, "TCADJTEMP", sizeof(p->param) - 1);
+    p->param[sizeof(p->param) - 1] = '\0';
+    p->decimals = 1;
     return 0;
 }
 
@@ -286,6 +323,28 @@ int m207_send_raw(const char *cmd)
     return m207_txq_push(cmd);
 }
 
+/* H10：按映射表下发（下发→回读确认→不一致自动重发 1 次→NAK 告警）*/
+int m207_map_set(uint16_t pid, float v)
+{
+    for (size_t i = 0; i < M207_MAP_N; i++) {
+        const m207_map_entry_t *e = &s_map[i];
+        if (e->pid != pid) continue;
+        char cmd[24];
+        if (m207_map_format(e, v, cmd, sizeof(cmd)) != 0) return -1;
+        if (m207_txq_push(cmd) != 0) return -1;
+        m207_setpend_t *p = &s_pend[e->ch - 1];
+        p->value = v;
+        p->ch = e->ch;
+        p->retries = 0;
+        p->active = 1;
+        strncpy(p->param, e->cmd, sizeof(p->param) - 1);
+        p->param[sizeof(p->param) - 1] = '\0';
+        p->decimals = e->decimals;
+        return 0;
+    }
+    return -1;   /* 未映射参数 */
+}
+
 float m207_last_temp(uint8_t ch)
 {
     if (ch != 1 && ch != 2) return 0.0f;
@@ -294,15 +353,28 @@ float m207_last_temp(uint8_t ch)
 
 uint8_t m207_online(void) { return s_online; }
 
-/* 回复行处理（含写路径确认）*/
-static void m207_handle_line(const char *line)
+/* 回复行处理（含写路径确认）。now_ms 供 H6.7 合理性滤波取 Δt。*/
+static void m207_handle_line(const char *line, uint32_t now_ms)
 {
     m207_reply_t r;
     if (!m207_parse_line(line, &r)) return;
     if (r.module == M207_MOD_NONE) return;
 
     if (r.kind == M207_KIND_REPLY && strcmp(r.param, "TCACTTEMP") == 0) {
+        /* H6.7 合理性滤波：|Δ|>10°C/s 判不可信 → 按失联路径（计数+1，不采纳）*/
+        if (s_have_temp[r.module]) {
+            float dt = (float)(now_ms - s_last_temp_ms[r.module]) / 1000.0f;
+            if (!post_m207_sanity_ok(s_last_temp[r.module], r.value, dt)) {
+                SEGGER_RTT_printf(0, "[WARN] m207 implausible ch=%u %.1f->%.1f (dt=%.1fs)\n",
+                                  (unsigned)r.module, (double)s_last_temp[r.module],
+                                  (double)r.value, (double)dt);
+                if (s_fail_cnt < 255) s_fail_cnt++;
+                return;
+            }
+        }
         s_last_temp[r.module] = r.value;
+        s_last_temp_ms[r.module] = now_ms;
+        s_have_temp[r.module] = 1;
         s_fail_cnt = 0;                        /* 任何成功回复清失败计数 */
         if (!s_online) {
             s_online = 1;
@@ -349,7 +421,7 @@ void m207_poll(uint32_t now_ms)
     uint16_t guard = M207_RING_SIZE + 2u;
     while (guard-- && m207_ring_pop(&b)) {
         if (m207_lineasm_feed(&s_asm, b, line, sizeof(line)))
-            m207_handle_line(line);
+            m207_handle_line(line, now_ms);
     }
 
     /* 3) 轮询状态机 */

@@ -6,6 +6,7 @@
  * TCS_SIM 构建：假体温源（tmp117_sim_set/off）驱动 FSM/报警全路径（WP-G）。
  */
 #include "tmp117.h"
+#include "post.h"               /* H6.7 合理性滤波 post_body_sanity_ok */
 
 /* ====== 纯逻辑 ====== */
 float tmp117_raw_to_c(int16_t raw)
@@ -71,11 +72,14 @@ static float  s_win[TMP117_AVG_WIN];
 static int    s_win_idx;
 static int    s_win_fill;
 static uint32_t s_last_ms;
+static float    s_last_valid_c;     /* H6.7：上一有效样本（合理性滤波基准）*/
+static uint32_t s_last_valid_ms;
+static uint8_t  s_have_valid;
 
 static void on_sensor_lost(void)
 {
-    /* WP-A.5：未布防只记日志不上横幅（布防由 control_poll 统一裁决，此处同步门控）*/
-    if (param_get(PARAM_ID_COMMISSIONED) < 0.5f) {
+    /* H6 动态布防：布防态由 post 三态机裁决（0x08=auto/强制布防→armed）*/
+    if (!post_armed()) {
         SEGGER_RTT_WriteString("[WARN] TMP117 LOST (unarmed, log only)\n");
         return;
     }
@@ -91,8 +95,29 @@ void tmp117_init(I2C_HandleTypeDef *hi2c)
     s_win_idx = 0;
     s_win_fill = 0;
     s_last_ms = 0;
+    s_have_valid = 0;
+    s_last_valid_c = 0.0f;
+    s_last_valid_ms = 0;
     g_tcs.body_sensor_ok = 1;
     g_tcs.body_temp = 0.0f;
+}
+
+int tmp117_read_devid(uint16_t *id)
+{
+    uint8_t buf[2];
+    if (HAL_I2C_Mem_Read(s_i2c, (uint16_t)(TMP117_ADDR7 << 1), TMP117_REG_DEVID,
+                         I2C_MEMADD_SIZE_8BIT, buf, 2, 20u) != HAL_OK)
+        return -1;
+    *id = (uint16_t)(((uint16_t)buf[0] << 8) | buf[1]);
+    return 0;
+}
+
+/* 单样本接受：I2C 成功 + H6.7 合理性（25~45°C 且 |Δ|≤2°C/s）。不合理按通信错误计。*/
+static int sample_accept(float c, uint32_t now_ms)
+{
+    if (!s_have_valid) return 1;
+    float dt = (float)(now_ms - s_last_valid_ms) / 1000.0f;
+    return post_body_sanity_ok(s_last_valid_c, c, dt);
 }
 
 void tmp117_poll(uint32_t now_ms)
@@ -120,14 +145,22 @@ void tmp117_poll(uint32_t now_ms)
                          I2C_MEMADD_SIZE_8BIT, buf, 2, 20u) == HAL_OK) {
         int16_t raw = (int16_t)(((uint16_t)buf[0] << 8) | buf[1]);
         float c = tmp117_raw_to_c(raw);
-        s_win[s_win_idx] = c;
-        s_win_idx = (s_win_idx + 1) % TMP117_AVG_WIN;
-        if (s_win_fill < TMP117_AVG_WIN) s_win_fill++;
-        /* 滑动均值 */
-        float sum = 0.0f;
-        for (int i = 0; i < s_win_fill; i++) sum += s_win[i];
-        g_tcs.body_temp = sum / (float)s_win_fill;
-        ok = 1;
+        if (sample_accept(c, now_ms)) {   /* H6.7：不合理样本按错误计，不入窗口 */
+            s_win[s_win_idx] = c;
+            s_win_idx = (s_win_idx + 1) % TMP117_AVG_WIN;
+            if (s_win_fill < TMP117_AVG_WIN) s_win_fill++;
+            /* 滑动均值 */
+            float sum = 0.0f;
+            for (int i = 0; i < s_win_fill; i++) sum += s_win[i];
+            g_tcs.body_temp = sum / (float)s_win_fill;
+            s_last_valid_c = c;
+            s_last_valid_ms = now_ms;
+            s_have_valid = 1;
+            ok = 1;
+        } else {
+            SEGGER_RTT_printf(0, "[WARN] tmp117 implausible sample %.2f dropped\n",
+                              (double)c);
+        }
     }
     tmp117_health_step(&s_health, ok, on_sensor_lost);
     g_tcs.body_sensor_ok = s_health.ok;

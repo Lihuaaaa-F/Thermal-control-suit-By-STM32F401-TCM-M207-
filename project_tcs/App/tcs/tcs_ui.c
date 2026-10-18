@@ -17,6 +17,7 @@
 #include "ft5446.h"
 #include "param_registry.h"
 #include "control.h"
+#include "post.h"
 #include "segger_rtt.h"
 #include <string.h>
 #include <stdio.h>
@@ -258,14 +259,13 @@ static void ui_fill_circle(int cx, int cy, int r, uint16_t c)
 }
 
 /* ====== 基础控件 ====== */
-/* 白底蓝边按钮（底栏主按钮）；solid=1 时实底、字白 */
-static void ui_btn(int x, int y, int w, int h, const char *label,
-                   uint16_t labelc, int solid)
+/* 白底蓝边按钮（底栏主按钮）；solid=1 时实底、字白；hl=1 按住态（H1：#E5E7EB 底）*/
+static void ui_btn_hl(int x, int y, int w, int h, const char *label,
+                      uint16_t labelc, int solid, int hl)
 {
-    if (solid) {
-        ui_fill_round(x, y, w, h, 8, labelc, C_BG);
-    } else {
-        ui_fill_round(x, y, w, h, 8, C_CARD, C_BG);
+    uint16_t bg = hl ? C_PRESS : (solid ? labelc : C_CARD);
+    ui_fill_round(x, y, w, h, 8, bg, C_BG);
+    if (!solid) {
         gfx_draw_hline(x + 6, x + w - 7, y, labelc);
         gfx_draw_hline(x + 6, x + w - 7, y + h - 1, labelc);
         gfx_draw_vline(x, y + 6, y + h - 7, labelc);
@@ -273,7 +273,13 @@ static void ui_btn(int x, int y, int w, int h, const char *label,
     }
     int lw = ui_text24_w(label);
     ui_text24(x + (w - lw) / 2, y + (h - 24) / 2, label,
-              solid ? C_WHITE : labelc, solid ? labelc : C_CARD);
+              solid ? (hl ? labelc : C_WHITE) : labelc, bg);
+}
+
+static void ui_btn(int x, int y, int w, int h, const char *label,
+                   uint16_t labelc, int solid)
+{
+    ui_btn_hl(x, y, w, h, label, labelc, solid, 0);
 }
 
 /* 状态胶囊（右上小胶囊）：on=绿"运行/开"，off=灰"停止/关" */
@@ -291,7 +297,7 @@ static int ui_in(int x, int y, int rx, int ry, int rw, int rh)
 }
 
 /* ====== 页面/弹窗状态 ====== */
-typedef enum { UI_PAGE_HOME = 0, UI_PAGE_TUNE } ui_page_t;
+typedef enum { UI_PAGE_HOME = 0, UI_PAGE_TUNE, UI_PAGE_QR } ui_page_t;
 typedef enum { DLG_NONE = 0, DLG_ESTOP, DLG_MODE_AUTO, DLG_SETCONFIRM } ui_dlg_t;
 
 static ui_page_t s_page = UI_PAGE_HOME;
@@ -321,6 +327,7 @@ static int s_prev_touched;
 static uint16_t s_dirty = D_ALL;
 
 /* ====== 顶栏 48px ====== */
+static void draw_post_badge(void);   /* H6 角标（定义在后）*/
 static void draw_topbar(void)
 {
     gfx_fill_rect(0, 0, LCD_WIDTH - 1, 47, C_CARD);
@@ -366,6 +373,44 @@ static void draw_topbar(void)
              (unsigned long)(t / 3600u), (unsigned long)((t / 60u) % 60u),
              (unsigned long)(t % 60u));
     ui_text16(904, 16, ts, C_TEXT, C_CARD);
+
+    /* H6 自检角标 (128,0,640,40)：16px ASCII+✓绿✗黄，POST 裁决后显示 3s 淡出 */
+    if (post_badge_state() == 1) draw_post_badge();
+}
+
+/* ====== POST 角标（H6：六项 ✓绿/✗黄，16px）====== */
+/* 8x16 手编码 ✓/✗（16px 档仅 ASCII，无该字形；直接位图不经字库/审计双源）*/
+static const uint8_t s_glyph_ok[16] = {
+    0,0,0,0, 0x06,0x06,0x0C,0x48,0x68,0x30,0x10,0x30, 0,0,0,0
+};
+static const uint8_t s_glyph_ng[16] = {
+    0,0,0, 0x42,0x24,0x18,0x18,0x18,0x18,0x24,0x42, 0,0,0,0
+};
+
+static void badge_glyph(int x, int y, const uint8_t *g, uint16_t c, uint16_t bg)
+{
+    for (int row = 0; row < 16; row++) {
+        uint8_t bits = g[row];
+        for (int col = 0; col < 8; col++)
+            gfx_draw_pixel(x + col, y + row, (bits & (0x80 >> col)) ? c : bg);
+    }
+}
+
+static void draw_post_badge(void)
+{
+    ui_fill_round(128, 0, 640, 40, 8, C_CARD, C_CARD);
+    gfx_draw_rect(128, 0, 128 + 640 - 1, 39, C_BORDER);
+    static const char *labels[POST_ITEM_N] = {
+        "TMP117", "M207", "EEPR", "TABLE", "SCR", "VER"
+    };
+    int x = 140;
+    for (int i = 0; i < POST_ITEM_N; i++) {
+        uint8_t ok = post_item_ok((uint8_t)i);
+        badge_glyph(x, 12, ok ? s_glyph_ok : s_glyph_ng,
+                    ok ? C_OK : C_WARN_TX, C_CARD);
+        ui_text16(x + 12, 12, labels[i], C_TEXT, C_CARD);
+        x += 104;
+    }
 }
 
 /* ====== 主页卡片 ====== */
@@ -421,15 +466,33 @@ static void draw_fan_card(void)
               C_WHITE, g_tcs.fan_on ? C_OK : C_CLINE);
 }
 
+/* H1 按住态：整卡灰底变体（内容同款重绘其上）*/
+static void draw_fan_card_hl(void)
+{
+    gfx_fill_rect(528, 296, 528 + 480 - 1, 296 + 152 - 1, C_PRESS);
+    gfx_draw_rect(528, 296, 528 + 480 - 1, 296 + 152 - 1, C_BORDER);
+    ui_text24(544, 304, "风扇", C_TEXT, C_PRESS);
+    ui_fill_round(528 + 376, 300, 88, 32, 16, g_tcs.fan_on ? C_OK : C_DIS, C_PRESS);
+    int lw = ui_text24_w(g_tcs.fan_on ? "开" : "关");
+    ui_text24(528 + 376 + (88 - lw) / 2, 304, g_tcs.fan_on ? "开" : "关",
+              C_WHITE, g_tcs.fan_on ? C_OK : C_DIS);
+    int cx0 = 640, cy0 = 372;
+    ui_fill_circle(cx0, cy0, 36, g_tcs.fan_on ? C_OK : C_CLINE);
+    ui_text24(cx0 - 12, cy0 - 12, g_tcs.fan_on ? "开" : "关",
+              C_WHITE, g_tcs.fan_on ? C_OK : C_CLINE);
+}
+
 static void draw_home_buttons(void)
 {
     int auto_m = (g_tcs.mode != 0);
-    ui_btn(16, 544, 220, 56, "调参", C_ACCENT, 0);
-    ui_btn(252, 544, 220, 56, auto_m ? "切手动" : "切自动", C_ACCENT, 0);
+    /* H13：五按钮行（176px 等宽+急停加宽），连接=二维码页入口 */
+    ui_btn(16, 544, 176, 56, "调参", C_ACCENT, 0);
+    ui_btn(208, 544, 176, 56, auto_m ? "切手动" : "切自动", C_ACCENT, 0);
     /* TEC1 启停：自动模式禁用灰 */
-    ui_btn(488, 544, 220, 56, "TEC1 启停", auto_m ? C_DIS : C_ACCENT, 0);
-    /* 急停：实心红加宽（视觉 748 起；命中区=原 rect + 加宽条，只增不减）*/
-    ui_btn(748, 544, 260, 56, "急停", C_ALARM, 1);
+    ui_btn(400, 544, 176, 56, "TEC1 启停", auto_m ? C_DIS : C_ACCENT, 0);
+    ui_btn(592, 544, 176, 56, "连接", C_ACCENT, 0);
+    /* 急停：实心红加宽 */
+    ui_btn(784, 544, 228, 56, "急停", C_ALARM, 1);
 }
 
 /* 页底色：只填卡片/按钮未覆盖的空白区（WP-C.5：省 1.2MB 全屏清，写带宽让给内容）*/
@@ -444,11 +507,12 @@ static void draw_home_bg(void)
     gfx_fill_rect(496, 296, 527, 447, C_BG);
     gfx_fill_rect(1008, 296, 1023, 447, C_BG);
     gfx_fill_rect(0, 448, 1023, 543, C_BG);            /* 卡片-按钮间 */
-    gfx_fill_rect(0, 544, 15, 599, C_BG);              /* 按钮间缝隙 */
-    gfx_fill_rect(236, 544, 251, 599, C_BG);
-    gfx_fill_rect(472, 544, 487, 599, C_BG);
-    gfx_fill_rect(708, 544, 747, 599, C_BG);
-    gfx_fill_rect(1008, 544, 1023, 599, C_BG);
+    gfx_fill_rect(0, 544, 15, 599, C_BG);              /* 按钮间缝隙（H13 五按钮）*/
+    gfx_fill_rect(192, 544, 207, 599, C_BG);
+    gfx_fill_rect(384, 544, 399, 599, C_BG);
+    gfx_fill_rect(576, 544, 591, 599, C_BG);
+    gfx_fill_rect(768, 544, 783, 599, C_BG);
+    gfx_fill_rect(1012, 544, 1023, 599, C_BG);
 }
 
 static void draw_home(void)
@@ -508,7 +572,9 @@ static void draw_tune(void)
         if (p->id == PARAM_ID_MODE)
             snprintf(vs, sizeof(vs), "%s", p->value != 0.0f ? "自动" : "手动");
         else if (p->id == PARAM_ID_COMMISSIONED)
-            snprintf(vs, sizeof(vs), "%s", p->value != 0.0f ? "已布防" : "未布防");
+            snprintf(vs, sizeof(vs), "%s",
+                     p->value == 1.0f ? "强制布防" :
+                     p->value == 2.0f ? "强制不布防" : "自动");
         else
             snprintf(vs, sizeof(vs), "%.1f%s", (double)p->value, p->unit);
         int vw = ui_text24_w(vs);
@@ -535,6 +601,48 @@ static void draw_tune(void)
 
     ui_btn(16, 544, 200, 56, "返回", C_ACCENT, 0);
     ui_btn(700, 544, 324, 56, "保存并返回", C_ACCENT, 1);   /* 主操作=实底蓝字白 */
+    gfx_flip();
+    if (page_switched) gfx_sync_buffers();
+    g_stat_ui_ms_x10 = (DWT->CYCCNT - t0) / (SystemCoreClock / 10000u);
+    s_dirty = 0;
+}
+
+/* ====== 连接二维码页（P2，H13）====== */
+#include "qr/qrcodegen.h"
+static void draw_qr(void)
+{
+    uint32_t t0 = DWT->CYCCNT;
+    int page_switched = (s_page != UI_PAGE_QR);
+    s_page = UI_PAGE_QR;
+    gfx_clear(C_CARD);   /* 白底利于扫码 */
+
+    ui_text24(32, 16, "连接", C_TEXT, C_CARD);
+
+    /* URL 二维码：ECC M，版本 2~6；模块 7px+4 模块静区 */
+    uint8_t qrc[qrcodegen_BUFFER_LEN_FOR_VERSION(6)];
+    uint8_t tmp[qrcodegen_BUFFER_LEN_FOR_VERSION(6)];
+    bool ok = qrcodegen_encodeText("http://192.168.4.1", tmp, qrc,
+                                   qrcodegen_Ecc_MEDIUM, 2, 6, -1, true);
+    if (ok) {
+        int n = qrcodegen_getSize(qrc);
+        int mod = 7;
+        int x0 = (LCD_WIDTH - (n + 8) * mod) / 2;
+        int y0 = 72;
+        gfx_fill_rect(x0, y0, x0 + (n + 8) * mod - 1, y0 + (n + 8) * mod - 1, C_WHITE);
+        for (int y = 0; y < n; y++)
+            for (int x = 0; x < n; x++)
+                if (qrcodegen_getModule(qrc, x, y))
+                    gfx_fill_rect(x0 + (x + 4) * mod, y0 + (y + 4) * mod,
+                                  x0 + (x + 4) * mod + mod - 1,
+                                  y0 + (y + 4) * mod + mod - 1, C_TEXT);
+        ui_text24(32, y0 + (n + 8) * mod + 16, "手机连接 TCS 热点后扫码自动打开",
+                  C_SUB, C_CARD);
+        ui_text24(32, y0 + (n + 8) * mod + 48, "http://192.168.4.1", C_TEXT, C_CARD);
+    } else {
+        ui_text24(32, 200, "二维码生成失败", C_ALARM, C_CARD);
+    }
+
+    ui_btn(16, 544, 200, 56, "返回", C_ACCENT, 0);
     gfx_flip();
     if (page_switched) gfx_sync_buffers();
     g_stat_ui_ms_x10 = (DWT->CYCCNT - t0) / (SystemCoreClock / 10000u);
@@ -612,6 +720,152 @@ static void tune_step(float dir)
     tune_apply(p->value + dir * s_tune_step);
 }
 
+/* ====== H1 按住态高亮（#E5E7EB 按下即重绘，抬起还原）====== */
+typedef enum {
+    HL_NONE = 0,
+    HL_HOME_TUNE, HL_HOME_MODE, HL_HOME_TEC1, HL_HOME_CONNECT, HL_HOME_ESTOP,
+    HL_HOME_PILL, HL_HOME_FAN,
+    HL_TUNE_MINUS, HL_TUNE_PLUS, HL_TUNE_STEP, HL_TUNE_BACK, HL_TUNE_SAVE,
+    HL_QR_BACK,
+    HL_DLG_OK, HL_DLG_CANCEL,
+} hl_t;
+static hl_t s_press_hl;
+
+static hl_t press_hit_test(int x, int y)
+{
+    if (s_dlg != DLG_NONE) {
+        if (ui_in(x, y, 412, 300, 200, 64)) return HL_DLG_OK;
+        if (ui_in(x, y, 612, 300, 200, 64)) return HL_DLG_CANCEL;
+        return HL_NONE;
+    }
+    if (s_page == UI_PAGE_HOME) {
+        if (ui_in(x, y, 16, 544, 176, 56))   return HL_HOME_TUNE;
+        if (ui_in(x, y, 208, 544, 176, 56))  return HL_HOME_MODE;
+        if (ui_in(x, y, 400, 544, 176, 56))  return HL_HOME_TEC1;
+        if (ui_in(x, y, 592, 544, 176, 56))  return HL_HOME_CONNECT;
+        if (ui_in(x, y, 784, 544, 228, 56))  return HL_HOME_ESTOP;
+        if (ui_in(x, y, 120, 0, 80, 40))     return HL_HOME_PILL;
+        if (ui_in(x, y, 528, 296, 480, 152)) return HL_HOME_FAN;
+    } else if (s_page == UI_PAGE_QR) {
+        if (ui_in(x, y, 16, 544, 200, 56))   return HL_QR_BACK;
+    } else {
+        if (ui_in(x, y, 700, 168, 140, 140)) return HL_TUNE_MINUS;
+        if (ui_in(x, y, 884, 168, 140, 140)) return HL_TUNE_PLUS;
+        if (ui_in(x, y, 700, 336, 324, 56))  return HL_TUNE_STEP;
+        if (ui_in(x, y, 16, 544, 200, 56))   return HL_TUNE_BACK;
+        if (ui_in(x, y, 700, 544, 324, 56))  return HL_TUNE_SAVE;
+    }
+    return HL_NONE;
+}
+
+/* 按住样绘制（down=1 灰底 / 0 常态）。仅按下单控件；还原走组重绘。*/
+static void press_hl_draw(int down)
+{
+    int auto_m = (g_tcs.mode != 0);
+    switch (s_press_hl) {
+    case HL_HOME_TUNE:
+        ui_btn_hl(16, 544, 176, 56, "调参", C_ACCENT, 0, down); break;
+    case HL_HOME_MODE:
+        ui_btn_hl(208, 544, 176, 56, auto_m ? "切手动" : "切自动", C_ACCENT, 0, down); break;
+    case HL_HOME_TEC1:
+        ui_btn_hl(400, 544, 176, 56, "TEC1 启停", auto_m ? C_DIS : C_ACCENT, 0, down); break;
+    case HL_HOME_CONNECT:
+        ui_btn_hl(592, 544, 176, 56, "连接", C_ACCENT, 0, down); break;
+    case HL_HOME_ESTOP:
+        ui_btn_hl(784, 544, 228, 56, "急停", C_ALARM, 1, down); break;
+    case HL_HOME_PILL:
+        ui_fill_round(120, 8, 80, 32, 16, down ? C_PRESS : C_ALARM, C_CARD);
+        ui_text24(120 + (80 - 48) / 2, 12, "急停",
+                  down ? C_ALARM : C_WHITE, down ? C_PRESS : C_ALARM);
+        break;
+    case HL_HOME_FAN:
+        if (down) draw_fan_card_hl(); else draw_fan_card();
+        break;
+    case HL_TUNE_MINUS:
+        ui_btn_hl(700, 168, 140, 140, "-", C_ACCENT, 0, down); break;
+    case HL_TUNE_PLUS:
+        ui_btn_hl(884, 168, 140, 140, "+", C_ACCENT, 0, down); break;
+    case HL_TUNE_STEP: {
+        char step_l[32];
+        snprintf(step_l, sizeof(step_l), "步进 %.1f", (double)s_tune_step);
+        ui_btn_hl(700, 336, 324, 56, step_l, C_ACCENT, 0, down);
+        break;
+    }
+    case HL_TUNE_BACK:
+        ui_btn_hl(16, 544, 200, 56, "返回", C_ACCENT, 0, down); break;
+    case HL_TUNE_SAVE:
+        ui_btn_hl(700, 544, 324, 56, "保存并返回", C_ACCENT, 1, down); break;
+    case HL_DLG_OK:
+        ui_btn_hl(412, 300, 200, 64, "确认",
+                  (s_dlg == DLG_MODE_AUTO) ? C_ACCENT : C_ALARM, 1, down);
+        break;
+    case HL_QR_BACK:
+        ui_btn_hl(16, 544, 200, 56, "返回", C_ACCENT, 0, down); break;
+    case HL_DLG_CANCEL:
+        ui_btn_hl(612, 300, 200, 64, "取消", C_ACCENT, 0, down); break;
+    default:
+        break;
+    }
+}
+
+/* 连发/弹窗路径整页重绘会覆盖按下样——重放一次 */
+static void press_hl_reapply(void)
+{
+    if (s_press_hl != HL_NONE) {
+        press_hl_draw(1);
+        gfx_flip();
+    }
+}
+
+/* 按下沿进入按住态 / 抬起沿组重绘还原（在 touch_tap 之前调）*/
+static void press_hl_update(int down_now, int x, int y)
+{
+    static int hl_active;
+    if (down_now) {
+        hl_t h = press_hit_test(x, y);
+        if (h != HL_NONE) {
+            s_press_hl = h;
+            hl_active = 1;
+            /* 先整页重绘并同步双缓冲，再叠按下样——back 可能是陈旧帧
+             * （同页部分重绘不同步，实测会把上一次按下残影翻上屏）*/
+            if (s_dlg != DLG_NONE) {
+                draw_dialog();                       /* 内含 sync */
+            } else if (s_page == UI_PAGE_HOME) {
+                draw_home();
+                gfx_sync_buffers();
+            } else {
+                draw_tune();
+                gfx_sync_buffers();
+            }
+            press_hl_draw(1);
+            gfx_flip();
+        }
+    } else if (hl_active) {
+        hl_active = 0;
+        hl_t h = s_press_hl;
+        s_press_hl = HL_NONE;
+        switch (h) {
+        case HL_HOME_TUNE: case HL_HOME_MODE: case HL_HOME_TEC1:
+        case HL_HOME_CONNECT: case HL_HOME_ESTOP:
+            draw_home_buttons(); gfx_flip(); gfx_sync_buffers(); break;
+        case HL_HOME_PILL:
+            draw_topbar(); gfx_flip(); gfx_sync_buffers(); break;
+        case HL_HOME_FAN:
+            draw_fan_card(); gfx_flip(); gfx_sync_buffers(); break;
+        case HL_TUNE_MINUS: case HL_TUNE_PLUS: case HL_TUNE_STEP:
+        case HL_TUNE_BACK: case HL_TUNE_SAVE:
+            draw_tune(); gfx_sync_buffers(); break;
+        case HL_QR_BACK:
+            draw_qr(); gfx_sync_buffers(); break;
+        case HL_DLG_OK: case HL_DLG_CANCEL:
+            if (s_dlg != DLG_NONE) draw_dialog();
+            break;
+        default:
+            break;
+        }
+    }
+}
+
 /* ====== 触摸分发 ====== */
 static volatile uint32_t s_tap_cnt;   /* 诊断：点击累计（幻触摸侦测）*/
 
@@ -653,31 +907,39 @@ static void touch_tap(int x, int y)
             tcs_log("[APP]", "touch alarm ack");
             draw_topbar(); gfx_flip(); return;
         }
-        if (ui_in(x, y, 16, 544, 220, 56)) {           /* 调参 */
+        if (ui_in(x, y, 16, 544, 176, 56)) {           /* 调参 */
             s_page = UI_PAGE_TUNE; s_tune_sel = 0; s_step_granted = 0;
             tcs_log("[APP]", "touch page->tune");
             draw_tune(); return;
         }
-        if (ui_in(x, y, 252, 544, 220, 56)) {          /* 模式切换 */
+        if (ui_in(x, y, 208, 544, 176, 56)) {          /* 模式切换 */
             if (g_tcs.mode == 0) { s_dlg = DLG_MODE_AUTO; draw_dialog(); }
             else (void)param_set(PARAM_ID_MODE, 0.0f, PARAM_SRC_TOUCH);
             draw_home(); return;
         }
-        if (ui_in(x, y, 488, 544, 220, 56)) {          /* TEC1 启停 */
+        if (ui_in(x, y, 400, 544, 176, 56)) {          /* TEC1 启停 */
             if (g_tcs.mode == 0) {
                 control_manual_tec(1, g_tcs.tec1_on ? 0u : 1u);
                 tcs_log("[APP]", "touch tec1 %u", g_tcs.tec1_on);
             }
             draw_home(); return;
         }
-        if (ui_in(x, y, 788, 544, 220, 56)             /* 急停原 rect */
-            || ui_in(x, y, 748, 544, 40, 56)) {        /* + 视觉加宽条（只增不减）*/
+        if (ui_in(x, y, 592, 544, 176, 56)) {          /* 连接（H13 二维码页）*/
+            tcs_log("[APP]", "touch page->qr");
+            draw_qr(); return;
+        }
+        if (ui_in(x, y, 784, 544, 228, 56)) {          /* 急停 */
             s_dlg = DLG_ESTOP; draw_dialog(); return;
         }
         if (ui_in(x, y, 528, 296, 480, 152)) {         /* 风扇整卡切换（低风险无确认）*/
             control_manual_fan(g_tcs.fan_on ? 0u : 1u);
             tcs_log("[APP]", "touch fan %u", g_tcs.fan_on);
             draw_fan_card(); gfx_flip(); return;
+        }
+    } else if (s_page == UI_PAGE_QR) {
+        if (ui_in(x, y, 16, 544, 200, 56)) {           /* 返回 */
+            tcs_log("[APP]", "touch page->home");
+            draw_home(); return;
         }
     } else { /* P1 调参页 */
         int ids[16];
@@ -691,6 +953,9 @@ static void touch_tap(int x, int y)
                 draw_tune(); return;
             }
         }
+        /* H3(A-5)：± 单击步进一档（长按连发在 touch_poll，两路径互补不重发）*/
+        if (ui_in(x, y, 700, 168, 140, 140)) { tune_step(-1.0f); return; }
+        if (ui_in(x, y, 884, 168, 140, 140)) { tune_step(1.0f); return; }
         if (ui_in(x, y, 700, 336, 324, 56)) {          /* 步进 0.1↔1.0 */
             s_tune_step = (s_tune_step > 0.05f && s_tune_step < 0.5f) ? 1.0f : 0.1f;
             draw_tune(); return;
@@ -709,11 +974,36 @@ static void touch_tap(int x, int y)
     }
 }
 
+#ifdef TCS_SIM
+/* H1 取证/彩排注入：按住序列（touchh/touchr 走真 touch_poll 路径）*/
+static int s_inj_hold, s_inj_release, s_inj_x, s_inj_y;
+void tcs_ui_inject_touch(int down, int x, int y)
+{
+    if (down) { s_inj_x = x; s_inj_y = y; s_inj_hold = 1; s_inj_release = 0; }
+    else      { s_inj_hold = 0; s_inj_release = 1; }
+}
+static int touch_inject_get(touch_event_t *ev)
+{
+    if (s_inj_hold)    { ev->touched = 1; ev->x = s_inj_x; ev->y = s_inj_y; return 1; }
+    if (s_inj_release) { s_inj_release = 0; ev->touched = 0; return 1; }
+    return 0;
+}
+#endif
+
 static void touch_poll(uint32_t now)
 {
-    if (!touch_ready()) return;
     touch_event_t ev;
-    if (ft5446_read(&ev) != 0) return;
+#ifdef TCS_SIM
+    /* 注入优先且不依赖真实触摸 IC（仿真/彩排必须硬件无关；POST 仍如实报 SCRTOUCH）*/
+    int injected = touch_inject_get(&ev);
+#else
+    int injected = 0;
+#endif
+    if (!injected) {
+        if (!touch_ready()) return;
+        int rv = ft5446_read(&ev);
+        if (rv != 0) return;   /* -1 未就绪；2=H1 幽灵帧丢弃（不得合成释放沿）*/
+    }
 
     /* 30ms 去抖：释放沿距按下 <30ms 忽略 */
     if (ev.touched) {
@@ -725,6 +1015,7 @@ static void touch_poll(uint32_t now)
             s_touch_release_ok = now;
             s_last_x = ev.x;
             s_last_y = ev.y;
+            press_hl_update(1, ev.x, ev.y);   /* H1：按下即灰底 */
         } else {
             s_last_x = ev.x;   /* 跟踪（长按期间滑出按钮则停发）*/
             s_last_y = ev.y;
@@ -739,12 +1030,14 @@ static void touch_poll(uint32_t now)
                 s_last_lp_ms = now;
                 s_press_lp_fired++;
                 tune_step(ui_in(s_last_x, s_last_y, 700, 168, 140, 140) ? -1.0f : 1.0f);
+                press_hl_reapply();           /* H1：整页重绘后恢复按下样 */
             }
         }
         s_prev_touched = 1;
     } else if (s_prev_touched) {
-        /* 抬手沿：去抖 + 长按未发过才触发单击 */
+        /* 抬手沿：先还原按住态，再去抖 + 长按未发过才触发单击 */
         s_prev_touched = 0;
+        press_hl_update(0, 0, 0);             /* H1：抬起还原（先于动作重绘）*/
         if (s_touch_down && now - s_touch_release_ok >= 30u) {
             if (s_press_lp_fired == 0)
                 touch_tap(s_last_x, s_last_y);
@@ -906,6 +1199,19 @@ void tcs_ui_poll(uint32_t now)
         if (s_page == UI_PAGE_HOME) s_dirty |= D_TOPBAR;
     }
 
+    /* H6 角标状态沿（出现/淡出）→ 主页顶栏重绘 */
+    {
+        static uint8_t last_badge = 0xFF;
+        uint8_t b = post_badge_state();
+        if (b != last_badge) {
+            last_badge = b;
+            if (s_page == UI_PAGE_HOME && s_dlg == DLG_NONE) s_dirty |= D_TOPBAR;
+        }
+    }
+
+    /* 模态弹窗打开期间冻结周期重绘：局部重绘+flip 会把弹窗从显示缓冲刷掉
+     * （H1 实测：>500ms 未点的弹窗 1Hz 闪烁）。弹窗关闭路径自带整页重绘。*/
+    if (s_dlg != DLG_NONE) return;
     if (s_page != UI_PAGE_HOME || !s_dirty) return;
 
     /* 脏区局部重绘（back buffer 画完翻转）*/
@@ -917,4 +1223,5 @@ void tcs_ui_poll(uint32_t now)
     if (s_dirty & D_BTNS) draw_home_buttons();
     gfx_flip();
     s_dirty = 0;
+    press_hl_reapply();   /* H1：周期重绘后保持按住灰底（否则 500ms 即被翻掉）*/
 }

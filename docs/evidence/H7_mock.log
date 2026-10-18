@@ -1,0 +1,53 @@
+web_mock: http://127.0.0.1:8123/  (Ctrl-C 停止)
+----------------------------------------
+Exception occurred during processing of request from ('127.0.0.1', 10052)
+Traceback (most recent call last):
+  File "C:\Users\ShiyuFang\AppData\Local\Programs\Python\Python312\Lib\socketserver.py", line 692, in process_request_thread
+    self.finish_request(request, client_address)
+  File "C:\Users\ShiyuFang\AppData\Local\Programs\Python\Python312\Lib\socketserver.py", line 362, in finish_request
+    self.RequestHandlerClass(request, client_address, self)
+  File "C:\Users\ShiyuFang\AppData\Local\Programs\Python\Python312\Lib\socketserver.py", line 761, in __init__
+    self.handle()
+  File "C:\Users\ShiyuFang\AppData\Local\Programs\Python\Python312\Lib\http\server.py", line 436, in handle
+    self.handle_one_request()
+  File "C:\Users\ShiyuFang\AppData\Local\Programs\Python\Python312\Lib\http\server.py", line 424, in handle_one_request
+    method()
+  File "D:\Espressif\ws\tcs\esp32\tools\web_mock.py", line 182, in do_GET
+    return self.handle_ws()
+           ^^^^^^^^^^^^^^^^
+  File "D:\Espressif\ws\tcs\esp32\tools\web_mock.py", line 210, in handle_ws
+    ws_serve(self.connection)
+  File "D:\Espressif\ws\tcs\esp32\tools\web_mock.py", line 160, in ws_serve
+    msg = json.loads(raw.decode())
+                     ^^^^^^^^^^^^
+UnicodeDecodeError: 'utf-8' codec can't decode byte 0xe9 in position 1: unexpected end of data
+----------------------------------------
+----------------------------------------
+Exception occurred during processing of request from ('127.0.0.1', 7141)
+Traceback (most recent call last):
+  File "C:\Users\ShiyuFang\AppData\Local\Programs\Python\Python312\Lib\socketserver.py", line 692, in process_request_thread
+    self.finish_request(request, client_address)
+  File "C:\Users\ShiyuFang\AppData\Local\Programs\Python\Python312\Lib\socketserver.py", line 362, in finish_request
+    self.RequestHandlerClass(request, client_address, self)
+  File "C:\Users\ShiyuFang\AppData\Local\Programs\Python\Python312\Lib\socketserver.py", line 761, in __init__
+    self.handle()
+  File "C:\Users\ShiyuFang\AppData\Local\Programs\Python\Python312\Lib\http\server.py", line 436, in handle
+    self.handle_one_request()
+  File "C:\Users\ShiyuFang\AppData\Local\Programs\Python\Python312\Lib\http\server.py", line 424, in handle_one_request
+    method()
+  File "D:\Espressif\ws\tcs\esp32\tools\web_mock.py", line 182, in do_GET
+    return self.handle_ws()
+           ^^^^^^^^^^^^^^^^
+  File "D:\Espressif\ws\tcs\esp32\tools\web_mock.py", line 210, in handle_ws
+    ws_serve(self.connection)
+  File "D:\Espressif\ws\tcs\esp32\tools\web_mock.py", line 160, in ws_serve
+    msg = json.loads(raw.decode())
+                     ^^^^^^^^^^^^
+UnicodeDecodeError: 'utf-8' codec can't decode byte 0xe9 in position 1: unexpected end of data
+----------------------------------------
+web_mock: http://127.0.0.1:8123/  (Ctrl-C 停止)
+web_mock: http://127.0.0.1:8123/  (Ctrl-C 停止)
+web_mock: http://127.0.0.1:8123/  (Ctrl-C 停止)
+web_mock: http://127.0.0.1:8123/  (Ctrl-C 停止)
+web_mock: http://127.0.0.1:8123/  (Ctrl-C 停止)
+web_mock: http://127.0.0.1:8123/  (Ctrl-C 停止)

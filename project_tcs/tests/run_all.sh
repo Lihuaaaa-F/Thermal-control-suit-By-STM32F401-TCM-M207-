@@ -6,13 +6,13 @@ set -u
 cd "$(dirname "$0")/.." || exit 1
 FAIL=0
 
-IFLAGS="-IApp/tcs -IApp/proto -IApp/comm"
+IFLAGS="-IApp/tcs -IApp/proto -IApp/comm -ICore/Inc"
 INC_CL="/IApp\\tcs /IApp\\proto /IApp\\comm"
 VARS64="C:\\Program Files\\Microsoft Visual Studio\\2022\\Community\\VC\\Auxiliary\\Build\\vcvars64.bat"
 
 cl_run() {  # cl_run <out.exe> <src...> — bat 内 cd 到 build，产物/对象全落 build
     local out="$1"; shift
-    local cmd_line='cl /nologo /W4 /std:c11 /utf-8 /D_CRT_SECURE_NO_WARNINGS /DTCS_UNIT_TEST /I..\App\tcs /I..\App\proto /I..\App\comm'
+    local cmd_line='cl /nologo /W4 /std:c11 /utf-8 /D_CRT_SECURE_NO_WARNINGS /DTCS_UNIT_TEST /I..\App\tcs /I..\App\proto /I..\App\comm /I..\Core\Inc'
     for s in "$@"; do
         cmd_line="$cmd_line \"$(cygpath -w "$PWD/$s")\""
     done
@@ -55,8 +55,20 @@ run() {  # run <name> <test.c> <sources...>
 
 run m207        tests/test_m207_parse.c       App/tcs/m207.c
 run registry    tests/test_param_registry.c   App/tcs/param_registry.c App/proto/proto.c
-run control     tests/test_control.c          App/tcs/control.c App/tcs/param_registry.c App/proto/proto.c
+run control     tests/test_control.c          App/tcs/control.c App/tcs/param_registry.c App/tcs/post.c App/proto/proto.c
+run post        tests/test_post.c             App/tcs/post.c App/tcs/param_registry.c App/proto/proto.c
 run proto_comm  tests/test_proto_tcs.c        App/proto/proto.c App/comm/comm.c
+
+run touchflt    tests/test_touchflt.c         Core/Src/ft5446.c
+run qr          tests/test_qr.c               App/tcs/qr/qrcodegen.c
+
+# H13 二维码解码回读（PC 出图 → zxing-cpp 解码比对）
+PYBIN=$(command -v python3 || command -v python)
+if [ -n "$PYBIN" ]; then
+    if "$PYBIN" tools/qr_verify.py build/test_qr.pbm "http://192.168.4.1"; then :; else FAIL=1; fi
+else
+    echo "[qr_verify] SKIP: python not found"; FAIL=1
+fi
 
 # TMP117 换算与健康计数（§11.2 PC 单测替代模拟器）
 cat > build/test_tmp117.c <<'EOF'

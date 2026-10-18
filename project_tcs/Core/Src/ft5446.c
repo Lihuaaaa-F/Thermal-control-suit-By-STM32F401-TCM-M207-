@@ -10,8 +10,22 @@
  * 不依赖 HAL_I2C（用户决策 D1 软件 bit-bang）。
  */
 #include "ft5446.h"
+#ifndef TCS_UNIT_TEST
 #include "ltdc.h"      /* LCD_WIDTH/HEIGHT */
 #include "segger_rtt.h"
+#endif
+
+/* ====== 纯逻辑（PC 单测）：幽灵触点突跳判定（H1）====== */
+uint8_t ft5446_ghost_jump_ok(int have, int px, int py, int x, int y)
+{
+    if (!have) return 1;
+    int dx = x - px, dy = y - py;
+    if (dx < 0) dx = -dx;
+    if (dy < 0) dy = -dy;
+    return (dx <= FT5446_GHOST_JUMP_PX && dy <= FT5446_GHOST_JUMP_PX) ? 1u : 0u;
+}
+
+#ifndef TCS_UNIT_TEST
 
 /* ====== 软件 I2C 引脚（抄 ctiic.h，SCL=PD12/SDA=PD13）====== */
 #define CT_IIC_SCL_PORT   GPIOD
@@ -306,17 +320,25 @@ int ft5446_init(void)
     temp[0] = 12;
     ft5446_wr_reg(FT5446_ID_G_PERIODACTIVE, temp, 1); /* 激活周期 12 */
 
-    /* 读版本号验证在线（抄 ft5206_init：版本 0x3003/0x0001/0x0002/CST340）*/
-    ft5446_rd_reg(FT5446_ID_G_LIB_VERSION, temp, 2);
-    if ((temp[0] == 0x30 && temp[1] == 0x03) || temp[1] == 0x01
-        || temp[1] == 0x02 || (temp[0] == 0x00 && temp[1] == 0x00)) {
-        ver_ok = 1;
+    /* 读版本号验证在线（抄 ft5206_init：版本 0x3003/0x0001/0x0002/CST340）。
+     * H3 加固：SWD 会话期位bang总线偶发 NAK → 版本/触点读带 3 次重试 */
+    for (int t = 0; t < 3 && !ver_ok; t++) {
+        ft5446_rd_reg(FT5446_ID_G_LIB_VERSION, temp, 2);
+        if ((temp[0] == 0x30 && temp[1] == 0x03) || temp[1] == 0x01
+            || temp[1] == 0x02 || (temp[0] == 0x00 && temp[1] == 0x00)) {
+            ver_ok = 1;
+        } else {
+            HAL_Delay(20);
+        }
     }
 
     /* 进一步验证：读触点数寄存器 0x02，在线应 ≤ 5 */
     uint8_t fingers = 0xFF;
-    ft5446_rd_reg(FT5446_REG_NUM_FINGER, &fingers, 1);
-    if ((fingers & 0x0F) <= 5) ver_ok = 1;
+    for (int t = 0; t < 3; t++) {
+        ft5446_rd_reg(FT5446_REG_NUM_FINGER, &fingers, 1);
+        if ((fingers & 0x0F) <= 5) { ver_ok = 1; break; }
+        HAL_Delay(20);
+    }
 
     SEGGER_RTT_printf(0, "RTT: ft5446 ver=%02x%02x fingers=%02x ver_ok=%d (0=HW offline, skip touch)\n",
                       temp[0], temp[1], fingers, ver_ok);
@@ -339,7 +361,11 @@ void ft5446_set_calibration(float a, float b, float c, float d)
     g_cal_a = a; g_cal_b = b; g_cal_c = c; g_cal_d = d;
 }
 
-/* ====== 读触摸点（抄 ft5206_scan 单点简化）====== */
+/* ====== 读触摸点（抄 ft5206_scan 单点简化 + H1 幽灵触点过滤）====== */
+static int s_flt_have;                 /* 突跳过滤基准点有效性 */
+static int s_flt_x, s_flt_y;
+volatile uint32_t g_ft5446_ghost_drops;/* 丢弃计数（诊断可见）*/
+
 int ft5446_read(touch_event_t *ev)
 {
     ev->touched = 0;
@@ -348,7 +374,10 @@ int ft5446_read(touch_event_t *ev)
     uint8_t sta = 0;
     ft5446_rd_reg(FT5446_REG_NUM_FINGER, &sta, 1);
     uint8_t n = sta & 0x0F;
-    if (n == 0 || n > 5) return 0;   /* 无触摸 */
+    if (n == 0 || n > 5) {
+        s_flt_have = 0;                /* 抬手：清除突跳基准 */
+        return 0;   /* 无触摸 */
+    }
 
     /* 读第1触点 4 字节（0x03 起）*/
     uint8_t buf[4];
@@ -380,8 +409,20 @@ int ft5446_read(touch_event_t *ev)
     if (sy < 0) sy = 0;
     if (sy >= LCD_HEIGHT) sy = LCD_HEIGHT - 1;
 
+    /* H1 幽灵触点：相邻帧位移 >200px 丢弃该帧（返回 2=丢弃，上层不得合成释放沿）*/
+    if (!ft5446_ghost_jump_ok(s_flt_have, s_flt_x, s_flt_y, sx, sy)) {
+        g_ft5446_ghost_drops++;
+        ev->touched = 0;
+        return 2;
+    }
+    s_flt_have = 1;
+    s_flt_x = sx;
+    s_flt_y = sy;
+
     ev->touched = 1;
     ev->x = sx;
     ev->y = sy;
     return 0;
 }
+
+#endif /* !TCS_UNIT_TEST */

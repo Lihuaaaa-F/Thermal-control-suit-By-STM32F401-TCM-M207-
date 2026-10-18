@@ -83,6 +83,21 @@ int main(void)
         CHECK(got == 1, "crlf no spurious frame");
     }
 
+    
+    /* H10：映射表模板格式化（纯函数）*/
+    {
+        m207_map_entry_t e = {0x100, 1, "PIDKP", 3};
+        char buf[24];
+        if (!(m207_map_format(&e, 1.5f, buf, sizeof(buf)) == 0 &&
+              strcmp(buf, "TC1:PIDKP=1.500\r") == 0)) { printf("FAIL: map format 3dp\n"); g_fail++; }
+        m207_map_entry_t e2 = {0x101, 2, "PIDKI", 2};
+        if (!(m207_map_format(&e2, 0.1f, buf, sizeof(buf)) == 0 &&
+              strcmp(buf, "TC2:PIDKI=0.10\r") == 0)) { printf("FAIL: map format ch2\n"); g_fail++; }
+        m207_map_entry_t bad = {0, 0, "", 1};
+        if (!(m207_map_format(&bad, 1.0f, buf, sizeof(buf)) == -1)) { printf("FAIL: map reject ch=0\n"); g_fail++; }
+        if (!(m207_map_format(&e, 1.0f, buf, 8) == -1)) { printf("FAIL: map cap guard\n"); g_fail++; }
+    }
+
     printf("test_m207_parse: PASS=%d FAIL=%d\n", g_pass, g_fail);
     return g_fail ? 1 : 0;
 }

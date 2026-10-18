@@ -13,7 +13,9 @@
 #define FT5446_H
 
 #include <stdint.h>
+#ifndef TCS_UNIT_TEST
 #include "stm32h7xx_hal.h"
+#endif
 
 /* ====== FT5446 参数（抄 ft5206.h）====== */
 #define FT5446_CMD_WR           0x70    /* 写命令（0x38<<1，末位0）*/
@@ -32,6 +34,11 @@ typedef struct {
     int     x;              /* 屏幕像素 X（已校准，0..LCD_WIDTH-1）*/
     int     y;              /* 屏幕像素 Y（已校准，0..LCD_HEIGHT-1）*/
 } touch_event_t;
+
+/* ====== 纯逻辑（PC 单测，H1 幽灵触点过滤）====== */
+#define FT5446_GHOST_JUMP_PX  200   /* 坐标突跳阈值：相邻帧位移 >200px 判幽灵 */
+/* 与上一有效点的位移是否可信（H1：>200px/帧 丢弃）。首点（have=0）恒可信。 */
+uint8_t ft5446_ghost_jump_ok(int have, int px, int py, int x, int y);
 
 /* ====== API ====== */
 

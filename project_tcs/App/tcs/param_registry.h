@@ -92,6 +92,7 @@ extern tcs_state_t g_tcs;
 typedef struct {
     void (*on_broadcast)(param_desc_t *p, uint8_t src);
     void (*on_m207_set)(uint8_t ch, float v);
+    void (*on_m207_map_set)(uint16_t pid, float v);  /* H10：0x100+ 映射表参数下发 */
     void (*on_mode_change)(uint8_t m);
     int  (*eeprom_commit)(const uint8_t *img);   /* 传整 256B 镜像（含 CRC），物理写 */
     uint8_t src_touch, src_console, src_web;     /* src 标记（回显来源用）*/

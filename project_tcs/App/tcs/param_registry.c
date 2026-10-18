@@ -2,7 +2,8 @@
  * param_registry.c — 参数注册表实现（任务书 §3.3）
  *
  * 参数表 v1（id 永久分配）：tc1_set/tc2_set/body_hot/body_cold/hyst/mode/
- * tc_set_confirm/commissioned(0x08, WP-A.5 布防)。
+ * tc_set_confirm/commissioned(0x08 布防模式：0=auto POST 过且源健康→布防，
+ * 1=强制布防，2=强制不布防；H6 起 max=2，旧 0/1 值语义兼容)。
  * M207 底层参数（0x100+，PF_WEB 无 PF_SCREEN，D6）待文档后在此表追加——注册表驱动
  * 一切界面，届时网页自动出现新控件（M5 演示），屏端调参页自动不出现（无 PF_SCREEN）。
  *
@@ -17,7 +18,7 @@ tcs_state_t g_tcs = {
     .tc1_act = 0.0f, .tc2_act = 0.0f, .body_temp = 0.0f,
     .tec1_on = 0, .tec2_on = 0, .fan_on = 0, .mode = 0,
     .alarm_bits = 0, .m207_online = 0, .body_sensor_ok = 0,
-    .esp_link_ok = 0, .fw_ver = 0x010000u,   /* v1.0.0 BCD */
+    .esp_link_ok = 0, .fw_ver = 0x010100u,   /* v1.1.0 BCD (H4 交付版) */
 };
 
 /* ====== 参数表 v1（初值/[min,max]/step/flags 严格按任务书 §3.3 表）====== */
@@ -37,15 +38,20 @@ static param_desc_t s_params[PARAM_CAPACITY] = {
       PF_RW|PF_SCREEN|PF_WEB|PF_PERSIST,                      0.0f,  1.0f,  1.0f, 0.0f,  0, 0 },
     { 0x07, "tc_set_confirm", "高温二次确认阈值", "°C", PARAM_TYPE_F32,
       PF_RW|PF_WEB|PF_PERSIST,                                38.0f, 45.0f, 0.5f, 40.0f, 0, 0 },
-    { 0x08, "commissioned", "布防",       "",   PARAM_TYPE_U8,
-      PF_RW|PF_SCREEN|PF_WEB|PF_PERSIST,                      0.0f,  1.0f,  1.0f, 0.0f,  0, 0 },
-    /* 0x100+ m207_*：待文档（WP9）。追加条目放这里，flags=RW+WEB+PERSIST+M207（无 SCREEN，D6）*/
+    { 0x08, "commissioned", "布防模式",     "",   PARAM_TYPE_U8,
+      PF_RW|PF_SCREEN|PF_WEB|PF_PERSIST,                      0.0f,  2.0f,  1.0f, 0.0f,  0, 0 },
+    /* H10 映射表假参数（0x100+，PF_M207 无 PF_SCREEN；M207 文档到后替换为真参数 id，
+     * 注册表扩容不改 id 不改义——扩展成本=表加行+映射表加行）*/
+    { 0x100, "m207_kp",     "M207 PID 比例", "",  PARAM_TYPE_F32,
+      PF_RW|PF_WEB|PF_PERSIST|PF_M207,                        0.0f, 10.0f, 0.1f, 1.0f,  0, 0 },
+    { 0x101, "m207_ki",     "M207 PID 积分", "",  PARAM_TYPE_F32,
+      PF_RW|PF_WEB|PF_PERSIST|PF_M207,                        0.0f,  1.0f, 0.01f, 0.1f, 0, 0 },
 };
-#define PARAM_N_REGISTERED  8
+#define PARAM_N_REGISTERED  10
 
 /* 默认初值（与表 value 列同序；param_load_defaults 用）*/
 static const float s_defaults[PARAM_N_REGISTERED] = {
-    25.0f, 25.0f, 37.5f, 36.5f, 0.2f, 0.0f, 40.0f, 0.0f,
+    25.0f, 25.0f, 37.5f, 36.5f, 0.2f, 0.0f, 40.0f, 0.0f, 1.0f, 0.1f,
 };
 
 static param_hooks_t s_hooks;
@@ -108,8 +114,13 @@ static float type_quantize(const param_desc_t *p, float v)
 static void side_effects(param_desc_t *p)
 {
     if (p->flags & PF_M207) {
-        uint8_t ch = (p->id == PARAM_ID_TC1_SET) ? 1u : 2u;
-        if (s_hooks.on_m207_set) s_hooks.on_m207_set(ch, p->value);
+        if (p->id >= PARAM_ID_M207_BASE) {
+            /* H10：映射表参数（0x100+）走通用模板通道 */
+            if (s_hooks.on_m207_map_set) s_hooks.on_m207_map_set(p->id, p->value);
+        } else {
+            uint8_t ch = (p->id == PARAM_ID_TC1_SET) ? 1u : 2u;
+            if (s_hooks.on_m207_set) s_hooks.on_m207_set(ch, p->value);
+        }
     }
     if (p->id == PARAM_ID_MODE) {
         g_tcs.mode = (uint8_t)p->value;

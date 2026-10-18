@@ -7,8 +7,10 @@
  */
 #include "console.h"
 #include "param_registry.h"
+#include "proto.h"
 #include "control.h"
 #include "m207.h"
+#include "post.h"
 #include "segger_rtt.h"
 #include "ltdc.h"
 #include "tcs_ui.h"
@@ -140,14 +142,56 @@ static void cmd_exec(char *line)
     /* --- stat --- */
     if (strcmp(argv[0], "stat") == 0) {
         printf("tc1=%.1f tc2=%.1f body=%.1f tec1=%u tec2=%u fan=%u mode=%u "
-               "alarm=0x%04x m207=%u sensor=%u esp=%u ctrl=%d arm=%u loop=%lu drops=%lu\n",
+               "alarm=0x%04x m207=%u sensor=%u esp=%u ctrl=%d arm=%u(0x08=%u) "
+               "loop=%lu drops=%lu\n",
                (double)g_tcs.tc1_act, (double)g_tcs.tc2_act, (double)g_tcs.body_temp,
                g_tcs.tec1_on, g_tcs.tec2_on, g_tcs.fan_on, g_tcs.mode,
                g_tcs.alarm_bits, g_tcs.m207_online, g_tcs.body_sensor_ok,
                g_tcs.esp_link_ok, (int)control_state(),
+               (unsigned)post_arm_state(),
                (unsigned)param_get(PARAM_ID_COMMISSIONED),
                (unsigned long)g_stat_loop_passes,
                (unsigned long)s_tx_drop_cnt);
+        return;
+    }
+    /* --- ee：EEPROM 镜像现场重读+校验（诊断）--- */
+    if (strcmp(argv[0], "ee") == 0) {
+        extern int eeprom_ready(void);
+        extern int eeprom_read_image(uint8_t img[EE_IMG_SIZE]);
+        uint8_t img[EE_IMG_SIZE];
+        if (!eeprom_ready()) { printf("ee offline\n"); return; }
+        if (eeprom_read_image(img) != 0) { printf("ee read fail\n"); return; }
+        uint8_t crc = proto_crc8(img, EE_CRC_ADDR);
+        printf("ee magic=%02x ver=%02x count=%d crc=%02x(calc %02x) f6=%02x %s\n",
+               img[0], img[1], img[2], img[EE_CRC_ADDR], crc, img[EE_SELFTST_ADDR],
+               (img[0] == EE_MAGIC_V2 && img[1] == EE_LAYOUT_VER && img[EE_CRC_ADDR] == crc)
+                   ? "VALID" : "INVALID");
+        return;
+    }
+    /* --- post：六项自检结果 + 布防三态（H6）--- */
+    if (strcmp(argv[0], "post") == 0) {
+        if (argc >= 2 && strcmp(argv[1], "badge") == 0) {
+            extern void post_badge_reshow(uint32_t ms);
+            uint32_t ms = (argc >= 3) ? (uint32_t)strtoul(argv[2], NULL, 0) : 0u;
+            post_badge_reshow(ms);
+            printf("post badge reshow %lu ms\n",
+                   (unsigned long)(ms ? ms : 3000u));
+            return;
+        }
+        static const char *item_name[POST_ITEM_N] = {
+            "TMP117", "M207", "EEPROM", "TABLE", "SCRTOUCH", "VER"
+        };
+        static const char *arm_name[3] = { "UNARMED_ABSENT", "ARMED_ONLINE", "LOST_ALARM" };
+        printf("done=%u pass=%u result=0x%02x decided=0x%02x arm=%s badge=%u\n",
+               post_done(), post_all_pass(),
+               (unsigned)post_result_mask(), (unsigned)post_done_mask(),
+               arm_name[(unsigned)post_arm_state() < 3 ? (unsigned)post_arm_state() : 0],
+               post_badge_state());
+        for (int i = 0; i < POST_ITEM_N; i++) {
+            printf("  %-8s %s\n", item_name[i],
+                   !post_item_decided((uint8_t)i) ? "WAIT" :
+                   post_item_ok((uint8_t)i) ? "PASS" : "FAIL");
+        }
         return;
     }
     /* --- perf：DWT 实测（WP-C.5）--- */
@@ -301,18 +345,36 @@ static void cmd_exec(char *line)
             } else if (strcmp(argv[2], "wrongecho") == 0) {
                 extern void m207_sim_wrong_echo(void);
                 m207_sim_wrong_echo();
+            } else if (strcmp(argv[2], "drop") == 0 && argc == 4) {
+                extern void m207_sim_drop(uint8_t pct);
+                m207_sim_drop((uint8_t)atoi(argv[3]));
             }
             printf("sim m207 %s\n", argv[2]);
         } else if (strcmp(argv[1], "touch") == 0 && argc == 4) {
             extern void tcs_ui_inject_tap(int x, int y);
             tcs_ui_inject_tap(atoi(argv[2]), atoi(argv[3]));
             printf("sim touch %s %s\n", argv[2], argv[3]);
+        } else if (strcmp(argv[1], "touchh") == 0 && argc == 4) {
+            extern void tcs_ui_inject_touch(int down, int x, int y);
+            tcs_ui_inject_touch(1, atoi(argv[2]), atoi(argv[3]));
+            printf("sim touchh %s %s (hold)\n", argv[2], argv[3]);
+        } else if (strcmp(argv[1], "touchr") == 0) {
+            extern void tcs_ui_inject_touch(int down, int x, int y);
+            tcs_ui_inject_touch(0, 0, 0);
+            printf("sim touchr (release)\n");
         } else if (strcmp(argv[1], "arm") == 0) {
             (void)param_set(PARAM_ID_COMMISSIONED, 1.0f, PARAM_SRC_CONSOLE);
             printf("sim armed=%u\n", (unsigned)param_get(PARAM_ID_COMMISSIONED));
+        } else if (strcmp(argv[1], "post") == 0 && argc == 4 &&
+                   strcmp(argv[2], "fail") == 0) {
+            /* 强制单项 FAIL（角标 ✗黄 + auto 不布防演示/取证）*/
+            extern void post_sim_fail_item(uint8_t item);
+            int it = atoi(argv[3]);
+            post_sim_fail_item((uint8_t)it);
+            printf("sim post item %d forced FAIL\n", it);
         } else {
             printf("usage: sim body <val|off>|m207 <fault|recover|wrongecho>|"
-                   "touch <x> <y>|arm\n");
+                   "touch <x> <y>|arm|post fail <0-5>\n");
         }
         return;
     }

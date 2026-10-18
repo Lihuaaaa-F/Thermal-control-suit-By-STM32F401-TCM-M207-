@@ -5,8 +5,8 @@
  *
  * 主循环 10ms 节拍（SysTick 1ms 分频），时序预算 ≤8ms/节拍（§3.2 铁律）：
  *   喂狗 → comm_poll_tx → console_poll → m207_poll → 链路 RX 喂 comm → comm_tick
- *   → tcs_ui_poll → control_poll(500ms) → tmp117_poll(100ms) → param_persist_flush(2s)
- *   → STATUS 帧(500ms) → KEY0 急停 → LED 心跳 → 等下一节拍
+ *   → tcs_ui_poll → control_poll(500ms) → tmp117_poll(100ms) → post_poll(100ms,H6)
+ *   → param_persist_flush(2s) → STATUS 帧(500ms) → KEY0 急停 → LED 心跳 → 等下一节拍
  * ISR 只做：UART RX 单字节入环形缓冲（USART1 console / USART2 link / USART3 m207）。
  *
  * keypad 不初始化：KP_COL2=PD5 与 USART2_TX(ESP32) 冲突（接线表 #3），只编译不链接执行。
@@ -29,6 +29,7 @@
 #include "fan.h"
 #include "eeprom.h"
 #include "iwdg.h"
+#include "post.h"
 #include <string.h>
 
 /* ====== 全局句柄 ====== */
@@ -180,6 +181,7 @@ static void hook_broadcast(param_desc_t *p, uint8_t src)
 }
 
 static void hook_m207_set(uint8_t ch, float v) { (void)m207_set_temp(ch, v); }
+static void hook_m207_map_set(uint16_t pid, float v) { (void)m207_map_set(pid, v); }
 static void hook_mode_change(uint8_t m)        { control_on_mode_change(m); }
 static int  hook_eeprom_commit(const uint8_t *img) { return eeprom_commit_image(img); }
 static void ops_tec_sw(uint8_t ch, uint8_t on)   { (void)m207_tec(ch, on); }
@@ -490,10 +492,14 @@ int main(void)
 
     console_init(&huart_console);
     console_print_reset_source();
-    tcs_log("[SYSTEM]", "boot project_tcs fw=v1.0.0 HCLK=%lu MHz",
+    tcs_log("[SYSTEM]", "boot project_tcs fw=v1.1.0 HCLK=%lu MHz",
             (unsigned long)(SystemCoreClock / 1000000U));
 
     iwdg_init();   /* ~2s */
+    /* H3 发现的总线怪象根因：探针会话挂起 CPU 时 IWDG 继续计数 → 2s 打狗复位
+     * （EEPROM/触摸位 bang NAK、丢保存、M207 瞬断、wp_check 计数跳变同源）。
+     * 调试停顿期冻结 IWDG（仅 halt 时生效，现场运行不受影响）。 */
+    DBGMCU->APB4FZ1 |= DBGMCU_APB4FZ1_DBG_IWDG1;
 
     /* 显示（失败不阻塞协议/控制）*/
 #ifdef ENABLE_LCD
@@ -508,10 +514,11 @@ int main(void)
     int ee_rv = eeprom_init();
     uint8_t ee_cfg_invalid = 0;
     param_registry_init(&(param_hooks_t){
-        .on_broadcast  = hook_broadcast,
-        .on_m207_set   = hook_m207_set,
-        .on_mode_change= hook_mode_change,
-        .eeprom_commit = hook_eeprom_commit,
+        .on_broadcast   = hook_broadcast,
+        .on_m207_set    = hook_m207_set,
+        .on_m207_map_set= hook_m207_map_set,
+        .on_mode_change = hook_mode_change,
+        .eeprom_commit  = hook_eeprom_commit,
     });
     if (ee_rv == 0) {
         eeprom_selftest();
@@ -546,6 +553,7 @@ int main(void)
 #ifdef ENABLE_LCD
     tcs_ui_init();
 #endif
+    post_init(ee_cfg_invalid);   /* H6：六项自检（M207 项宽限窗内异步裁决）*/
     tcs_log("[SYSTEM]", "init done, entering main loop");
 
     uint32_t last_tick = 0;
@@ -578,6 +586,7 @@ int main(void)
 #endif
         control_poll(now);
         tmp117_poll(now);
+        post_poll(now);          /* H6：M207 宽限裁决 + 角标 + 布防三态机 100ms */
         param_persist_flush(now);
         status_tx(now);
         kill_key_poll();

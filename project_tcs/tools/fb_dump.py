@@ -85,9 +85,10 @@ def read_words(addr: int, nwords: int) -> list:
 def rgb565_to_png(words, path, y0=0, nrows=H):
     img = Image.new("RGB", (W, nrows))
     px = img.load()
-    base = y0 * WORDS_PER_LINE
+    # words 是自 y0 起的窗口数据（read_words 只读了请求的行）——行基址必须相对窗口。
+    # 修复前用绝对行基址（y0>0 时索引越界 IndexError），部分行模式从未可用过。
     for y in range(nrows):
-        rowbase = base + y * WORDS_PER_LINE
+        rowbase = y * WORDS_PER_LINE
         for x in range(0, W, 2):
             v = words[rowbase + (x >> 1)]
             p0 = v & 0xFFFF          # 低半字 = 偶数像素

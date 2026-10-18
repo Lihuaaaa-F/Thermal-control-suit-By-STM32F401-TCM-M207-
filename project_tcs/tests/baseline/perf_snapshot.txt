@@ -1,0 +1,2 @@
+work avg=71us max=25869us ovf=3 | ui_full=13.0 ms | touch max=0us | loop=2826 rate=97/s up=29s
+[MB] done seq=6

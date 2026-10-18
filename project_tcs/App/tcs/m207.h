@@ -59,6 +59,19 @@ int  m207_lineasm_feed(m207_lineasm_t *la, uint8_t b, char *line, size_t cap);
  * 返回 1=解析成功（out 填出），0=忽略。 */
 int m207_parse_line(const char *line, m207_reply_t *out);
 
+/* ====== H10 映射表（纯逻辑，PC 可测）====== */
+/* 参数 id → M207 指令模板。文档到达后填表即可接入真参数（扩展成本=一行）。
+ * 指令名全大写；ch=1/2（TC1/TC2 通道）。 */
+typedef struct {
+    uint16_t pid;          /* 注册表参数 id（0x100+）*/
+    uint8_t  ch;           /* 下发通道 1/2 */
+    char     cmd[14];      /* M207 参数名（如 "TCADJTEMP"/占位 "PIDKP"）*/
+    uint8_t  decimals;     /* 下发小数位（回读容差 0.5×10^-decimals）*/
+} m207_map_entry_t;
+
+/* 模板格式化（纯函数）：`TC{ch}:{cmd}=%.{}f\r`。返回 0=ok，-1=cap 不足/表项非法 */
+int m207_map_format(const m207_map_entry_t *e, float v, char *out, size_t cap);
+
 /* ====== 目标机驱动（TCS_UNIT_TEST 下不编译）====== */
 #ifndef TCS_UNIT_TEST
 
@@ -67,10 +80,12 @@ int m207_parse_line(const char *line, m207_reply_t *out);
 typedef enum { M207_ST_IDLE = 0, M207_ST_WAIT_REPLY, M207_ST_RECOVER } m207_state_t;
 
 typedef struct {
-    float  value;       /* 待确认下发值 */
-    uint8_t ch;         /* 1/2 */
-    uint8_t retries;    /* 已自动重发次数（0/1）*/
+    float   value;       /* 待确认下发值 */
+    uint8_t ch;          /* 1/2 */
+    uint8_t retries;     /* 已自动重发次数（0/1）*/
     uint8_t active;
+    char    param[16];   /* 回读确认的参数名（H10 泛化：TCADJTEMP/PIDKP/…）*/
+    uint8_t decimals;    /* 容差位数 */
 } m207_setpend_t;
 
 void  m207_init(UART_HandleTypeDef *huart);   /* 挂 USART3 @57600 */
@@ -78,6 +93,7 @@ void  m207_poll(uint32_t now_ms);             /* 主循环节拍调用，内部�
 int   m207_set_temp(uint8_t ch, float v);     /* 入下发队列，异步；0=ok -1=队列满/参数错 */
 int   m207_tec(uint8_t ch, uint8_t on);       /* TCx:TCSW=0/1，异步 */
 int   m207_send_raw(const char *cmd);         /* 原始指令透传（console 调试期专用）*/
+int   m207_map_set(uint16_t pid, float v);    /* H10：按映射表下发（回读确认+NAK 重发）*/
 float m207_last_temp(uint8_t ch);
 uint8_t m207_online(void);                    /* 0/1（g_tcs.m207_online 同步）*/
 
@@ -88,6 +104,7 @@ void m207_isr_push(uint8_t b);
 void m207_sim_fault(void);        /* 应答静默（拔线仿真）*/
 void m207_sim_recover(void);      /* 应答恢复 */
 void m207_sim_wrong_echo(void);   /* 下一次设定回读故意错值（重发路径）*/
+void m207_sim_drop(uint8_t pct);  /* H11：回包丢弃率注入（0=关闭）*/
 /* RX 完成重启 + 错误恢复（main.c 回调转发）*/
 void m207_rx_complete(void);
 void m207_uart_error_recover(void);

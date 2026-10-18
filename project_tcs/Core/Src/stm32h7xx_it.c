@@ -23,6 +23,8 @@ void link_uart_error_recover(void);      /* main.c：ORE 清标志+重置 */
 /* ====== §0B.2 全局 fault 信息（probe-rs 可读）====== */
 volatile uint32_t g_fault_cfsr, g_fault_hfsr, g_fault_bfar, g_fault_pc, g_fault_lr, g_fault_sp;
 
+#include "blackbox.h"   /* T1：故障现场持久化到备份寄存器 */
+
 void NMI_Handler(void)        { while (1) {} }
 void MemManage_Handler(void)  { while (1) {} }
 void BusFault_Handler(void)   { while (1) {} }
@@ -51,6 +53,7 @@ void HardFault_Handler(void)
     SEGGER_RTT_printf(0, "FAULT CFSR=%08x HFSR=%08x BFAR=%08x PC=%08x LR=%08x SP=%08x\n",
                       g_fault_cfsr, g_fault_hfsr, g_fault_bfar,
                       g_fault_pc, g_fault_lr, g_fault_sp);
+    blackbox_fault(0xFA17u, g_fault_pc, g_fault_lr, g_fault_cfsr, g_fault_hfsr);
 
     /* 不喂 IWDG（2s）→ 自动复位。闪 LED2 指示。*/
     while (1) {
@@ -62,6 +65,9 @@ void HardFault_Handler(void)
 void SysTick_Handler(void)
 {
     HAL_IncTick();
+    /* T1 实验臂 B：SysTick 上下文每约 1s 额外喂狗（主循环喂狗保持不变） */
+    static uint16_t s_feed_div = 0;
+    if (++s_feed_div >= 1024u) { s_feed_div = 0; blackbox_isr_feed(); }
 }
 
 void WWDG_IRQHandler(void) { while (1) {} }

@@ -29,6 +29,7 @@
 #include "fan.h"
 #include "eeprom.h"
 #include "iwdg.h"
+#include "blackbox.h"
 #include <string.h>
 
 /* ====== 全局句柄 ====== */
@@ -40,6 +41,14 @@ I2C_HandleTypeDef  hi2c_tmp117;     /* I2C1 PB8/PB9 TMP117 */
 /* ====== 时间基准（SysTick 1ms）====== */
 static volatile uint32_t g_tick_ms = 0;
 uint32_t millis(void) { return g_tick_ms; }
+
+/* SysTick 1ms 双递增覆盖（GS 工程移植时曾丢失本函数 → 主循环卡死在节拍等待，
+ * IWDG 32.7s 复位循环；根因记录 docs/evidence/WP6_iwdg_defect.md） */
+void HAL_IncTick(void)
+{
+    uwTick++;
+    g_tick_ms++;
+}
 
 /* ====== 链路实例 ====== */
 comm_link_t g_link;
@@ -422,6 +431,7 @@ static void MX_I2C1_Init(void)
 
 void Error_Handler(void)
 {
+    blackbox_fault(0xE110u, 0, 0, 0, 0);   /* T1：留痕后停摆等狗 */
     __disable_irq();
     SEGGER_RTT_WriteString("ERROR_HANDLER\n");
     while (1) {
@@ -457,6 +467,8 @@ int main(void)
 {
     HAL_Init();
     SEGGER_RTT_Init();
+
+    blackbox_boot();   /* T1 黑匣子：抢在 console 清 RSR 之前抓复位源与上轮现场 */
 
     SystemClock_Config();
     MX_GPIO_Init();
@@ -529,6 +541,8 @@ int main(void)
         uint32_t now = g_tick_ms;
 
         iwdg_refresh();
+        blackbox_loop_tick();
+        blackbox_heartbeat(now);
         comm_poll_tx(&g_link);           /* 链路 TX 串行消费（唯一 HAL_UART_Transmit 处之一）*/
         console_poll();
         m207_poll(now);

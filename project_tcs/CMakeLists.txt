@@ -73,6 +73,7 @@ set(APP_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/App/tcs/control.c
     ${CMAKE_CURRENT_SOURCE_DIR}/App/tcs/console.c
     ${CMAKE_CURRENT_SOURCE_DIR}/App/tcs/tcs_ui.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/App/tcs/blackbox.c
 )
 
 add_executable(tcs_main.elf

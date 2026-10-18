@@ -209,6 +209,8 @@ static uint32_t s_last_lp_ms;        /* 上次连发时刻 */
 static uint32_t s_touch_release_ok;  /* 去抖：按下时刻 */
 static int s_prev_touched;
 
+#include "blackbox.h"   /* T1 调试页脚（结案后移除） */
+
 /* 脏区位 */
 #define D_TOPBAR   0x001
 #define D_TC1      0x002
@@ -646,6 +648,13 @@ void tcs_ui_init(void)
     tcs_log("[APP]", "ui init page=home lcd=%d touch=%d", lcd_ready(), touch_ready());
 }
 
+/* T1 调试页脚：B=启动数 U=运行秒 L=圈数k I=ISR喂狗 F=上轮故障 R=上轮复位源 H=上轮存活秒 */
+static void draw_debug_footer(uint32_t now)
+{
+    gfx_fill_rect(0, 583, 1023, 599, 0x0000);
+    gfx_draw_string(8, 583, blackbox_footer_text(now), 0xFFFF, 0x0000);
+}
+
 void tcs_ui_poll(uint32_t now)
 {
     touch_poll(now);
@@ -661,7 +670,7 @@ void tcs_ui_poll(uint32_t now)
     if (s_page != UI_PAGE_HOME || !s_dirty) return;
 
     /* 脏区局部重绘（back buffer 画完翻转）*/
-    if (s_dirty & D_TOPBAR) draw_topbar();
+    if (s_dirty & D_TOPBAR) { draw_topbar(); draw_debug_footer(now); }
     if (s_dirty & D_TC1) draw_tc_card(16, "贴身水箱", 0, D_TC1);
     if (s_dirty & D_TC2) draw_tc_card(528, "环境水箱", 1, D_TC2);
     if (s_dirty & D_BODY) draw_body_card();

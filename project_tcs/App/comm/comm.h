@@ -30,7 +30,7 @@
 #define COMM_ACK_TIMEOUT_MS   500    /* 等 ACK 超时（ms） */
 #define COMM_MAX_RETRIES      3      /* 最大重传次数（不含首传） */
 #define COMM_MAX_PENDING      8      /* 同时等 ACK 的帧上限（下行少，8 够） */
-#define MAX_TXQ               8      /* 待发队列深度（禁飞3+命令+急停够用） */
+#define MAX_TXQ               16     /* 待发队列深度（WP-A.5：注册表 8 条目+ACK 全量入队不丢；RAM +2KB 可承受） */
 #define COMM_LINK_OK_TRUE     1
 #define COMM_LINK_OK_FALSE    0
 

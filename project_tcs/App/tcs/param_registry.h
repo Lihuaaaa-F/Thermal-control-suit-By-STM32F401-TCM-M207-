@@ -43,6 +43,7 @@ typedef enum {
 #define PARAM_ID_HYST           0x05
 #define PARAM_ID_MODE           0x06
 #define PARAM_ID_SET_CONFIRM    0x07   /* 高温二次确认阈值 */
+#define PARAM_ID_COMMISSIONED   0x08   /* 布防（WP-A.5）：0=未布防传感器报警只记日志，1=完整 FMEA */
 #define PARAM_ID_M207_BASE      0x100  /* M207 底层参数段（文档到后启用，WP9）*/
 
 #define PARAM_CAPACITY      32    /* 注册表数组容量（含全部段）*/

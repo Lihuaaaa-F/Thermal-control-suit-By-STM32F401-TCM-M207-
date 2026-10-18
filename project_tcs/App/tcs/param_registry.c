@@ -1,7 +1,8 @@
 /**
  * param_registry.c — 参数注册表实现（任务书 §3.3）
  *
- * 参数表 v1（id 永久分配）：tc1_set/tc2_set/body_hot/body_cold/hyst/mode/tc_set_confirm。
+ * 参数表 v1（id 永久分配）：tc1_set/tc2_set/body_hot/body_cold/hyst/mode/
+ * tc_set_confirm/commissioned(0x08, WP-A.5 布防)。
  * M207 底层参数（0x100+，PF_WEB 无 PF_SCREEN，D6）待文档后在此表追加——注册表驱动
  * 一切界面，届时网页自动出现新控件（M5 演示），屏端调参页自动不出现（无 PF_SCREEN）。
  *
@@ -36,13 +37,15 @@ static param_desc_t s_params[PARAM_CAPACITY] = {
       PF_RW|PF_SCREEN|PF_WEB|PF_PERSIST,                      0.0f,  1.0f,  1.0f, 0.0f,  0, 0 },
     { 0x07, "tc_set_confirm", "高温二次确认阈值", "°C", PARAM_TYPE_F32,
       PF_RW|PF_WEB|PF_PERSIST,                                38.0f, 45.0f, 0.5f, 40.0f, 0, 0 },
+    { 0x08, "commissioned", "布防",       "",   PARAM_TYPE_U8,
+      PF_RW|PF_SCREEN|PF_WEB|PF_PERSIST,                      0.0f,  1.0f,  1.0f, 0.0f,  0, 0 },
     /* 0x100+ m207_*：待文档（WP9）。追加条目放这里，flags=RW+WEB+PERSIST+M207（无 SCREEN，D6）*/
 };
-#define PARAM_N_REGISTERED  7
+#define PARAM_N_REGISTERED  8
 
 /* 默认初值（与表 value 列同序；param_load_defaults 用）*/
 static const float s_defaults[PARAM_N_REGISTERED] = {
-    25.0f, 25.0f, 37.5f, 36.5f, 0.2f, 0.0f, 40.0f,
+    25.0f, 25.0f, 37.5f, 36.5f, 0.2f, 0.0f, 40.0f, 0.0f,
 };
 
 static param_hooks_t s_hooks;

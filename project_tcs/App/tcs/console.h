@@ -13,6 +13,9 @@ extern "C" {
 
 #include "stm32h7xx_hal.h"
 
+/* 主循环活性圈数（main.c 定义自增；stat 命令显示 + wp_check 活性判定，H2/H8）*/
+extern volatile uint32_t g_stat_loop_passes;
+
 void console_init(UART_HandleTypeDef *huart);
 void console_isr_push(uint8_t b);       /* ISR：RX 单字节入环形缓冲 */
 void console_rx_complete(void);          /* RX 完成重启（main 回调转发）*/

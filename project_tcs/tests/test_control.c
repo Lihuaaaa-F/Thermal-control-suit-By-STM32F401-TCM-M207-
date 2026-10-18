@@ -41,6 +41,7 @@ static void enter_auto_healthy(void)
         .fan_set = stub_fan, .tec_sw = stub_tec, .tec_temp = stub_temp, .on_state = 0,
     });
     param_registry_init(&(param_hooks_t){0});
+    (void)param_set(PARAM_ID_COMMISSIONED, 1.0f, 4);   /* WP-A.5：布防=完整 FMEA */
     g_tcs.body_sensor_ok = 1;
     g_tcs.m207_online = 1;
     g_tcs.tc1_act = 25.0f;
@@ -131,6 +132,7 @@ int main(void)
         .fan_set = stub_fan, .tec_sw = stub_tec, .tec_temp = stub_temp, .on_state = 0,
     });
     param_registry_init(&(param_hooks_t){0});
+    (void)param_set(PARAM_ID_COMMISSIONED, 1.0f, 4);   /* WP-A.5：布防 */
     g_tcs.body_sensor_ok = 1;
     g_tcs.m207_online = 0;
     s_now = 1000u;
@@ -166,6 +168,43 @@ int main(void)
     g_tcs.tc1_act = 40.0f;
     tcs_alarm_ack();
     CHECK(tcs_alarm_active(ALM_OVERTEMP) == 0, "overtemp cleared under 48");
+
+    /* ====== WP-A.5 未布防（默认 0）：传感器类异常只记状态沿，不上横幅不进 SAFE ====== */
+    enter_auto_healthy();
+    (void)param_set(PARAM_ID_COMMISSIONED, 0.0f, 4);   /* 拆防 */
+    reset_stubs();
+    g_tcs.body_temp = 37.0f;                           /* 带内温度：FSM 无动作可断言 */
+    g_tcs.body_sensor_ok = 0;                          /* 拔体温传感器 */
+    tick();
+    CHECK(control_state() != CTRL_SAFE, "unarmed: sensor loss no SAFE");
+    CHECK(tcs_alarm_active(ALM_BODY_SENSOR) == 0, "unarmed: no ALM_BODY_SENSOR");
+    CHECK(fan_calls == 0 && tec_calls == 0, "unarmed: outputs untouched (in-band body)");
+    s_now += 5000u;                                    /* 越过 M207 上电宽限 */
+    g_tcs.m207_online = 0;                             /* 再拔 M207 */
+    tick();
+    CHECK(tcs_alarm_active(ALM_M207) == 0, "unarmed: no ALM_M207");
+    CHECK(control_state() != CTRL_SAFE, "unarmed: m207 loss no SAFE");
+
+    /* 重新布防 → 同一异常立即进完整 FMEA */
+    (void)param_set(PARAM_ID_COMMISSIONED, 1.0f, 4);
+    tick();
+    CHECK(control_state() == CTRL_SAFE, "re-arm -> full FMEA SAFE");
+    CHECK(tcs_alarm_active(ALM_M207) == 1, "re-arm: ALM_M207 set");
+    CHECK(tcs_alarm_active(ALM_BODY_SENSOR) == 1, "re-arm: ALM_BODY_SENSOR set");
+
+    /* 急停不受布防影响（安全边界）*/
+    enter_auto_healthy();
+    (void)param_set(PARAM_ID_COMMISSIONED, 0.0f, 4);
+    tcs_emergency_stop();
+    CHECK(control_state() == CTRL_SAFE && tcs_alarm_active(ALM_ESTOP) == 1,
+          "unarmed: estop still SAFE+alarm");
+
+    /* 过热硬阈值不受布防影响（安全边界）*/
+    enter_auto_healthy();
+    (void)param_set(PARAM_ID_COMMISSIONED, 0.0f, 4);
+    g_tcs.tc1_act = 48.5f;
+    tick();
+    CHECK(tcs_alarm_active(ALM_OVERTEMP) == 1, "unarmed: overtemp still raises");
 
     printf("test_control: PASS=%d FAIL=%d\n", g_pass, g_fail);
     return g_fail ? 1 : 0;

@@ -10,6 +10,8 @@
 #include "control.h"
 #include "m207.h"
 #include "segger_rtt.h"
+#include "ltdc.h"
+#include "tcs_ui.h"
 #include <string.h>
 #include <stdio.h>
 #include <stdarg.h>
@@ -73,9 +75,20 @@ void tcs_log(const char *prefix, const char *fmt, ...)
 int _write(int fd, char *ptr, int len)
 {
     (void)fd;
-    if (len > 0) tx_push((const uint8_t *)ptr, (size_t)len);
+    if (len > 0) {
+        tx_push((const uint8_t *)ptr, (size_t)len);
+        SEGGER_RTT_Write(ptr, (unsigned)len);   /* printf 镜像 RTT（无 COM 线观测）*/
+    }
     return len;
 }
+
+/* ====== 主机邮箱命令注入（WP-D：无 COM/USB-TTL 时的控制台入口）======
+ * 主机 probe-rs write RAM：先写 s_mb_line（含 '\0'），再写 s_mb_magic=MB_MAGIC_RUN；
+ * console_poll 检测到即执行并 s_mb_seq++。读 s_mb_seq 确认消费。 */
+#define MB_MAGIC_RUN  0x54534D43u   /* 'CMST' */
+static volatile uint32_t s_mb_magic;
+static volatile uint32_t s_mb_seq;
+static char s_mb_line[CON_LINE_MAX];
 
 /* ====== RX ====== */
 void console_isr_push(uint8_t b)
@@ -117,7 +130,7 @@ static void cmd_exec(char *line)
 
     /* --- ver --- */
     if (strcmp(argv[0], "ver") == 0) {
-        printf("tcs v%lu.%lu.%lu build=%s %s params=v1(7+0x100resv) proto=v%u\n",
+        printf("tcs v%lu.%lu.%lu build=%s %s params=v1(8+0x100resv) proto=v%u\n",
                (unsigned long)(g_tcs.fw_ver >> 16) & 0xFFu,
                (unsigned long)(g_tcs.fw_ver >> 8) & 0xFFu,
                (unsigned long)(g_tcs.fw_ver) & 0xFFu,
@@ -127,11 +140,13 @@ static void cmd_exec(char *line)
     /* --- stat --- */
     if (strcmp(argv[0], "stat") == 0) {
         printf("tc1=%.1f tc2=%.1f body=%.1f tec1=%u tec2=%u fan=%u mode=%u "
-               "alarm=0x%04x m207=%u sensor=%u esp=%u ctrl=%d drops=%lu\n",
+               "alarm=0x%04x m207=%u sensor=%u esp=%u ctrl=%d arm=%u loop=%lu drops=%lu\n",
                (double)g_tcs.tc1_act, (double)g_tcs.tc2_act, (double)g_tcs.body_temp,
                g_tcs.tec1_on, g_tcs.tec2_on, g_tcs.fan_on, g_tcs.mode,
                g_tcs.alarm_bits, g_tcs.m207_online, g_tcs.body_sensor_ok,
                g_tcs.esp_link_ok, (int)control_state(),
+               (unsigned)param_get(PARAM_ID_COMMISSIONED),
+               (unsigned long)g_stat_loop_passes,
                (unsigned long)s_tx_drop_cnt);
         return;
     }
@@ -223,6 +238,34 @@ static void cmd_exec(char *line)
         while (HAL_GetTick() - t0 < 35000u) { }
         return;
     }
+    /* --- scrtest：屏诊断（WP-A.2d 噪声二分：纯 DMA2D 清屏/标定文本/触摸计数）--- */
+    if (strcmp(argv[0], "scrtest") == 0 && argc >= 2) {
+        if (strcmp(argv[1], "clear") == 0) {
+            tcs_ui_screen_clear(RGB565(0x10, 0x14, 0x18));
+            printf("scrtest clear done taps=%lu\n", (unsigned long)tcs_ui_tap_count());
+        } else if (strcmp(argv[1], "fill") == 0 && argc == 3) {
+            uint16_t c = (uint16_t)strtoul(argv[2], NULL, 16);
+            tcs_ui_screen_clear(c);
+            printf("scrtest fill 0x%04x done taps=%lu\n", c, (unsigned long)tcs_ui_tap_count());
+        } else if (strcmp(argv[1], "text") == 0) {
+            tcs_ui_screen_text();
+            printf("scrtest text done taps=%lu\n", (unsigned long)tcs_ui_tap_count());
+        } else if (strcmp(argv[1], "home") == 0) {
+            tcs_ui_force_home();
+            printf("scrtest home done taps=%lu\n", (unsigned long)tcs_ui_tap_count());
+        } else if (strcmp(argv[1], "tune") == 0) {
+            tcs_ui_force_tune();
+            printf("scrtest tune done taps=%lu\n", (unsigned long)tcs_ui_tap_count());
+        } else if (strcmp(argv[1], "stress") == 0 && argc == 4) {
+            int mode = atoi(argv[2]);
+            int n = atoi(argv[3]);
+            tcs_ui_screen_stress(mode, n);
+            printf("scrtest stress mode=%d n=%d done\n", mode, n);
+        } else {
+            printf("usage: scrtest clear|fill <565hex>|text|home|stress <mode> <n>\n");
+        }
+        return;
+    }
 
     printf("?\n");
 }
@@ -231,6 +274,15 @@ static void cmd_exec(char *line)
 void console_poll(void)
 {
     tx_drain();
+
+    /* 主机邮箱命令注入（probe-rs 写 RAM 触发，先于 UART 行处理）*/
+    if (s_mb_magic == MB_MAGIC_RUN) {
+        s_mb_magic = 0;
+        s_mb_line[CON_LINE_MAX - 1] = '\0';
+        cmd_exec(s_mb_line);
+        s_mb_seq++;
+        tcs_log("[MB]", "done seq=%lu", (unsigned long)(s_mb_seq + 1));
+    }
 
     /* RX 自愈：ORE 置位或 RXNEIE 失能（HAL 错误路径遗留）→ 恢复接收。
      * 症状：启动期线路扰动 → ORE → 中断被 HAL 关掉后控制台永久失聪。 */

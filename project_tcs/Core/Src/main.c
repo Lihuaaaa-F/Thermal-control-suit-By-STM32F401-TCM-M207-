@@ -42,6 +42,9 @@ I2C_HandleTypeDef  hi2c_tmp117;     /* I2C1 PB8/PB9 TMP117 */
 static volatile uint32_t g_tick_ms = 0;
 uint32_t millis(void) { return g_tick_ms; }
 
+/* 主循环活性圈数（H2/wp_check 活性证据用；volatile 供 probe-rs 直读）*/
+volatile uint32_t g_stat_loop_passes = 0;
+
 /* SysTick 1ms 双递增覆盖（GS 工程移植时曾丢失本函数 → 主循环卡死在节拍等待，
  * IWDG 32.7s 复位循环；根因记录 docs/evidence/WP6_iwdg_defect.md） */
 void HAL_IncTick(void)
@@ -195,7 +198,7 @@ void on_frame(const uint8_t *payload, size_t len)
         break;
     }
     case MT_TCS_GET_REGISTRY: {
-        /* 注册表全量 → 0x14 帧 ×N（txq 8 深：7 参数 + 本 ACK = 8 恰好）*/
+        /* 注册表全量 → 0x14 帧 ×N（txq 16 深：WP-A.5 后 8 条目 + ACK = 9 ≤ 16 富余）*/
         link_send_ack(seq, mt, TCS_ACK_OK, 0.0f);
         int n = param_count();
         for (int i = 0; i < n; i++) {
@@ -493,6 +496,7 @@ int main(void)
 
     /* EEPROM → 参数注册表（离线/CRC 坏不阻塞，默认值 + ALM_EEPROM）*/
     int ee_rv = eeprom_init();
+    uint8_t ee_cfg_invalid = 0;
     param_registry_init(&(param_hooks_t){
         .on_broadcast  = hook_broadcast,
         .on_m207_set   = hook_m207_set,
@@ -504,15 +508,15 @@ int main(void)
         uint8_t img[EE_IMAGE_SIZE];
         if (eeprom_read_image(img) == 0) {
             if (param_deserialize(img) != 0) {
+                ee_cfg_invalid = 1;   /* control_init 会清报警位，标志后置（时序 bug 修复）*/
                 tcs_log("[WARN]", "eeprom cfg invalid -> defaults");
-                tcs_alarm_raise(ALM_EEPROM);
             } else {
                 tcs_log("[SYSTEM]", "eeprom params loaded");
             }
         }
     } else {
+        ee_cfg_invalid = 1;
         tcs_log("[WARN]", "eeprom offline -> RAM only");
-        tcs_alarm_raise(ALM_EEPROM);
     }
 
     /* 安全控制 + 外设桥 */
@@ -522,6 +526,7 @@ int main(void)
         .tec_temp = ops_tec_temp,
         .on_state = NULL,
     });
+    if (ee_cfg_invalid) tcs_alarm_raise(ALM_EEPROM);   /* control_init 之后置位才不被清 */
     m207_init(&huart_m207);
     tmp117_init(&hi2c_tmp117);
     fan_init();
@@ -539,6 +544,7 @@ int main(void)
 
     while (1) {
         uint32_t now = g_tick_ms;
+        g_stat_loop_passes++;
 
         iwdg_refresh();
         blackbox_loop_tick();

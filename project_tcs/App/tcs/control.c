@@ -128,6 +128,14 @@ void control_on_mode_change(uint8_t m)
     (void)m;   /* 手动进出不强制改输出；自动评估在下一拍 control_poll 接管 */
 }
 
+/* WP-A.5：布防开关（0x08 commissioned，默认 0 未布防）。
+ * 未布防：传感器类异常（体温失联/M207 失联）只记状态沿，不上横幅不进 SAFE；
+ * 布防=1：恢复完整 FMEA。ALM_OVERTEMP 与急停不受布防影响（安全红线不变）。 */
+static uint8_t commissioned(void)
+{
+    return param_get(PARAM_ID_COMMISSIONED) > 0.5f;
+}
+
 /* ====== 500ms 评估 ====== */
 void control_poll(uint32_t now_ms)
 {
@@ -136,12 +144,23 @@ void control_poll(uint32_t now_ms)
         s_boot_ms_base_set = 1;
     }
 
-    /* 过热硬阈值报警（任意模式，自动置位）*/
+    /* 过热硬阈值报警（任意模式，自动置位；不受布防影响——安全边界）*/
     if (g_tcs.tc1_act > ALM_OVERTEMP_HARD_C) tcs_alarm_raise(ALM_OVERTEMP);
 
-    /* F1/F2：传感器丢失 / M207 失联 → SAFE（含手动模式；M207 有 5s 上电宽限）*/
+    /* F1/F2：传感器丢失 / M207 失联 → SAFE（含手动模式；M207 有 5s 上电宽限）
+     * WP-A.5 commissioned：未布防（默认）→ 只记状态沿（上位机可查询），不置报警位
+     * 不进 SAFE；布防后同一异常立即进完整 FMEA。 */
     uint8_t m207_fault = (!g_tcs.m207_online) && (now_ms - s_boot_ms >= CTRL_BOOT_GRACE_MS);
-    if (!g_tcs.body_sensor_ok || m207_fault) {
+    uint8_t sensor_fault = (!g_tcs.body_sensor_ok) || m207_fault;
+    static uint8_t s_unarmed_fault_prev;
+    if (sensor_fault && !commissioned()) {
+        if (!s_unarmed_fault_prev) {
+            s_unarmed_fault_prev = 1;   /* 沿标记（PC 单测/统计可见；日志由各传感器驱动侧打）*/
+        }
+    } else {
+        s_unarmed_fault_prev = 0;
+    }
+    if (sensor_fault && commissioned()) {
         if (!g_tcs.body_sensor_ok) tcs_alarm_raise(ALM_BODY_SENSOR);
         if (m207_fault)            tcs_alarm_raise(ALM_M207);
         enter_safe();

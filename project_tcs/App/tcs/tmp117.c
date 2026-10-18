@@ -55,6 +55,11 @@ static uint32_t s_last_ms;
 
 static void on_sensor_lost(void)
 {
+    /* WP-A.5：未布防只记日志不上横幅（布防由 control_poll 统一裁决，此处同步门控）*/
+    if (param_get(PARAM_ID_COMMISSIONED) < 0.5f) {
+        SEGGER_RTT_WriteString("[WARN] TMP117 LOST (unarmed, log only)\n");
+        return;
+    }
     tcs_alarm_raise(ALM_BODY_SENSOR);
     SEGGER_RTT_WriteString("[ERROR] TMP117 LOST -> ALM_BODY_SENSOR\n");
 }

@@ -85,6 +85,14 @@ int main(void){
 EOF
 run tmp117 build/test_tmp117.c App/tcs/tmp117.c
 
+# H3 字库缺字门禁（WP-A.2a，永久）：UI 字符串 × 字库码表，缺字退出非零
+PYBIN=$(command -v python3 || command -v python)
+if [ -n "$PYBIN" ]; then
+    if "$PYBIN" tools/font_audit.py; then :; else FAIL=1; fi
+else
+    echo "[font_audit] SKIP: python not found"; FAIL=1
+fi
+
 echo "==================="
 if [ "$FAIL" = 0 ]; then echo "run_all: ALL GREEN"; else echo "run_all: HAS FAILURES"; fi
 exit $FAIL

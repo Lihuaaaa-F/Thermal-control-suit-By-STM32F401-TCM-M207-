@@ -255,9 +255,9 @@ int ltdc_init(void)
      * 确认 PB5 真被配成推挽输出且拉高。若寄存器值对但背光仍不亮 → 100% 硬件层
      * （LCD1 pin1-2 VCC5V 缺失 / 排线接触 / 屏故障）。*/
     SEGGER_RTT_printf(0, "RTT: bl_diag AHB4ENR=%08x GPIOB_MODER=%08x ODR=%08x\n",
-                      RCC->AHB4ENR, GPIOB->MODER, GPIOB->ODR);
-    SEGGER_RTT_printf(0, "RTT: bl_diag PB5: MODER[11:10]=%lu ODR_bit5=%lu (expect 1,1)\n",
-                      (GPIOB->MODER >> 10) & 3U, (GPIOB->ODR >> 5) & 1U);
+                      (unsigned)RCC->AHB4ENR, (unsigned)GPIOB->MODER, (unsigned)GPIOB->ODR);
+    SEGGER_RTT_printf(0, "RTT: bl_diag PB5: MODER[11:10]=%u ODR_bit5=%u (expect 1,1)\n",
+                      (unsigned)((GPIOB->MODER >> 10) & 3U), (unsigned)((GPIOB->ODR >> 5) & 1U));
 
     g_lcd_ok = 1;
     gfx_clear(COLOR_BLACK);
@@ -405,39 +405,47 @@ void HAL_LTDC_MspInit(LTDC_HandleTypeDef *h)
 /* ===================================================================== */
 /*                §0C.2 DMA2D R2M（抄官方例程 ltdc_fill）                */
 /* ===================================================================== */
-/* 寄存器直写，每次用前先开 DMA2D 时钟（例程写法）。RGB565。*/
+/* 寄存器直写，每次用前先开 DMA2D 时钟（例程写法）。RGB565。
+ * ⚠ WP-A.2d 根因（2026-10-18 帧缓冲取证实测）：本片 DMA2D 多行 R2M 每行实际
+ * 步进 = NLW + OOR + 32px（行尾 64B 突发残留），逐行漏一条 32px 斜带——旧行内容
+ * 从漏带透出即"红线/花屑"（OOR 补偿对满宽填充会下溢取负，不可用）。
+ * 处置：h>1 一律拆成逐行 h=1 填充（h=1 无行跳转，零误差）；性能损失经 DWT 实测
+ * 可接受（见 docs/results/WP-C.md）。*/
 static void dma2d_fill_rect(uint16_t *dst, int w, int h, int pitch, uint16_t color)
 {
     /* TCS 加固（2026-10-18 运行时实证）：TC 忙等曾观测到不死等 → 主循环 >2s 卡死
-     * → IWDG 复位循环。改为：空矩形防御 + TC 超时（约 5ms@HCLK240M）→ 软复位
+     * → IWDG 复位循环。改为：空矩形防御 + TC 超时（约 5ms@HCLK480M）→ 软复位
      * DMA2D 恢复总线，缺一块填充优于整机复位。其余逻辑原样。*/
     __HAL_RCC_DMA2D_CLK_ENABLE();
     if (w <= 0 || h <= 0) return;
-    DMA2D->CR = 0;
-    DMA2D->CR = DMA2D_R2M;                    /* Register-to-Memory */
-    DMA2D->OPFCCR = LTDC_PIXEL_FORMAT_RGB565; /* 0x02 */
-    DMA2D->OOR = (uint32_t)(pitch - w);       /* 行间偏移（像素）*/
-    DMA2D->OMAR = (uint32_t)dst;
-    DMA2D->NLR = (uint32_t)w | ((uint32_t)h << 16);   /* 宽 | 高<<16 */
-    DMA2D->OCOLR = color;
-    DMA2D->IFCR |= DMA2D_FLAG_TC;             /* 先清旧 TC 再启动，防上一帧残留 */
-    DMA2D->CR |= DMA2D_CR_START;
-    uint32_t guard = 2000000u;                /* ~5ms @480M 循环上限 */
-    while ((DMA2D->ISR & DMA2D_FLAG_TC) == 0) {
-        if (--guard == 0) {
-            __HAL_RCC_DMA2D_FORCE_RESET();
-            __HAL_RCC_DMA2D_RELEASE_RESET();
-            __HAL_RCC_DMA2D_CLK_ENABLE();
-            SEGGER_RTT_WriteString("[WARN] dma2d TC timeout -> soft reset");
-            return;
+    for (int row = 0; row < h; row++) {
+        uint32_t guard = 2000000u;                /* ~5ms 级循环上限 */
+        DMA2D->CR = DMA2D_R2M;                    /* Register-to-Memory */
+        DMA2D->OPFCCR = LTDC_PIXEL_FORMAT_RGB565; /* 0x02 */
+        DMA2D->OOR = 0;                           /* h=1 无行跳转 */
+        DMA2D->OMAR = (uint32_t)(dst + (size_t)row * pitch);
+        DMA2D->NLR = (uint32_t)w | (1U << 16);    /* 宽 w × 高 1（NLH=0 则不启动传输!）*/
+        DMA2D->OCOLR = color;
+        DMA2D->IFCR |= DMA2D_FLAG_TC;             /* 先清旧 TC 再启动 */
+        DMA2D->CR |= DMA2D_CR_START;
+        while ((DMA2D->ISR & DMA2D_FLAG_TC) == 0) {
+            if (--guard == 0) {
+                __HAL_RCC_DMA2D_FORCE_RESET();
+                __HAL_RCC_DMA2D_RELEASE_RESET();
+                __HAL_RCC_DMA2D_CLK_ENABLE();
+                SEGGER_RTT_WriteString("[WARN] dma2d TC timeout -> soft reset");
+                return;
+            }
         }
+        DMA2D->IFCR |= DMA2D_FLAG_TC;
     }
-    DMA2D->IFCR |= DMA2D_FLAG_TC;             /* 清标志（例程写法）*/
 }
 
 /* ===================================================================== */
 /*                          基础绘图                                      */
 /* ===================================================================== */
+static void dma2d_m2m_copy(const uint16_t *src, uint16_t *dst, int w, int h);
+
 void gfx_clear(uint16_t color)
 {
     if (!g_lcd_ok) return;
@@ -523,8 +531,37 @@ void gfx_draw_string(int x, int y, const char *s, uint16_t fg, uint16_t bg)
 void gfx_flip(void)
 {
     if (!g_lcd_ok) return;
-    /* M2：单 buffer + memcpy + write-through（最稳不花屏，例程同款）。
-     * write-through 下 memcpy 写 back 立即穿透 SDRAM，LTDC 立即读到 → 不花屏。
-     * 真双 buffer（写 L1CFBAR）作为 §0C.3 可选优化，M2 不做。*/
+    /* back 由 DMA2D 写（绕过 D-Cache），CPU memcpy 读前必须作废 back 的 cache 行，
+     * 否则命中陈旧行会把旧帧内容涂进 front（write-through 下 CPU 写 front 无此问题）。*/
+    SCB_InvalidateDCache_by_Addr((uint32_t *)(void *)LCD_BACK_BUF, LCD_FBSIZE);
     memcpy((void *)LCD_FRONT_BUF, (void *)LCD_BACK_BUF, LCD_FBSIZE);
+}
+
+/* DMA2D M2M 整帧搬运——已弃用（WP-A.2d 实测同一 +32px/行步进异常，见 dma2d_fill_rect
+ * 注释）。保留实现备查，不再被 gfx_flip 调用。*/
+static void dma2d_m2m_copy(const uint16_t *src, uint16_t *dst, int w, int h)
+{
+    __HAL_RCC_DMA2D_CLK_ENABLE();
+    if (w <= 0 || h <= 0) return;
+    DMA2D->CR = 0x00000000U;                  /* M2M 模式 */
+    DMA2D->OPFCCR = LTDC_PIXEL_FORMAT_RGB565;
+    DMA2D->FGPFCCR = LTDC_PIXEL_FORMAT_RGB565;
+    DMA2D->OMAR = (uint32_t)dst;
+    DMA2D->FGMAR = (uint32_t)src;
+    DMA2D->OOR = 0;
+    DMA2D->FGOR = 0;
+    DMA2D->NLR = (uint32_t)w | ((uint32_t)h << 16);
+    DMA2D->IFCR |= DMA2D_FLAG_TC;
+    DMA2D->CR |= DMA2D_CR_START;
+    uint32_t guard = 2000000u;
+    while ((DMA2D->ISR & DMA2D_FLAG_TC) == 0) {
+        if (--guard == 0) {
+            __HAL_RCC_DMA2D_FORCE_RESET();
+            __HAL_RCC_DMA2D_RELEASE_RESET();
+            __HAL_RCC_DMA2D_CLK_ENABLE();
+            SEGGER_RTT_WriteString("[WARN] dma2d M2M TC timeout -> soft reset");
+            return;
+        }
+    }
+    DMA2D->IFCR |= DMA2D_FLAG_TC;
 }

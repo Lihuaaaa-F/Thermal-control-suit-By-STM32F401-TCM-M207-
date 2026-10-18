@@ -209,7 +209,9 @@ static uint32_t s_last_lp_ms;        /* 上次连发时刻 */
 static uint32_t s_touch_release_ok;  /* 去抖：按下时刻 */
 static int s_prev_touched;
 
-#include "blackbox.h"   /* T1 调试页脚（结案后移除） */
+#ifdef TCS_DEBUG_UI
+#include "blackbox.h"   /* T1 调试页脚（WP-A.2b：默认关；ASCII 混排页脚是问号源之一）*/
+#endif
 
 /* 脏区位 */
 #define D_TOPBAR   0x001
@@ -362,9 +364,10 @@ static void draw_tune(void)
     int n = tune_items(ids, 16);
     gfx_clear(C_BG);
 
-    /* 页顶：标题 + 常驻灰字说明（调参即实时生效，保存=EEPROM 固化）*/
+    /* 页顶：标题 + 常驻灰字说明（调参即实时生效，保存=EEPROM 固化）
+     * （WP-A.3：中文说明必须走 24px——16px 字库仅 ASCII，CJK 会渲染成 '?'）*/
     ui_text24(32, 8, "调参", C_TEXT, C_BG);
-    ui_text16(300, 12, "实时生效中  保存=断电保持(EEPROM)", C_DISABLED, C_BG);
+    ui_text24(300, 10, "实时生效 保存=断电保持", C_DISABLED, C_BG);
 
     /* 列表 8 行 (16,56+i*56,640,48) */
     for (int i = 0; i < 8 && i < n; i++) {
@@ -474,8 +477,11 @@ static void tune_step(float dir)
 }
 
 /* ====== 触摸分发 ====== */
+static volatile uint32_t s_tap_cnt;   /* 诊断：点击累计（幻触摸侦测）*/
+
 static void touch_tap(int x, int y)
 {
+    s_tap_cnt++;
     /* 弹窗优先 */
     if (s_dlg != DLG_NONE) {
         if (ui_in(x, y, 412, 300, 200, 64)) {          /* 确认 */
@@ -648,11 +654,82 @@ void tcs_ui_init(void)
     tcs_log("[APP]", "ui init page=home lcd=%d touch=%d", lcd_ready(), touch_ready());
 }
 
-/* T1 调试页脚：B=启动数 U=运行秒 L=圈数k I=ISR喂狗 F=上轮故障 R=上轮复位源 H=上轮存活秒 */
+#ifdef TCS_DEBUG_UI
+/* T1 调试页脚：B=启动数 U=运行秒 L=圈数k I=ISR喂狗 F=上轮故障 R=上轮复位源 H=上轮存活秒
+ * （WP-A.2b：默认关——正式版不画 ASCII 调试页脚；WP-C 删 blackbox 后本块改挂 stat 计数器）*/
 static void draw_debug_footer(uint32_t now)
 {
     gfx_fill_rect(0, 583, 1023, 599, 0x0000);
     gfx_draw_string(8, 583, blackbox_footer_text(now), 0xFFFF, 0x0000);
+}
+#else
+static void draw_debug_footer(uint32_t now) { (void)now; }
+#endif
+
+/* ====== 屏诊断（console scrtest；WP-A.2d 噪声二分用）====== */
+uint32_t tcs_ui_tap_count(void) { return s_tap_cnt; }
+
+void tcs_ui_screen_clear(uint16_t rgb565)
+{
+    if (!lcd_ready()) return;
+    gfx_clear(rgb565);
+    gfx_flip();
+}
+
+void tcs_ui_screen_text(void)
+{
+    if (!lcd_ready()) return;
+    gfx_clear(RGB565(0xEE, 0xF1, 0xF5));
+    ui_text16(16, 16, "ASCII16 0123 :/ -", RGB565(0x1F, 0x24, 0x29), RGB565(0xEE, 0xF1, 0xF5));
+    ui_text24(16, 48, "ASCII24 012.3 -/yz", RGB565(0x1F, 0x24, 0x29), RGB565(0xEE, 0xF1, 0xF5));
+    ui_text24(16, 88, "中文24 布防调参保存", RGB565(0x1F, 0x24, 0x29), RGB565(0xEE, 0xF1, 0xF5));
+    ui_text48(16, 128, "-25.0", RGB565(0x11, 0x18, 0x27), RGB565(0xEE, 0xF1, 0xF5));
+    gfx_flip();
+}
+
+void tcs_ui_force_home(void)
+{
+    if (!lcd_ready()) return;
+    s_page = UI_PAGE_HOME;
+    s_dlg = DLG_NONE;
+    s_dirty = D_ALL;
+    draw_home();
+}
+
+void tcs_ui_force_tune(void)
+{
+    if (!lcd_ready()) return;
+    s_page = UI_PAGE_TUNE;
+    s_tune_sel = 0;
+    s_dlg = DLG_NONE;
+    draw_tune();
+}
+
+/* 压测算子（WP-A.2d 分音定位：flip / 各绘制算子 × flip 谁在制造剪切 junk）*/
+void tcs_ui_screen_stress(int mode, int n)
+{
+    if (!lcd_ready()) return;
+    for (int i = 0; i < n; i++) {
+        switch (mode) {
+        case 0:                                   /* 纯 flip（back 无新绘制）*/
+            break;
+        case 1:                                   /* 横幅红底填充 + flip */
+            gfx_fill_rect(200, 0, 767, 39, RGB565(0xE5, 0x48, 0x4D));
+            break;
+        case 2:                                   /* 横幅文本（红底白字）+ flip */
+            ui_text24(208, 8, "EEPROM", RGB565(0xFF, 0xFF, 0xFF), RGB565(0xE5, 0x48, 0x4D));
+            break;
+        case 3:                                   /* TEC 徽章灰填充 + flip */
+            gfx_fill_rect(400, 72, 463, 111, RGB565(0x5A, 0x64, 0x72));
+            break;
+        case 4:                                   /* 48px 大字 + flip */
+            ui_text48(32, 120, "-25.0", RGB565(0x11, 0x18, 0x27), RGB565(0x1B, 0x21, 0x29));
+            break;
+        default:
+            return;
+        }
+        gfx_flip();
+    }
 }
 
 void tcs_ui_poll(uint32_t now)

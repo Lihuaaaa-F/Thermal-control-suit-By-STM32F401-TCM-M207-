@@ -516,6 +516,19 @@ void gfx_flip(void)
     s_back = (s_back == LCD_FRONT_BUF) ? LCD_BACK_BUF : LCD_FRONT_BUF;
 }
 
+/* WP-C.5 补丁：乒乓下不同脏区的局部重绘会落不同缓冲 → 内容分叉
+ * （实测 TEC 徽章停在旧态）。局部重绘一律直写显示缓冲；整页/弹窗先选
+ * 隐藏缓冲再 flip。*/
+void gfx_use_shown_buffer(void)
+{
+    s_back = (g_shown_fb == (uint32_t)LCD_FRONT_BUF) ? LCD_FRONT_BUF : LCD_BACK_BUF;
+}
+
+void gfx_use_hidden_buffer(void)
+{
+    s_back = (g_shown_fb == (uint32_t)LCD_FRONT_BUF) ? LCD_BACK_BUF : LCD_FRONT_BUF;
+}
+
 void gfx_sync_buffers(void)
 {
     if (!g_lcd_ok) return;

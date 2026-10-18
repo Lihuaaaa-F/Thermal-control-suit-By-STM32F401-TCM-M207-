@@ -83,6 +83,11 @@ uint8_t m207_online(void);                    /* 0/1（g_tcs.m207_online 同步�
 
 /* ISR 侧：USART3 RX 单字节入口（由 HAL 回调转发）。只入环形缓冲，SPSC。 */
 void m207_isr_push(uint8_t b);
+
+/* WP-G 板内仿真（TCS_SIM 构建才实现）：模拟应答器控制 */
+void m207_sim_fault(void);        /* 应答静默（拔线仿真）*/
+void m207_sim_recover(void);      /* 应答恢复 */
+void m207_sim_wrong_echo(void);   /* 下一次设定回读故意错值（重发路径）*/
 /* RX 完成重启 + 错误恢复（main.c 回调转发）*/
 void m207_rx_complete(void);
 void m207_uart_error_recover(void);

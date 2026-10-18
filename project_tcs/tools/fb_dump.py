@@ -8,6 +8,7 @@
 用法：python tools/fb_dump.py 输出.png [起始行 行数]
 默认整屏；可只转储部分行加快速度。依赖 Pillow。
 """
+import os
 import re
 import subprocess
 import sys
@@ -43,7 +44,7 @@ def current_fb_addr() -> int:
     """取当前屏上显示的帧缓冲地址。WP-C.5 真双缓冲（CFBAR 乒乓）后固定地址会读
     到陈旧缓冲——LTDC 寄存器经调试口读数不可靠（实测恒 0），固件在 RAM 暴露
     g_shown_fb（gfx_flip 维护），经 nm 定位直读，可靠。"""
-    elf = Path("build/tcs_main.elf")
+    elf = Path(os.environ.get("TCS_ELF", "build/tcs_main.elf"))
     try:
         nm = subprocess.run(["arm-none-eabi-nm", str(elf)], capture_output=True,
                             text=True, check=True, timeout=60).stdout

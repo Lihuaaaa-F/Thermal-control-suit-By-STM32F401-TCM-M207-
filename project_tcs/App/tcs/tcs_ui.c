@@ -838,6 +838,14 @@ void tcs_ui_screen_text(void)
     gfx_flip();
 }
 
+#ifdef TCS_SIM
+void tcs_ui_inject_tap(int x, int y)
+{
+    tcs_log("[SIM]", "tap %d,%d", x, y);
+    touch_tap(x, y);
+}
+#endif
+
 void tcs_ui_force_home(void)
 {
     if (!lcd_ready()) return;

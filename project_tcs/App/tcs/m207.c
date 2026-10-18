@@ -100,6 +100,7 @@ int m207_parse_line(const char *line, m207_reply_t *out)
 #include "stm32h7xx_hal.h"
 #include "segger_rtt.h"
 #include "param_registry.h"
+#include "console.h"        /* tcs_log（TCS_SIM 应答器日志）*/
 
 #define M207_RING_SIZE   512u
 #define M207_RING_MASK   (M207_RING_SIZE - 1u)
@@ -149,8 +150,77 @@ static uint16_t m207_ring_pop(uint8_t *b)
     return 1;
 }
 
+#ifdef TCS_SIM
+/* ====== WP-G 板内仿真：M207 模拟应答器（无外线驱动状态机全路径）======
+ * 拦截 TX 命令合成 RX 行入环形缓冲：查询→正弦水温；设定→回读确认
+ * （sim m207 wrongecho 时首次故意错值 → 驱动走自动重发路径）；
+ * sim m207 fault → 应答静默（拔线仿真，5 败→OFFLINE→RECOVER）。*/
+static struct {
+    uint8_t fault;
+    uint8_t wrong_echo;
+    float   setpoint[3];
+    float   act[3];
+} s_m207_sim;
+
+static void sim_push_line(const char *line)
+{
+    for (const char *p = line; *p; p++) m207_isr_push((uint8_t)*p);
+}
+
+static void sim_respond(const char *cmd)
+{
+    int ch = 0;
+    float v = 0;
+    char line[40];
+    if (!s_m207_sim.act[1] && !s_m207_sim.act[2]) {
+        s_m207_sim.act[1] = 26.0f;
+        s_m207_sim.act[2] = 25.0f;
+    }
+    if (sscanf(cmd, "TC%d:TCACTTEMP?", &ch) == 1) {
+        /* 实际水温：向设定点一阶趋近 + 微幅正弦（画面/曲线有生命感）*/
+        float sp = s_m207_sim.setpoint[ch] ? s_m207_sim.setpoint[ch] : 25.0f;
+        s_m207_sim.act[ch] += (sp - s_m207_sim.act[ch]) * 0.15f;
+        s_m207_sim.act[ch] += 0.05f * sinf((float)HAL_GetTick() / 7000.0f);
+        snprintf(line, sizeof(line), "TC%d:TCACTTEMP=%.1f\r",
+                 ch, (double)s_m207_sim.act[ch]);
+        sim_push_line(line);
+    } else if (sscanf(cmd, "TC%d:TCADJTEMP=%f", &ch, &v) == 2) {
+        s_m207_sim.setpoint[ch] = v;
+        float echo = s_m207_sim.wrong_echo ? (v + 0.3f) : v;
+        s_m207_sim.wrong_echo = 0;
+        snprintf(line, sizeof(line), "TC%d:TCADJTEMP=%.1f\r", ch, (double)echo);
+        tcs_log("[SIM]", "echo %s (want %.1f)", line, (double)v);
+        sim_push_line(line);
+    } else if (sscanf(cmd, "TC%d:TCSW=%f", &ch, &v) == 2) {
+        snprintf(line, sizeof(line), "TC%d:TCSW=%.0f\r", ch, (double)v);
+        sim_push_line(line);
+    }
+}
+
+void m207_sim_fault(void)
+{
+    s_m207_sim.fault = 1;
+    tcs_log("[SIM]", "m207 responder SILENT (unplug sim)");
+}
+
+void m207_sim_recover(void)
+{
+    s_m207_sim.fault = 0;
+    tcs_log("[SIM]", "m207 responder BACK online");
+}
+
+void m207_sim_wrong_echo(void)
+{
+    s_m207_sim.wrong_echo = 1;
+    tcs_log("[SIM]", "next setpoint echo will be WRONG (resend path)");
+}
+#endif /* TCS_SIM */
+
 static void m207_tx_raw(const char *cmd)
 {
+#ifdef TCS_SIM
+    if (!s_m207_sim.fault) sim_respond(cmd);
+#endif
     HAL_UART_Transmit(s_huart, (uint8_t *)cmd, (uint16_t)strlen(cmd), 20u);
 }
 

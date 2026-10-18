@@ -18,6 +18,9 @@ uint32_t tcs_ui_tap_count(void);            /* 触摸点击累计（幻触摸侦
 void tcs_ui_screen_clear(uint16_t rgb565);  /* 纯色清屏+flip（DMA2D 全屏路径自证）*/
 void tcs_ui_screen_text(void);              /* 干净底+标定文本(16/24/48px)+flip */
 void tcs_ui_force_home(void);               /* 回主页+整页重绘（诊断后恢复）*/
+#ifdef TCS_SIM
+void tcs_ui_inject_tap(int x, int y);       /* 触摸注入（WP-G 交互自测）*/
+#endif
 void tcs_ui_force_tune(void);               /* 调参页整页重绘（取证/诊断）*/
 void tcs_ui_screen_stress(int mode, int n); /* 压测算子（WP-A.2d 分音）：0纯flip 1横幅填充 2横幅文本 3徽章填充 4大字*/
 

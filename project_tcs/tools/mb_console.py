@@ -9,6 +9,7 @@
 
 用法：python tools/mb_console.py "ver" ["stat" ...]   （在 project_tcs 根目录）
 """
+import os
 import re
 import subprocess
 import sys
@@ -17,7 +18,7 @@ from pathlib import Path
 
 CHIP = "STM32H743II"
 PROBE = "0d28:0204"
-ELF = Path("build/tcs_main.elf")
+ELF = Path(os.environ.get("TCS_ELF", "build/tcs_main.elf"))
 MB_MAGIC_RUN = 0x54534D43
 
 

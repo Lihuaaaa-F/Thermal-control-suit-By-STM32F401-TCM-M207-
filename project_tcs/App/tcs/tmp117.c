@@ -3,6 +3,7 @@
  *
  * 硬件 I2C1（PB8/PB9 AF4 @100kHz，飞线外接 4.7kΩ 上拉——接线表 #5/#6）。
  * HAL_I2C_Mem_Read 读 0x00 寄存器 2B 大端；滑动均值窗口 8；健康判定见头文件。
+ * TCS_SIM 构建：假体温源（tmp117_sim_set/off）驱动 FSM/报警全路径（WP-G）。
  */
 #include "tmp117.h"
 
@@ -46,6 +47,24 @@ void tmp117_health_step(tmp117_health_t *h, int step, void (*alarm_raise)(void))
 #include "control.h"            /* tcs_alarm_raise */
 #include "segger_rtt.h"
 
+#ifdef TCS_SIM
+/* WP-G 板内仿真：假体温源（sim body <val> / sim body off）*/
+static float   s_sim_body = 36.8f;
+static uint8_t s_sim_on = 1;
+void tmp117_sim_set(float v)
+{
+    s_sim_body = v;
+    s_sim_on = 1;
+    SEGGER_RTT_printf(0, "[SIM] body temp forced %.1f", (double)v);
+    SEGGER_RTT_WriteString("\n");
+}
+void tmp117_sim_disable(void)
+{
+    s_sim_on = 0;
+    SEGGER_RTT_WriteString("[SIM] body temp sim OFF (sensor-loss path)\n");
+}
+#endif
+
 static I2C_HandleTypeDef *s_i2c;
 static tmp117_health_t s_health;
 static float  s_win[TMP117_AVG_WIN];
@@ -80,6 +99,20 @@ void tmp117_poll(uint32_t now_ms)
 {
     if (now_ms - s_last_ms < TMP117_SAMPLE_MS) return;
     s_last_ms = now_ms;
+
+#ifdef TCS_SIM
+    if (s_sim_on) {                       /* 假体温：直接进滑动均值，恒 ok */
+        s_win[s_win_idx] = s_sim_body;
+        s_win_idx = (s_win_idx + 1) % TMP117_AVG_WIN;
+        if (s_win_fill < TMP117_AVG_WIN) s_win_fill++;
+        float sum = 0.0f;
+        for (int i = 0; i < s_win_fill; i++) sum += s_win[i];
+        g_tcs.body_temp = sum / (float)s_win_fill;
+        tmp117_health_step(&s_health, 1, on_sensor_lost);
+        g_tcs.body_sensor_ok = s_health.ok;
+        return;
+    }
+#endif
 
     uint8_t buf[2];
     int ok = 0;

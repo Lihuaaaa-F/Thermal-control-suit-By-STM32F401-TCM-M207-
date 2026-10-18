@@ -282,6 +282,41 @@ static void cmd_exec(char *line)
         return;
     }
 
+#ifdef TCS_SIM
+    /* --- sim：板内仿真注入（WP-G；仅 TCS_SIM 构建）--- */
+    if (strcmp(argv[0], "sim") == 0 && argc >= 2) {
+        if (strcmp(argv[1], "body") == 0 && argc == 3) {
+            extern void tmp117_sim_set(float v);
+            extern void tmp117_sim_disable(void);
+            if (strcmp(argv[2], "off") == 0) tmp117_sim_disable();
+            else tmp117_sim_set(strtof(argv[2], NULL));
+            printf("sim body %s\n", argv[2]);
+        } else if (strcmp(argv[1], "m207") == 0 && argc == 3) {
+            if (strcmp(argv[2], "fault") == 0) {
+                extern void m207_sim_fault(void);
+                m207_sim_fault();
+            } else if (strcmp(argv[2], "recover") == 0) {
+                extern void m207_sim_recover(void);
+                m207_sim_recover();
+            } else if (strcmp(argv[2], "wrongecho") == 0) {
+                extern void m207_sim_wrong_echo(void);
+                m207_sim_wrong_echo();
+            }
+            printf("sim m207 %s\n", argv[2]);
+        } else if (strcmp(argv[1], "touch") == 0 && argc == 4) {
+            extern void tcs_ui_inject_tap(int x, int y);
+            tcs_ui_inject_tap(atoi(argv[2]), atoi(argv[3]));
+            printf("sim touch %s %s\n", argv[2], argv[3]);
+        } else if (strcmp(argv[1], "arm") == 0) {
+            (void)param_set(PARAM_ID_COMMISSIONED, 1.0f, PARAM_SRC_CONSOLE);
+            printf("sim armed=%u\n", (unsigned)param_get(PARAM_ID_COMMISSIONED));
+        } else {
+            printf("usage: sim body <val|off>|m207 <fault|recover|wrongecho>|"
+                   "touch <x> <y>|arm\n");
+        }
+        return;
+    }
+#endif
     printf("?\n");
 }
 

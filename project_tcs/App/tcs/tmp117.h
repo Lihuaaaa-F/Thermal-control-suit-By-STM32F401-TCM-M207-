@@ -47,6 +47,10 @@ void tmp117_health_step(tmp117_health_t *h, int step, void (*alarm_raise)(void))
 void  tmp117_init(I2C_HandleTypeDef *hi2c);
 void  tmp117_poll(uint32_t now_ms);   /* 主循环 100ms 节拍调用；更新 g_tcs.body_temp/body_sensor_ok */
 
+/* WP-G 板内仿真（TCS_SIM 构建才实现）*/
+void tmp117_sim_set(float v);         /* 假体温注入 */
+void tmp117_sim_disable(void);        /* 关闭假源 → 走真 I2C（失败=失联路径）*/
+
 #endif /* !TCS_UNIT_TEST */
 
 #ifdef __cplusplus

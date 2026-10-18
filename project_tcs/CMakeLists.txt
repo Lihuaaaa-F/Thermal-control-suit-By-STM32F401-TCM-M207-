@@ -89,6 +89,15 @@ target_compile_definitions(tcs_main.elf PRIVATE
     # 无 SCREEN_TEST：TCS 直接出正式版（任务书 §3.1）
 )
 
+# ====== WP-G 板内仿真构建（默认关；独立目录构建，不入正式发布）======
+# 用法：cmake -S . -B build-sim -G Ninja -DCMAKE_TOOLCHAIN_FILE=arm-none-eabi-gcc.cmake -DTCS_SIM=ON
+set(TCS_SIM OFF CACHE BOOL "board-in simulation build (M207/TMP117 sim + touch inject)")
+if(TCS_SIM)
+    target_compile_definitions(tcs_main.elf PRIVATE TCS_SIM)
+    target_link_libraries(tcs_main.elf PRIVATE m)   # sim 应答器 sinf
+    message(STATUS "TCS_SIM=ON: simulation build (M207 responder / TMP117 inject / touch inject)")
+endif()
+
 # 转 hex/bin（ASCII 路径可直接 objcopy，仍走 python 统一后处理）
 find_package(Python3 REQUIRED COMPONENTS Interpreter)
 add_custom_command(TARGET tcs_main.elf POST_BUILD

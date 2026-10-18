@@ -1,0 +1,3 @@
+D:/Espressif/ws/tcs/project_tcs/build-sim/CMakeFiles/tcs_main.elf.dir
+D:/Espressif/ws/tcs/project_tcs/build-sim/CMakeFiles/edit_cache.dir
+D:/Espressif/ws/tcs/project_tcs/build-sim/CMakeFiles/rebuild_cache.dir

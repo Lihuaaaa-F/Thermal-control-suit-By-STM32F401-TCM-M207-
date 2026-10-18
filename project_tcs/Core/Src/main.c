@@ -566,6 +566,10 @@ int main(void)
         comm_poll_tx(&g_link);           /* 链路 TX 串行消费（唯一 HAL_UART_Transmit 处之一）*/
         console_poll();
         m207_poll(now);
+        /* M207 实际水温 → 全局快照（WP-G 仿真暴露的集成缺口：此前
+         * m207_last_temp 从未同步进 g_tcs，屏/网页水温恒 0、过热保护失效）*/
+        g_tcs.tc1_act = m207_last_temp(1);
+        g_tcs.tc2_act = m207_last_temp(2);
         link_rx_drain();
         comm_tick(&g_link);              /* 重传检查（主循环上下文）*/
 

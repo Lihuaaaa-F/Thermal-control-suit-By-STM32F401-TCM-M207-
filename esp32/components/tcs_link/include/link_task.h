@@ -33,6 +33,7 @@ typedef struct {
 typedef void (*link_event_cb_t)(void);   /* 参数/注册表/状态变更通知（ws 推送）*/
 
 void link_start(void);                    /* 建 UART + 任务 */
+void link_loopback_run(void);             /* WP-F.1 真机自环自测（link_start 前独占 UART1，证据=[LPBK] 日志）*/
 bool link_alive(void);                    /* 0x10 3s 内有新鲜帧 */
 const link_status_t *link_status(void);   /* 快照指针（内部加锁，读后尽快用）*/
 

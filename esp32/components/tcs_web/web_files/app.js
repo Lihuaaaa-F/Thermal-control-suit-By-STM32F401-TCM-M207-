@@ -65,7 +65,7 @@ function onStatus(s) {
 
   /* 报警横幅 */
   let msgs = [];
-  for (const k in ALM_TXT) if (s.alarm & ALM[k]) msgs.push(ALM_TXT[k]);
+  for (const k in ALM_TXT) if (s.alarm & +k) msgs.push(ALM_TXT[k]);   /* +k：ALM_TXT 数字键 → 位值（ALM[k] 恒 undefined，横幅永不显示——WP-F.2 实测修复）*/
   const bar = $("alarmbar");
   if (msgs.length) { bar.textContent = "⚠ " + msgs.join("｜"); bar.classList.remove("hidden"); }
   else bar.classList.add("hidden");

@@ -55,20 +55,23 @@ static int fds_send(const char *json, size_t len)
         .final = true, .fragmented = false,
         .type = HTTPD_WS_TYPE_TEXT, .payload = (uint8_t *)json, .len = len,
     };
-    int alive = 0;
+    /* 快照后发送：临界区只做拷贝（旧版循环内 EXIT/ENTER/continue 会打穿
+     * 自旋锁配对——空槽触发 assert，演示模式 500ms 推送首次踩中）*/
+    int fds[WS_MAX_CLIENTS];
+    int n = 0;
     taskENTER_CRITICAL(&s_mux);
-    for (int i = 0; i < WS_MAX_CLIENTS; i++) {
-        int fd = s_fds[i];
-        taskEXIT_CRITICAL(&s_mux);
-        if (fd <= 0) continue;
-        if (httpd_ws_send_frame_async(s_hd, fd, &pkt) != ESP_OK) {
-            fds_del(fd);
+    for (int i = 0; i < WS_MAX_CLIENTS; i++)
+        if (s_fds[i] > 0) fds[n++] = s_fds[i];
+    taskEXIT_CRITICAL(&s_mux);
+
+    int alive = 0;
+    for (int i = 0; i < n; i++) {
+        if (httpd_ws_send_frame_async(s_hd, fds[i], &pkt) != ESP_OK) {
+            fds_del(fds[i]);
         } else {
             alive++;
         }
-        taskENTER_CRITICAL(&s_mux);
     }
-    taskEXIT_CRITICAL(&s_mux);
     return alive;
 }
 
@@ -226,6 +229,13 @@ esp_err_t ws_on_recv(httpd_req_t *req)
                 link_send_cmd((uint8_t)c->valueint);
                 ESP_LOGI(TAG, "ws cmd=%d", c->valueint);
             }
+        } else if (strcmp(t->valuestring, "ota") == 0) {
+            /* WP-F.4：m=0 自拷贝+切换；m=1 回滚（boot 指回对槽）*/
+            extern void app_ota_trigger(int rollback);
+            cJSON *m = cJSON_GetObjectItem(root, "m");
+            int rb = (cJSON_IsNumber(m) && m->valueint == 1) ? 1 : 0;
+            ESP_LOGI(TAG, "ws ota trigger rollback=%d", rb);
+            app_ota_trigger(rb);
         }
     }
     cJSON_Delete(root);

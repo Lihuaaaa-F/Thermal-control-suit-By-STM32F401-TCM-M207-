@@ -1,0 +1,6 @@
+I (803) tcs_link: [LPBK] frame loopback PASS (1 frame decoded)
+I (853) tcs_link: [LPBK] dup dedup PASS (dup=1)
+I (903) tcs_link: [LPBK] bad-crc drop PASS
+I (3103) tcs_link: [LPBK] ARQ retransmit PASS (4 copies rx)
+I (3103) tcs_link: [LPBK] RESULT pass=4 fail=0 PASS
+I (3103) tcs_link: registry seeded: 10 entries (H743 0x14 will override)

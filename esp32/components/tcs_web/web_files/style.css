@@ -44,8 +44,9 @@ header {
 .prow input[type=range] { width: 100%; accent-color: var(--accent); }
 .stepper { display: flex; gap: 6px; margin-top: 4px; }
 .stepper button {
-  width: 44px; height: 32px; border: 0; border-radius: 6px;
+  min-width: 44px; height: 32px; border: 0; border-radius: 6px;
   background: var(--accent); color: #fff; font-size: 18px;
+  padding: 0 10px; white-space: nowrap;
 }
 .stepper .step-num { flex: 1; text-align: center; color: var(--value); font-size: 16px; padding: 4px 0; }
 

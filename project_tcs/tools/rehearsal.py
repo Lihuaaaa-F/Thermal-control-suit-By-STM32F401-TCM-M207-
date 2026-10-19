@@ -41,6 +41,19 @@ def probe_reset():
                    capture_output=True, timeout=60)
 
 
+def cmd_batch(lines, wait_each=0.15):
+    """单进程批量命令（novice 计时用：剔除每条一次 spawn 的 1.5~2.5s 主机开销）"""
+    import subprocess
+    env = dict(os.environ)
+    subprocess.run([sys.executable, str(pathlib_ok()), *lines], env=env,
+                   capture_output=True, timeout=120)
+    time.sleep(wait_each * len(lines))
+
+
+def pathlib_ok():
+    return os.path.join(os.path.dirname(os.path.abspath(__file__)), "mb_console.py")
+
+
 def cmd(line, wait=2.5):
     out = mb.send_cmd(line, wait=wait)
     if b"TIMEOUT" in out:                 # 复位后 console_poll 启动慢 → 重试一次
@@ -156,34 +169,34 @@ def c04():   # 主页四卡片数值/单位/中文全对零'?'
 
 def c05():   # 触摸调参 ±0.1 精确
     arm_on()
-    cmd("sim touch 126 572")            # 进调参页
+    cmd("sim touch 144 520")            # 进调参页
     time.sleep(0.5)
     p0 = plist()
-    cmd("sim touch 770 238")            # −
+    cmd("sim touch 856 100")            # −
     time.sleep(0.5)
     p1 = plist()
-    cmd("sim touch 954 238")            # +
+    cmd("sim touch 936 100")            # +
     time.sleep(0.5)
     p2 = plist()
     d1 = float(p1["0x01"]) - float(p0["0x01"])
     d2 = float(p2["0x01"]) - float(p1["0x01"])
-    cmd("sim touch 116 572")            # 返回
+    cmd("sim touch 84 28")            # 返回
     return (abs(d1 + 0.1) < 1e-6 and abs(d2 - 0.1) < 1e-6,
             f"−Δ={d1:.3f}(期望-0.1) +Δ={d2:.3f}(期望+0.1)")
 
 
 def c06():   # 长按连发 150ms 节奏
     arm_on()
-    cmd("sim touch 126 572")
+    cmd("sim touch 144 520")
     time.sleep(0.5)
     cmd("p set 0x01 25.0")
-    cmd("sim touchh 954 238")             # 按住 +（注入即刻生效）
+    cmd("sim touchh 936 100")             # 按住 +（注入即刻生效）
     time.sleep(4.0)                       # 主机侧名义 4s；touchr 触达有 2~4s spawn 抖动
     cmd("sim touchr")
     time.sleep(0.6)
     v1 = float(plist()["0x01"])
     n = (v1 - 25.0) / 0.1
-    cmd("sim touch 116 572")
+    cmd("sim touch 84 28")
     # 400ms 首发+150ms 节奏：持按 4~8.5s → 24~54 步；节奏常量已由 H1 帧序列背书
     return (15 <= n <= 55, f"连发 {n:.0f} 步/持按4~8.5s（150ms 节奏理论 6.67 步/s）")
 
@@ -191,20 +204,20 @@ def c06():   # 长按连发 150ms 节奏
 
 def c07():   # 步进 0.1/1.0 切换
     arm_on()
-    cmd("sim touch 126 572")
+    cmd("sim touch 144 520")
     time.sleep(0.5)
-    cmd("sim touch 862 364")            # 步进按钮 (700,336,324,56) 中心
+    cmd("sim touch 248 520")            # 步进按钮 (700,336,324,56) 中心
     time.sleep(0.5)
     v0 = float(plist()["0x01"])
-    cmd("sim touch 954 238")            # +（应为 1.0 步）
+    cmd("sim touch 936 100")            # +（应为 1.0 步）
     time.sleep(0.5)
     v1 = float(plist()["0x01"])
     d = v1 - v0
-    cmd("sim touch 862 364")            # 切回 0.1
+    cmd("sim touch 248 520")            # 切回 0.1
     time.sleep(0.3)
-    cmd("sim touch 954 238")
+    cmd("sim touch 936 100")
     time.sleep(0.3)
-    cmd("sim touch 116 572")
+    cmd("sim touch 84 28")
     return (abs(d - 1.0) < 1e-6, f"1.0 档 +Δ={d:.3f}")
 
 
@@ -225,19 +238,19 @@ def c08():   # 保存后断电重启参数保持（判据=功能结果：复位�
 def c09():   # 模式切自动弹确认框
     arm_on()
     ok = fb_dump("H3_before_mode.png")
-    cmd("sim touch 296 572")            # 切自动 (208,544,176,56) 中心
+    cmd("sim touch 376 520")            # 切自动 (208,544,176,56) 中心
     time.sleep(0.5)
     ok2 = fb_dump("H3_mode_dlg.png")
-    cmd("sim touch 712 332")            # 取消
+    cmd("sim touch 632 388")            # 取消
     time.sleep(0.5)
     return (ok and ok2, f"确认框帧 H3_mode_dlg.png（取消路径，改自动走 A-10 联动验证）")
 
 
 def c10():   # 假体温>37.7→自动制冷+风扇开
     arm_on()
-    cmd("sim touch 296 572")            # 切自动→弹框
+    cmd("sim touch 376 520")            # 切自动→弹框
     time.sleep(0.4)
-    cmd("sim touch 512 332")            # 确认 → mode=1
+    cmd("sim touch 392 388")            # 确认 → mode=1
     time.sleep(0.4)
     cmd("sim body 38.5")
     time.sleep(1.5)
@@ -282,10 +295,10 @@ def c13():   # 人工确认清报警才恢复
 
 def c14():   # 急停弹窗二次确认→TEC 全停风扇全开
     arm_on()
-    cmd("sim touch 898 572")            # 急停按钮 (784,544,228,56) 中心
+    cmd("sim touch 876 528")            # 急停按钮 (784,544,228,56) 中心
     time.sleep(0.5)
     fb_dump("H3_estop_dlg.png")
-    cmd("sim touch 512 332")            # 确认
+    cmd("sim touch 392 388")            # 确认
     time.sleep(0.5)
     s = stat()
     cmd("ack")
@@ -330,7 +343,7 @@ def main():
     cmd("sim body 36.8")
     cmd("p set 0x01 25.0")
     cmd("p save")
-    cmd("sim touch 116 572")     # 回主页
+    cmd("sim touch 84 28")     # 回主页
 
     seq = [(1, "开机≤3s 亮屏", c01), (2, "自检角标 3s", c02),
            (3, "未接线无横幅(安静)", c03), (4, "主页四卡片零?", c04),

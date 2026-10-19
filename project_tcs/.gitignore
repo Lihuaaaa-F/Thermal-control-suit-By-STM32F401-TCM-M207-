@@ -1,1 +1,5 @@
 build-sim/
+
+# CDP 审计临时 profile（web_audit.py）
+project_tcs/tools/_chrome_prof/
+project_tcs/tools/_web_audit_page.html

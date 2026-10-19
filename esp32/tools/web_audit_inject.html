@@ -1,0 +1,60 @@
+window.__errs = [];
+window.onerror = (m, src, l, c) => { window.__errs.push(m + "@" + l); };
+window.__audit = (async () => {
+  const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+  const r = {};
+  for (let i = 0; i < 30; i++) { await sleep(200);
+    if (document.getElementById("conn") && document.getElementById("conn").textContent === "已连接") break; }
+  await sleep(1200);
+  /* 真实时间窗（同步 XHR 阻塞虚拟时钟，让服务端 500ms ticker 帧真实到达）*/
+  for (let i = 0; i < 600; i++) {
+    const x = new XMLHttpRequest();
+    x.open("GET", "/favicon.ico", false);
+    try { x.send(null); } catch (e) {}
+    if (document.getElementById("t1").textContent !== "--.-") break;
+  }
+  const cs = getComputedStyle(document.body);
+  r.bg = cs.backgroundColor;
+  const estop = document.getElementById("btn-estop");
+  r.estop_bg = getComputedStyle(estop).backgroundColor;
+  r.estop_h = Math.round(estop.getBoundingClientRect().height);
+  const small = [];
+  document.querySelectorAll("button, input[type=range], summary").forEach(el => {
+    const b = el.getBoundingClientRect();
+    if (b.height > 0 && b.height < 43.5 && !el.closest(".hidden") && el.offsetParent)
+      small.push((el.id || el.className) + ":" + Math.round(b.height) + "px");
+  });
+  r.small_targets = small;
+  r.conn = document.getElementById("conn").textContent;
+  r.t1 = document.getElementById("t1").textContent;
+  r.t2 = document.getElementById("t2").textContent;
+  r.tb = document.getElementById("tb").textContent;
+  r.nparams = document.querySelectorAll("#params .prow").length;
+  r.nadv = document.querySelectorAll("#adv-params .prow").length;
+  r.sliders = document.querySelectorAll("#params input[type=range]").length;
+  const plus = document.querySelector("#params .stepper button");
+  const inp = plus && plus.closest(".prow").querySelector("input");
+  if (inp) { const v0 = +inp.value; plus.click(); await sleep(500);
+    r.step_delta = +(+inp.value - v0).toFixed(3); }
+  let confirmTxt = null;
+  window.confirm = (m) => { confirmTxt = m; return false; };
+  estop.click(); await sleep(150);
+  r.estop_confirm = confirmTxt;
+  try {
+    const orig = HTMLAnchorElement.prototype.click; let csvName = null;
+    HTMLAnchorElement.prototype.click = function(){ csvName = this.download; };
+    document.getElementById("btn-csv").click();
+    HTMLAnchorElement.prototype.click = orig;
+    r.csv = csvName;
+  } catch(e) { r.csv_err = String(e); }
+  r.overlay = !!document.getElementById("overlay");
+  r.errors = window.__errs; return r;
+})();
+window.__audit.then(r => {
+  const pre = document.createElement("pre");
+  pre.id = "audit-out";
+  pre.textContent = "AUDIT_JSON:" + JSON.stringify(r);
+  document.body.appendChild(pre);
+  document.title = "AUDIT_DONE";
+});
+

@@ -1,0 +1,131 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>调温服控制台</title>
+<link rel="stylesheet" href="http://127.0.0.1:8123/style.css">
+</head>
+<body>
+<div id="verbar" class="verbar hidden"></div>
+<div id="alarmbar" class="alarmbar hidden"></div>
+
+<header>
+  <div class="hgroup">
+    <span class="dot" id="dot"></span>
+    <span id="conn">连接中…</span>
+  </div>
+  <div class="hgroup right">
+    <span id="uptime">--:--</span>
+    <button id="btn-ack" class="mini hidden">确认恢复</button>
+  </div>
+</header>
+
+<main id="app" class="hidden">
+  <!-- ① hero：双水温大数值（数值字体阶梯移动端等效 40px）-->
+  <div class="heroes">
+    <div class="hcard"><div class="ttl">贴身水箱</div>
+      <span class="val" id="t1">--.-</span><span class="unit"> °C</span>
+      <canvas id="g1" width="140" height="140"></canvas></div>
+    <div class="hcard"><div class="ttl">环境水箱</div>
+      <span class="val" id="t2">--.-</span><span class="unit"> °C</span>
+      <canvas id="g2" width="140" height="140"></canvas></div>
+  </div>
+
+  <!-- ② 曲线+导出（体温）-->
+  <section class="card">
+    <h2>体温 <span class="unit" style="font-size:13px;color:var(--tx2)">当前 <b id="tb" style="color:var(--hero)">--.-</b> °C</span></h2>
+    <canvas id="curve" height="180"></canvas>
+    <button id="btn-csv" class="csv">导出 CSV</button>
+    <div class="switches">
+      <button class="sw" id="sw-tec1">TEC1</button>
+      <button class="sw" id="sw-tec2">TEC2</button>
+      <button class="sw" id="sw-fan">风扇</button>
+      <button class="sw" id="sw-mode">自动</button>
+    </div>
+  </section>
+
+  <!-- ③ 参数区（registry 动态渲染，仅 PF_WEB）-->
+  <section class="card">
+    <h2>参数</h2>
+    <div id="params"></div>
+  </section>
+
+  <!-- ④ 高级区（M207 参数，registry 出现即自动生成）-->
+  <section class="card">
+    <details id="adv-details">
+      <summary>高级参数（M207）</summary>
+      <div id="adv-params"></div>
+    </details>
+  </section>
+</main>
+
+<!-- ⑤ 急停：常驻底部拇指区（独占、永不变）-->
+<div class="estop-wrap">
+  <button id="btn-estop" class="estop">急停</button>
+</div>
+
+<div id="overlay" class="overlay hidden">
+  <div class="overlay-box">
+    <div id="ov-title">连接断开</div>
+    <div id="ov-sub">重连中 <span id="ov-count">--</span>s</div>
+  </div>
+</div>
+<div id="toast" class="toast hidden"></div>
+
+<script src="http://127.0.0.1:8123/chart.umd.min.js"></script>
+<script src="http://127.0.0.1:8123/app.js"></script>
+<script>
+window.__audit = (async () => {
+  const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+  const r = {};
+  for (let i = 0; i < 30; i++) { await sleep(200);
+    if (document.getElementById("conn") && document.getElementById("conn").textContent === "已连接") break; }
+  await sleep(1200);
+  const cs = getComputedStyle(document.body);
+  r.bg = cs.backgroundColor;
+  const estop = document.getElementById("btn-estop");
+  r.estop_bg = getComputedStyle(estop).backgroundColor;
+  r.estop_h = Math.round(estop.getBoundingClientRect().height);
+  const small = [];
+  document.querySelectorAll("button, input[type=range], summary").forEach(el => {
+    const b = el.getBoundingClientRect();
+    if (b.height > 0 && b.height < 43.5 && !el.closest(".hidden") && el.offsetParent)
+      small.push((el.id || el.className) + ":" + Math.round(b.height) + "px");
+  });
+  r.small_targets = small;
+  r.conn = document.getElementById("conn").textContent;
+  r.t1 = document.getElementById("t1").textContent;
+  r.t2 = document.getElementById("t2").textContent;
+  r.tb = document.getElementById("tb").textContent;
+  r.nparams = document.querySelectorAll("#params .prow").length;
+  r.nadv = document.querySelectorAll("#adv-params .prow").length;
+  r.sliders = document.querySelectorAll("#params input[type=range]").length;
+  const plus = document.querySelector("#params .stepper button");
+  const inp = plus && plus.closest(".prow").querySelector("input");
+  if (inp) { const v0 = +inp.value; plus.click(); await sleep(500);
+    r.step_delta = +(+inp.value - v0).toFixed(3); }
+  let confirmTxt = null;
+  window.confirm = (m) => { confirmTxt = m; return false; };
+  estop.click(); await sleep(150);
+  r.estop_confirm = confirmTxt;
+  try {
+    const orig = HTMLAnchorElement.prototype.click; let csvName = null;
+    HTMLAnchorElement.prototype.click = function(){ csvName = this.download; };
+    document.getElementById("btn-csv").click();
+    HTMLAnchorElement.prototype.click = orig;
+    r.csv = csvName;
+  } catch(e) { r.csv_err = String(e); }
+  r.overlay = !!document.getElementById("overlay");
+  return r;
+})();
+window.__audit.then(r => {
+  const pre = document.createElement("pre");
+  pre.id = "audit-out";
+  pre.textContent = "AUDIT_JSON:" + JSON.stringify(r);
+  document.body.appendChild(pre);
+  document.title = "AUDIT_DONE";
+});
+</script>
+</body>
+</html>

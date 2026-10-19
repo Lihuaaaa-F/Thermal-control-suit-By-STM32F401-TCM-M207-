@@ -2,3 +2,5 @@
 # project_tcs 构建产物与测试中间件
 project_tcs/build/
 *.exe
+esp32/tools/_chrome_prof/
+esp32/tools/_web_audit_page.html

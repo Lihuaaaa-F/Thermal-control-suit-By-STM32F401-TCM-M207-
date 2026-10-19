@@ -1,18 +1,25 @@
 /**
- * tcs_ui.c — 触摸 UI 实现（任务书 v5.1 WP-B 浅色定稿 + P0 主页 / P1 调参页 / 弹窗）
+ * tcs_ui.c — 触摸 UI（任务书 v9.5 UI 重构专册 K3/K4/K4b 全量落地）
  *
- * 复用 ltdc.c gfx_* 图元 + memcpy flip（back 读取前作废 D-Cache 行，WP-A.2d）。
- * FT5446 20Hz 轮询；触摸去抖 30ms；抬手才触发（1→0 沿）；长按 400ms 后每 150ms
- * 连发（调参 +/−）；同一时刻只响应第一个触点。
+ * 设计唯一来源 = Core/Inc/ui_layout.h（token=C 仪表定稿，三眼评审 1/2 眼过）。
+ * 视觉规范（ISA-101 对齐）：灰阶底、颜色只留给报警；蓝仅交互（按钮描边/选中/拖动）；
+ * 状态双编码（●○▲■+颜色+文字）；"正常=安静灰，异常=一点红"。
  *
- * WP-B 定稿：浅色冷白系（调色板 RGB888 见下），温度 64px（32px 字形 2×）/标题
- * 24px/正文 16px；顶栏 48px 胶囊+浅红浅黄横幅+状态点；卡片白底描边+右上状态胶囊；
- * 底栏主按钮白底蓝边、急停实红加宽；调参页隔行 #F6F8FA、选中行 4px 蓝竖条+浅蓝底。
- * **触摸 rect 命中区保持现值**（急停视觉加宽至 748 起，命中区在原 rect 上只增不减）。
+ * 渲染策略（K3 闪屏根治）：
+ *   - 小更新（数值/胶囊/横幅/按住态/滑条/时钟/角标）= ui_patch_begin 直绘显示缓冲
+ *     + ui_patch_commit(rect) 矩形同步 → 全程零 flip，根治 500ms 周期×乒乓的条带闪屏；
+ *   - 仅切页/弹窗/开机 ui_full_begin + ui_full_commit(flip+sync)；
+ *   - 不变量：两缓冲任意时刻除最近 patch 区外逐像素一致（patch 必伴随等区同步）。
  *
- * 顶栏重叠说明：急停常驻胶囊 rect(120,8,80,32) 压在横幅区左端——触摸按区域分流。
+ * 交互（K4b 滑条细则）：轨道 432×16 + 80px 拇指球；拖动跟手回显 ≤20Hz；
+ * 拖出轨道 ±32px=取消回弹；松手 1s 防抖后生效下发；±/步进/翻页与拖动并发时
+ * 后到操作取消未生效拖动值；触摸校准归属 I5 真人（sim 注入不依赖校准）。
+ *
+ * 字体（K2）：96/48 原生数字字模（msyhbd，比例宽）+ 32/24 中文（gen_font_cn 自动收集）
+ * + 20px ASCII（辅助档）；禁任何整数倍放大；字库 const 驻 Flash。
  */
 #include "tcs_ui.h"
+#include "ui_layout.h"
 #include "ltdc.h"
 #include "ft5446.h"
 #include "param_registry.h"
@@ -22,39 +29,25 @@
 #include <string.h>
 #include <stdio.h>
 
-/* ====== 调色板（WP-B 总设计师定稿，RGB888→RGB565，不得发挥）====== */
-#define C_BG       RGB565(0xEE,0xF1,0xF5)   /* 页面底 #EEF1F5 */
-#define C_CARD     RGB565(0xFF,0xFF,0xFF)   /* 卡片 #FFFFFF */
-#define C_BORDER   RGB565(0xD8,0xDE,0xE6)   /* 卡片描边 #D8DEE6 */
-#define C_CLINE    RGB565(0xDD,0xE3,0xEA)   /* 底饰线 #DDE3EA */
-#define C_TEXT     RGB565(0x1F,0x24,0x29)   /* 主文字 #1F2429 */
-#define C_VALUE    RGB565(0x11,0x18,0x27)   /* 大数值 #111827 */
-#define C_SUB      RGB565(0x6B,0x72,0x80)   /* 次级 #6B7280 */
-#define C_ACCENT   RGB565(0x25,0x63,0xEB)   /* 强调蓝 #2563EB（实底时字白）*/
-#define C_OK       RGB565(0x16,0xA3,0x4A)   /* 成功绿 #16A34A */
-#define C_ALARM    RGB565(0xDC,0x26,0x26)   /* 报警红 #DC2626 */
-#define C_ALM_BG   RGB565(0xFE,0xE2,0xE2)   /* 横幅红底 #FEE2E2 */
-#define C_ALM_TX   RGB565(0x99,0x1B,0x1B)   /* 横幅红字 #991B1B */
-#define C_WARN_BG  RGB565(0xFE,0xF3,0xC7)   /* 警告黄底 #FEF3C7 */
-#define C_WARN_TX  RGB565(0x92,0x40,0x0E)   /* 警告黄字 #92400E */
-#define C_DIS      RGB565(0x9C,0xA3,0xAF)   /* 禁用 #9CA3AF */
-#define C_PRESS    RGB565(0xE5,0xE7,0xEB)   /* 按下反馈 #E5E7EB */
-#define C_ROWA     RGB565(0xF6,0xF8,0xFA)   /* 调参隔行 #F6F8FA */
-#define C_SELBG    RGB565(0xDB,0xEA,0xFE)   /* 选中行浅蓝 #DBEAFE */
-#define C_WHITE    RGB565(0xFF,0xFF,0xFF)
+#include "console.h"   /* tcs_log + g_stat_* */
 
-#include "console.h"   /* tcs_log */
+extern uint32_t millis(void);
 
-/* ====== 24×24 中文/符号 + 32×32 数值字形（tools/gen_font_cn.py 生成）====== */
-#include "tcs_font_cn.inc"
-#define F24_W  24
-#define F24_H  24
-#define F24_BPR (F24_W / 8)          /* 3B/行 */
-#define F24_SZ  (F24_BPR * F24_H)    /* 72B/字 */
-#define F32_W  32
-#define F32_H  32
-#define F32_BPR (F32_W / 8)          /* 4B/行 */
-#define F32_SZ  (F32_BPR * F32_H)    /* 128B/字 */
+/* ====== K2 字库 ====== */
+typedef struct { uint32_t cp; uint8_t w, adv, h, yoff; const uint8_t *bits; } ui_glyph_t;
+#include "tcs_font_cn.inc"      /* 24px 全量 + 32px（ASCII/°℃/32px 中文集）*/
+#include "tcs_font96.inc"       /* 96px 数字（原生，比例宽）*/
+#include "tcs_font48.inc"       /* 48px 数字（原生，比例宽）*/
+#include "tcs_font20.inc"       /* 20px ASCII（辅助档，比例宽）*/
+
+#define F24_W 24
+#define F24_H 24
+#define F24_BPR (F24_W / 8)
+#define F24_SZ  (F24_BPR * F24_H)
+#define F32_W 32
+#define F32_H 32
+#define F32_BPR (F32_W / 8)
+#define F32_SZ  (F32_BPR * F32_H)
 
 #define F24_N (sizeof(tcs_font24_cp) / sizeof(tcs_font24_cp[0]))
 #define F32_N (sizeof(tcs_font32_cp) / sizeof(tcs_font32_cp[0]))
@@ -63,49 +56,7 @@ static const unsigned char (*s_gl24)[F24_SZ] = tcs_font24_glyphs;
 static const unsigned int   *s_cp32  = tcs_font32_cp;
 static const unsigned char (*s_gl32)[F32_SZ] = tcs_font32_glyphs;
 
-/* 8×16 ASCII（复用 GS 已验证字库，16px 档仅 ASCII）*/
-static const uint8_t s_f8x16[][16] = {
-#include "font8x16.inc"
-};
-
-/* ====== 字形查找 ====== */
-static int f24_find(unsigned int cp)
-{
-    int lo = 0, hi = (int)F24_N - 1;
-    while (lo <= hi) {
-        int mid = (lo + hi) >> 1;
-        if (s_cp24[mid] == cp) return mid;
-        if (s_cp24[mid] < cp) lo = mid + 1;
-        else hi = mid - 1;
-    }
-    return -1;
-}
-
-static int f32_find(unsigned int cp)
-{
-    int lo = 0, hi = (int)F32_N - 1;
-    while (lo <= hi) {
-        int mid = (lo + hi) >> 1;
-        if (s_cp32[mid] == cp) return mid;
-        if (s_cp32[mid] < cp) lo = mid + 1;
-        else hi = mid - 1;
-    }
-    return -1;
-}
-
-static void f24_draw(int x, int y, int gi, uint16_t fg, uint16_t bg)
-{
-    const unsigned char *g = s_gl24[gi];
-    for (int row = 0; row < F24_H; row++) {
-        for (int col = 0; col < F24_W; col++) {
-            uint8_t bits = g[row * F24_BPR + col / 8];
-            gfx_draw_pixel(x + col, y + row,
-                           (bits & (0x80 >> (col % 8))) ? fg : bg);
-        }
-    }
-}
-
-/* UTF-8 → codepoint。返回消耗字节数；*cp 出参。 */
+/* ====== UTF-8 → codepoint ====== */
 static int utf8_next(const char *s, unsigned int *cp)
 {
     const unsigned char *p = (const unsigned char *)s;
@@ -124,171 +75,231 @@ static int utf8_next(const char *s, unsigned int *cp)
     return 1;
 }
 
-/* ====== 24px 文本（CJK/符号/ASCII 通吃）====== */
-static int ui_char24(int x, int y, unsigned int cp, uint16_t fg, uint16_t bg)
+/* ====== 固定格 24/32 文本 ====== */
+static int f24_find(unsigned int cp)
 {
-    int gi = f24_find(cp);
-    if (gi < 0) gi = f24_find('?');
-    if (gi >= 0) f24_draw(x, y, gi, fg, bg);
-    return F24_W;
-}
-
-static void ui_text24(int x, int y, const char *s, uint16_t fg, uint16_t bg)
-{
-    while (*s) {
-        unsigned int cp;
-        int n = utf8_next(s, &cp);
-        if (n == 0) break;
-        x += ui_char24(x, y, cp, fg, bg);
-        s += n;
+    int lo = 0, hi = (int)F24_N - 1;
+    while (lo <= hi) {
+        int mid = (lo + hi) >> 1;
+        if (s_cp24[mid] == cp) return mid;
+        if (s_cp24[mid] < cp) lo = mid + 1;
+        else hi = mid - 1;
     }
+    return -1;
 }
-
-static int ui_text24_w(const char *s)
+static int f32_find(unsigned int cp)
 {
-    int w = 0;
-    while (*s) {
-        unsigned int cp;
-        int n = utf8_next(s, &cp);
-        if (n == 0) break;
-        w += F24_W;
-        s += n;
+    int lo = 0, hi = (int)F32_N - 1;
+    while (lo <= hi) {
+        int mid = (lo + hi) >> 1;
+        if (s_cp32[mid] == cp) return mid;
+        if (s_cp32[mid] < cp) lo = mid + 1;
+        else hi = mid - 1;
     }
-    return w;
+    return -1;
 }
 
-/* ====== 16px 文本（仅 ASCII；CJK 会成 '?'，勿用——WP-A.3 实测教训）====== */
-static void ui_text16(int x, int y, const char *s, uint16_t fg, uint16_t bg)
+/* 行游程合并绘制一格（bg=0xFFFF 只画前景）*/
+static void f_cell_draw(int x, int y, int w, int h, int bpr,
+                        const unsigned char *g, uint16_t fg, uint16_t bg)
 {
-    while (*s) {
-        char c = *s;
-        if (c < 0x20 || c > 0x7E) c = '?';
-        const uint8_t *g = s_f8x16[(int)c - 0x20];
-        for (int row = 0; row < 16; row++) {
-            uint8_t bits = g[row];
-            for (int col = 0; col < 8; col++)
-                gfx_draw_pixel(x + col, y + row,
-                               (bits & (0x80 >> col)) ? fg : bg);
-        }
-        x += 8;
-        s++;
-    }
-}
-
-/* ====== 64px 大数值（32px 字形 2× 最近邻；行内游程合并降 DMA2D 次数）====== */
-static void ui_char64(int x, int y, unsigned int cp, uint16_t fg, uint16_t bg)
-{
-    int gi = f32_find(cp);
-    if (gi < 0) gi = f32_find('?');
-    if (gi < 0) return;
-    const unsigned char *g = s_gl32[gi];
-    for (int row = 0; row < F32_H; row++) {
+    for (int row = 0; row < h; row++) {
         int col = 0;
-        while (col < F32_W) {
-            uint8_t b = g[row * F32_BPR + col / 8];
-            int bit = (b >> (7 - (col & 7))) & 1;
+        while (col < w) {
+            uint8_t bits = g[row * bpr + col / 8];
+            int bit = (bits & (0x80 >> (col & 7))) != 0;
             int run = 1;
-            while (col + run < F32_W) {
-                uint8_t b2 = g[row * F32_BPR + (col + run) / 8];
+            while (col + run < w) {
+                uint8_t b2 = g[row * bpr + (col + run) / 8];
                 if (((b2 >> (7 - ((col + run) & 7))) & 1) != bit) break;
                 run++;
             }
-            if (bit || bg != 0xFFFF) {
-                /* 2px 宽 × 2px 高一次填充（h=2 合并相邻两行，DMA2D 调用减半）*/
-                gfx_fill_rect(x + col * 2, y + row * 2,
-                              x + (col + run) * 2 - 1, y + row * 2 + 1,
-                              bit ? fg : bg);
-            }
+            if (bit || bg != 0xFFFF)
+                gfx_fill_rect(x + col, y + row, x + col + run - 1, y + row, bit ? fg : bg);
             col += run;
         }
     }
 }
 
-static void ui_text64(int x, int y, const char *s, uint16_t fg, uint16_t bg)
+static void ui_text24(int x, int y, const char *s, uint16_t fg, uint16_t bg)
 {
     while (*s) {
-        unsigned int cp;
-        int n = utf8_next(s, &cp);
+        unsigned int cp; int n = utf8_next(s, &cp);
         if (n == 0) break;
-        ui_char64(x, y, cp, fg, bg);
-        x += F32_W * 2;
-        s += n;
+        int gi = f24_find(cp);
+        if (gi < 0) gi = f24_find('?');
+        if (gi >= 0) f_cell_draw(x, y, F24_W, F24_H, F24_BPR, s_gl24[gi], fg, bg);
+        x += F24_W; s += n;
     }
 }
+static int ui_text24_w(const char *s)
+{
+    int w = 0;
+    while (*s) { unsigned int cp; int n = utf8_next(s, &cp); if (!n) break; w += F24_W; s += n; }
+    return w;
+}
 
-static int ui_text64_w(const char *s)
+static void ui_text32(int x, int y, const char *s, uint16_t fg, uint16_t bg)
+{
+    while (*s) {
+        unsigned int cp; int n = utf8_next(s, &cp);
+        if (n == 0) break;
+        int gi = f32_find(cp);
+        if (gi < 0) gi = f32_find('?');
+        if (gi >= 0) f_cell_draw(x, y, F32_W, F32_H, F32_BPR, s_gl32[gi], fg, bg);
+        x += F32_W; s += n;
+    }
+}
+static int ui_text32_w(const char *s)
+{
+    int w = 0;
+    while (*s) { unsigned int cp; int n = utf8_next(s, &cp); if (!n) break; w += F32_W; s += n; }
+    return w;
+}
+
+/* ====== 比例宽文本（96/48/20；原生字形禁放大）====== */
+static const ui_glyph_t *prop_find(const ui_glyph_t *tab, int n, unsigned int cp)
+{
+    for (int i = 0; i < n; i++)
+        if (tab[i].cp == cp) return &tab[i];
+    for (int i = 0; i < n; i++)   /* 兜底：数字表→'-'，ASCII 表→'?' */
+        if (tab[i].cp == (n > 20 ? (uint32_t)'?' : (uint32_t)'-')) return &tab[i];
+    return 0;
+}
+
+static int prop_text(const ui_glyph_t *tab, int n, int x, int y,
+                     const char *s, uint16_t fg, uint16_t bg)
+{
+    int x0 = x;
+    while (*s) {
+        unsigned int cp; int nb = utf8_next(s, &cp);
+        if (nb == 0) break;
+        const ui_glyph_t *g = prop_find(tab, n, cp);
+        if (g) {
+            int gy = y + g->yoff;   /* 墨迹基线定位：'.'/'-' 落低位 */
+            int stride = (g->w + 7) / 8;
+            for (int row = 0; row < g->h; row++) {
+                int col = 0;
+                while (col < g->w) {
+                    uint8_t bits = g->bits[row * stride + col / 8];
+                    int bit = (bits & (0x80 >> (col & 7))) != 0;
+                    int run = 1;
+                    while (col + run < g->w) {
+                        uint8_t b2 = g->bits[row * stride + (col + run) / 8];
+                        if (((b2 >> (7 - ((col + run) & 7))) & 1) != bit) break;
+                        run++;
+                    }
+                    if (bit)   /* 只画前景：擦底由调用方显式矩形负责 */
+                        gfx_fill_rect(x + col, gy + row, x + col + run - 1, gy + row, fg);
+                    col += run;
+                }
+            }
+            x += g->adv;
+        }
+        s += nb;
+    }
+    return x - x0;
+}
+
+static int prop_w(const ui_glyph_t *tab, int n, const char *s)
 {
     int w = 0;
     while (*s) {
-        unsigned int cp;
-        int n = utf8_next(s, &cp);
-        if (n == 0) break;
-        w += F32_W * 2;
-        s += n;
+        unsigned int cp; int nb = utf8_next(s, &cp);
+        if (!nb) break;
+        const ui_glyph_t *g = prop_find(tab, n, cp);
+        w += g ? g->adv : 8;
+        s += nb;
     }
     return w;
 }
 
-/* ====== 圆角/圆形图元（RGB565 无 alpha，角落以 bg 补）====== */
-static void ui_fill_round(int x, int y, int w, int h, int r,
-                          uint16_t c, uint16_t bg)
+#define ui_text96(x, y, s, fg, bg) prop_text(tcs_font96, (int)TCS_FONT96_N, x, y, s, fg, bg)
+#define ui_text96_w(s) prop_w(tcs_font96, (int)TCS_FONT96_N, s)
+#define ui_text48(x, y, s, fg, bg) prop_text(tcs_font48, (int)TCS_FONT48_N, x, y, s, fg, bg)
+#define ui_text48_w(s) prop_w(tcs_font48, (int)TCS_FONT48_N, s)
+#define ui_text20(x, y, s, fg, bg) prop_text(tcs_font20, (int)TCS_FONT20_N, x, y, s, fg, bg)
+
+/* 20px 辅助档输入护栏：非 ASCII → '?'（16px 档教训：中文进 ASCII 表变乱码）*/
+static void ui_aux20(int x, int y, const char *s, uint16_t fg, uint16_t bg)
+{
+    char buf[48];
+    int i = 0;
+    while (*s && i < (int)sizeof(buf) - 1) {
+        unsigned int cp;
+        int n = utf8_next(s, &cp);
+        if (cp < 0x80) {
+            buf[i++] = (char)cp;
+        } else if (cp == 0xB0 && i < (int)sizeof(buf) - 2) {
+            buf[i++] = (char)0xC2;   /* ° 按 UTF-8 双字节回填（单字节会被
+                                        utf8_next 判成续字节→'?'）*/
+            buf[i++] = (char)0xB0;
+        } else {
+            buf[i++] = '?';
+        }
+        s += n;
+    }
+    buf[i] = 0;
+    ui_text20(x, y, buf, fg, bg);
+}
+
+/* ====== K3 渲染路径 ======
+ * 整页期间组件内的 patch 调用必须降级为无操作——否则绘制目标中途切到
+ * 陈旧显示缓冲，flip 后旧页内容现形（真机实测：主页边缘残留标定页）。*/
+static int s_render_full;
+static void ui_full_begin(void)  { s_render_full = 1; gfx_use_hidden_buffer(); }
+volatile uint8_t g_stat_flip_src;   /* 翻转来源诊断：1=home 2=tune 3=qr 4=dlg 5=clear 6=text */
+/* 不变量：flip 前目标缓冲必被整页重画（gfx_clear+内容），旧内容永不被读到——
+ * 故切页后无需 sync_buffers 整帧拷贝（实测该 memcpy ~40ms，是全页预算超标的
+ * 全部来源）。隐藏缓冲的陈旧内容只在 gfx_sync_rect 的"其他缓冲"一侧短暂存在，
+ * 且必在下次 flip 前被整页重画覆盖。*/
+static void ui_full_commit(void) { gfx_flip(); s_render_full = 0; }
+/* WP-C nightly perf 门禁沿用 ui_ms 口径：整页耗时（含 sync memcpy）×10 */
+static void ui_page_stat(uint32_t cyc_diff)
+{
+    g_stat_full_us_last = cyc_diff / (SystemCoreClock / 1000000u);
+    g_stat_ui_ms_x10 = (uint16_t)(g_stat_full_us_last / 100u);
+}
+#define UI_FULL_COMMIT(src) do { g_stat_flip_src = (src); ui_full_commit(); } while (0)
+static void ui_patch_begin(void) { if (!s_render_full) gfx_use_shown_buffer(); }
+static void ui_patch_commit(int x0, int y0, int x1, int y1)
+{
+    if (!s_render_full) gfx_sync_rect(x0, y0, x1, y1);
+}
+
+/* ====== 性能统计（K3 预算表实测；probe-rs 读符号取证）====== */
+volatile uint32_t g_stat_hero_us_max;    /* hero 数值区重绘耗时（预算 ≤3000µs）*/
+volatile uint32_t g_stat_full_us_last;   /* 整页重绘耗时（预算 ≤25000µs）*/
+volatile uint32_t g_stat_patch_cnt;      /* 小更新直绘次数 */
+volatile uint32_t g_stat_touch_hz;       /* K12：真实触摸 IC 报点率（点/s，1s 窗口）*/
+volatile uint32_t g_stat_flip_cnt;       /* flip 次数（闪屏指标：应仅切页/弹窗增长）*/
+
+/* ====== 图元 ====== */
+static void ui_round_rect(int x, int y, int w, int h, int r, uint16_t c, uint16_t bg)
 {
     if (r * 2 > h) r = h / 2;
     gfx_fill_rect(x, y, x + w - 1, y + h - 1, c);
-    for (int dy = 0; dy < r; dy++) {
+    for (int dy = 0; dy < r; dy++)
         for (int dx = 0; dx < r; dx++) {
             int cx = r - 1 - dx, cy = r - 1 - dy;
             if (cx * cx + cy * cy >= r * r) {
-                gfx_draw_pixel(x + dx,         y + dy,         bg);
-                gfx_draw_pixel(x + w - 1 - dx, y + dy,         bg);
-                gfx_draw_pixel(x + dx,         y + h - 1 - dy, bg);
+                gfx_draw_pixel(x + dx, y + dy, bg);
+                gfx_draw_pixel(x + w - 1 - dx, y + dy, bg);
+                gfx_draw_pixel(x + dx, y + h - 1 - dy, bg);
                 gfx_draw_pixel(x + w - 1 - dx, y + h - 1 - dy, bg);
             }
         }
-    }
 }
 
-static void ui_fill_circle(int cx, int cy, int r, uint16_t c)
+/* 卡片：底色 + 1px 描边 + 2px 底饰线，圆角 8 */
+static void ui_card(int x, int y, int w, int h, uint16_t base, uint16_t border)
 {
-    for (int dy = -r; dy <= r; dy++) {
-        int dx = 0;
-        while (dx * dx + dy * dy <= r * r) dx++;   /* 整数开方（r≤40，免 libm）*/
-        dx--;
-        gfx_draw_hline(cx - dx, cx + dx, cy + dy, c);
-    }
-}
-
-/* ====== 基础控件 ====== */
-/* 白底蓝边按钮（底栏主按钮）；solid=1 时实底、字白；hl=1 按住态（H1：#E5E7EB 底）*/
-static void ui_btn_hl(int x, int y, int w, int h, const char *label,
-                      uint16_t labelc, int solid, int hl)
-{
-    uint16_t bg = hl ? C_PRESS : (solid ? labelc : C_CARD);
-    ui_fill_round(x, y, w, h, 8, bg, C_BG);
-    if (!solid) {
-        gfx_draw_hline(x + 6, x + w - 7, y, labelc);
-        gfx_draw_hline(x + 6, x + w - 7, y + h - 1, labelc);
-        gfx_draw_vline(x, y + 6, y + h - 7, labelc);
-        gfx_draw_vline(x + w - 1, y + 6, y + h - 7, labelc);
-    }
-    int lw = ui_text24_w(label);
-    ui_text24(x + (w - lw) / 2, y + (h - 24) / 2, label,
-              solid ? (hl ? labelc : C_WHITE) : labelc, bg);
-}
-
-static void ui_btn(int x, int y, int w, int h, const char *label,
-                   uint16_t labelc, int solid)
-{
-    ui_btn_hl(x, y, w, h, label, labelc, solid, 0);
-}
-
-/* 状态胶囊（右上小胶囊）：on=绿"运行/开"，off=灰"停止/关" */
-static void ui_pill(int x, int y, int w, int h, const char *label, uint8_t on)
-{
-    uint16_t bg = on ? C_OK : C_DIS;
-    ui_fill_round(x, y, w, h, h / 2, bg, C_CARD);
-    int lw = ui_text24_w(label);
-    ui_text24(x + (w - lw) / 2, y + (h - 24) / 2, label, C_WHITE, bg);
+    ui_round_rect(x, y, w, h, 8, base, C_BG);
+    gfx_draw_hline(x + 6, x + w - 7, y, border);
+    gfx_draw_hline(x + 6, x + w - 7, y + h - 1, border);
+    gfx_draw_vline(x, y + 6, y + h - 7, border);
+    gfx_draw_vline(x + w - 1, y + 6, y + h - 7, border);
+    gfx_fill_rect(x + 1, y + h - 3, x + w - 2, y + h - 2, C_CLINE);
 }
 
 static int ui_in(int x, int y, int rx, int ry, int rw, int rh)
@@ -296,90 +307,167 @@ static int ui_in(int x, int y, int rx, int ry, int rw, int rh)
     return x >= rx && x < rx + rw && y >= ry && y < ry + rh;
 }
 
-/* ====== 页面/弹窗状态 ====== */
+/* 按钮 style：0=主(白底蓝边) 1=禁用 2=危险(实红) 3=危险按住(暗红)
+ *            4=按住(浅蓝底蓝边) 5=幽灵(白底灰边灰字)。fs=32/24 */
+static void ui_btn(int x, int y, int w, int h, const char *label, int style, int fs)
+{
+    uint16_t bg, bd, tx;
+    switch (style) {
+    case 1: bg = C_CARD;  bd = C_BORDER; tx = C_GRAY;   break;
+    case 2: bg = C_RED;   bd = C_RED;    tx = C_WHITE;  break;
+    case 3: bg = C_REDDK; bd = C_REDDK;  tx = C_WHITE;  break;
+    case 4: bg = C_PRESS; bd = C_BLUE;   tx = C_BLUE;   break;
+    case 5: bg = C_CARD;  bd = C_BORDER; tx = C_TX2;    break;
+    default: bg = C_CARD; bd = C_BLUE;   tx = C_BLUE;   break;
+    }
+    ui_round_rect(x, y, w, h, 8, bg, C_BG);
+    gfx_draw_hline(x + 6, x + w - 7, y, bd);
+    gfx_draw_hline(x + 6, x + w - 7, y + h - 1, bd);
+    gfx_draw_vline(x, y + 6, y + h - 7, bd);
+    gfx_draw_vline(x + w - 1, y + 6, y + h - 7, bd);
+    int lw = (fs == 32) ? ui_text32_w(label) : ui_text24_w(label);
+    int lx = x + (w - lw) / 2;
+    if (fs == 32) ui_text32(lx, y + (h - 32) / 2, label, tx, bg);
+    else          ui_text24(lx, y + (h - 24) / 2, label, tx, bg);
+}
+
+/* 圆点 8px（呼吸点/链路点/模式点共用）*/
+static void ui_dot8(int cx, int cy, uint16_t c)
+{
+    for (int dy = -4; dy < 4; dy++)
+        for (int dx = -4; dx < 4; dx++)
+            if (dx * dx + dy * dy <= 12)
+                gfx_draw_pixel(cx + dx, cy + dy, c);
+}
+
+/* ====== 页面/会话状态 ====== */
 typedef enum { UI_PAGE_HOME = 0, UI_PAGE_TUNE, UI_PAGE_QR } ui_page_t;
-typedef enum { DLG_NONE = 0, DLG_ESTOP, DLG_MODE_AUTO, DLG_SETCONFIRM } ui_dlg_t;
+typedef enum { DLG_NONE = 0, DLG_ESTOP, DLG_MODE_AUTO, DLG_SETCONFIRM, DLG_RESET } ui_dlg_t;
 
 static ui_page_t s_page = UI_PAGE_HOME;
 static ui_dlg_t  s_dlg = DLG_NONE;
-static int  s_tune_sel;              /* 调参页选中行（PF_SCREEN 列表 idx）*/
-static float s_tune_step = 0.1f;
-static float s_pending_set;          /* SETCONFIRM 待确认值 */
+static int  s_tune_page;               /* 0=核心4参 1=其余+恢复默认 */
+static int  s_tune_sel;                /* 全局序号 0..6 */
+static float s_tune_step_f = 0.1f;
+static float s_pending_set;
 static uint16_t s_pending_id;
-static uint8_t  s_step_granted;      /* 已确认本次超阈连续调节（值落回阈值下复位）*/
+static uint8_t  s_step_granted;
 
-static int   s_touch_down;           /* 当前按住 */
+static int   s_touch_down;
 static int   s_last_x, s_last_y;
-static uint32_t s_press_t0;          /* 按下时刻 */
-static uint8_t  s_press_lp_fired;    /* 长按已触发次数 */
-static uint32_t s_last_lp_ms;        /* 上次连发时刻 */
-static uint32_t s_touch_release_ok;  /* 去抖：按下时刻 */
+static uint32_t s_press_t0;
+static uint8_t  s_press_lp_fired;
+static uint32_t s_last_lp_ms;
+static uint32_t s_touch_release_ok;
 static int s_prev_touched;
+static uint8_t s_sl_cancelled;   /* 拖出取消后抑制本次抬手的 tap（取消≠点选）*/
 
-/* 脏区位 */
-#define D_TOPBAR   0x001
-#define D_TC1      0x002
-#define D_TC2      0x004
-#define D_BODY     0x008
-#define D_FAN      0x010
-#define D_BTNS     0x020
-#define D_ALL      0x03F
-static uint16_t s_dirty = D_ALL;
+/* 新鲜度：UI 自记最近变更时刻（param/control 零改动红线）*/
+static uint32_t s_fresh_tc1, s_fresh_tc2, s_fresh_body;
 
-/* ====== 顶栏 48px ====== */
-static void draw_post_badge(void);   /* H6 角标（定义在后）*/
-static void draw_topbar(void)
+/* 已保存角标（2s flush 防抖的 UI 镜像提示，亮 1s）*/
+static uint32_t s_saved_apply_t;
+static uint8_t  s_saved_toast_on;
+static uint32_t s_saved_toast_t0;
+
+/* ====== 滑条状态机（K4b）====== */
+typedef enum { SL_IDLE = 0, SL_DRAG, SL_PENDING } sl_state_t;
+static struct {
+    sl_state_t st;
+    float    val;            /* 拖动回显值 / 待生效值 */
+    float    orig;           /* 取消回弹基准 */
+    uint32_t t_release;
+    uint32_t t_last_draw;
+    uint16_t id;
+} s_sl;
+
+/* ====== 调参清单 ====== */
+static int tune_items(int *ids, int max)
 {
-    gfx_fill_rect(0, 0, LCD_WIDTH - 1, 47, C_CARD);
-    gfx_draw_hline(0, LCD_WIDTH - 1, 47, C_BORDER);
-
-    /* 左：模式胶囊 (16,8,120,32) */
-    int auto_m = (g_tcs.mode != 0);
-    ui_fill_round(16, 8, 120, 32, 16, auto_m ? C_ACCENT : C_DIS, C_CARD);
-    ui_text24(16 + (120 - 48) / 2, 12, auto_m ? "自动" : "手动", C_WHITE,
-              auto_m ? C_ACCENT : C_DIS);
-
-    /* 急停常驻胶囊 (120,8,80,32)（命中 rect(120,0,80,40) 保持现值）*/
-    ui_fill_round(120, 8, 80, 32, 16, C_ALARM, C_CARD);
-    ui_text24(120 + (80 - 48) / 2, 12, "急停", C_WHITE, C_ALARM);
-
-    /* 中：横幅浅红/浅黄圆角条 (208,8,552,32)；急停/过热=红，失联/EEPROM=黄 */
-    if (g_tcs.alarm_bits) {
-        const char *msg = "ALARM";
-        uint16_t bg = C_ALM_BG, tx = C_ALM_TX;
-        int red = 0;
-        if (g_tcs.alarm_bits & ALM_ESTOP)         { msg = "急停已触发 点击恢复"; red = 1; }
-        else if (g_tcs.alarm_bits & ALM_OVERTEMP) { msg = "水温过高 >48°C";    red = 1; }
-        else if (g_tcs.alarm_bits & ALM_BODY_SENSOR) msg = "体温失联 点击恢复";
-        else if (g_tcs.alarm_bits & ALM_M207)        msg = "M207 失联 点击恢复";
-        else if (g_tcs.alarm_bits & ALM_EEPROM)      msg = "EEPROM 配置无效 已恢复默认";
-        if (red) { bg = C_ALM_BG; tx = C_ALM_TX; }
-        else     { bg = C_WARN_BG; tx = C_WARN_TX; }
-        ui_fill_round(208, 8, 552, 32, 10, bg, C_CARD);
-        ui_text24(224, 12, msg, tx, bg);
+    int n = 0;
+    for (int i = 0; i < param_count() && n < max; i++) {
+        const param_desc_t *p = param_at(i);
+        if (p->flags & PF_SCREEN) ids[n++] = p->id;
     }
-
-    /* 右：M207/ESP 状态点 + 时间（16px ASCII）*/
-    gfx_fill_rect(768, 0, LCD_WIDTH - 1, 47, C_CARD);
-    ui_text16(776, 8, "M207", g_tcs.m207_online ? C_TEXT : C_DIS, C_CARD);
-    ui_fill_circle(816, 16, 4, g_tcs.m207_online ? C_OK : C_DIS);
-    ui_text16(832, 8, "ESP", g_tcs.esp_link_ok ? C_TEXT : C_DIS, C_CARD);
-    ui_fill_circle(868, 16, 4, g_tcs.esp_link_ok ? C_OK : C_DIS);
-
-    extern uint32_t millis(void);
-    uint32_t t = millis() / 1000u;
-    char ts[12];
-    snprintf(ts, sizeof(ts), "%02lu:%02lu:%02lu",
-             (unsigned long)(t / 3600u), (unsigned long)((t / 60u) % 60u),
-             (unsigned long)(t % 60u));
-    ui_text16(904, 16, ts, C_TEXT, C_CARD);
-
-    /* H6 自检角标 (128,0,640,40)：16px ASCII+✓绿✗黄，POST 裁决后显示 3s 淡出 */
-    if (post_badge_state() == 1) draw_post_badge();
+    return n;
 }
 
-/* ====== POST 角标（H6：六项 ✓绿/✗黄，16px）====== */
-/* 8x16 手编码 ✓/✗（16px 档仅 ASCII，无该字形；直接位图不经字库/审计双源）*/
+static const param_desc_t *tune_sel_desc(void)
+{
+    int ids[16]; int n = tune_items(ids, 16);
+    if (s_tune_sel >= n) return 0;
+    return param_find((uint16_t)ids[s_tune_sel]);
+}
+
+static void fmt_val(const param_desc_t *p, char *out, int cap)
+{
+    if (p->id == PARAM_ID_MODE)
+        snprintf(out, cap, "%s", p->value != 0.0f ? "自动" : "手动");
+    else if (p->id == PARAM_ID_COMMISSIONED)
+        snprintf(out, cap, "%s", p->value == 1.0f ? "强制布防" :
+                 p->value == 2.0f ? "强制不布防" : "自动");
+    else
+        snprintf(out, cap, "%.1f", (double)p->value);
+}
+
+/* ====== K10 报警动作建议文案表（每条报警一句"怎么办"）====== */
+static int alarm_pick(uint16_t bits, const char **msg, const char **act, int *red)
+{
+    struct { uint16_t bit; const char *msg; const char *act; int red; } tab[] = {
+        { ALM_ESTOP,      "急停已触发",     "已断电制动 · 点击横幅确认恢复",     1 },
+        { ALM_OVERTEMP,   "水温过高",       "已停止加热 · 点击横幅确认恢复",     1 },
+        { ALM_BODY_SENSOR,"体温传感器失联", "检查传感器接头 · 点击横幅确认恢复", 0 },
+        { ALM_M207,       "M207 通信失联",  "检查通信线缆 · 点击横幅确认恢复",   0 },
+        { ALM_EEPROM,     "配置校验失败",   "已恢复默认参数 · 请重新设定",       0 },
+    };
+    int extra = 0;
+    *msg = 0; *act = 0; *red = 0;
+    for (unsigned i = 0; i < sizeof(tab) / sizeof(tab[0]); i++) {
+        if (bits & tab[i].bit) {
+            if (!*msg) { *msg = tab[i].msg; *act = tab[i].act; *red = tab[i].red; }
+            else extra++;
+        }
+    }
+    return extra;
+}
+
+/* 横幅图标：■危险(红)/▲警告(黄)，程序化绘制（双编码 2/2）*/
+static void draw_banner_icon(int x, int y, int red, uint16_t tx, uint16_t bg)
+{
+    if (red) {
+        gfx_fill_rect(x, y, x + 19, y + 19, tx);
+    } else {
+        for (int r = 0; r < 20; r++) {
+            int hw = (r + 2) * 11 / 20;   /* 半宽随行增长 */
+            gfx_fill_rect(x + 10 - hw, y + r, x + 10 + hw, y + r, tx);
+        }
+    }
+    (void)bg;
+}
+
+static void draw_banner_content(void)
+{
+    int bx = 208, by = 8, bw = 552, bh = 56;
+    const char *msg, *act; int red;
+    int extra = alarm_pick(g_tcs.alarm_bits, &msg, &act, &red);
+    if (!msg) return;
+    uint16_t bg = red ? C_ALMBG : C_WARNBG;
+    uint16_t tx = red ? C_ALMTX : C_WARNTX;
+    ui_round_rect(bx, by, bw, bh, 12, bg, C_BG);
+    draw_banner_icon(bx + 18, by + 18, red, tx, bg);
+    ui_text24(bx + 50, by + 4, msg, tx, bg);
+    ui_text24(bx + 50, by + 30, act, tx, bg);
+    if (extra > 0) {
+        char cnt[24];
+        snprintf(cnt, sizeof(cnt), "还有%d条", extra);
+        int cw = ui_text24_w(cnt) + 16;
+        int cx0 = bx + bw - cw - 12;
+        gfx_draw_rect(cx0, by + 12, cx0 + cw - 1, by + 43, tx);
+        ui_text24(cx0 + 8, by + 16, cnt, tx, bg);
+    }
+}
+
+/* ✓/✗ 手编码 8x16（H6 沿用：16px 档无此字形，直接位图不经字库双源）*/
 static const uint8_t s_glyph_ok[16] = {
     0,0,0,0, 0x06,0x06,0x0C,0x48,0x68,0x30,0x10,0x30, 0,0,0,0
 };
@@ -387,313 +475,510 @@ static const uint8_t s_glyph_ng[16] = {
     0,0,0, 0x42,0x24,0x18,0x18,0x18,0x18,0x24,0x42, 0,0,0,0
 };
 
-static void badge_glyph(int x, int y, const uint8_t *g, uint16_t c, uint16_t bg)
+/* ====== 顶栏内容（无 patch 包装；主页整页与 patch 两路复用）====== */
+static void draw_post_badge(void);
+
+static void topbar_content(void)
 {
-    for (int row = 0; row < 16; row++) {
-        uint8_t bits = g[row];
-        for (int col = 0; col < 8; col++)
-            gfx_draw_pixel(x + col, y + row, (bits & (0x80 >> col)) ? c : bg);
+    gfx_fill_rect(0, 0, UI_W - 1, 87, C_BG);   /* 含横幅全高与卡前间隙 */
+
+    /* 模式胶囊 (24,16,160,40)：白底描边 + 点(绿=自动/灰=手动) + 文字 */
+    ui_round_rect(24, 16, 160, 40, 20, C_CARD, C_BG);
+    gfx_draw_hline(30, 178, 16, C_BORDER);
+    gfx_draw_hline(30, 178, 55, C_BORDER);
+    gfx_draw_vline(24, 22, 50, C_BORDER);
+    gfx_draw_vline(183, 22, 50, C_BORDER);
+    int auto_m = (g_tcs.mode != 0);
+    ui_dot8(52, 36, auto_m ? C_GREEN : C_GRAY);
+    ui_text24(68, 24, auto_m ? "自动" : "手动", C_TX, C_CARD);
+
+    if (g_tcs.alarm_bits) {
+        draw_banner_content();   /* 报警时链路点并入横幅（隐藏）*/
+    } else {
+        ui_dot8(784, 26, g_tcs.m207_online ? C_GREEN : C_GRAY);
+        ui_aux20(796, 18, "M207", C_TX2, C_BG);
+        ui_dot8(856, 26, g_tcs.esp_link_ok ? C_GREEN : C_GRAY);
+        ui_aux20(868, 18, "ESP", C_TX2, C_BG);
     }
+
+    /* 急停小图标常驻 (940,20,24,24)：灰描边/急停红实心（非触摸）*/
+    if (g_tcs.alarm_bits & ALM_ESTOP) {
+        gfx_fill_rect(942, 22, 963, 43, C_RED);
+        gfx_fill_rect(948, 28, 957, 37, C_WHITE);
+    } else {
+        gfx_draw_rect(942, 22, 963, 43, C_GRAY);
+        gfx_fill_rect(948, 28, 957, 37, C_GRAY);
+    }
+
+    if (post_badge_state() == 1) draw_post_badge();
 }
 
 static void draw_post_badge(void)
 {
-    ui_fill_round(128, 0, 640, 40, 8, C_CARD, C_CARD);
-    gfx_draw_rect(128, 0, 128 + 640 - 1, 39, C_BORDER);
+    ui_round_rect(128, 0, 640, 40, 8, C_CARD, C_BG);
+    gfx_draw_rect(128, 0, 767, 39, C_BORDER);
     static const char *labels[POST_ITEM_N] = {
         "TMP117", "M207", "EEPR", "TABLE", "SCR", "VER"
     };
-    int x = 140;
+    int x = 152;
     for (int i = 0; i < POST_ITEM_N; i++) {
         uint8_t ok = post_item_ok((uint8_t)i);
-        badge_glyph(x, 12, ok ? s_glyph_ok : s_glyph_ng,
-                    ok ? C_OK : C_WARN_TX, C_CARD);
-        ui_text16(x + 12, 12, labels[i], C_TEXT, C_CARD);
+        const uint8_t *g = ok ? s_glyph_ok : s_glyph_ng;
+        for (int row = 0; row < 16; row++) {
+            uint8_t bits = g[row];
+            for (int col = 0; col < 8; col++)
+                gfx_draw_pixel(x + col, 12 + row,
+                               (bits & (0x80 >> col)) ? (ok ? C_GREEN : C_WARNTX) : C_CARD);
+        }
+        ui_aux20(x + 12, 12, labels[i], C_TX, C_CARD);
         x += 104;
     }
 }
 
-/* ====== 主页卡片 ====== */
-static void draw_tc_card(int cx, const char *title, int ch)
+static void draw_topbar(void)
 {
-    gfx_fill_rect(cx, 56, cx + 480 - 1, 56 + 224 - 1, C_CARD);
-    gfx_draw_rect(cx, 56, cx + 480 - 1, 56 + 224 - 1, C_BORDER);
-    ui_text24(cx + 16, 68, title, C_TEXT, C_CARD);
-
-    /* 右上状态胶囊（绿运行/灰停止）*/
-    uint8_t tec_on = ch ? g_tcs.tec2_on : g_tcs.tec1_on;
-    ui_pill(cx + 376, 64, 88, 32, tec_on ? "运行" : "停止", tec_on);
-
-    /* 温度大数值 64px + °C 次级 */
-    float act = ch ? g_tcs.tc2_act : g_tcs.tc1_act;
-    char big[16];
-    snprintf(big, sizeof(big), "%.1f", (double)act);
-    ui_text64(cx + 16, 112, big, C_VALUE, C_CARD);
-    ui_text24(cx + 16 + ui_text64_w(big) + 12, 152, "°C", C_SUB, C_CARD);
-
-    /* 底饰线 + 设定行 */
-    float setv = param_get(ch ? PARAM_ID_TC2_SET : PARAM_ID_TC1_SET);
-    char setl[48];
-    snprintf(setl, sizeof(setl), "设定 %.1f°C", (double)setv);
-    ui_text24(cx + 16, 224, setl, C_SUB, C_CARD);
-    gfx_draw_hline(cx + 16, cx + 464 - 1, 264, C_CLINE);
-    gfx_draw_hline(cx + 16, cx + 464 - 1, 265, C_CLINE);
+    ui_patch_begin();
+    topbar_content();
+    /* 横幅 8..64 越过顶栏条，同步区下沿取 87（卡片起始前一行）*/
+    ui_patch_commit(0, 0, UI_W - 1, 87);
+    g_stat_patch_cnt++;
 }
 
+/* ====== hero 卡 ====== */
+static void draw_tc_value(int cx, int ch)
+{
+    uint32_t t0 = DWT->CYCCNT;
+    char big[16];
+    int lost = !g_tcs.m207_online;
+    float act = ch ? g_tcs.tc2_act : g_tcs.tc1_act;
+    if (lost) snprintf(big, sizeof(big), "--.-");
+    else      snprintf(big, sizeof(big), "%.1f", (double)act);
+    int nx = cx + 24, ny = 88 + 72;
+    /* 擦除/同步区按实际字宽收窄（K3 预算：≤3ms；全卡宽版实测 4.07ms 超标）*/
+    int tw = ui_text96_w(big);
+    gfx_fill_rect(nx - 4, ny, nx + tw + 64, ny + 106, C_CARD);
+    ui_text96(nx, ny, big, lost ? C_GRAY : C_HERO, C_CARD);
+    ui_text32(nx + tw + 8, ny + 64, "°C", C_TX2, C_CARD);
+    int lit = (millis() - (ch ? s_fresh_tc2 : s_fresh_tc1)) <= 1000u;
+    /* 呼吸点跟随字尾（1.4"数值旁"），与数值同一同步区——避免跨区二次 sync */
+    ui_dot8(nx + tw + 44, ny + 8, (lit && !lost) ? C_GREEN : C_GRAY);
+    ui_patch_commit(nx - 4, ny, nx + tw + 64, ny + 106);
+    uint32_t us = (DWT->CYCCNT - t0) / (SystemCoreClock / 1000000u);
+    if (us > g_stat_hero_us_max) g_stat_hero_us_max = us;
+    g_stat_patch_cnt++;
+}
+
+static void draw_tc_setline(int cx, int ch)
+{
+    float setv = param_get(ch ? PARAM_ID_TC2_SET : PARAM_ID_TC1_SET);
+    int sx = cx + 24, sy = 88 + 184;
+    gfx_fill_rect(sx - 4, sy - 8, cx + 444, sy + 30, C_CARD);
+    ui_text24(sx, sy, "设定", C_TX2, C_CARD);
+    char vs[16];
+    snprintf(vs, sizeof(vs), "%.1f", (double)setv);
+    ui_text32(sx + 56, sy - 4, vs, C_TX, C_CARD);
+    ui_text32(sx + 56 + ui_text32_w(vs) + 4, sy - 4, "°C", C_TX2, C_CARD);
+    ui_patch_commit(sx - 4, sy - 8, cx + 444, sy + 30);
+    g_stat_patch_cnt++;
+}
+
+static void draw_tc_card(int cx, const char *title, int ch)
+{
+    ui_patch_begin();
+    ui_card(cx, 88, 460, 240, C_CARD, C_BORDER);
+    ui_text32(cx + 24, 88 + 20, title, C_TX, C_CARD);
+    {
+        int on = ch ? g_tcs.tec2_on : g_tcs.tec1_on;
+        uint16_t bg = on ? C_GREEN : C_GRAY;
+        ui_round_rect(cx + 348, 88 + 24, 88, 40, 20, bg, C_CARD);
+        ui_text24(cx + 356, 88 + 32, on ? "●运行" : "○停止", C_WHITE, bg);
+    }
+    ui_patch_commit(cx, 88, cx + 460, 88 + 240);   /* 卡壳/标题/胶囊同步 */
+    draw_tc_value(cx, ch);
+    draw_tc_setline(cx, ch);
+    g_stat_patch_cnt++;
+}
+
+/* ====== 体温卡 ====== */
 static void draw_body_card(void)
 {
-    gfx_fill_rect(16, 296, 16 + 480 - 1, 296 + 152 - 1, C_CARD);
-    uint16_t border = g_tcs.body_sensor_ok ? C_BORDER : C_ALARM;
-    gfx_draw_rect(16, 296, 16 + 480 - 1, 296 + 152 - 1, border);
-    ui_text24(32, 304, "体温", C_TEXT, C_CARD);
+    ui_patch_begin();
+    ui_card(32, 352, 460, 96, C_CARD, g_tcs.body_sensor_ok ? C_BORDER : C_YELLOW);
+    ui_text24(56, 364, "体温", C_TX, C_CARD);
     char big[16];
     if (g_tcs.body_sensor_ok) snprintf(big, sizeof(big), "%.1f", (double)g_tcs.body_temp);
     else                      snprintf(big, sizeof(big), "--.-");
-    ui_text64(32, 336, big, g_tcs.body_sensor_ok ? C_VALUE : C_ALARM, C_CARD);
-    ui_text24(32 + ui_text64_w(big) + 12, 376, "°C", C_SUB, C_CARD);
+    gfx_fill_rect(140, 368, 380, 432, C_CARD);
+    ui_text48(152, 372, big, g_tcs.body_sensor_ok ? C_HERO : C_GRAY, C_CARD);
+    ui_aux20(152 + ui_text48_w(big) + 6, 400, "°C", C_TX2, C_CARD);
+    int lit = (millis() - s_fresh_body) <= 1000u;
+    ui_dot8(328, 392, (lit && g_tcs.body_sensor_ok) ? C_GREEN : C_GRAY);
+    if (!g_tcs.body_sensor_ok) {
+        ui_round_rect(380, 380, 88, 40, 20, C_WARNBG, C_CARD);
+        ui_text24(392, 388, "▲失联", C_WARNTX, C_WARNBG);
+    }
+    ui_patch_commit(32, 352, 492, 448);
+    g_stat_patch_cnt++;
 }
 
-static void draw_fan_card(void)
+/* ====== 风扇卡（128×64 轨道 + 64px 球）====== */
+static void draw_fan_card_hl(int hl)
 {
-    gfx_fill_rect(528, 296, 528 + 480 - 1, 296 + 152 - 1, C_CARD);
-    gfx_draw_rect(528, 296, 528 + 480 - 1, 296 + 152 - 1, C_BORDER);
-    ui_text24(544, 304, "风扇", C_TEXT, C_CARD);
-    ui_pill(528 + 376, 300, 88, 32, g_tcs.fan_on ? "开" : "关", g_tcs.fan_on);
-    /* 状态圆盘：绿开/灰关，中心 24px 字 */
-    int cx0 = 640, cy0 = 372;
-    ui_fill_circle(cx0, cy0, 36, g_tcs.fan_on ? C_OK : C_CLINE);
-    ui_text24(cx0 - 12, cy0 - 12, g_tcs.fan_on ? "开" : "关",
-              C_WHITE, g_tcs.fan_on ? C_OK : C_CLINE);
+    uint16_t base = hl ? C_PRESS : C_CARD;
+    ui_patch_begin();
+    ui_card(532, 352, 460, 96, base, C_BORDER);
+    ui_text24(556, 364, "风扇", C_TX, base);
+    ui_text24(556, 402, g_tcs.fan_on ? "运行中" : "已停止", C_TX2, base);
+    int tx0 = 840, ty0 = 368;
+    ui_round_rect(tx0, ty0, 128, 64, 32, g_tcs.fan_on ? C_GREEN : C_GRAY, base);
+    int bx = tx0 + (g_tcs.fan_on ? 64 : 0);
+    ui_round_rect(bx, ty0, 64, 64, 32, C_WHITE, g_tcs.fan_on ? C_GREEN : C_GRAY);
+    ui_text24(bx + 20, ty0 + 20, g_tcs.fan_on ? "开" : "关", C_TX, C_WHITE);
+    ui_patch_commit(532, 352, 992, 448);
+    g_stat_patch_cnt++;
 }
 
-/* H1 按住态：整卡灰底变体（内容同款重绘其上）*/
-static void draw_fan_card_hl(void)
-{
-    gfx_fill_rect(528, 296, 528 + 480 - 1, 296 + 152 - 1, C_PRESS);
-    gfx_draw_rect(528, 296, 528 + 480 - 1, 296 + 152 - 1, C_BORDER);
-    ui_text24(544, 304, "风扇", C_TEXT, C_PRESS);
-    ui_fill_round(528 + 376, 300, 88, 32, 16, g_tcs.fan_on ? C_OK : C_DIS, C_PRESS);
-    int lw = ui_text24_w(g_tcs.fan_on ? "开" : "关");
-    ui_text24(528 + 376 + (88 - lw) / 2, 304, g_tcs.fan_on ? "开" : "关",
-              C_WHITE, g_tcs.fan_on ? C_OK : C_DIS);
-    int cx0 = 640, cy0 = 372;
-    ui_fill_circle(cx0, cy0, 36, g_tcs.fan_on ? C_OK : C_CLINE);
-    ui_text24(cx0 - 12, cy0 - 12, g_tcs.fan_on ? "开" : "关",
-              C_WHITE, g_tcs.fan_on ? C_OK : C_CLINE);
-}
-
-static void draw_home_buttons(void)
+/* ====== 底栏 ====== */
+static void draw_dock_content(void)
 {
     int auto_m = (g_tcs.mode != 0);
-    /* H13：五按钮行（176px 等宽+急停加宽），连接=二维码页入口 */
-    ui_btn(16, 544, 176, 56, "调参", C_ACCENT, 0);
-    ui_btn(208, 544, 176, 56, auto_m ? "切手动" : "切自动", C_ACCENT, 0);
-    /* TEC1 启停：自动模式禁用灰 */
-    ui_btn(400, 544, 176, 56, "TEC1 启停", auto_m ? C_DIS : C_ACCENT, 0);
-    ui_btn(592, 544, 176, 56, "连接", C_ACCENT, 0);
-    /* 急停：实心红加宽 */
-    ui_btn(784, 544, 228, 56, "急停", C_ALARM, 1);
+    ui_btn(40, 472, 208, 96, "调参", 0, 32);
+    ui_btn(272, 472, 208, 96, auto_m ? "切手动" : "切自动", 0, 32);
+    ui_btn(504, 472, 208, 96, "连接", 0, 32);
+    ui_btn(768, 472, 216, 112, "急停", 2, 32);
 }
-
-/* 页底色：只填卡片/按钮未覆盖的空白区（WP-C.5：省 1.2MB 全屏清，写带宽让给内容）*/
-static void draw_home_bg(void)
+static void draw_dock(void)
 {
-    gfx_fill_rect(0, 48, 1023, 55, C_BG);              /* 顶栏-卡片间 */
-    gfx_fill_rect(0, 56, 15, 279, C_BG);               /* 卡片行两侧与中缝 */
-    gfx_fill_rect(496, 56, 527, 279, C_BG);
-    gfx_fill_rect(1008, 56, 1023, 279, C_BG);
-    gfx_fill_rect(0, 280, 1023, 295, C_BG);            /* 两行卡片之间 */
-    gfx_fill_rect(0, 296, 15, 447, C_BG);
-    gfx_fill_rect(496, 296, 527, 447, C_BG);
-    gfx_fill_rect(1008, 296, 1023, 447, C_BG);
-    gfx_fill_rect(0, 448, 1023, 543, C_BG);            /* 卡片-按钮间 */
-    gfx_fill_rect(0, 544, 15, 599, C_BG);              /* 按钮间缝隙（H13 五按钮）*/
-    gfx_fill_rect(192, 544, 207, 599, C_BG);
-    gfx_fill_rect(384, 544, 399, 599, C_BG);
-    gfx_fill_rect(576, 544, 591, 599, C_BG);
-    gfx_fill_rect(768, 544, 783, 599, C_BG);
-    gfx_fill_rect(1012, 544, 1023, 599, C_BG);
+    ui_patch_begin();
+    draw_dock_content();
+    ui_patch_commit(40, 472, 984, 584);
+    g_stat_patch_cnt++;
 }
 
+/* ====== 主页整页 ====== */
 static void draw_home(void)
 {
     uint32_t t0 = DWT->CYCCNT;
-    int page_switched = (s_page != UI_PAGE_HOME);   /* 切页才需要缓冲同步（WP-C.5）*/
     s_page = UI_PAGE_HOME;
-    draw_home_bg();
-    draw_topbar();
-    draw_tc_card(16, "贴身水箱", 0);
-    draw_tc_card(528, "环境水箱", 1);
+    ui_full_begin();
+    gfx_clear(C_BG);
+    topbar_content();
+    draw_tc_card(32, "贴身水箱", 0);
+    draw_tc_card(532, "环境水箱", 1);
     draw_body_card();
-    draw_fan_card();
-    draw_home_buttons();
-    gfx_flip();
-    if (page_switched) gfx_sync_buffers();   /* 仅切页同步（同页重绘两缓冲本就同页）*/
-    g_stat_ui_ms_x10 = (DWT->CYCCNT - t0) / (SystemCoreClock / 10000u);
-    s_dirty = 0;
+    draw_fan_card_hl(0);
+    draw_dock_content();
+    ui_full_commit();
+    g_stat_full_us_last = (DWT->CYCCNT - t0) / (SystemCoreClock / 1000000u);
+    g_stat_flip_cnt++;
 }
 
-/* ====== 调参页（P1）====== */
-static int tune_items(int *ids, int max)
+/* ====== 滑条（K4b）====== */
+static int tune_row_y(int page_idx)
 {
-    int n = 0;
-    for (int i = 0; i < param_count() && n < max; i++) {
-        const param_desc_t *p = param_at(i);
-        if (p->flags & PF_SCREEN) ids[n++] = p->id;   /* D6：无 SCREEN 永不出现 */
+    return UI_TUNE_ROW_Y0 + page_idx * (UI_TUNE_ROW_H + UI_TUNE_ROW_GAP);
+}
+
+static float slider_px2val(const param_desc_t *p, int px)
+{
+    int tx0 = UI_TUNE_ROW_X + 320, tw = UI_ROW_TRACK_W;
+    float frac = (float)(px - (tx0 + 40)) / (float)(tw - 80);
+    if (frac < 0.0f) frac = 0.0f;
+    if (frac > 1.0f) frac = 1.0f;
+    float v = p->min + frac * (p->max - p->min);
+    float step = (p->step > 0.0f) ? p->step : 0.1f;
+    v = p->min + (float)((int)((v - p->min) / step + 0.5f)) * step;
+    if (v < p->min) v = p->min;
+    if (v > p->max) v = p->max;
+    return v;
+}
+
+/* 滑条区重绘；drag=1 拇指内嵌实时值（跟手回显，20Hz 外部限幅）*/
+static void draw_slider(int row_y, const param_desc_t *p, float v, int drag,
+                        int selected, uint16_t row_bg)
+{
+    ui_patch_begin();
+    int tx0 = UI_TUNE_ROW_X + 320, ty0 = row_y + 36, tw = UI_ROW_TRACK_W, th = 16;
+    /* 拖动时回显=行值区实时刷新：80px 拇指容不下 24px×4 字（比例字体才塞得下），
+     * 改刷行值区（与 K4b"拖动跟手回显"等效且更大更清晰）*/
+    if (drag) {
+        char vs[24];
+        if (p->id == PARAM_ID_MODE)
+            snprintf(vs, sizeof(vs), "%s", v != 0.0f ? "自动" : "手动");
+        else if (p->id == PARAM_ID_COMMISSIONED)
+            snprintf(vs, sizeof(vs), "%s", v == 2.0f ? "强制不布防" :
+                     v == 1.0f ? "强制布防" : "自动");
+        else
+            snprintf(vs, sizeof(vs), "%.1f", (double)v);
+        gfx_fill_rect(UI_TUNE_ROW_X + 20, row_y + 42, UI_TUNE_ROW_X + 200,
+                      row_y + 80, row_bg);
+        ui_text32(UI_TUNE_ROW_X + 24, row_y + 44, vs, C_HERO, row_bg);
     }
-    return n;
+    gfx_fill_rect(tx0 - 4, row_y + 2, tx0 + tw + 4, row_y + UI_TUNE_ROW_H - 2, row_bg);
+    float frac = (p->max > p->min) ? (v - p->min) / (p->max - p->min) : 0.0f;
+    if (frac < 0.0f) frac = 0.0f;
+    if (frac > 1.0f) frac = 1.0f;
+    gfx_fill_rect(tx0, ty0, tx0 + tw - 1, ty0 + th - 1, C_TRACK);
+    if (frac > 0.01f)
+        gfx_fill_rect(tx0, ty0, tx0 + (int)(frac * (float)(tw - 1)), ty0 + th - 1,
+                      C_TRACKFILL);
+    int bx = tx0 + 40 + (int)(frac * (float)(tw - 80)) - 40;
+    int by = ty0 + th / 2 - 40;
+    uint16_t ball = selected ? C_BLUE : C_GRAY;
+    ui_round_rect(bx, by, 80, 80, 40, ball, row_bg);
+    ui_patch_commit(UI_TUNE_ROW_X + 16, row_y + 2, tx0 + tw + 4,
+                    row_y + UI_TUNE_ROW_H - 2);
+    g_stat_patch_cnt++;
+}
+
+/* ====== 调参页 ====== */
+static void draw_prow(int page_idx, int glob_idx, uint16_t id)
+{
+    int y = tune_row_y(page_idx);
+    int sel = (glob_idx == s_tune_sel);
+    uint16_t bg = sel ? C_PRESS : C_CARD;
+    uint16_t bd = sel ? C_BLUE : C_BORDER;
+    ui_card(UI_TUNE_ROW_X, y, UI_TUNE_ROW_W, UI_TUNE_ROW_H, bg, bd);
+    if (sel) gfx_fill_rect(UI_TUNE_ROW_X + 1, y + 1, UI_TUNE_ROW_X + 4,
+                           y + UI_TUNE_ROW_H - 4, C_BLUE);
+    const param_desc_t *p = param_find(id);
+    if (!p) return;
+    ui_text24(UI_TUNE_ROW_X + 24, y + 12, p->name, C_TX, bg);
+    char vs[24];
+    fmt_val(p, vs, sizeof(vs));
+    ui_text32(UI_TUNE_ROW_X + 24, y + 44, vs, C_HERO, bg);
+    if (p->unit[0] && p->id != PARAM_ID_MODE && p->id != PARAM_ID_COMMISSIONED)
+        ui_aux20(UI_TUNE_ROW_X + 24 + ui_text32_w(vs) + 4, y + 52, "°C", C_TX2, bg);
+    draw_slider(y, p, p->value, 0, sel, bg);
+    ui_btn(UI_TUNE_ROW_X + 792, y + 12, 64, 64, "-", sel ? 0 : 1, 32);
+    ui_btn(UI_TUNE_ROW_X + 872, y + 12, 64, 64, "+", sel ? 0 : 1, 32);
+}
+
+static void draw_tune_topbar(void)
+{
+    ui_btn(24, 8, 120, 40, "‹返回", 5, 24);
+    const param_desc_t *p = tune_sel_desc();
+    char ctx[80];
+    if (p) {
+        if (p->id == PARAM_ID_MODE)
+            snprintf(ctx, sizeof(ctx), "选中：%s · 手动/自动", p->name);
+        else if (p->id == PARAM_ID_COMMISSIONED)
+            snprintf(ctx, sizeof(ctx), "选中：%s · 自动/强制布防/强制不布防", p->name);
+        else
+            snprintf(ctx, sizeof(ctx), "选中：%s · 范围 %.1f~%.1f°C",
+                     p->name, (double)p->min, (double)p->max);
+    } else {
+        snprintf(ctx, sizeof(ctx), "调参");
+    }
+    ui_text24(176, 22, ctx, C_TX2, C_BG);
+    uint32_t t = millis() / 1000u;
+    char ts[12];
+    snprintf(ts, sizeof(ts), "%02lu:%02lu:%02lu",
+             (unsigned long)(t / 3600u), (unsigned long)((t / 60u) % 60u),
+             (unsigned long)(t % 60u));
+    ui_aux20(896, 24, ts, C_TX2, C_BG);
+    if (s_saved_toast_on) {
+        ui_round_rect(716, 8, 168, 40, 8, C_PRESS, C_BG);
+        gfx_draw_rect(716, 8, 883, 47, C_BLUE);
+        ui_text24(764, 16, "已保存", C_BLUE, C_PRESS);
+    }
+}
+
+static void tune_zone_content(void)
+{
+    ui_btn(32, 472, 96, 96, "-", 0, 32);
+    ui_btn(896, 472, 96, 96, "+", 0, 32);
+    char step_l[24];
+    snprintf(step_l, sizeof(step_l), "步进%.1f", (double)s_tune_step_f);
+    ui_btn(160, 488, 180, 64, step_l, 0, 24);
+    if (s_tune_page == 0) {
+        ui_btn(360, 488, 240, 64, "下一页›", 0, 24);
+    } else {
+        ui_btn(360, 488, 200, 64, "‹上一页", 0, 24);
+        ui_btn(580, 488, 240, 64, "恢复默认", 5, 24);
+        ui_text24(56, 404, "拖动滑条或点 ± 调整选中参数 · 实时生效 · 断电自动保持",
+                  C_TX2, C_BG);
+    }
 }
 
 static void draw_tune(void)
 {
     uint32_t t0 = DWT->CYCCNT;
-    int page_switched = (s_page != UI_PAGE_TUNE);   /* 切页才需要缓冲同步（WP-C.5）*/
     s_page = UI_PAGE_TUNE;
     int ids[16];
     int n = tune_items(ids, 16);
+    ui_full_begin();
     gfx_clear(C_BG);
-
-    /* 页顶：标题 + 常驻灰字说明（中文必须 24px——16px 仅 ASCII，WP-A.3）*/
-    ui_text24(32, 8, "调参", C_TEXT, C_BG);
-    ui_text24(300, 10, "实时生效 保存=断电保持", C_SUB, C_BG);
-
-    /* 列表 8 行 (16,56+i*56,640,48)：隔行 #F6F8FA；选中行浅蓝底+4px 蓝竖条 */
-    for (int i = 0; i < 8 && i < n; i++) {
-        const param_desc_t *p = param_find((uint16_t)ids[i]);
-        if (!p) continue;
-        int y = 56 + i * 56;
-        uint16_t bg = (i == s_tune_sel) ? C_SELBG : ((i & 1) ? C_ROWA : C_CARD);
-        gfx_fill_rect(16, y, 16 + 640 - 1, y + 48 - 1, bg);
-        if (i == s_tune_sel) {
-            gfx_fill_rect(16, y, 16 + 4 - 1, y + 48 - 1, C_ACCENT);
-        }
-        ui_text24(32, y + 12, p->name, C_TEXT, bg);
-        char vs[32];
-        if (p->id == PARAM_ID_MODE)
-            snprintf(vs, sizeof(vs), "%s", p->value != 0.0f ? "自动" : "手动");
-        else if (p->id == PARAM_ID_COMMISSIONED)
-            snprintf(vs, sizeof(vs), "%s",
-                     p->value == 1.0f ? "强制布防" :
-                     p->value == 2.0f ? "强制不布防" : "自动");
-        else
-            snprintf(vs, sizeof(vs), "%.1f%s", (double)p->value, p->unit);
-        int vw = ui_text24_w(vs);
-        ui_text24(16 + 480 - vw, y + 12, vs, C_VALUE, bg);
-    }
-
-    /* −/+ 大按钮 (700,168,140,140)/(884,168,140,140)：白底蓝边 */
-    ui_btn(700, 168, 140, 140, "-", C_ACCENT, 0);
-    ui_btn(884, 168, 140, 140, "+", C_ACCENT, 0);
-
-    /* 步进切换 (700,336,324,56) */
-    char step_l[32];
-    snprintf(step_l, sizeof(step_l), "步进 %.1f", (double)s_tune_step);
-    ui_btn(700, 336, 324, 56, step_l, C_ACCENT, 0);
-
-    /* 范围提示 (700,408,324,40) */
-    const param_desc_t *sp = (s_tune_sel < n) ? param_find((uint16_t)ids[s_tune_sel]) : 0;
-    if (sp) {
-        char rg[64];
-        snprintf(rg, sizeof(rg), "范围 %.1f ~ %.1f %s",
-                 (double)sp->min, (double)sp->max, sp->unit);
-        ui_text24(712, 414, rg, C_SUB, C_BG);
-    }
-
-    ui_btn(16, 544, 200, 56, "返回", C_ACCENT, 0);
-    ui_btn(700, 544, 324, 56, "保存并返回", C_ACCENT, 1);   /* 主操作=实底蓝字白 */
-    gfx_flip();
-    if (page_switched) gfx_sync_buffers();
-    g_stat_ui_ms_x10 = (DWT->CYCCNT - t0) / (SystemCoreClock / 10000u);
-    s_dirty = 0;
+    draw_tune_topbar();
+    int base = s_tune_page * UI_TUNE_ROW_N;
+    for (int i = 0; i < UI_TUNE_ROW_N && base + i < n; i++)
+        draw_prow(i, base + i, (uint16_t)ids[base + i]);
+    tune_zone_content();
+    UI_FULL_COMMIT(2);
+    ui_page_stat(DWT->CYCCNT - t0);
+    g_stat_flip_cnt++;
 }
 
-/* ====== 连接二维码页（P2，H13）====== */
+/* 选中行迁移/值变更后的局部刷新（零 flip）*/
+static void tune_refresh_rows(void)
+{
+    int ids[16]; int n = tune_items(ids, 16);
+    int base = s_tune_page * UI_TUNE_ROW_N;
+    for (int i = 0; i < UI_TUNE_ROW_N && base + i < n; i++)
+        draw_prow(i, base + i, (uint16_t)ids[base + i]);
+    ui_patch_begin();
+    gfx_fill_rect(168, 8, 884, 51, C_BG);   /* 时钟(896)前全清，防长短句残尾 */
+    draw_tune_topbar();
+    ui_patch_commit(168, 8, 1015, 51);
+    g_stat_patch_cnt++;
+}
+
+/* ====== 连接页 ====== */
 #include "qr/qrcodegen.h"
 static void draw_qr(void)
 {
     uint32_t t0 = DWT->CYCCNT;
-    int page_switched = (s_page != UI_PAGE_QR);
     s_page = UI_PAGE_QR;
-    gfx_clear(C_CARD);   /* 白底利于扫码 */
+    ui_full_begin();
+    gfx_clear(C_BG);
+    ui_text32(32, 16, "连接", C_TX, C_BG);
 
-    ui_text24(32, 16, "连接", C_TEXT, C_CARD);
-
-    /* URL 二维码：ECC M，版本 2~6；模块 7px+4 模块静区 */
+    ui_round_rect(392, 88, 240, 240, 8, C_WHITE, C_BG);
     uint8_t qrc[qrcodegen_BUFFER_LEN_FOR_VERSION(6)];
     uint8_t tmp[qrcodegen_BUFFER_LEN_FOR_VERSION(6)];
     bool ok = qrcodegen_encodeText("http://192.168.4.1", tmp, qrc,
                                    qrcodegen_Ecc_MEDIUM, 2, 6, -1, true);
     if (ok) {
-        int n = qrcodegen_getSize(qrc);
-        int mod = 7;
-        int x0 = (LCD_WIDTH - (n + 8) * mod) / 2;
-        int y0 = 72;
-        gfx_fill_rect(x0, y0, x0 + (n + 8) * mod - 1, y0 + (n + 8) * mod - 1, C_WHITE);
-        for (int y = 0; y < n; y++)
-            for (int x = 0; x < n; x++)
+        int nmod = qrcodegen_getSize(qrc);
+        int mod = 200 / nmod;
+        if (mod < 1) mod = 1;
+        int x0 = 392 + (240 - nmod * mod) / 2;
+        int y0 = 88 + (240 - nmod * mod) / 2;
+        for (int y = 0; y < nmod; y++)
+            for (int x = 0; x < nmod; x++)
                 if (qrcodegen_getModule(qrc, x, y))
-                    gfx_fill_rect(x0 + (x + 4) * mod, y0 + (y + 4) * mod,
-                                  x0 + (x + 4) * mod + mod - 1,
-                                  y0 + (y + 4) * mod + mod - 1, C_TEXT);
-        ui_text24(32, y0 + (n + 8) * mod + 16, "手机连接 TCS 热点后扫码自动打开",
-                  C_SUB, C_CARD);
-        ui_text24(32, y0 + (n + 8) * mod + 48, "http://192.168.4.1", C_TEXT, C_CARD);
+                    gfx_fill_rect(x0 + x * mod, y0 + y * mod,
+                                  x0 + x * mod + mod - 1, y0 + y * mod + mod - 1, C_TX);
     } else {
-        ui_text24(32, 200, "二维码生成失败", C_ALARM, C_CARD);
+        ui_text24(416, 200, "二维码生成失败", C_RED, C_WHITE);
     }
 
-    ui_btn(16, 544, 200, 56, "返回", C_ACCENT, 0);
-    gfx_flip();
-    if (page_switched) gfx_sync_buffers();
-    g_stat_ui_ms_x10 = (DWT->CYCCNT - t0) / (SystemCoreClock / 10000u);
-    s_dirty = 0;
+    ui_text24(292, 352, "热点名称", C_TX2, C_BG);
+    ui_aux20(412, 356, "TCS-XXXX", C_TX, C_BG);
+    ui_text24(292, 392, "热点密码", C_TX2, C_BG);
+    ui_aux20(412, 396, "12345678", C_TX, C_BG);
+    ui_text24(292, 432, "控制页", C_TX2, C_BG);
+    ui_aux20(412, 436, "http://192.168.4.1", C_TX, C_BG);
+
+    char fw[24];
+    snprintf(fw, sizeof(fw), "fw v%lu.%lu.%lu",
+             (unsigned long)(g_tcs.fw_ver >> 16) & 0xFFu,
+             (unsigned long)(g_tcs.fw_ver >> 8) & 0xFFu,
+             (unsigned long)(g_tcs.fw_ver) & 0xFFu);
+    ui_aux20(896, 520, fw, C_TX2, C_BG);
+
+    ui_btn(40, 472, 208, 96, "返回", 0, 32);
+    UI_FULL_COMMIT(3);
+    ui_page_stat(DWT->CYCCNT - t0);
+    g_stat_flip_cnt++;
 }
 
-/* ====== 弹窗（白卡 + 描边；确认实底红/蓝，取消白底蓝边）====== */
+/* ====== 弹窗 ====== */
+static void dlg_labels(const char **title, const char **body, const char **okl, int *ok_red)
+{
+    static char tbuf[48];
+    *ok_red = 1;
+    switch (s_dlg) {
+    case DLG_ESTOP:
+        *title = "确认急停？"; *body = "TEC 将全部停止，风扇全开。"; *okl = "确认急停"; break;
+    case DLG_MODE_AUTO:
+        *title = "切换到自动模式？"; *body = "自动模式按体温闭环控制制冷。";
+        *okl = "确认切换"; *ok_red = 0; break;
+    case DLG_SETCONFIRM:
+        snprintf(tbuf, sizeof(tbuf), "设定 %.1f°C 超过确认阈值", (double)s_pending_set);
+        *title = tbuf; *body = "高温设定需二次确认，确认后本会话放行。";
+        *okl = "确认设定"; break;
+    case DLG_RESET:
+        *title = "恢复默认参数？"; *body = "全部参数将回到出厂值，立即生效。";
+        *okl = "恢复默认"; break;
+    default: *title = ""; *body = ""; *okl = "确认"; break;
+    }
+}
+
+/* 弹窗底页内容（整页重画到当前缓冲，不 commit）*/
+static void draw_underlay(void)
+{
+    if (s_page == UI_PAGE_TUNE) {
+        int ids[16];
+        int n = tune_items(ids, 16);
+        gfx_clear(C_BG);
+        draw_tune_topbar();
+        int base = s_tune_page * UI_TUNE_ROW_N;
+        for (int i = 0; i < UI_TUNE_ROW_N && base + i < n; i++)
+            draw_prow(i, base + i, (uint16_t)ids[base + i]);
+        tune_zone_content();
+    } else {
+        gfx_clear(C_BG);
+        topbar_content();
+        draw_tc_card(32, "贴身水箱", 0);
+        draw_tc_card(532, "环境水箱", 1);
+        draw_body_card();
+        draw_fan_card_hl(0);
+        draw_dock_content();
+    }
+}
+
 static void draw_dialog(void)
 {
-    /* 全屏点阵遮罩（RGB565 无 alpha → 浅灰点阵近似）*/
-    for (int y = 48; y < LCD_HEIGHT; y += 3)
-        for (int x = 0; x < LCD_WIDTH; x += 3)
-            gfx_draw_pixel(x, y, C_CLINE);
+    ui_full_begin();          /* 底页整画到隐藏缓冲，杜绝陈旧内容 */
+    draw_underlay();
 
-    /* 白色圆角卡片 (292,180,440,240) */
-    ui_fill_round(292, 180, 440, 240, 12, C_CARD, C_BG);
-    gfx_draw_rect(292, 180, 292 + 440 - 1, 180 + 240 - 1, C_BORDER);
+    for (int y = 0; y < UI_H; y += 3)               /* 3px 点阵遮罩 */
+        for (int x = 0; x < UI_W; x += 3)
+            gfx_draw_pixel(x, y, C_BORDER);
 
-    if (s_dlg == DLG_ESTOP) {
-        ui_text24(312, 208, "确认急停？", C_ALARM, C_CARD);
-        ui_text24(312, 248, "TEC 将全部停止，风扇全开", C_TEXT, C_CARD);
-        ui_btn(412, 300, 200, 64, "确认", C_ALARM, 1);
-        ui_btn(612, 300, 200, 64, "取消", C_ACCENT, 0);
-    } else if (s_dlg == DLG_MODE_AUTO) {
-        ui_text24(392, 232, "切换到自动模式？", C_TEXT, C_CARD);
-        ui_btn(412, 300, 200, 64, "确认", C_ACCENT, 1);
-        ui_btn(612, 300, 200, 64, "取消", C_ACCENT, 0);
-    } else if (s_dlg == DLG_SETCONFIRM) {
-        char msg[48];
-        snprintf(msg, sizeof(msg), "设定 %.1f°C 超过确认阈值",
-                 (double)s_pending_set);
-        ui_text24(312, 208, msg, C_ALARM, C_CARD);
-        ui_text24(312, 248, "高温设定需二次确认", C_TEXT, C_CARD);
-        ui_btn(412, 300, 200, 64, "确认", C_ALARM, 1);
-        ui_btn(612, 300, 200, 64, "取消", C_ACCENT, 0);
+    ui_round_rect(256, 136, 512, 320, 12, C_CARD, C_BG);
+    gfx_draw_hline(262, 762, 136, C_BORDER);
+    gfx_draw_hline(262, 762, 455, C_BORDER);
+    gfx_draw_vline(256, 142, 449, C_BORDER);
+    gfx_draw_vline(767, 142, 449, C_BORDER);
+    gfx_fill_rect(257, 453, 766, 454, C_CLINE);
+
+    const char *title, *body, *okl; int ok_red;
+    dlg_labels(&title, &body, &okl, &ok_red);
+    ui_text32(296, 168, title, ok_red ? C_RED : C_TX, C_CARD);
+    ui_text24(296, 232, body, C_TX, C_CARD);
+
+    int oy = 344;
+    if (ok_red) {
+        ui_round_rect(296, oy, 192, 88, 8, C_RED, C_CARD);
+        ui_text24(296 + (192 - ui_text24_w(okl)) / 2, oy + 32, okl, C_WHITE, C_RED);
+    } else {
+        ui_round_rect(296, oy, 192, 88, 8, C_BLUE, C_CARD);
+        ui_text24(296 + (192 - ui_text24_w(okl)) / 2, oy + 32, okl, C_WHITE, C_BLUE);
     }
-    gfx_flip();
-    gfx_sync_buffers();   /* 弹窗帧同步（关闭后另一缓冲不得残留遮罩/卡片）*/
+    ui_round_rect(536, oy, 192, 88, 8, C_CARD, C_CARD);
+    gfx_draw_hline(542, 722, oy, C_BLUE);
+    gfx_draw_hline(542, 722, oy + 87, C_BLUE);
+    gfx_draw_vline(536, oy + 6, oy + 81, C_BLUE);
+    gfx_draw_vline(727, oy + 6, oy + 81, C_BLUE);
+    ui_text24(536 + (192 - 48) / 2, oy + 32, "取消", C_BLUE, C_CARD);
+
+    UI_FULL_COMMIT(4);
+    g_stat_flip_cnt++;
 }
 
-/* ====== 调参动作（touch 路径，含 F4 二次确认）====== */
-static void tune_apply(float v)
+/* ====== 动作路径 ====== */
+static void slider_cancel_pending(void)
 {
-    int ids[16];
-    int n = tune_items(ids, 16);
-    if (s_tune_sel >= n) return;
-    uint16_t id = (uint16_t)ids[s_tune_sel];
+    s_sl.st = SL_IDLE;
+    s_saved_apply_t = 0;
+}
+
+static void apply_param(uint16_t id, float v)
+{
     const param_desc_t *p = param_find(id);
     if (!p) return;
-
-    /* F4：温度设定超 tc_set_confirm → 二次确认弹窗（确认后本次会话放行）*/
     if ((id == PARAM_ID_TC1_SET || id == PARAM_ID_TC2_SET)
         && v > param_get(PARAM_ID_SET_CONFIRM) && !s_step_granted) {
         s_pending_id = id;
@@ -702,186 +987,231 @@ static void tune_apply(float v)
         draw_dialog();
         return;
     }
-    int rv = param_set(id, v, PARAM_SRC_TOUCH);
-    (void)rv;
-    if (id == PARAM_ID_TC1_SET || id == PARAM_ID_TC2_SET) {
-        if (v <= param_get(PARAM_ID_SET_CONFIRM)) s_step_granted = 0;
+    (void)param_set(id, v, PARAM_SRC_TOUCH);
+    if ((id == PARAM_ID_TC1_SET || id == PARAM_ID_TC2_SET)
+        && v <= param_get(PARAM_ID_SET_CONFIRM)) s_step_granted = 0;
+    s_saved_apply_t = millis();
+}
+
+static void tune_apply_selected(float v)
+{
+    const param_desc_t *p = tune_sel_desc();
+    if (!p) return;
+    apply_param(p->id, v);
+    if (s_dlg == DLG_NONE) {
+        int ids[16]; tune_items(ids, 16);
+        draw_prow(s_tune_sel - s_tune_page * UI_TUNE_ROW_N, s_tune_sel,
+                  (uint16_t)ids[s_tune_sel]);
     }
-    draw_tune();   /* 值变更行重绘（页小，整页重绘）*/
 }
 
 static void tune_step(float dir)
 {
-    int ids[16];
-    int n = tune_items(ids, 16);
-    if (s_tune_sel >= n) return;
-    const param_desc_t *p = param_find((uint16_t)ids[s_tune_sel]);
+    slider_cancel_pending();
+    const param_desc_t *p = tune_sel_desc();
     if (!p) return;
-    tune_apply(p->value + dir * s_tune_step);
+    float v = p->value + dir * s_tune_step_f;
+    float step = (p->step > 0.0f) ? p->step : 0.1f;
+    v = p->min + (float)((int)((v - p->min) / step + 0.5f)) * step;
+    if (v < p->min) v = p->min;
+    if (v > p->max) v = p->max;
+    tune_apply_selected(v);
 }
 
-/* ====== H1 按住态高亮（#E5E7EB 按下即重绘，抬起还原）====== */
+/* ====== 按住态（patch 直绘，精确矩形区同步）====== */
 typedef enum {
     HL_NONE = 0,
-    HL_HOME_TUNE, HL_HOME_MODE, HL_HOME_TEC1, HL_HOME_CONNECT, HL_HOME_ESTOP,
-    HL_HOME_PILL, HL_HOME_FAN,
-    HL_TUNE_MINUS, HL_TUNE_PLUS, HL_TUNE_STEP, HL_TUNE_BACK, HL_TUNE_SAVE,
-    HL_QR_BACK,
-    HL_DLG_OK, HL_DLG_CANCEL,
+    HL_DOCK_TUNE, HL_DOCK_MODE, HL_DOCK_CONN, HL_DOCK_ESTOP,
+    HL_FAN,
+    HL_BACK, HL_ROW_KEYM, HL_ROW_KEYP, HL_STEP, HL_NEXT, HL_PREV, HL_RESET,
+    HL_ZM, HL_ZP,
+    HL_CONN_BACK, HL_DLG_OK, HL_DLG_CANCEL,
 } hl_t;
 static hl_t s_press_hl;
 
 static hl_t press_hit_test(int x, int y)
 {
     if (s_dlg != DLG_NONE) {
-        if (ui_in(x, y, 412, 300, 200, 64)) return HL_DLG_OK;
-        if (ui_in(x, y, 612, 300, 200, 64)) return HL_DLG_CANCEL;
+        if (ui_in(x, y, 296, 344, 192, 88)) return HL_DLG_OK;
+        if (ui_in(x, y, 536, 344, 192, 88)) return HL_DLG_CANCEL;
         return HL_NONE;
     }
     if (s_page == UI_PAGE_HOME) {
-        if (ui_in(x, y, 16, 544, 176, 56))   return HL_HOME_TUNE;
-        if (ui_in(x, y, 208, 544, 176, 56))  return HL_HOME_MODE;
-        if (ui_in(x, y, 400, 544, 176, 56))  return HL_HOME_TEC1;
-        if (ui_in(x, y, 592, 544, 176, 56))  return HL_HOME_CONNECT;
-        if (ui_in(x, y, 784, 544, 228, 56))  return HL_HOME_ESTOP;
-        if (ui_in(x, y, 120, 0, 80, 40))     return HL_HOME_PILL;
-        if (ui_in(x, y, 528, 296, 480, 152)) return HL_HOME_FAN;
+        if (ui_in(x, y, R_DOCK_TUNE))  return HL_DOCK_TUNE;
+        if (ui_in(x, y, R_DOCK_MODE))  return HL_DOCK_MODE;
+        if (ui_in(x, y, R_DOCK_CONN))  return HL_DOCK_CONN;
+        if (ui_in(x, y, R_DOCK_ESTOP)) return HL_DOCK_ESTOP;
+        if (ui_in(x, y, 532, 352, 460, 96)) return HL_FAN;
     } else if (s_page == UI_PAGE_QR) {
-        if (ui_in(x, y, 16, 544, 200, 56))   return HL_QR_BACK;
+        if (ui_in(x, y, R_CONN_BACK)) return HL_CONN_BACK;
     } else {
-        if (ui_in(x, y, 700, 168, 140, 140)) return HL_TUNE_MINUS;
-        if (ui_in(x, y, 884, 168, 140, 140)) return HL_TUNE_PLUS;
-        if (ui_in(x, y, 700, 336, 324, 56))  return HL_TUNE_STEP;
-        if (ui_in(x, y, 16, 544, 200, 56))   return HL_TUNE_BACK;
-        if (ui_in(x, y, 700, 544, 324, 56))  return HL_TUNE_SAVE;
+        int base = s_tune_page * UI_TUNE_ROW_N;
+        int ry = tune_row_y(s_tune_sel - base);
+        if (ui_in(x, y, UI_TUNE_ROW_X + 792, ry + 8, 64, 64)) return HL_ROW_KEYM;
+        if (ui_in(x, y, UI_TUNE_ROW_X + 872, ry + 8, 64, 64)) return HL_ROW_KEYP;
+        if (ui_in(x, y, R_TUNE_STEP)) return HL_STEP;
+        if (s_tune_page == 0 && ui_in(x, y, R_TUNE_NEXT)) return HL_NEXT;
+        if (s_tune_page == 1 && ui_in(x, y, R_TUNE_PREV))  return HL_PREV;
+        if (s_tune_page == 1 && ui_in(x, y, R_TUNE_RESET)) return HL_RESET;
+        if (ui_in(x, y, R_TUNE_ZONE_MINUS)) return HL_ZM;
+        if (ui_in(x, y, R_TUNE_ZONE_PLUS))  return HL_ZP;
+        if (ui_in(x, y, UI_BACK_HIT)) return HL_BACK;
     }
     return HL_NONE;
 }
 
-/* 按住样绘制（down=1 灰底 / 0 常态）。仅按下单控件；还原走组重绘。*/
+static void hl_rect(hl_t h, int *x0, int *y0, int *x1, int *y1)
+{
+    switch (h) {
+    case HL_DOCK_TUNE:  *x0 = 40;  *y0 = 472; *x1 = 247; *y1 = 567; break;
+    case HL_DOCK_MODE:  *x0 = 272; *y0 = 472; *x1 = 479; *y1 = 567; break;
+    case HL_DOCK_CONN:  *x0 = 504; *y0 = 472; *x1 = 711; *y1 = 567; break;
+    case HL_DOCK_ESTOP: *x0 = 768; *y0 = 472; *x1 = 983; *y1 = 583; break;
+    case HL_FAN:        *x0 = 532; *y0 = 352; *x1 = 991; *y1 = 447; break;
+    case HL_CONN_BACK:  *x0 = 40;  *y0 = 472; *x1 = 247; *y1 = 567; break;
+    case HL_BACK:       *x0 = 24;  *y0 = 8;   *x1 = 143; *y1 = 47;  break;
+    case HL_STEP:       *x0 = 160; *y0 = 488; *x1 = 339; *y1 = 551; break;
+    case HL_NEXT:       *x0 = 356; *y0 = 488; *x1 = 595; *y1 = 551; break;
+    case HL_PREV:       *x0 = 356; *y0 = 488; *x1 = 555; *y1 = 551; break;
+    case HL_RESET:      *x0 = 580; *y0 = 488; *x1 = 819; *y1 = 551; break;
+    case HL_ZM:         *x0 = 32;  *y0 = 472; *x1 = 127; *y1 = 567; break;
+    case HL_ZP:         *x0 = 896; *y0 = 472; *x1 = 991; *y1 = 567; break;
+    case HL_DLG_OK:     *x0 = 296; *y0 = 344; *x1 = 487; *y1 = 431; break;
+    case HL_DLG_CANCEL: *x0 = 536; *y0 = 344; *x1 = 727; *y1 = 431; break;
+    default: {
+        int base = s_tune_page * UI_TUNE_ROW_N;
+        int ry = tune_row_y(s_tune_sel - base);
+        if (h == HL_ROW_KEYM) { *x0 = UI_TUNE_ROW_X + 792; *y0 = ry + 8; *x1 = *x0 + 63; *y1 = ry + 75; }
+        else                  { *x0 = UI_TUNE_ROW_X + 872; *y0 = ry + 8; *x1 = *x0 + 63; *y1 = ry + 75; }
+        break;
+    }
+    }
+}
+
 static void press_hl_draw(int down)
 {
     int auto_m = (g_tcs.mode != 0);
+    int x0, y0, x1, y1;
+    hl_rect(s_press_hl, &x0, &y0, &x1, &y1);
+    ui_patch_begin();
     switch (s_press_hl) {
-    case HL_HOME_TUNE:
-        ui_btn_hl(16, 544, 176, 56, "调参", C_ACCENT, 0, down); break;
-    case HL_HOME_MODE:
-        ui_btn_hl(208, 544, 176, 56, auto_m ? "切手动" : "切自动", C_ACCENT, 0, down); break;
-    case HL_HOME_TEC1:
-        ui_btn_hl(400, 544, 176, 56, "TEC1 启停", auto_m ? C_DIS : C_ACCENT, 0, down); break;
-    case HL_HOME_CONNECT:
-        ui_btn_hl(592, 544, 176, 56, "连接", C_ACCENT, 0, down); break;
-    case HL_HOME_ESTOP:
-        ui_btn_hl(784, 544, 228, 56, "急停", C_ALARM, 1, down); break;
-    case HL_HOME_PILL:
-        ui_fill_round(120, 8, 80, 32, 16, down ? C_PRESS : C_ALARM, C_CARD);
-        ui_text24(120 + (80 - 48) / 2, 12, "急停",
-                  down ? C_ALARM : C_WHITE, down ? C_PRESS : C_ALARM);
-        break;
-    case HL_HOME_FAN:
-        if (down) draw_fan_card_hl(); else draw_fan_card();
-        break;
-    case HL_TUNE_MINUS:
-        ui_btn_hl(700, 168, 140, 140, "-", C_ACCENT, 0, down); break;
-    case HL_TUNE_PLUS:
-        ui_btn_hl(884, 168, 140, 140, "+", C_ACCENT, 0, down); break;
-    case HL_TUNE_STEP: {
-        char step_l[32];
-        snprintf(step_l, sizeof(step_l), "步进 %.1f", (double)s_tune_step);
-        ui_btn_hl(700, 336, 324, 56, step_l, C_ACCENT, 0, down);
+    case HL_DOCK_TUNE:  ui_btn(40, 472, 208, 96, "调参", down ? 4 : 0, 32); break;
+    case HL_DOCK_MODE:  ui_btn(272, 472, 208, 96, auto_m ? "切手动" : "切自动",
+                               down ? 4 : 0, 32); break;
+    case HL_DOCK_CONN:  ui_btn(504, 472, 208, 96, "连接", down ? 4 : 0, 32); break;
+    case HL_DOCK_ESTOP: ui_btn(768, 472, 216, 112, "急停", down ? 3 : 2, 32); break;
+    case HL_FAN:        draw_fan_card_hl(down); break;
+    case HL_CONN_BACK:  ui_btn(40, 472, 208, 96, "返回", down ? 4 : 0, 32); break;
+    case HL_BACK:       ui_btn(24, 8, 120, 40, "‹返回", down ? 4 : 5, 24); break;
+    case HL_STEP: {
+        char step_l[24];
+        snprintf(step_l, sizeof(step_l), "步进%.1f", (double)s_tune_step_f);
+        ui_btn(160, 488, 180, 64, step_l, down ? 4 : 0, 24);
         break;
     }
-    case HL_TUNE_BACK:
-        ui_btn_hl(16, 544, 200, 56, "返回", C_ACCENT, 0, down); break;
-    case HL_TUNE_SAVE:
-        ui_btn_hl(700, 544, 324, 56, "保存并返回", C_ACCENT, 1, down); break;
-    case HL_DLG_OK:
-        ui_btn_hl(412, 300, 200, 64, "确认",
-                  (s_dlg == DLG_MODE_AUTO) ? C_ACCENT : C_ALARM, 1, down);
+    case HL_NEXT:       ui_btn(360, 488, 240, 64, "下一页›", down ? 4 : 0, 24); break;
+    case HL_PREV:       ui_btn(360, 488, 200, 64, "‹上一页", down ? 4 : 0, 24); break;
+    case HL_RESET:      ui_btn(580, 488, 240, 64, "恢复默认", down ? 4 : 5, 24); break;
+    case HL_ZM:         ui_btn(32, 472, 96, 96, "-", down ? 4 : 0, 32); break;
+    case HL_ZP:         ui_btn(896, 472, 96, 96, "+", down ? 4 : 0, 32); break;
+    case HL_ROW_KEYM:
+    case HL_ROW_KEYP: {
+        int base = s_tune_page * UI_TUNE_ROW_N;
+        int ry = tune_row_y(s_tune_sel - base);
+        int kx = (s_press_hl == HL_ROW_KEYM) ? UI_TUNE_ROW_X + 792 : UI_TUNE_ROW_X + 872;
+        ui_btn(kx, ry + 8, 64, 64, (s_press_hl == HL_ROW_KEYM) ? "-" : "+",
+               down ? 4 : 0, 32);
         break;
-    case HL_QR_BACK:
-        ui_btn_hl(16, 544, 200, 56, "返回", C_ACCENT, 0, down); break;
+    }
+    case HL_DLG_OK: {
+        const char *title, *body, *okl; int ok_red;
+        dlg_labels(&title, &body, &okl, &ok_red);
+        if (down) {
+            ui_round_rect(296, 344, 192, 88, 8, C_PRESS, C_CARD);
+            ui_text24(296 + (192 - ui_text24_w(okl)) / 2, 376, okl, C_BLUE, C_PRESS);
+        } else {
+            ui_round_rect(296, 344, 192, 88, 8, ok_red ? C_RED : C_BLUE, C_CARD);
+            ui_text24(296 + (192 - ui_text24_w(okl)) / 2, 376, okl, C_WHITE,
+                      ok_red ? C_RED : C_BLUE);
+        }
+        break;
+    }
     case HL_DLG_CANCEL:
-        ui_btn_hl(612, 300, 200, 64, "取消", C_ACCENT, 0, down); break;
-    default:
+        if (down) {
+            ui_round_rect(536, 344, 192, 88, 8, C_PRESS, C_CARD);
+            ui_text24(584, 376, "取消", C_BLUE, C_PRESS);
+        } else {
+            ui_round_rect(536, 344, 192, 88, 8, C_CARD, C_CARD);
+            gfx_draw_hline(542, 722, 344, C_BLUE);
+            gfx_draw_hline(542, 722, 431, C_BLUE);
+            gfx_draw_vline(536, 350, 425, C_BLUE);
+            gfx_draw_vline(727, 350, 425, C_BLUE);
+            ui_text24(584, 376, "取消", C_BLUE, C_CARD);
+        }
         break;
+    default: break;
     }
+    ui_patch_commit(x0 - 2, y0 - 2, x1 + 2, y1 + 2);
+    g_stat_patch_cnt++;
 }
 
-/* 连发/弹窗路径整页重绘会覆盖按下样——重放一次 */
-static void press_hl_reapply(void)
-{
-    if (s_press_hl != HL_NONE) {
-        press_hl_draw(1);
-        gfx_flip();
-    }
-}
-
-/* 按下沿进入按住态 / 抬起沿组重绘还原（在 touch_tap 之前调）*/
 static void press_hl_update(int down_now, int x, int y)
 {
     static int hl_active;
     if (down_now) {
         hl_t h = press_hit_test(x, y);
-        if (h != HL_NONE) {
+        if (h != HL_NONE && h != s_press_hl) {
             s_press_hl = h;
             hl_active = 1;
-            /* 先整页重绘并同步双缓冲，再叠按下样——back 可能是陈旧帧
-             * （同页部分重绘不同步，实测会把上一次按下残影翻上屏）*/
-            if (s_dlg != DLG_NONE) {
-                draw_dialog();                       /* 内含 sync */
-            } else if (s_page == UI_PAGE_HOME) {
-                draw_home();
-                gfx_sync_buffers();
-            } else {
-                draw_tune();
-                gfx_sync_buffers();
-            }
             press_hl_draw(1);
-            gfx_flip();
         }
     } else if (hl_active) {
         hl_active = 0;
         hl_t h = s_press_hl;
         s_press_hl = HL_NONE;
-        switch (h) {
-        case HL_HOME_TUNE: case HL_HOME_MODE: case HL_HOME_TEC1:
-        case HL_HOME_CONNECT: case HL_HOME_ESTOP:
-            draw_home_buttons(); gfx_flip(); gfx_sync_buffers(); break;
-        case HL_HOME_PILL:
-            draw_topbar(); gfx_flip(); gfx_sync_buffers(); break;
-        case HL_HOME_FAN:
-            draw_fan_card(); gfx_flip(); gfx_sync_buffers(); break;
-        case HL_TUNE_MINUS: case HL_TUNE_PLUS: case HL_TUNE_STEP:
-        case HL_TUNE_BACK: case HL_TUNE_SAVE:
-            draw_tune(); gfx_sync_buffers(); break;
-        case HL_QR_BACK:
-            draw_qr(); gfx_sync_buffers(); break;
-        case HL_DLG_OK: case HL_DLG_CANCEL:
-            if (s_dlg != DLG_NONE) draw_dialog();
-            break;
-        default:
-            break;
-        }
+        press_hl_draw(0);
+        (void)h;
     }
 }
 
 /* ====== 触摸分发 ====== */
-static volatile uint32_t s_tap_cnt;   /* 诊断：点击累计（幻触摸侦测）*/
+static volatile uint32_t s_tap_cnt;
+
+static void tune_select(int page_idx)
+{
+    int ids[16]; int n = tune_items(ids, 16);
+    int gi = s_tune_page * UI_TUNE_ROW_N + page_idx;
+    if (gi >= n) return;
+    if (s_tune_sel != gi) {
+        s_tune_sel = gi;
+        s_step_granted = 0;
+        slider_cancel_pending();
+        tcs_log("[APP]", "touch sel %s", param_find((uint16_t)ids[gi])->key);
+        tune_refresh_rows();
+    }
+}
+
+static void tune_goto_page(int pg)
+{
+    slider_cancel_pending();
+    s_tune_page = pg;
+    s_tune_sel = pg * UI_TUNE_ROW_N;
+    s_step_granted = 0;
+    tcs_log("[APP]", "tune page %d", pg);
+    draw_tune();
+}
 
 static void touch_tap(int x, int y)
 {
     s_tap_cnt++;
 
-    /* 弹窗优先 */
     if (s_dlg != DLG_NONE) {
-        if (ui_in(x, y, 412, 300, 200, 64)) {          /* 确认 */
+        if (ui_in(x, y, 296, 344, 192, 88)) {
             ui_dlg_t d = s_dlg;
             s_dlg = DLG_NONE;
             if (d == DLG_ESTOP) {
                 tcs_emergency_stop();
                 tcs_log("[APP]", "touch estop confirm");
-                s_page = UI_PAGE_HOME;
                 draw_home();
             } else if (d == DLG_MODE_AUTO) {
                 (void)param_set(PARAM_ID_MODE, 1.0f, PARAM_SRC_TOUCH);
@@ -889,9 +1219,16 @@ static void touch_tap(int x, int y)
             } else if (d == DLG_SETCONFIRM) {
                 s_step_granted = 1;
                 (void)param_set(s_pending_id, s_pending_set, PARAM_SRC_TOUCH);
+                s_saved_apply_t = millis();
+                draw_tune();
+            } else if (d == DLG_RESET) {
+                param_load_defaults();
+                (void)param_persist_now();
+                s_tune_page = 0; s_tune_sel = 0; s_step_granted = 0;
+                tcs_log("[APP]", "factory defaults restored");
                 draw_tune();
             }
-        } else if (ui_in(x, y, 612, 300, 200, 64)) {   /* 取消 */
+        } else if (ui_in(x, y, 536, 344, 192, 88)) {
             s_dlg = DLG_NONE;
             if (s_page == UI_PAGE_HOME) draw_home(); else draw_tune();
         }
@@ -899,83 +1236,93 @@ static void touch_tap(int x, int y)
     }
 
     if (s_page == UI_PAGE_HOME) {
-        if (ui_in(x, y, 120, 0, 80, 40)) {             /* 常驻急停胶囊 */
-            s_dlg = DLG_ESTOP; draw_dialog(); return;
-        }
-        if (g_tcs.alarm_bits && ui_in(x, y, 200, 0, 568, 40)) {
-            tcs_alarm_ack();                            /* 点横幅=人工确认恢复 */
+        if (g_tcs.alarm_bits && ui_in(x, y, 208, 8, 552, 56)) {
+            tcs_alarm_ack();
             tcs_log("[APP]", "touch alarm ack");
-            draw_topbar(); gfx_flip(); return;
+            draw_topbar();
+            return;
         }
-        if (ui_in(x, y, 16, 544, 176, 56)) {           /* 调参 */
-            s_page = UI_PAGE_TUNE; s_tune_sel = 0; s_step_granted = 0;
+        if (ui_in(x, y, R_DOCK_TUNE)) {
+            s_tune_page = 0; s_tune_sel = 0; s_step_granted = 0;
+            slider_cancel_pending();
             tcs_log("[APP]", "touch page->tune");
             draw_tune(); return;
         }
-        if (ui_in(x, y, 208, 544, 176, 56)) {          /* 模式切换 */
+        if (ui_in(x, y, R_DOCK_MODE)) {
             if (g_tcs.mode == 0) { s_dlg = DLG_MODE_AUTO; draw_dialog(); }
-            else (void)param_set(PARAM_ID_MODE, 0.0f, PARAM_SRC_TOUCH);
-            draw_home(); return;
-        }
-        if (ui_in(x, y, 400, 544, 176, 56)) {          /* TEC1 启停 */
-            if (g_tcs.mode == 0) {
-                control_manual_tec(1, g_tcs.tec1_on ? 0u : 1u);
-                tcs_log("[APP]", "touch tec1 %u", g_tcs.tec1_on);
+            else {
+                slider_cancel_pending();
+                (void)param_set(PARAM_ID_MODE, 0.0f, PARAM_SRC_TOUCH);
+                draw_topbar(); draw_dock();
             }
-            draw_home(); return;
+            return;
         }
-        if (ui_in(x, y, 592, 544, 176, 56)) {          /* 连接（H13 二维码页）*/
+        if (ui_in(x, y, R_DOCK_CONN)) {
             tcs_log("[APP]", "touch page->qr");
             draw_qr(); return;
         }
-        if (ui_in(x, y, 784, 544, 228, 56)) {          /* 急停 */
+        if (ui_in(x, y, R_DOCK_ESTOP)) {
             s_dlg = DLG_ESTOP; draw_dialog(); return;
         }
-        if (ui_in(x, y, 528, 296, 480, 152)) {         /* 风扇整卡切换（低风险无确认）*/
+        if (ui_in(x, y, 532, 352, 460, 96)) {
             control_manual_fan(g_tcs.fan_on ? 0u : 1u);
             tcs_log("[APP]", "touch fan %u", g_tcs.fan_on);
-            draw_fan_card(); gfx_flip(); return;
+            draw_fan_card_hl(0);
+            return;
         }
     } else if (s_page == UI_PAGE_QR) {
-        if (ui_in(x, y, 16, 544, 200, 56)) {           /* 返回 */
+        if (ui_in(x, y, R_CONN_BACK)) {
             tcs_log("[APP]", "touch page->home");
             draw_home(); return;
         }
-    } else { /* P1 调参页 */
+    } else { /* 调参页 */
         int ids[16];
         int n = tune_items(ids, 16);
-        for (int i = 0; i < 8 && i < n; i++) {
-            int ry = 56 + i * 56;
-            if (ui_in(x, y, 16, ry, 640, 48)) {
-                s_tune_sel = i;
-                s_step_granted = 0;
-                tcs_log("[APP]", "touch sel %s", param_find((uint16_t)ids[i])->key);
-                draw_tune(); return;
+        int base = s_tune_page * UI_TUNE_ROW_N;
+        for (int i = 0; i < UI_TUNE_ROW_N && base + i < n; i++) {
+            int ry = tune_row_y(i);
+            if (ui_in(x, y, UI_TUNE_ROW_X, ry, UI_TUNE_ROW_W, UI_TUNE_ROW_H)) {
+                /* 选中行的 ± 键在行矩形内：放行给下方键处理（附录 A-05 教训）*/
+                if ((base + i) == s_tune_sel
+                    && (ui_in(x, y, UI_TUNE_ROW_X + 792, ry + 8, 64, 64)
+                        || ui_in(x, y, UI_TUNE_ROW_X + 872, ry + 8, 64, 64)))
+                    break;
+                if (!ui_in(x, y, UI_TUNE_ROW_X + 312, ry + 4, 448, 80)
+                    || (base + i) != s_tune_sel)
+                    tune_select(i);
+                return;
             }
         }
-        /* H3(A-5)：± 单击步进一档（长按连发在 touch_poll，两路径互补不重发）*/
-        if (ui_in(x, y, 700, 168, 140, 140)) { tune_step(-1.0f); return; }
-        if (ui_in(x, y, 884, 168, 140, 140)) { tune_step(1.0f); return; }
-        if (ui_in(x, y, 700, 336, 324, 56)) {          /* 步进 0.1↔1.0 */
-            s_tune_step = (s_tune_step > 0.05f && s_tune_step < 0.5f) ? 1.0f : 0.1f;
-            draw_tune(); return;
+        int ry = tune_row_y(s_tune_sel - base);
+        if (ui_in(x, y, UI_TUNE_ROW_X + 792, ry + 8, 64, 64)) { tune_step(-1.0f); return; }
+        if (ui_in(x, y, UI_TUNE_ROW_X + 872, ry + 8, 64, 64)) { tune_step(1.0f); return; }
+        if (ui_in(x, y, R_TUNE_ZONE_MINUS)) { tune_step(-1.0f); return; }
+        if (ui_in(x, y, R_TUNE_ZONE_PLUS))  { tune_step(1.0f); return; }
+        if (ui_in(x, y, R_TUNE_STEP)) {
+            s_tune_step_f = (s_tune_step_f > 0.05f && s_tune_step_f < 0.5f) ? 1.0f : 0.1f;
+            slider_cancel_pending();
+            char step_l[24];
+            snprintf(step_l, sizeof(step_l), "步进%.1f", (double)s_tune_step_f);
+            ui_patch_begin();
+            ui_btn(160, 488, 180, 64, step_l, 0, 24);
+            ui_patch_commit(160, 488, 340, 552);
+            g_stat_patch_cnt++;
+            return;
         }
-        if (ui_in(x, y, 16, 544, 200, 56)) {           /* 返回（不保存也回）*/
-            s_page = UI_PAGE_HOME;
+        if (s_tune_page == 0 && ui_in(x, y, R_TUNE_NEXT)) { tune_goto_page(1); return; }
+        if (s_tune_page == 1 && ui_in(x, y, R_TUNE_PREV))  { tune_goto_page(0); return; }
+        if (s_tune_page == 1 && ui_in(x, y, R_TUNE_RESET)) {
+            s_dlg = DLG_RESET; draw_dialog(); return;
+        }
+        if (ui_in(x, y, UI_BACK_HIT)) {
+            slider_cancel_pending();
             tcs_log("[APP]", "touch page->home");
-            draw_home(); return;
-        }
-        if (ui_in(x, y, 700, 544, 324, 56)) {          /* 保存并返回 */
-            (void)param_persist_now();
-            tcs_log("[APP]", "touch save+home");
-            s_page = UI_PAGE_HOME;
             draw_home(); return;
         }
     }
 }
 
 #ifdef TCS_SIM
-/* H1 取证/彩排注入：按住序列（touchh/touchr 走真 touch_poll 路径）*/
 static int s_inj_hold, s_inj_release, s_inj_x, s_inj_y;
 void tcs_ui_inject_touch(int down, int x, int y)
 {
@@ -994,7 +1341,6 @@ static void touch_poll(uint32_t now)
 {
     touch_event_t ev;
 #ifdef TCS_SIM
-    /* 注入优先且不依赖真实触摸 IC（仿真/彩排必须硬件无关；POST 仍如实报 SCRTOUCH）*/
     int injected = touch_inject_get(&ev);
 #else
     int injected = 0;
@@ -1002,10 +1348,17 @@ static void touch_poll(uint32_t now)
     if (!injected) {
         if (!touch_ready()) return;
         int rv = ft5446_read(&ev);
-        if (rv != 0) return;   /* -1 未就绪；2=H1 幽灵帧丢弃（不得合成释放沿）*/
+        if (rv != 0) return;   /* -1 未就绪；2=幽灵帧丢弃 */
+        /* K12 报点率：真实 IC 触点样本计数（1s 窗口锁存）*/
+        static uint32_t cnt = 0, t0 = 0;
+        cnt++;
+        if (!t0) t0 = now;
+        if (now - t0 >= 1000u) {
+            g_stat_touch_hz = cnt;
+            cnt = 0; t0 = now;
+        }
     }
 
-    /* 30ms 去抖：释放沿距按下 <30ms 忽略 */
     if (ev.touched) {
         if (!s_touch_down) {
             s_touch_down = 1;
@@ -1015,41 +1368,86 @@ static void touch_poll(uint32_t now)
             s_touch_release_ok = now;
             s_last_x = ev.x;
             s_last_y = ev.y;
-            press_hl_update(1, ev.x, ev.y);   /* H1：按下即灰底 */
+
+            /* K4b：选中行滑条热区按下 → 进入拖动 */
+            if (s_dlg == DLG_NONE && s_page == UI_PAGE_TUNE) {
+                int base = s_tune_page * UI_TUNE_ROW_N;
+                int ry = tune_row_y(s_tune_sel - base);
+                int tx0 = UI_TUNE_ROW_X + 320, tw = UI_ROW_TRACK_W;
+                const param_desc_t *p = tune_sel_desc();
+                if (p && ui_in(ev.x, ev.y, tx0 - 8, ry + 4, tw + 16, UI_TUNE_ROW_H - 8)) {
+                    s_sl.st = SL_DRAG;
+                    s_sl.id = p->id;
+                    s_sl.orig = p->value;
+                    s_sl.val = slider_px2val(p, ev.x);
+                    s_sl.t_last_draw = 0;
+                    draw_slider(ry, p, s_sl.val, 1, 1, C_PRESS);
+                }
+            }
+            press_hl_update(1, ev.x, ev.y);
         } else {
-            s_last_x = ev.x;   /* 跟踪（长按期间滑出按钮则停发）*/
+            s_last_x = ev.x;
             s_last_y = ev.y;
+            /* 拖动跟手（≤20Hz 回显）*/
+            if (s_sl.st == SL_DRAG && s_dlg == DLG_NONE && s_page == UI_PAGE_TUNE) {
+                int base = s_tune_page * UI_TUNE_ROW_N;
+                int ry = tune_row_y(s_tune_sel - base);
+                int ty0 = ry + 36, th = 16;
+                if (ev.y < ty0 - UI_SLIDER_CANCEL_DY
+                    || ev.y > ty0 + th + UI_SLIDER_CANCEL_DY) {
+                    const param_desc_t *p = param_find(s_sl.id);
+                    s_sl.st = SL_IDLE;
+                    s_sl_cancelled = 1;
+                    tcs_log("[APP]", "slider cancel");
+                    if (p) draw_slider(ry, p, s_sl.orig, 0, 1, C_PRESS);
+                } else if (now - s_sl.t_last_draw >= UI_SLIDER_MIN_PERIOD_MS) {
+                    const param_desc_t *p = param_find(s_sl.id);
+                    if (p) {
+                        s_sl.val = slider_px2val(p, ev.x);
+                        s_sl.t_last_draw = now;
+                        draw_slider(ry, p, s_sl.val, 1, 1, C_PRESS);
+                    }
+                }
+            }
         }
-        /* 长按连发：仅调参页 +/− 按钮，400ms 首发后每 150ms */
-        if (s_page == UI_PAGE_TUNE && s_dlg == DLG_NONE) {
+        /* 长按连发：±（行内键 + 底部 ±区）*/
+        if (s_page == UI_PAGE_TUNE && s_dlg == DLG_NONE && s_sl.st == SL_IDLE) {
             uint32_t held = now - s_press_t0;
-            int in_btn = ui_in(s_last_x, s_last_y, 700, 168, 140, 140)
-                       || ui_in(s_last_x, s_last_y, 884, 168, 140, 140);
-            if (in_btn && held >= 400u
-                && now - s_last_lp_ms >= 150u) {
+            int base = s_tune_page * UI_TUNE_ROW_N;
+            int ry = tune_row_y(s_tune_sel - base);
+            int in_m = ui_in(s_last_x, s_last_y, R_TUNE_ZONE_MINUS)
+                    || ui_in(s_last_x, s_last_y, UI_TUNE_ROW_X + 792, ry + 8, 64, 64);
+            int in_p = ui_in(s_last_x, s_last_y, R_TUNE_ZONE_PLUS)
+                    || ui_in(s_last_x, s_last_y, UI_TUNE_ROW_X + 872, ry + 8, 64, 64);
+            if ((in_m || in_p) && held >= UI_REPEAT_FIRST_MS
+                && now - s_last_lp_ms >= UI_REPEAT_MS) {
                 s_last_lp_ms = now;
                 s_press_lp_fired++;
-                tune_step(ui_in(s_last_x, s_last_y, 700, 168, 140, 140) ? -1.0f : 1.0f);
-                press_hl_reapply();           /* H1：整页重绘后恢复按下样 */
+                tune_step(in_m ? -1.0f : 1.0f);
             }
         }
         s_prev_touched = 1;
     } else if (s_prev_touched) {
-        /* 抬手沿：先还原按住态，再去抖 + 长按未发过才触发单击 */
         s_prev_touched = 0;
-        press_hl_update(0, 0, 0);             /* H1：抬起还原（先于动作重绘）*/
+        press_hl_update(0, 0, 0);
         if (s_touch_down && now - s_touch_release_ok >= 30u) {
-            if (s_press_lp_fired == 0)
-                touch_tap(s_last_x, s_last_y);
-            else {
-                /* 长按后抬手：无额外动作（连发已生效）*/
+            if (s_sl_cancelled) {
+                s_sl_cancelled = 0;   /* 取消的拖动不放行 tap（回弹即终结）*/
+            } else if (s_press_lp_fired == 0) {
+                if (s_sl.st == SL_DRAG) {
+                    s_sl.st = SL_PENDING;
+                    s_sl.t_release = now;
+                    tcs_log("[APP]", "slider pending %.2f", (double)s_sl.val);
+                } else {
+                    touch_tap(s_last_x, s_last_y);
+                }
             }
         }
         s_touch_down = 0;
     }
 }
 
-/* ====== 状态→脏区（500ms 扫描）====== */
+/* ====== 500ms 状态扫描 → 小更新直绘（零 flip）====== */
 static void ui_sync_state(void)
 {
     static float last_tc1 = -999, last_tc2 = -999, last_body = -999;
@@ -1057,19 +1455,39 @@ static void ui_sync_state(void)
     static uint8_t last_mode = 0xFF;
     static uint16_t last_alarm = 0xFFFF;
     static uint8_t last_m207 = 0xFF, last_esp = 0xFF;
+    static int last_lit1 = -1, last_lit2 = -1, last_litb = -1;
 
-    if (s_page != UI_PAGE_HOME) { /* 调参页由操作自绘 */ }
-    if (g_tcs.tc1_act != last_tc1) { last_tc1 = g_tcs.tc1_act; s_dirty |= D_TC1; }
-    if (g_tcs.tc2_act != last_tc2) { last_tc2 = g_tcs.tc2_act; s_dirty |= D_TC2; }
-    if (g_tcs.body_temp != last_body) { last_body = g_tcs.body_temp; s_dirty |= D_BODY; }
-    if (g_tcs.tec1_on != last_tec1) { last_tec1 = g_tcs.tec1_on; s_dirty |= D_TC1 | D_BTNS; }
-    if (g_tcs.tec2_on != last_tec2) { last_tec2 = g_tcs.tec2_on; s_dirty |= D_TC2; }
-    if (g_tcs.fan_on != last_fan) { last_fan = g_tcs.fan_on; s_dirty |= D_FAN; }
-    if (g_tcs.mode != last_mode) { last_mode = g_tcs.mode; s_dirty |= D_TOPBAR | D_BTNS; }
-    if (g_tcs.alarm_bits != last_alarm) { last_alarm = g_tcs.alarm_bits; s_dirty |= D_TOPBAR; }
+    if (s_page != UI_PAGE_HOME || s_dlg != DLG_NONE) return;
+
+    int tc1_chg = (g_tcs.tc1_act != last_tc1);
+    int tc2_chg = (g_tcs.tc2_act != last_tc2);
+    int body_chg = (g_tcs.body_temp != last_body);
+    if (tc1_chg) { last_tc1 = g_tcs.tc1_act; s_fresh_tc1 = millis(); }
+    if (tc2_chg) { last_tc2 = g_tcs.tc2_act; s_fresh_tc2 = millis(); }
+    if (body_chg) { last_body = g_tcs.body_temp; s_fresh_body = millis(); }
+
+    int lit1 = ((millis() - s_fresh_tc1) <= 1000u) && g_tcs.m207_online;
+    int lit2 = ((millis() - s_fresh_tc2) <= 1000u) && g_tcs.m207_online;
+    int litb = ((millis() - s_fresh_body) <= 1000u) && g_tcs.body_sensor_ok;
+
+    /* 数值/失联/呼吸点状态驱动重绘（首次必画：last_lit 初值 -1）*/
+    if (tc1_chg || lit1 != last_lit1) draw_tc_value(32, 0);
+    if (tc2_chg || lit2 != last_lit2) draw_tc_value(532, 1);
+    if (body_chg || litb != last_litb) draw_body_card();
+
+    last_lit1 = lit1; last_lit2 = lit2; last_litb = litb;
+
+    if (g_tcs.tec1_on != last_tec1) { last_tec1 = g_tcs.tec1_on; draw_tc_card(32, "贴身水箱", 0); }
+    if (g_tcs.tec2_on != last_tec2) { last_tec2 = g_tcs.tec2_on; draw_tc_card(532, "环境水箱", 1); }
+    if (g_tcs.fan_on != last_fan) { last_fan = g_tcs.fan_on; draw_fan_card_hl(0); }
+    if (g_tcs.mode != last_mode) { last_mode = g_tcs.mode; draw_topbar(); draw_dock(); }
+    if (g_tcs.alarm_bits != last_alarm) { last_alarm = g_tcs.alarm_bits; draw_topbar(); }
     if (g_tcs.m207_online != last_m207 || g_tcs.esp_link_ok != last_esp) {
         last_m207 = g_tcs.m207_online; last_esp = g_tcs.esp_link_ok;
-        s_dirty |= D_TOPBAR;
+        draw_topbar();
+        draw_tc_value(32, 0);
+        draw_tc_value(532, 1);
+        draw_body_card();
     }
 }
 
@@ -1077,19 +1495,18 @@ void tcs_ui_init(void)
 {
     s_page = UI_PAGE_HOME;
     s_dlg = DLG_NONE;
+    s_tune_page = 0;
     s_tune_sel = 0;
-    s_tune_step = 0.1f;
+    s_tune_step_f = 0.1f;
     s_step_granted = 0;
-    s_dirty = D_ALL;
+    s_sl.st = SL_IDLE;
     if (lcd_ready()) {
         draw_home();
-        gfx_sync_buffers();   /* boot：另一缓冲尚是启动黑屏，需同步 */
     }
     tcs_log("[APP]", "ui init page=home lcd=%d touch=%d", lcd_ready(), touch_ready());
 }
 
 #ifdef TCS_DEBUG_UI
-/* T1 调试页脚（WP-A.2b：默认关；WP-C.2：blackbox 已删，改挂 DWT stat 计数器）*/
 static void draw_debug_footer(uint32_t now)
 {
     (void)now;
@@ -1109,26 +1526,29 @@ static void draw_debug_footer(uint32_t now)
 static void draw_debug_footer(uint32_t now) { (void)now; }
 #endif
 
-/* ====== 屏诊断（console scrtest；WP-A.2d 噪声二分用）====== */
 uint32_t tcs_ui_tap_count(void) { return s_tap_cnt; }
 
 void tcs_ui_screen_clear(uint16_t rgb565)
 {
     if (!lcd_ready()) return;
+    ui_full_begin();
     gfx_clear(rgb565);
-    gfx_flip();
+    UI_FULL_COMMIT(5);
 }
 
+/* 字体标定页（新五档原生：20/24/32/48/96）*/
 void tcs_ui_screen_text(void)
 {
     if (!lcd_ready()) return;
+    ui_full_begin();
     gfx_clear(C_BG);
-    ui_text16(16, 16, "ASCII16 0123 :/ -", C_TEXT, C_BG);
-    ui_text24(16, 48, "ASCII24 012.3 -/yz", C_TEXT, C_BG);
-    ui_text24(16, 88, "中文24 布防调参保存", C_TEXT, C_BG);
-    ui_text64(16, 128, "-25.0", C_VALUE, C_BG);
-    ui_text24(16, 210, "64px 温度大字标定", C_SUB, C_BG);
-    gfx_flip();
+    ui_aux20(16, 12, "ASCII20 0123:/- TCS-3C71", C_TX, C_BG);
+    ui_text24(16, 48, "中文24 布防调参保存·横幅", C_TX, C_BG);
+    ui_text32(16, 96, "32px 温度标题", C_TX, C_BG);
+    ui_text48(16, 160, "-25.0", C_HERO, C_BG);
+    ui_text96(16, 240, "25.0", C_HERO, C_BG);
+    ui_aux20(16, 360, "fw v1.1.0", C_TX2, C_BG);
+    UI_FULL_COMMIT(6);
 }
 
 #ifdef TCS_SIM
@@ -1144,7 +1564,6 @@ void tcs_ui_force_home(void)
     if (!lcd_ready()) return;
     s_page = UI_PAGE_HOME;
     s_dlg = DLG_NONE;
-    s_dirty = D_ALL;
     draw_home();
 }
 
@@ -1152,35 +1571,27 @@ void tcs_ui_force_tune(void)
 {
     if (!lcd_ready()) return;
     s_page = UI_PAGE_TUNE;
+    s_tune_page = 0;
     s_tune_sel = 0;
     s_dlg = DLG_NONE;
     draw_tune();
 }
 
-/* 压测算子（WP-A.2d 分音定位遗留工具）*/
+/* 压测算子（语义沿用：0纯flip 1横幅填充 2横幅文本 3胶囊填充 4 hero 大字）*/
 void tcs_ui_screen_stress(int mode, int n)
 {
     if (!lcd_ready()) return;
     for (int i = 0; i < n; i++) {
         switch (mode) {
-        case 0:                                   /* 纯 flip（back 无新绘制）*/
-            break;
-        case 1:                                   /* 横幅红底填充 + flip */
-            gfx_fill_rect(200, 0, 767, 39, C_ALARM);
-            break;
-        case 2:                                   /* 横幅文本（红底白字）+ flip */
-            ui_text24(208, 8, "EEPROM", C_WHITE, C_ALARM);
-            break;
-        case 3:                                   /* TEC 徽章灰填充 + flip */
-            gfx_fill_rect(400, 72, 463, 111, C_DIS);
-            break;
-        case 4:                                   /* 64px 大字 + flip */
-            ui_text64(32, 120, "-25.0", C_VALUE, C_CARD);
-            break;
-        default:
-            return;
+        case 0: break;
+        case 1: gfx_fill_rect(208, 8, 759, 63, C_RED); break;
+        case 2: ui_text24(224, 16, "EEPROM", C_WHITE, C_RED); break;
+        case 3: gfx_fill_rect(380, 112, 467, 151, C_GRAY); break;
+        case 4: ui_text96(56, 160, "-25.0", C_HERO, C_CARD); break;
+        default: return;
         }
-        gfx_flip();
+        ui_full_begin();
+        ui_full_commit();
     }
 }
 
@@ -1189,39 +1600,77 @@ void tcs_ui_poll(uint32_t now)
     uint32_t t0 = DWT->CYCCNT;
     touch_poll(now);
     uint32_t us = (DWT->CYCCNT - t0) / (SystemCoreClock / 1000000u);
-    if (us > g_stat_touch_us_max) g_stat_touch_us_max = us;   /* 单次轮询耗时(WP-C.5) */
+    if (us > g_stat_touch_us_max) g_stat_touch_us_max = us;
 
-    /* 500ms 状态扫描 → 脏区；顶栏时间每秒刷 */
+    /* K4b：PENDING 1s 防抖 → 生效下发 + clamp 后实际值回显 */
+    if (s_sl.st == SL_PENDING && now - s_sl.t_release >= UI_SLIDER_DEBOUNCE_MS) {
+        s_sl.st = SL_IDLE;
+        apply_param(s_sl.id, s_sl.val);
+        tcs_log("[APP]", "slider apply %.2f", (double)s_sl.val);
+        if (s_dlg == DLG_NONE && s_page == UI_PAGE_TUNE) {
+            int ids[16]; tune_items(ids, 16);
+            draw_prow(s_tune_sel - s_tune_page * UI_TUNE_ROW_N, s_tune_sel,
+                      (uint16_t)ids[s_tune_sel]);
+        }
+    }
+
+    /* 已保存角标：值生效 +2s（flush 防抖镜像）亮 1s */
+    if (s_saved_apply_t && now - s_saved_apply_t >= 2000u) {
+        s_saved_apply_t = 0;
+        if (s_page == UI_PAGE_TUNE && s_dlg == DLG_NONE) {
+            s_saved_toast_on = 1;
+            s_saved_toast_t0 = now;
+            ui_patch_begin();
+            draw_tune_topbar();
+            ui_patch_commit(700, 8, 1015, 51);
+            g_stat_patch_cnt++;
+        }
+    }
+    if (s_saved_toast_on && now - s_saved_toast_t0 >= 1000u) {
+        s_saved_toast_on = 0;
+        if (s_page == UI_PAGE_TUNE && s_dlg == DLG_NONE) {
+            ui_patch_begin();
+            gfx_fill_rect(716, 8, 884, 48, C_BG);
+            draw_tune_topbar();
+            ui_patch_commit(700, 8, 1015, 51);
+            g_stat_patch_cnt++;
+        }
+    }
+
+    /* 500ms 扫描 */
     static uint32_t last_sync = 0;
     if (now - last_sync >= 500u) {
         last_sync = now;
         ui_sync_state();
-        if (s_page == UI_PAGE_HOME) s_dirty |= D_TOPBAR;
+        if (s_page == UI_PAGE_TUNE && s_dlg == DLG_NONE) {
+            static uint32_t last_clk = 0;
+            uint32_t t = now / 1000u;
+            if (t != last_clk) {
+                last_clk = t;
+                ui_patch_begin();
+                char ts[12];
+                snprintf(ts, sizeof(ts), "%02lu:%02lu:%02lu",
+                         (unsigned long)(t / 3600u), (unsigned long)((t / 60u) % 60u),
+                         (unsigned long)(t % 60u));
+                gfx_fill_rect(890, 20, 1015, 48, C_BG);
+                ui_aux20(896, 24, ts, C_TX2, C_BG);
+                ui_patch_commit(890, 20, 1015, 48);
+                g_stat_patch_cnt++;
+            }
+        }
     }
 
-    /* H6 角标状态沿（出现/淡出）→ 主页顶栏重绘 */
+    /* H6 角标状态沿 → 顶栏 */
     {
         static uint8_t last_badge = 0xFF;
         uint8_t b = post_badge_state();
         if (b != last_badge) {
             last_badge = b;
-            if (s_page == UI_PAGE_HOME && s_dlg == DLG_NONE) s_dirty |= D_TOPBAR;
+            if (s_page == UI_PAGE_HOME && s_dlg == DLG_NONE) draw_topbar();
         }
     }
 
-    /* 模态弹窗打开期间冻结周期重绘：局部重绘+flip 会把弹窗从显示缓冲刷掉
-     * （H1 实测：>500ms 未点的弹窗 1Hz 闪烁）。弹窗关闭路径自带整页重绘。*/
+    /* 弹窗/非主页期间冻结周期重绘（H1 教训：模态期间不动屏）*/
     if (s_dlg != DLG_NONE) return;
-    if (s_page != UI_PAGE_HOME || !s_dirty) return;
-
-    /* 脏区局部重绘（back buffer 画完翻转）*/
-    if (s_dirty & D_TOPBAR) { draw_topbar(); draw_debug_footer(now); }
-    if (s_dirty & D_TC1) draw_tc_card(16, "贴身水箱", 0);
-    if (s_dirty & D_TC2) draw_tc_card(528, "环境水箱", 1);
-    if (s_dirty & D_BODY) draw_body_card();
-    if (s_dirty & D_FAN) draw_fan_card();
-    if (s_dirty & D_BTNS) draw_home_buttons();
-    gfx_flip();
-    s_dirty = 0;
-    press_hl_reapply();   /* H1：周期重绘后保持按住灰底（否则 500ms 即被翻掉）*/
+    draw_debug_footer(now);
 }

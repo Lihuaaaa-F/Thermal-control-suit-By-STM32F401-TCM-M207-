@@ -17,22 +17,25 @@
   </div>
   <div class="hgroup right">
     <span id="uptime">--:--</span>
-    <button id="btn-ack" class="mini ok hidden">确认恢复</button>
+    <button id="btn-ack" class="mini hidden">确认恢复</button>
   </div>
 </header>
 
 <main id="app" class="hidden">
-  <!-- ① 状态区 -->
+  <!-- ① hero：双水温大数值（数值字体阶梯移动端等效 40px）-->
+  <div class="heroes">
+    <div class="hcard"><div class="ttl">贴身水箱</div>
+      <span class="val" id="t1">--.-</span><span class="unit"> °C</span>
+      <canvas id="g1" width="140" height="140"></canvas></div>
+    <div class="hcard"><div class="ttl">环境水箱</div>
+      <span class="val" id="t2">--.-</span><span class="unit"> °C</span>
+      <canvas id="g2" width="140" height="140"></canvas></div>
+  </div>
+
+  <!-- ② 曲线+导出（体温）-->
   <section class="card">
-    <h2>水温</h2>
-    <div class="gauges">
-      <div class="gauge"><canvas id="g1" width="140" height="140"></canvas>
-        <div class="glabel">贴身<br><b id="t1">--.-</b>°C</div></div>
-      <div class="gauge"><canvas id="g2" width="140" height="140"></canvas>
-        <div class="glabel">环境<br><b id="t2">--.-</b>°C</div></div>
-      <div class="gauge"><canvas id="g3" width="140" height="140"></canvas>
-        <div class="glabel">体温<br><b id="tb">--.-</b>°C</div></div>
-    </div>
+    <h2>体温 <span class="unit" style="font-size:13px;color:var(--tx2)">当前 <b id="tb" style="color:var(--hero)">--.-</b> °C</span>
+      <canvas id="g3" width="140" height="140" style="width:44px;height:44px;vertical-align:middle;float:right;margin-top:-4px"></canvas></h2>
     <canvas id="curve" height="180"></canvas>
     <button id="btn-csv" class="csv">导出 CSV</button>
     <div class="switches">
@@ -43,25 +46,25 @@
     </div>
   </section>
 
-  <!-- ② 参数区（registry 动态渲染，仅 PF_WEB）-->
+  <!-- ③ 参数区（registry 动态渲染，仅 PF_WEB）-->
   <section class="card">
     <h2>参数</h2>
     <div id="params"></div>
   </section>
 
-  <!-- ③ 高级区（M207 参数，registry 出现即自动生成）-->
+  <!-- ④ 高级区（M207 参数，registry 出现即自动生成）-->
   <section class="card">
-    <details id="adv-details" open>
+    <details id="adv-details">
       <summary>高级参数（M207）</summary>
       <div id="adv-params"></div>
     </details>
   </section>
-
-  <!-- ④ 急停 -->
-  <section class="card">
-    <button id="btn-estop" class="estop">急　停</button>
-  </section>
 </main>
+
+<!-- ⑤ 急停：常驻底部拇指区（独占、永不变）-->
+<div class="estop-wrap">
+  <button id="btn-estop" class="estop">急停</button>
+</div>
 
 <div id="overlay" class="overlay hidden">
   <div class="overlay-box">

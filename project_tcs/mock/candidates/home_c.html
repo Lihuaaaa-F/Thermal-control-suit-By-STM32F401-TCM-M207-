@@ -1,0 +1,186 @@
+<!DOCTYPE html>
+<html lang="zh"><head><meta charset="utf-8">
+<title>C 仪表 Gauge（§0b 灰阶卡 + Ch3 蓝边主按钮，数据零蓝）★推荐</title>
+<style>
+* { margin:0; padding:0; box-sizing:border-box; }
+html,body { width:1024px; height:600px; overflow:hidden;
+  font-family:"Microsoft YaHei","PingFang SC",sans-serif;
+  -webkit-font-smoothing:antialiased; }
+:root {
+
+  --blue:#2563EB; --green:#16A34A; --gray:#9CA3AF; --yellow:#D97706; --red:#DC2626;
+  --alm-bg:#FEE2E2; --alm-tx:#991B1B; --warn-bg:#FEF3C7; --warn-tx:#92400E;
+  --bg:#EEF1F5; --tx:#1F2937; --tx2:#6B7280; --hero:#111827; --white:#FFFFFF;
+
+  /* ===== 候选 token ===== */
+  --card:#F2F3F5; --border:#D8DEE6; --cline:#D8DEE6;
+  --btn-main-bd:#2563EB; --btn-main-tx:#2563EB;
+  --press:#DBEAFE; --selbg:#DBEAFE; --selbar:#2563EB;
+  --thumb-rest:#2563EB; --thumb-drag:#1D4ED8;
+  --track-fill:#BFDBFE; --dot-mode-auto:#16A34A;
+}
+.abs { position:absolute; }
+/* ===== 顶栏 56px ===== */
+.mode-pill { left:24px; top:16px; width:160px; height:40px; background:var(--white);
+  border:1px solid var(--border); border-radius:20px;
+  display:flex; align-items:center; justify-content:center; gap:8px;
+  font-size:24px; color:var(--tx); }
+.mode-dot { width:8px; height:8px; border-radius:4px; background:var(--dot-mode-auto); }
+/* 横幅 56px（208,8,552,56）*/
+.banner { left:208px; top:8px; width:552px; height:56px; border-radius:12px;
+  display:flex; align-items:center; padding:0 16px; gap:12px; }
+.banner.red { background:var(--alm-bg); color:var(--alm-tx); }
+.banner.yellow { background:var(--warn-bg); color:var(--warn-tx); }
+.banner .b-ic { font-size:24px; }
+.banner .b-tx { line-height:1.15; }
+.banner .b-msg { font-size:24px; font-weight:600; }
+.banner .b-act { font-size:20px; opacity:.85; }
+.banner .b-count { margin-left:auto; font-size:20px; border:1px solid currentColor;
+  border-radius:10px; padding:2px 8px; opacity:.8; }
+/* 链路点 + 急停小图标 */
+.link { display:flex; align-items:center; gap:6px; font-size:20px; color:var(--tx2); top:18px; }
+.ldot { width:8px; height:8px; border-radius:4px; }
+.estop-ic { left:940px; top:20px; width:24px; height:24px; }
+/* ===== 主页卡片（Ch5 像素级） ===== */
+.hero-card { left:32px; top:88px; width:460px; height:240px; background:var(--card);
+  border:1px solid var(--border); border-bottom:2px solid var(--cline); border-radius:8px; }
+.hero-card.r { left:532px; }
+.card-title { position:absolute; left:24px; top:20px; font-size:32px; color:var(--tx); }
+.tec-pill { position:absolute; right:24px; top:24px; width:88px; height:40px; border-radius:20px;
+  display:flex; align-items:center; justify-content:center; gap:6px;
+  font-size:24px; color:var(--white); }
+.tec-pill.on { background:var(--green); } .tec-pill.off { background:var(--gray); }
+.hero-num { position:absolute; left:24px; top:72px; font-size:96px; line-height:96px;
+  color:var(--hero); font-weight:600; display:flex; align-items:baseline; }
+.hero-num .unit { font-size:24px; color:var(--tx2); margin-left:8px; }
+.fresh { position:absolute; left:24px; top:60px; width:8px; height:8px; border-radius:4px;
+  background:var(--green); }
+.fresh.stale { background:var(--gray); }
+.set-line { position:absolute; left:24px; top:184px; font-size:24px; color:var(--tx2); }
+.set-line b { color:var(--tx); font-weight:600; }
+/* 次级卡 96px */
+.sub-card { top:352px; width:460px; height:96px; background:var(--card);
+  border:1px solid var(--border); border-bottom:2px solid var(--cline); border-radius:8px; }
+.sub-card.l { left:32px; } .sub-card.r { left:532px; }
+.sub-title { position:absolute; left:24px; top:12px; font-size:24px; color:var(--tx); }
+.hero48 { position:absolute; left:120px; top:20px; font-size:48px; line-height:56px;
+  color:var(--hero); font-weight:600; display:flex; align-items:baseline; }
+.hero48 .unit { font-size:20px; color:var(--tx2); margin-left:6px; }
+.lost-mark { position:absolute; right:24px; top:28px; width:88px; height:40px; border-radius:20px;
+  background:var(--warn-bg); color:var(--warn-tx); font-size:24px;
+  display:flex; align-items:center; justify-content:center; }
+.fresh2 { position:absolute; left:104px; top:28px; width:8px; height:8px; border-radius:4px;
+  background:var(--green); }
+.fresh2.stale { background:var(--gray); }
+/* 风扇大开关（64px 球）*/
+.fan-track { position:absolute; right:88px; top:16px; width:128px; height:64px;
+  border-radius:32px; background:var(--gray); }
+.fan-track.on { background:var(--green); }
+.fan-ball { position:absolute; top:0; width:64px; height:64px; border-radius:32px;
+  background:var(--white); box-shadow:0 1px 4px rgba(0,0,0,.25);
+  display:flex; align-items:center; justify-content:center; font-size:24px; }
+.fan-label { position:absolute; right:232px; top:36px; font-size:24px; color:var(--tx2); }
+/* ===== 底栏（Ch4 像素级）===== */
+.dock-btn { top:472px; height:96px; background:var(--white); border:1px solid var(--btn-main-bd);
+  border-radius:8px; display:flex; align-items:center; justify-content:center;
+  font-size:32px; color:var(--btn-main-tx); }
+.dock-btn.dim { color:var(--gray); border-color:var(--border); }
+#b-tune { left:40px; width:208px; } #b-mode { left:272px; width:208px; }
+#b-conn { left:504px; width:208px; }
+#b-estop { left:768px; top:472px; width:216px; height:112px; background:var(--red);
+  border-color:var(--red); color:var(--white); font-weight:600; }
+/* ===== POST 自检角标（128,0,640,40）===== */
+.badge { left:128px; top:0; width:640px; height:40px; background:var(--white);
+  border:1px solid var(--border); border-radius:0 0 8px 8px; display:flex;
+  align-items:center; justify-content:center; gap:24px; font-size:20px; color:var(--tx); }
+.badge .ok { color:var(--green); } .badge .ng { color:var(--warn-tx); }
+.hidden { display:none !important; }
+</style></head>
+<body>
+<div class="screen" id="scr">
+  <!-- 顶栏 -->
+  <div class="abs mode-pill"><span class="mode-dot"></span>自动</div>
+  <div class="abs banner red hidden" id="bn-red">
+    <span class="b-ic">&#9632;</span>
+    <span class="b-tx"><div class="b-msg">急停已触发</div>
+    <div class="b-act">已断电制动 · 点击横幅确认恢复</div></span>
+    <span class="b-count" id="bn-red-count">还有 1 条</span>
+  </div>
+  <div class="abs banner yellow hidden" id="bn-yellow">
+    <span class="b-ic">&#9650;</span>
+    <span class="b-tx"><div class="b-msg">M207 通信失联</div>
+    <div class="b-act">检查线缆接头 · 点击横幅确认恢复</div></span>
+  </div>
+  <!-- 链路点（正常态显示；报警时并入横幅尾部）-->
+  <div class="abs link" style="left:776px" id="links">
+    <span class="ldot" style="background:var(--green)"></span>M207
+    <span class="ldot" style="background:var(--green);margin-left:8px"></span>ESP
+  </div>
+  <svg class="abs estop-ic" id="estop-ic" viewBox="0 0 24 24">
+    <circle cx="12" cy="12" r="10" fill="none" stroke="#9CA3AF" stroke-width="2"/>
+    <rect x="8" y="8" width="8" height="8" fill="#9CA3AF"/>
+  </svg>
+  <!-- 主卡×2 -->
+  <div class="abs hero-card">
+    <div class="card-title">贴身水箱</div>
+    <div class="tec-pill off" id="tec1-pill">&#9675; 停止</div>
+    <div class="fresh" id="fresh1"></div>
+    <div class="hero-num"><span id="t1">24.8</span><span class="unit">°C</span></div>
+    <div class="set-line">设定 <b id="s1">25.0</b> °C</div>
+  </div>
+  <div class="abs hero-card r">
+    <div class="card-title">环境水箱</div>
+    <div class="tec-pill off" id="tec2-pill">&#9675; 停止</div>
+    <div class="hero-num"><span id="t2">25.2</span><span class="unit">°C</span></div>
+    <div class="set-line">设定 <b id="s2">25.0</b> °C</div>
+  </div>
+  <!-- 次卡×2 -->
+  <div class="abs sub-card l">
+    <div class="sub-title">体温</div>
+    <div class="fresh2"></div>
+    <div class="hero48"><span id="tb">36.8</span><span class="unit">°C</span></div>
+    <div class="lost-mark hidden" id="body-lost">&#9650; 失联</div>
+  </div>
+  <div class="abs sub-card r">
+    <div class="sub-title">风扇</div>
+    <div class="fan-label" id="fan-label">运行中</div>
+    <div class="fan-track on" id="fan-track"><div class="fan-ball" id="fan-ball" style="left:64px">开</div></div>
+  </div>
+  <!-- 底栏 -->
+  <div class="abs dock-btn" id="b-tune">调参</div>
+  <div class="abs dock-btn" id="b-mode">切手动</div>
+  <div class="abs dock-btn" id="b-conn">连接</div>
+  <div class="abs dock-btn" id="b-estop">急停</div>
+  <!-- POST 角标 -->
+  <div class="abs badge hidden" id="badge">
+    <span class="ok">&#10003; TMP117</span><span class="ok">&#10003; M207</span>
+    <span class="ok">&#10003; EEPR</span><span class="ok">&#10003; TABLE</span>
+    <span class="ng">&#10007; SCR</span><span class="ok">&#10003; VER</span>
+  </div>
+</div>
+<script>
+const st = (location.hash || "#normal").slice(1);
+const $ = (id) => document.getElementById(id);
+function estopIcon(active) {
+  const s = $("estop-ic");
+  s.innerHTML = active
+    ? '<circle cx="12" cy="12" r="10" fill="#DC2626"/><rect x="8" y="8" width="8" height="8" fill="#fff"/>'
+    : '<circle cx="12" cy="12" r="10" fill="none" stroke="#9CA3AF" stroke-width="2"/><rect x="8" y="8" width="8" height="8" fill="#9CA3AF"/>';
+}
+if (st === "alarm") {            // 黄警告：M207 失联（体温也失联→灰显+角标，链路点并入横幅）
+  $("bn-yellow").classList.remove("hidden"); $("links").classList.add("hidden");
+  $("tb").textContent = "--.-";  $("tb").style.color = "var(--gray)";
+  document.querySelector(".fresh2").classList.add("stale");
+  $("body-lost").classList.remove("hidden");
+} else if (st === "safe") {      // 红 SAFE：急停已触发
+  $("bn-red").classList.remove("hidden"); $("links").classList.add("hidden");
+  estopIcon(true);
+} else if (st === "lost") {      // 失联灰显：M207 离线→两水箱灰显
+  document.querySelector(".link .ldot").style.background = "var(--gray)";
+  for (const id of ["t1","t2"]) { $(id).textContent = "--.-"; $(id).style.color = "var(--gray)"; }
+  for (const id of ["fresh1"]) $(id).classList.add("stale");
+} else if (st === "badge") {     // 自检角标期
+  $("badge").classList.remove("hidden");
+}
+</script>
+</body></html>

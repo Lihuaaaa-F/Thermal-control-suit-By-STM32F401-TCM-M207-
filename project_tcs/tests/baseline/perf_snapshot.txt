@@ -1,2 +1,2 @@
-work avg=71us max=25869us ovf=3 | ui_full=13.0 ms | touch max=0us | loop=2826 rate=97/s up=29s
+work avg=588us max=82122us ovf=7 | ui_full=0.0 ms | touch max=182us | loop=2947 rate=98/s | hero_max=2509us page=22595us flips=1 patches=77 touch_hz=100 | up=30s
 [MB] done seq=6

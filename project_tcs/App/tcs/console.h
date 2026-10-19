@@ -20,6 +20,12 @@ extern volatile uint32_t g_stat_work_us_max;
 extern volatile uint32_t g_stat_work_us_avg;
 extern volatile uint32_t g_stat_ui_ms_x10;
 extern volatile uint32_t g_stat_touch_us_max;
+/* v9.5 K3 渲染计数（tcs_ui.c 定义）*/
+extern volatile uint32_t g_stat_hero_us_max;
+extern volatile uint32_t g_stat_full_us_last;
+extern volatile uint32_t g_stat_flip_cnt;
+extern volatile uint32_t g_stat_patch_cnt;
+extern volatile uint32_t g_stat_touch_hz;
 extern volatile uint32_t g_stat_tick_ovf;
 
 void console_init(UART_HandleTypeDef *huart);

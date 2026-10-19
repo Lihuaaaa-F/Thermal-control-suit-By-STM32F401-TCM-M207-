@@ -1,0 +1,18 @@
+{
+ "bg": "rgb(238, 241, 245)",
+ "estop_bg": "rgb(220, 38, 38)",
+ "estop_h": 64,
+ "small_targets": [],
+ "conn": "已连接",
+ "t1": "25.0",
+ "t2": "25.0",
+ "tb": "36.8",
+ "nparams": 8,
+ "nadv": 2,
+ "sliders": 7,
+ "step_delta": -0.1,
+ "estop_confirm": "确认急停？TEC 将全部停止，风扇全开",
+ "csv": "tcs_body_log.csv",
+ "overlay": true,
+ "errors": []
+}

@@ -198,15 +198,20 @@ static void cmd_exec(char *line)
     if (strcmp(argv[0], "perf") == 0) {
         uint32_t up_s = HAL_GetTick() / 1000u;
         uint32_t rate = up_s ? (g_stat_loop_passes / up_s) : 0;
+        /* v9.5 K3：hero/page/flips/patches 四计数入 perf（预算表回填口）*/
         printf("work avg=%luus max=%luus ovf=%lu | ui_full=%lu.%lu ms | "
-               "touch max=%luus | loop=%lu rate=%lu/s up=%lus\n",
+               "touch max=%luus | loop=%lu rate=%lu/s | "
+               "hero_max=%luus page=%luus flips=%lu patches=%lu "
+               "touch_hz=%lu | up=%lus\n",
                (unsigned long)g_stat_work_us_avg, (unsigned long)g_stat_work_us_max,
                (unsigned long)g_stat_tick_ovf,
                (unsigned long)(g_stat_ui_ms_x10 / 10u),
                (unsigned long)(g_stat_ui_ms_x10 % 10u),
                (unsigned long)g_stat_touch_us_max,
                (unsigned long)g_stat_loop_passes, (unsigned long)rate,
-               (unsigned long)up_s);
+               (unsigned long)g_stat_hero_us_max, (unsigned long)g_stat_full_us_last,
+               (unsigned long)g_stat_flip_cnt, (unsigned long)g_stat_patch_cnt,
+               (unsigned long)g_stat_touch_hz, (unsigned long)up_s);
         return;
     }
     /* --- p ... --- */

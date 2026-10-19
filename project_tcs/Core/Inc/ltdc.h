@@ -82,4 +82,12 @@ void gfx_flip(void);
 /* 整页重绘后同步另一缓冲（乒乓局部重绘语义保障；日常局部重绘勿调）*/
 void gfx_sync_buffers(void);
 
+/* K3 v9.5：小更新直绘后矩形同步——gfx_use_shown_buffer() 直绘显示缓冲完成后调用，
+ * 把该 rect 从显示缓冲拷入隐藏缓冲。仅切页/弹窗才 flip，其余更新零翻转零闪屏。*/
+void gfx_sync_rect(int x0, int y0, int x1, int y1);
+
+/* 选定后续绘制目标缓冲（WP-C.5 引入，v9.5 K3 直绘路径主用）*/
+void gfx_use_shown_buffer(void);
+void gfx_use_hidden_buffer(void);
+
 #endif /* LTDC_H */

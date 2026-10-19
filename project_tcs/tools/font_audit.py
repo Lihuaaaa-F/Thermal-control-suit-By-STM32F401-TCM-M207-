@@ -25,6 +25,10 @@ STR_RE = re.compile(r'"((?:[^"\\\n]|\\.)*)"')
 ESCAPE_RE = re.compile(r'\\(?:x[0-9A-Fa-f]{1,2}|[0-7]{1,3}|u[0-9A-Fa-f]{4}|.)')
 
 
+
+from c_strip import strip_c_comments  # noqa: E402
+
+
 def decode_literal(raw: str):
     """把 C 字面量原始文本转为 (码点列表, 无法解码的字节数)。
     \\xNN/\\NNN 按单字节处理（UTF-8 尾字节场景），\\uNNNN 按码点，

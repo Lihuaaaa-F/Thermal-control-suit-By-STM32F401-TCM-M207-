@@ -21,12 +21,13 @@ CHIP, PROBE = "STM32H743II", "0d28:0204"
 ELF = "build-sim/tcs_main.elf"
 os_env = {**__import__("os").environ, "TCS_ELF": ELF}
 
-# home 页动态区掩码 (x0,y0,x1,y1)：顶栏(时钟/状态点/横幅)、两行卡片(活动数值)
-HOME_MASKS = [(0, 0, 1023, 48), (16, 56, 1008, 280), (16, 296, 1008, 448)]
+# 动态区掩码 (x0,y0,x1,y1)——v9.5 新布局：顶栏/卡片数值/调参时钟
+HOME_MASKS = [(0, 0, 1023, 87), (16, 88, 1008, 448)]
+TUNE_MASKS = [(880, 16, 1024, 52)]          # 时钟
 PAGES = {
     "home": (["scrtest home"], HOME_MASKS),
-    "tune": (["scrtest tune"], []),
-    "qr":   (["sim touch 116 572", "sim touch 680 572"], []),  # home→连接
+    "tune": (["scrtest tune"], TUNE_MASKS),
+    "qr":   (["sim touch 84 28", "sim touch 608 520"], []),  # home→连接
 }
 
 
@@ -80,7 +81,7 @@ def main():
         capture(tmp)
         base = BASE / f"{page}.png"
         if mode == "init":
-            tmp.rename(base)
+            tmp.replace(base)
             results[page] = "baseline written"
             continue
         if not base.exists():
@@ -89,7 +90,7 @@ def main():
         d = masked_equal(Image.open(tmp).convert("RGB"), Image.open(base).convert("RGB"), masks)
         results[page] = f"{'OK' if d == 0 else 'FAIL'} diff={d}"
         if d != 0:
-            tmp.rename(BASE / f"_{page}_FAIL.png")   # 失败帧留档分析
+            tmp.replace(BASE / f"_{page}_FAIL.png")   # 失败帧留档分析
         else:
             tmp.unlink(missing_ok=True)
     ok = all(v.startswith(("OK", "baseline")) for v in results.values())

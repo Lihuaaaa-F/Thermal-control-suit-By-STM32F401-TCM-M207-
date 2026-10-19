@@ -1,0 +1,197 @@
+{
+ "suite": [
+  {
+   "png": "K9_home.png",
+   "checks": {
+    "contrast": {
+     "pass": true,
+     "fail": []
+    },
+    "touch_targets": {
+     "pass": true,
+     "fail": [],
+     "n_rects": 15
+    },
+    "alarm_salience": {
+     "pass": true,
+     "banner_present": false,
+     "delta_L": 1.2,
+     "note": "有横幅帧的 ΔL 硬判由 colorblind_check 分管（此处记录）"
+    },
+    "whitespace": {
+     "pass": true,
+     "note": "dock 间距 24/24/56 静态断言覆盖（ui_layout.h）"
+    }
+   },
+   "score_anchored": {
+    "readability": {
+     "5": "K2_fontpage.png（原生五档全锐利）",
+     "3": "H13_qr_page.png（旧 64px=2×发虚，可用）",
+     "1": "K0_before_home.png（2×放大毛边，用户否）"
+    },
+    "hierarchy": {
+     "5": "K9_home.png（96/32/24/20 四级）",
+     "1": "K0_before_home.png（数值与标签同权）"
+    },
+    "touch": {
+     "5": "ui_layout.h 断言全绿（96px dock+112px 急停）",
+     "1": "K0_before_tune.png（56px 行距挤 7 行）"
+    },
+    "alarm": {
+     "5": "K4_home_lost.png（黄横幅+灰显+角标三重编码）",
+     "3": "旧 WP-B 横幅（有色但与状态点混杂）"
+    },
+    "simplicity": {
+     "5": "K9_home.png（6 信息组/三级层级）",
+     "1": "K0_before_home.png（顶栏 5 类元素混杂）"
+    }
+   },
+   "verdict": true
+  },
+  {
+   "png": "K9_tune.png",
+   "checks": {
+    "contrast": {
+     "pass": true,
+     "fail": []
+    },
+    "touch_targets": {
+     "pass": true,
+     "fail": [],
+     "n_rects": 15
+    },
+    "alarm_salience": {
+     "pass": true,
+     "banner_present": true,
+     "delta_L": 11.5,
+     "note": "有横幅帧的 ΔL 硬判由 colorblind_check 分管（此处记录）"
+    },
+    "whitespace": {
+     "pass": true,
+     "note": "dock 间距 24/24/56 静态断言覆盖（ui_layout.h）"
+    }
+   },
+   "score_anchored": {
+    "readability": {
+     "5": "K2_fontpage.png（原生五档全锐利）",
+     "3": "H13_qr_page.png（旧 64px=2×发虚，可用）",
+     "1": "K0_before_home.png（2×放大毛边，用户否）"
+    },
+    "hierarchy": {
+     "5": "K9_home.png（96/32/24/20 四级）",
+     "1": "K0_before_home.png（数值与标签同权）"
+    },
+    "touch": {
+     "5": "ui_layout.h 断言全绿（96px dock+112px 急停）",
+     "1": "K0_before_tune.png（56px 行距挤 7 行）"
+    },
+    "alarm": {
+     "5": "K4_home_lost.png（黄横幅+灰显+角标三重编码）",
+     "3": "旧 WP-B 横幅（有色但与状态点混杂）"
+    },
+    "simplicity": {
+     "5": "K9_home.png（6 信息组/三级层级）",
+     "1": "K0_before_home.png（顶栏 5 类元素混杂）"
+    }
+   },
+   "verdict": true
+  },
+  {
+   "png": "K9_connect.png",
+   "checks": {
+    "contrast": {
+     "pass": true,
+     "fail": []
+    },
+    "touch_targets": {
+     "pass": true,
+     "fail": [],
+     "n_rects": 15
+    },
+    "alarm_salience": {
+     "pass": true,
+     "banner_present": false,
+     "delta_L": 5.9,
+     "note": "有横幅帧的 ΔL 硬判由 colorblind_check 分管（此处记录）"
+    },
+    "whitespace": {
+     "pass": true,
+     "note": "dock 间距 24/24/56 静态断言覆盖（ui_layout.h）"
+    }
+   },
+   "score_anchored": {
+    "readability": {
+     "5": "K2_fontpage.png（原生五档全锐利）",
+     "3": "H13_qr_page.png（旧 64px=2×发虚，可用）",
+     "1": "K0_before_home.png（2×放大毛边，用户否）"
+    },
+    "hierarchy": {
+     "5": "K9_home.png（96/32/24/20 四级）",
+     "1": "K0_before_home.png（数值与标签同权）"
+    },
+    "touch": {
+     "5": "ui_layout.h 断言全绿（96px dock+112px 急停）",
+     "1": "K0_before_tune.png（56px 行距挤 7 行）"
+    },
+    "alarm": {
+     "5": "K4_home_lost.png（黄横幅+灰显+角标三重编码）",
+     "3": "旧 WP-B 横幅（有色但与状态点混杂）"
+    },
+    "simplicity": {
+     "5": "K9_home.png（6 信息组/三级层级）",
+     "1": "K0_before_home.png（顶栏 5 类元素混杂）"
+    }
+   },
+   "verdict": true
+  },
+  {
+   "png": "K4_home_lost.png",
+   "checks": {
+    "contrast": {
+     "pass": true,
+     "fail": []
+    },
+    "touch_targets": {
+     "pass": true,
+     "fail": [],
+     "n_rects": 15
+    },
+    "alarm_salience": {
+     "pass": true,
+     "banner_present": true,
+     "delta_L": 23.9,
+     "note": "有横幅帧的 ΔL 硬判由 colorblind_check 分管（此处记录）"
+    },
+    "whitespace": {
+     "pass": true,
+     "note": "dock 间距 24/24/56 静态断言覆盖（ui_layout.h）"
+    }
+   },
+   "score_anchored": {
+    "readability": {
+     "5": "K2_fontpage.png（原生五档全锐利）",
+     "3": "H13_qr_page.png（旧 64px=2×发虚，可用）",
+     "1": "K0_before_home.png（2×放大毛边，用户否）"
+    },
+    "hierarchy": {
+     "5": "K9_home.png（96/32/24/20 四级）",
+     "1": "K0_before_home.png（数值与标签同权）"
+    },
+    "touch": {
+     "5": "ui_layout.h 断言全绿（96px dock+112px 急停）",
+     "1": "K0_before_tune.png（56px 行距挤 7 行）"
+    },
+    "alarm": {
+     "5": "K4_home_lost.png（黄横幅+灰显+角标三重编码）",
+     "3": "旧 WP-B 横幅（有色但与状态点混杂）"
+    },
+    "simplicity": {
+     "5": "K9_home.png（6 信息组/三级层级）",
+     "1": "K0_before_home.png（顶栏 5 类元素混杂）"
+    }
+   },
+   "verdict": true
+  }
+ ],
+ "all_pass": true
+}

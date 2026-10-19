@@ -30,11 +30,18 @@ UI_SOURCES = [ROOT / "App/tcs/tcs_ui.c", ROOT / "App/tcs/param_registry.c"]
 # + '?' 兜底字形（缺字时 UI 回落画 '?'，本字必须恒在——H3 教训）
 CHARSET_24_FIXED = "".join(chr(c) for c in range(0x20, 0x7F))
 
-# 32px 数值档固定集：可见 ASCII + 度/摄氏符号（64px=2× 最近邻放大用）
-CHARSET_32_FIXED = "".join(chr(c) for c in range(0x20, 0x7F)) + "°℃"
+# 32px 数值档固定集：可见 ASCII + 度/摄氏符号
+# + v9.5 K2：32px 中文（dock 标签/卡片标题/弹窗标题/枚举值，1.2"中文 24/32px"）
+CHARSET_32_FIXED = ("".join(chr(c) for c in range(0x20, 0x7F)) + "°℃"
+                    + "调参切手动自动连接急停贴身水箱环境体温风扇"
+                      "确认？到模式设定超过阈值恢复默认参数强制布防不")
 
 STR_RE = re.compile(r'"((?:[^"\\\n]|\\.)*)"')
 ESCAPE_RE = re.compile(r'\\(?:x[0-9A-Fa-f]{1,2}|[0-7]{1,3}|u[0-9A-Fa-f]{4}|.)')
+
+
+
+from c_strip import strip_c_comments
 
 
 def collect_ui_chars():
@@ -94,6 +101,16 @@ def render(cp: int, font: ImageFont.FreeTypeFont, size: int) -> bytes:
     return bytes(bits)
 
 
+def cmap_guard(cps):
+    """缺字硬失败（.notdef 空框混入字库的防线；▸◂ 实测教训）"""
+    from fontTools.ttLib import TTCollection
+    tt = TTCollection(FONT)
+    cmap = tt.fonts[0].getBestCmap()
+    missing = [cp for cp in sorted(set(cps)) if cp > 0x7E and cp not in cmap]
+    if missing:
+        raise SystemExit("[gen_font_cn] 缺字: " + " ".join(f"U+{c:04X}" for c in missing))
+
+
 def build_set(cps):
     charset, seen = [], set()
     for cp in cps:
@@ -108,6 +125,8 @@ def main():
     out_path = Path(sys.argv[1]) if len(sys.argv) > 1 else ROOT / "Core/Inc/tcs_font_cn.inc"
 
     auto = collect_ui_chars()
+    cmap_guard([ord(c) for c in CHARSET_24_FIXED] + list(auto)
+               + [ord(c) for c in CHARSET_32_FIXED])
     if not auto:
         print("[WARN] UI 源码未收集到非 ASCII 字符（检查 UI_SOURCES 路径）")
 

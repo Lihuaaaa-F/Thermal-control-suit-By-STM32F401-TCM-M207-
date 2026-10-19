@@ -1,0 +1,51 @@
+{
+ "tasks": [
+  {
+   "task": "读水温",
+   "ms_raw": 34153,
+   "ms_net": 8856,
+   "io_s": 25.3,
+   "wrong": 0,
+   "pass": true,
+   "detail": "主页直读贴身设定=25.00°C（点击 0 次即达）"
+  },
+  {
+   "task": "调高设定0.5",
+   "ms_raw": 33850,
+   "ms_net": 8304,
+   "io_s": 25.5,
+   "wrong": 0,
+   "pass": true,
+   "detail": "Δ=0.50（目标 +0.5）"
+  },
+  {
+   "task": "急停流程",
+   "ms_raw": 46187,
+   "ms_net": 9915,
+   "io_s": 36.3,
+   "wrong": 0,
+   "pass": true,
+   "detail": "alarm=0x0004 fan=1"
+  },
+  {
+   "task": "找二维码",
+   "ms_raw": 35040,
+   "ms_net": 2267,
+   "io_s": 32.8,
+   "wrong": 1,
+   "pass": true,
+   "detail": "二维码帧 K11_qr.png"
+  },
+  {
+   "task": "切模式",
+   "ms_raw": 42334,
+   "ms_net": 9626,
+   "io_s": 32.7,
+   "wrong": 0,
+   "pass": true,
+   "detail": "mode=1"
+  }
+ ],
+ "all_pass": true,
+ "timing_note": "净时=毛时-探针I/O（probe-rs 单读 ~1s×轮询）；阈值判净时（台账 2026-10-19：主机侧 spawn/链路开销不入产品判据）"
+}

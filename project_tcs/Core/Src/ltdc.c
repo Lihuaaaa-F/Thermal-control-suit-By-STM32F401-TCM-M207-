@@ -542,6 +542,32 @@ void gfx_sync_buffers(void)
     memcpy(s_back, other, LCD_FBSIZE);   /* 新帧(显示中) → 旧帧缓冲 */
 }
 
+/* K3 v9.5 小更新直绘配套：gfx_use_shown_buffer() 直绘完成后调用，把 rect 从
+ * 显示缓冲拷入隐藏缓冲（两缓冲恒一致，任何时刻 flip 都不残影）。
+ * 仅用于 <整卡级 小更新；整页/弹窗内容仍走 flip+gfx_sync_buffers。*/
+void gfx_sync_rect(int x0, int y0, int x1, int y1)
+{
+    if (!g_lcd_ok) return;
+    if (x0 > x1) { int t = x0; x0 = x1; x1 = t; }
+    if (y0 > y1) { int t = y0; y0 = y1; y1 = t; }
+    if (x0 < 0) x0 = 0;
+    if (y0 < 0) y0 = 0;
+    if (x1 >= LCD_WIDTH) x1 = LCD_WIDTH - 1;
+    if (y1 >= LCD_HEIGHT) y1 = LCD_HEIGHT - 1;
+    if (x0 > x1 || y0 > y1) return;
+    uint16_t *src = (uint16_t *)g_shown_fb;
+    uint16_t *dst = (s_back == src) ? ((s_back == LCD_FRONT_BUF) ? LCD_BACK_BUF
+                                                                 : LCD_FRONT_BUF)
+                                    : s_back;
+    size_t rowbytes = (size_t)(x1 - x0 + 1) * LCD_PIXELBYTES;
+    for (int y = y0; y <= y1; y++)
+        memcpy((uint8_t *)dst + (size_t)y * LCD_WIDTH * LCD_PIXELBYTES
+                               + (size_t)x0 * LCD_PIXELBYTES,
+               (const uint8_t *)src + (size_t)y * LCD_WIDTH * LCD_PIXELBYTES
+                                    + (size_t)x0 * LCD_PIXELBYTES,
+               rowbytes);
+}
+
 /* 历史记录（WP-A.2d/WP-C.5 实验结论，代码已移除防误用）：
  *  - DMA2D R2M 多行填充在本片存在 +32px/行步进异常（斜带漏色）；
  *  - 单次多行 R2M（scrtest raw 实验）会挂死系统总线（LTDC 同时在跑时），

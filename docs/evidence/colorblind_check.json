@@ -1,0 +1,69 @@
+{
+ "D:\\Espressif\\ws\\tcs\\docs\\evidence\\K9_home.png": {
+  "gray": {
+   "急停钮vs卡": {
+    "dL": 149.9,
+    "need": 25,
+    "ok": true
+   }
+  },
+  "deut": {
+   "急停钮vs卡": {
+    "dL": 76.1,
+    "need": 25,
+    "ok": true
+   }
+  },
+  "prot": {
+   "急停钮vs卡": {
+    "dL": 95.6,
+    "need": 25,
+    "ok": true
+   }
+  },
+  "_meta": {
+   "skipped_banner_group": true
+  }
+ },
+ "D:\\Espressif\\ws\\tcs\\docs\\evidence\\K4_home_lost.png": {
+  "gray": {
+   "横幅vs背景": {
+    "dL": 23.4,
+    "need": 12,
+    "ok": true
+   },
+   "急停钮vs卡": {
+    "dL": 149.9,
+    "need": 25,
+    "ok": true
+   }
+  },
+  "deut": {
+   "横幅vs背景": {
+    "dL": 13.4,
+    "need": 12,
+    "ok": true
+   },
+   "急停钮vs卡": {
+    "dL": 76.1,
+    "need": 25,
+    "ok": true
+   }
+  },
+  "prot": {
+   "横幅vs背景": {
+    "dL": 16.0,
+    "need": 12,
+    "ok": true
+   },
+   "急停钮vs卡": {
+    "dL": 95.6,
+    "need": 25,
+    "ok": true
+   }
+  },
+  "_meta": {
+   "skipped_banner_group": false
+  }
+ }
+}

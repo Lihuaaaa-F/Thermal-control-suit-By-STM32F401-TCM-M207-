@@ -180,6 +180,18 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         if "websocket" in (self.headers.get("Upgrade") or "").lower():
             return self.handle_ws()
+        if self.path == "/__audit":          # K8：注入审计脚本的页面（同源保 WS）
+            body = open(os.path.join(ROOT, "index.html"), "rb").read().decode("utf-8")
+            inj = open(os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                    "web_audit_inject.html"), encoding="utf-8").read()
+            body = body.replace("</body>", "<script>\n" + inj + "\n</script>\n</body>")
+            body = body.encode("utf-8")      # Content-Length 必须按字节数（中文字符数<字节数）
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+            return
         name = "index.html" if self.path in ("/", "/index.html") else self.path.lstrip("/")
         path = os.path.join(ROOT, name)
         if not os.path.isfile(path):

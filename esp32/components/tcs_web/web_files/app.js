@@ -6,12 +6,13 @@
 "use strict";
 const $ = (id) => document.getElementById(id);
 const ALM = { BODY: 1, M207: 2, ESTOP: 4, OVERTEMP: 8, EEPROM: 16 };
+/* K10 报警文案表（与屏端 alarm_pick 同源：主句+怎么办）*/
 const ALM_TXT = {
-  1: "体温传感器失联（TEC 已停，风扇全开）",
-  2: "M207 失联（TEC 已停，风扇全开）",
-  4: "急停已触发",
-  8: "水温过高（>48°C）",
-  16: "EEPROM 配置无效，已恢复默认",
+  1: "体温传感器失联 · 检查接头后确认恢复",
+  2: "M207 通信失联 · 检查线缆后确认恢复",
+  4: "急停已触发 · 确认恢复后重新运行",
+  8: "水温过高 · 已停止加热，等待降温",
+  16: "配置校验失败 · 已恢复默认参数，请重新设定",
 };
 const PROTO_VER_EXPECT = 1;
 
@@ -200,11 +201,11 @@ function drawGauge(cv, v, mn, mx) {
   const c = cv.getContext("2d"), w = cv.width, h = cv.height, cx = w / 2, cy = h / 2, r = w / 2 - 8;
   c.clearRect(0, 0, w, h);
   c.lineWidth = 10; c.lineCap = "round";
-  c.strokeStyle = "#2a323d";
+  c.strokeStyle = "#D8DEE6";
   c.beginPath(); c.arc(cx, cy, r, Math.PI * 0.75, Math.PI * 2.25); c.stroke();
   if (v != null && isFinite(v)) {
     const frac = Math.max(0, Math.min(1, (v - mn) / (mx - mn)));
-    c.strokeStyle = "#4f8cff";
+    c.strokeStyle = "#2563EB";
     c.beginPath(); c.arc(cx, cy, r, Math.PI * 0.75, Math.PI * (0.75 + 1.5 * frac)); c.stroke();
   }
 }
@@ -212,15 +213,16 @@ function ensureCurve() {
   if (curve || !window.Chart) return;
   curve = new Chart($("curve"), {
     type: "line",
-    data: { datasets: [{ label: "体温 °C", data: curvePts, borderColor: "#4f8cff",
+    data: { datasets: [{ label: "体温 °C", data: curvePts, borderColor: "#2563EB",
       pointRadius: 0, tension: 0.25, fill: false }] },
     options: {
       animation: false, responsive: true,
       scales: {
-        x: { type: "linear", ticks: { maxTicksLimit: 5, color: "#5a6472" }, grid: { color: "#232a34" } },
-        y: { suggestedMin: 35, suggestedMax: 39, ticks: { color: "#5a6472" }, grid: { color: "#232a34" } },
+        x: { type: "linear", ticks: { maxTicksLimit: 5, color: "#5F6B7A", 
+          callback: (v) => { const d = new Date(v * 1000); return `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`; } }, grid: { color: "#E5E7EB" } },
+        y: { suggestedMin: 35, suggestedMax: 39, ticks: { color: "#5F6B7A" }, grid: { color: "#E5E7EB" } },
       },
-      plugins: { legend: { labels: { color: "#e8eaed" } } },
+      plugins: { legend: { labels: { color: "#1F2937" } } },
     },
   });
 }

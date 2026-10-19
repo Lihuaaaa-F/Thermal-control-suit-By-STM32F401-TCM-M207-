@@ -112,23 +112,57 @@ function onPv(m) {
 }
 
 /* ====== 注册表 → 控件 ====== */
+/* WP-P3 高级区分组（H10 id 段 → 功能组；与规格说明书 v1.2 §2.5 对齐）*/
+const ADV_GROUPS = [
+  { lo: 0x100, hi: 0x102, title: "PID（贴身 TC1）" },
+  { lo: 0x110, hi: 0x112, title: "PID（环境 TC2）" },
+  { lo: 0x103, hi: 0x10A, title: "保护（TC1）" },
+  { lo: 0x113, hi: 0x11A, title: "保护（TC2）" },
+  { lo: 0x120, hi: 0x122, title: "保护（PCB）" },
+  { lo: 0x10B, hi: 0x10F, title: "输出/温度选项（TC1）" },
+  { lo: 0x11B, hi: 0x11F, title: "输出/温度选项（TC2）" },
+  { lo: 0x123, hi: 0x12F, title: "系统" },
+  { lo: 0x130, hi: 0x1FF, title: "遥测（只读）" },
+];
+function advGroupOf(id) {
+  for (const g of ADV_GROUPS) if (id >= g.lo && id <= g.hi) return g.title;
+  return "其它";
+}
 function buildParams() {
   const norm = $("params"), adv = $("adv-params");
   norm.innerHTML = ""; adv.innerHTML = "";
+  const groups = new Map();
   for (const p of registry) {
     if (!(p.flags & 0x04)) continue;              /* PF_WEB */
-    const isAdv = !!(p.flags & 0x10);             /* PF_M207 → 高级区 */
+    const isAdv = p.id >= 0x100;                  /* M207 段=H10 0x100+（PF_M207 语义是"需下发"非分区，tc1/tc2_set 亦带该位）*/
     const row = document.createElement("div");
     row.className = "prow";
+    if (isAdv && (p.flags & 0x20)) row.dataset.danger = "1";   /* PF_DANGER → 二次确认 */
     const name = p.name || p.key;
     const isMode = p.id === 6;
+    const ro = isAdv && !(p.flags & 0x01);        /* 高级区无 PF_RW → 只读遥测 */
     row.innerHTML =
       `<div class="pname"><span>${name}</span><span class="pval" data-v="${p.id}">${isMode ? "" : fmtVal(p.id, p.def)}</span></div>` +
       (isMode
         ? `<div class="stepper"><button data-cmd-off="${p.id}">手动</button><button data-cmd-on="${p.id}">自动</button></div>`
-        : `<input type="range" data-id="${p.id}" min="${p.min}" max="${p.max}" step="${p.step}" value="${p.def ?? p.min}">` +
-          `<div class="stepper"><button data-step="-">−</button><span class="step-num" data-v="${p.id}"></span><button data-step="+">＋</button></div>`);
-    (isAdv ? adv : norm).appendChild(row);
+        : ro
+          ? `<div class="ro-hint">只读 · 由模块周期上报</div>`
+          : `<input type="range" data-id="${p.id}" min="${p.min}" max="${p.max}" step="${p.step}" value="${p.def ?? p.min}">` +
+            `<div class="stepper"><button data-step="-">−</button><span class="step-num" data-v="${p.id}"></span><button data-step="+">＋</button></div>`);
+    if (isAdv) {
+      const g = advGroupOf(p.id);
+      if (!groups.has(g)) {
+        const card = document.createElement("div");
+        card.className = "adv-group";
+        card.dataset.group = g;
+        card.innerHTML = `<div class="adv-gtitle">${g}</div>`;
+        adv.appendChild(card);
+        groups.set(g, card);
+      }
+      groups.get(g).appendChild(row);
+    } else {
+      norm.appendChild(row);
+    }
   }
   built = true;
   bindParamEvents();
@@ -153,6 +187,11 @@ function doSet(id, v) {
     const thr = cf ? (cf.cur ?? cf.def ?? 40) : 40;
     if (v > thr && !confirm(`设定 ${v.toFixed(1)}°C 超过确认阈值 ${thr}°C，确认？`)) return;
   }
+  /* WP-P3 危险参数二次确认（PF_DANGER=0x20，H10 ✓ 列：保护/输出上限类）*/
+  if (p && (p.flags & 0x20) &&
+      !confirm(`「${p.name || p.key}」为保护/输出限制类参数，误改可能影响设备安全。确认改为 ${v}？`)) return;
+  /* P3 客户端钳制（纵深防御；固件 clamp 仍为权威）*/
+  if (p) v = Math.min(p.max, Math.max(p.min, v));
   webAckWait = { id, us: Date.now() };
   send({ t: "set", id, v });
 }
@@ -190,6 +229,14 @@ function bindButtons() {
   $("sw-mode").onclick = () => send({ t: "cmd", c: $("sw-mode").classList.contains("on") ? 7 : 6 });
   $("btn-ack").onclick = () => send({ t: "cmd", c: 9 });
   $("btn-csv").onclick = exportCsv;
+  $("btn-m207-save").onclick = () => {
+    /* WP-P3 保存语义：仅"当前会话已下发"的值，保存后掉电保持；
+     * 未保存参数掉电后回模块上次保存值（提示文案见 index.html）。 */
+    if (confirm("保存全部高级参数到模块？保存后掉电保持。")) {
+      send({ t: "cmd", c: 10 });   /* TCS_CMD_M207_SAVE（R5 接 M207 `!`）*/
+      toast("已请求保存到模块");
+    }
+  };
   $("btn-estop").onclick = () => {
     /* 与屏同一 tcs_emergency_stop 语义：TEC 全停 + 风扇全开 + 手动 + ALM_ESTOP */
     if (confirm("确认急停？TEC 将全部停止，风扇全开")) send({ t: "cmd", c: 8 });

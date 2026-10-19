@@ -29,3 +29,6 @@ void tcs_ui_screen_stress(int mode, int n); /* 压测算子（WP-A.2d 分音）�
 }
 #endif
 #endif /* TCS_UI_H */
+
+/* WP-M 调试：触摸会话机状态快照（state,x,y,down 经 console 打印）*/
+void tcs_ui_touch_debug(char *out, int cap);

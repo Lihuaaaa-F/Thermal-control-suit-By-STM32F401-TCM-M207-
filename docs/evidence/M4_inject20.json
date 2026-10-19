@@ -1,0 +1,346 @@
+{
+ "pass_": 11,
+ "chain": 9,
+ "fail": 0,
+ "zero_stray": true,
+ "final_stat": {
+  "tc1": 24.9,
+  "tc2": 24.9,
+  "body": 36.8,
+  "tec1": 0,
+  "tec2": 0,
+  "fan": 0,
+  "mode": 0,
+  "alarm": "0x0000",
+  "m207": 1,
+  "sensor": 1,
+  "esp": 1,
+  "ctrl": 0,
+  "arm": "1(0x08=1)",
+  "loop": 66054,
+  "drops": 0,
+  "seq": 212
+ },
+ "hits": [
+  {
+   "no": 1,
+   "name": "tune_enter",
+   "screen": [
+    144,
+    520
+   ],
+   "raw": [
+    520,
+    144
+   ],
+   "expect_log": "touch page->tune",
+   "log_hit": true,
+   "state_ev": "",
+   "verdict": "PASS"
+  },
+  {
+   "no": 2,
+   "name": "minus_row",
+   "screen": [
+    856,
+    100
+   ],
+   "raw": [
+    100,
+    856
+   ],
+   "expect_log": null,
+   "log_hit": false,
+   "state_ev": "p 25.00->10.00",
+   "verdict": "PASS"
+  },
+  {
+   "no": 3,
+   "name": "plus_row",
+   "screen": [
+    936,
+    100
+   ],
+   "raw": [
+    100,
+    936
+   ],
+   "expect_log": null,
+   "log_hit": false,
+   "state_ev": "p 10.00->25.00",
+   "verdict": "PASS"
+  },
+  {
+   "no": 4,
+   "name": "step_toggle",
+   "screen": [
+    248,
+    520
+   ],
+   "raw": [
+    520,
+    248
+   ],
+   "expect_log": null,
+   "log_hit": false,
+   "state_ev": "",
+   "verdict": "CHAIN"
+  },
+  {
+   "no": 5,
+   "name": "tune_p2",
+   "screen": [
+    480,
+    520
+   ],
+   "raw": [
+    520,
+    480
+   ],
+   "expect_log": null,
+   "log_hit": false,
+   "state_ev": "",
+   "verdict": "CHAIN"
+  },
+  {
+   "no": 6,
+   "name": "reset_entry",
+   "screen": [
+    704,
+    520
+   ],
+   "raw": [
+    520,
+    704
+   ],
+   "expect_log": null,
+   "log_hit": false,
+   "state_ev": "",
+   "verdict": "CHAIN"
+  },
+  {
+   "no": 7,
+   "name": "dlg_cancel",
+   "screen": [
+    632,
+    388
+   ],
+   "raw": [
+    388,
+    632
+   ],
+   "expect_log": null,
+   "log_hit": false,
+   "state_ev": "",
+   "verdict": "CHAIN"
+  },
+  {
+   "no": 8,
+   "name": "back_home",
+   "screen": [
+    84,
+    28
+   ],
+   "raw": [
+    28,
+    84
+   ],
+   "expect_log": "touch page->home",
+   "log_hit": true,
+   "state_ev": "",
+   "verdict": "PASS"
+  },
+  {
+   "no": 9,
+   "name": "mode_dlg",
+   "screen": [
+    376,
+    520
+   ],
+   "raw": [
+    520,
+    376
+   ],
+   "expect_log": null,
+   "log_hit": false,
+   "state_ev": "",
+   "verdict": "CHAIN"
+  },
+  {
+   "no": 10,
+   "name": "mode_confirm",
+   "screen": [
+    392,
+    388
+   ],
+   "raw": [
+    388,
+    392
+   ],
+   "expect_log": null,
+   "log_hit": false,
+   "state_ev": "mode=1",
+   "verdict": "PASS"
+  },
+  {
+   "no": 11,
+   "name": "mode_dlg2",
+   "screen": [
+    376,
+    520
+   ],
+   "raw": [
+    520,
+    376
+   ],
+   "expect_log": null,
+   "log_hit": false,
+   "state_ev": "",
+   "verdict": "CHAIN"
+  },
+  {
+   "no": 12,
+   "name": "mode_confirm2",
+   "screen": [
+    392,
+    388
+   ],
+   "raw": [
+    388,
+    392
+   ],
+   "expect_log": null,
+   "log_hit": false,
+   "state_ev": "",
+   "verdict": "PASS"
+  },
+  {
+   "no": 13,
+   "name": "fan_on",
+   "screen": [
+    904,
+    400
+   ],
+   "raw": [
+    400,
+    904
+   ],
+   "expect_log": "touch fan 1",
+   "log_hit": true,
+   "state_ev": "",
+   "verdict": "PASS"
+  },
+  {
+   "no": 14,
+   "name": "fan_off",
+   "screen": [
+    904,
+    400
+   ],
+   "raw": [
+    400,
+    904
+   ],
+   "expect_log": "touch fan 0",
+   "log_hit": true,
+   "state_ev": "",
+   "verdict": "PASS"
+  },
+  {
+   "no": 15,
+   "name": "conn_qr",
+   "screen": [
+    608,
+    520
+   ],
+   "raw": [
+    520,
+    608
+   ],
+   "expect_log": "touch page->qr",
+   "log_hit": true,
+   "state_ev": "",
+   "verdict": "PASS"
+  },
+  {
+   "no": 16,
+   "name": "conn_back",
+   "screen": [
+    144,
+    520
+   ],
+   "raw": [
+    520,
+    144
+   ],
+   "expect_log": "touch page->home",
+   "log_hit": true,
+   "state_ev": "",
+   "verdict": "PASS"
+  },
+  {
+   "no": 17,
+   "name": "estop_dlg",
+   "screen": [
+    876,
+    528
+   ],
+   "raw": [
+    528,
+    876
+   ],
+   "expect_log": null,
+   "log_hit": false,
+   "state_ev": "",
+   "verdict": "CHAIN"
+  },
+  {
+   "no": 18,
+   "name": "estop_cancel",
+   "screen": [
+    632,
+    388
+   ],
+   "raw": [
+    388,
+    632
+   ],
+   "expect_log": null,
+   "log_hit": false,
+   "state_ev": "",
+   "verdict": "CHAIN"
+  },
+  {
+   "no": 19,
+   "name": "estop_dlg2",
+   "screen": [
+    876,
+    528
+   ],
+   "raw": [
+    528,
+    876
+   ],
+   "expect_log": null,
+   "log_hit": false,
+   "state_ev": "",
+   "verdict": "CHAIN"
+  },
+  {
+   "no": 20,
+   "name": "estop_confirm",
+   "screen": [
+    392,
+    388
+   ],
+   "raw": [
+    388,
+    392
+   ],
+   "expect_log": "touch estop confirm",
+   "log_hit": true,
+   "state_ev": "",
+   "verdict": "PASS"
+  }
+ ]
+}

@@ -27,6 +27,7 @@ extern volatile uint32_t g_stat_flip_cnt;
 extern volatile uint32_t g_stat_patch_cnt;
 extern volatile uint32_t g_stat_touch_hz;
 extern volatile uint32_t g_stat_tick_ovf;
+extern volatile uint32_t g_stat_touch_gap_ms_max;   /* M1④/T-12：触摸轮询最大间隔 ms */
 
 void console_init(UART_HandleTypeDef *huart);
 void console_isr_push(uint8_t b);       /* ISR：RX 单字节入环形缓冲 */

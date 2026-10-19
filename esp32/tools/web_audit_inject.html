@@ -47,6 +47,67 @@ window.__audit = (async () => {
     HTMLAnchorElement.prototype.click = orig;
     r.csv = csvName;
   } catch(e) { r.csv_err = String(e); }
+  /* ====== WP-P3 高级参数区断言（a13-a21）====== */
+  const advRows = [...document.querySelectorAll("#adv-params .prow")];
+  r.adv_groups = [...document.querySelectorAll("#adv-params .adv-group")]
+    .map(g => g.dataset.group);
+  r.adv_danger = advRows.filter(x => x.dataset.danger === "1").length;
+  r.adv_ro = advRows.filter(x => x.querySelector(".ro-hint")).length;
+  /* a20 屏不显红线：registry 全局（app.js let）— id≥0x100 全部无 PF_SCREEN(0x2) */
+  try {
+    const m207 = registry.filter(p => p.id >= 0x100);
+    r.m207_count = m207.length;
+    r.m207_no_screen = m207.every(p => !(p.flags & 2));
+  } catch (e) { r.m207_err = String(e); }
+  /* ws.send 捕获器 */
+  let lastSend = null;
+  try { const os = ws.send; ws.send = (d) => { lastSend = d; os.call(ws, d); }; } catch (e) {}
+  /* a15 危险二次确认：拒绝路径 */
+  const dRow = advRows.find(x => x.dataset.danger === "1");
+  if (dRow) {
+    const dinp = dRow.querySelector("input");
+    if (dinp) {
+      const pv0 = +dinp.value;
+      let cmsg = null;
+      window.confirm = (m) => { cmsg = m; return false; };
+      dinp.value = pv0 + +dinp.step;
+      dinp.dispatchEvent(new Event("change"));
+      await sleep(120);
+      r.danger_confirm_msg = cmsg ? cmsg.slice(0, 40) : null;
+      r.danger_rejected = lastSend === null;
+      /* a16 读回一致性（同意路径）：确认后 mock 立即回 pv(web_ack) → pval 更新 */
+      window.confirm = (m) => true;
+      const target = Math.min(+dinp.max, pv0 + +dinp.step * 2);
+      dinp.value = target;
+      dinp.dispatchEvent(new Event("change"));
+      const disp = dRow.querySelector(".pval");
+      for (let i = 0; i < 25; i++) { await sleep(120);
+        if (disp && disp.textContent && !disp.textContent.startsWith("0.")) break; }
+      r.readback_txt = disp ? disp.textContent : null;
+      r.readback_sent = lastSend;
+    }
+  }
+  /* a16b 范围钳制：doSet 超界 → 发送值为 max */
+  try {
+    const pk = registry.find(p => p.id === 0x100);
+    let sentClamp = null;
+    const os2 = ws.send; ws.send = (d) => { sentClamp = d; };
+    doSet(0x100, 99999);
+    ws.send = os2;
+    r.clamp_sent = sentClamp ? JSON.parse(sentClamp).v : null;
+    r.clamp_expect = pk ? pk.max : null;
+  } catch (e) { r.clamp_err = String(e); }
+  /* a17/a18 保存按钮 + 帧序 */
+  const hint = document.querySelector(".adv-hint");
+  r.save_hint = hint ? hint.textContent.includes("掉电保持") : false;
+  let saveSend = null;
+  try {
+    const os3 = ws.send; ws.send = (d) => { saveSend = d; os3.call(ws, d); };
+    window.confirm = () => true;
+    document.getElementById("btn-m207-save").click();
+    ws.send = os3;
+    r.save_frame = saveSend ? JSON.parse(saveSend) : null;
+  } catch (e) { r.save_err = String(e); }
   r.overlay = !!document.getElementById("overlay");
   r.errors = window.__errs; return r;
 })();

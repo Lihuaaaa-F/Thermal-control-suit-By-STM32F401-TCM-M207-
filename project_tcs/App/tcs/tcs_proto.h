@@ -41,6 +41,7 @@
 #define TCS_CMD_MODE_MANUAL    7
 #define TCS_CMD_ESTOP          8
 #define TCS_CMD_ALARM_ACK      9
+#define TCS_CMD_M207_SAVE     10   /* P3：保存到模块（R5 接 M207 `!` 传输）*/
 
 /* TCS_ACK status */
 #define TCS_ACK_OK             0

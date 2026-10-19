@@ -54,12 +54,13 @@ run() {  # run <name> <test.c> <sources...>
 }
 
 run m207        tests/test_m207_parse.c       App/tcs/m207.c
+run m207golden  tests/test_m207_golden.c      App/tcs/m207.c
 run registry    tests/test_param_registry.c   App/tcs/param_registry.c App/proto/proto.c
 run control     tests/test_control.c          App/tcs/control.c App/tcs/param_registry.c App/tcs/post.c App/proto/proto.c
 run post        tests/test_post.c             App/tcs/post.c App/tcs/param_registry.c App/proto/proto.c
 run proto_comm  tests/test_proto_tcs.c        App/proto/proto.c App/comm/comm.c
 
-run touchflt    tests/test_touchflt.c         Core/Src/ft5446.c
+run touchsession tests/test_touch_session.c   App/tcs/touch_session.c Core/Src/ft5446.c
 run qr          tests/test_qr.c               App/tcs/qr/qrcodegen.c
 
 # H13 二维码解码回读（PC 出图 → zxing-cpp 解码比对）
@@ -96,6 +97,13 @@ int main(void){
 }
 EOF
 run tmp117 build/test_tmp117.c App/tcs/tmp117.c
+
+# WP-P4/P6：M207 高级参数注入矩阵（PC/sim 层，五行矩阵+golden+50ms+PDF 示例）
+if [ -n "$PYBIN" ]; then
+    if "$PYBIN" tests/test_m207_adv.py; then :; else FAIL=1; fi
+else
+    echo "[m207_adv] SKIP: python not found"; FAIL=1
+fi
 
 # H3 字库缺字门禁（WP-A.2a，永久）：UI 字符串 × 字库码表，缺字退出非零
 PYBIN=$(command -v python3 || command -v python)

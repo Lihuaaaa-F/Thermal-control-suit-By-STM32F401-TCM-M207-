@@ -28,7 +28,7 @@ int main(void)
     CHECK(param_get(PARAM_ID_TC1_SET) == 25.0f, "default tc1");
     CHECK(param_get(PARAM_ID_BODY_HOT) == 37.5f, "default body_hot");
     CHECK(param_get(PARAM_ID_MODE) == 0.0f, "default mode manual (F9)");
-    CHECK(param_count() == 10, "registry count (H6 0x08三态 + H10 假参数 0x100/0x101)");
+    CHECK(param_count() == 50, "registry count (H6 0x08三态 + H10 假参数 0x100/0x101)");
 
     /* commissioned 0x08（WP-A.5）：u8 默认 0=未布防 */
     CHECK(param_get(PARAM_ID_COMMISSIONED) == 0.0f, "default unarmed");
@@ -84,7 +84,7 @@ int main(void)
     {
         uint8_t img[EE_IMG_SIZE];
         CHECK(param_serialize(img) == 0, "serialize");
-        CHECK(img[0] == 0xA6 && img[1] == 2 && img[2] == 10, "header magic/ver/count (10 持久化参数)");
+        CHECK(img[0] == 0xA6 && img[1] == 2 && img[2] == 8, "header magic/ver/count (10 持久化参数)");
         CHECK(img[3] == 0, "rfu");
         /* 记录 1：id=0x01 type=0(f32) value=45.0 位型小端 */
         CHECK(img[4] == 0x01 && img[5] == 0x00 && img[6] == 0 && img[7] == 0, "rec1 id/type");

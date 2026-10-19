@@ -1,0 +1,18 @@
+# m207 golden RX 语料 — 固件解析器 golden 断言（工程质量三；下行帧语料见 m207_golden.csv/sim 侧）
+# 格式: <行不含\r>|<解析期0/1>|<module 0/1/2>|<kind 0=N/1=POLL/2=REPLY/3=ERRCODE>|<param>|<数值或errcode>
+TC1:TCACTTEMP=24.9|1|1|2|TCACTTEMP|24.9
+TC2:TCADJTEMP=25.0|1|2|2|TCADJTEMP|25.0
+tc1:tcadjtemp=30.5|1|1|2|TCADJTEMP|30.5
+TC1:TCSW=1|1|1|2|TCSW|1
+TC1:TCADJTEMP?|1|1|1|TCADJTEMP|0
+TC2:TCACTTEMP=-8.25|1|2|2|TCACTTEMP|-8.25
+CMD:REPLY=0|1|0|3||0
+CMD:REPLY=1|1|0|3||1
+CMD:REPLY=4|1|0|3||4
+CMD:REPLY=8|1|0|3||8
+TC1:TCADJTEMP=abc|0|0|0||
+TC3:TCACTTEMP=1|0|0|0||
+NOCOLON1|0|0|0||
+TC1:|0|0|0||
+TC1:TCADJTEMP=|0|0|0||
+|0|0|0||

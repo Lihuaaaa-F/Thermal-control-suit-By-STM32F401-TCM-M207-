@@ -52,10 +52,12 @@
     <div id="params"></div>
   </section>
 
-  <!-- ④ 高级区（M207 参数，registry 出现即自动生成）-->
+  <!-- ④ 高级区（M207 参数，registry 出现即自动生成；WP-P3 分组卡+保存语义）-->
   <section class="card">
     <details id="adv-details">
-      <summary>高级参数（M207）</summary>
+      <summary>高级参数（M207）
+        <button id="btn-m207-save" class="mini" style="margin-left:8px">保存到模块</button></summary>
+      <div class="adv-hint">改动即时下发并读回确认；<b>保存到模块</b>后掉电保持——未保存的改动掉电后回模块上次保存值。保护/输出限制类参数修改需二次确认。</div>
       <div id="adv-params"></div>
     </details>
   </section>

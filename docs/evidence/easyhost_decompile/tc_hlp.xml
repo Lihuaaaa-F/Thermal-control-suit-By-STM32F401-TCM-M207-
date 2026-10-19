@@ -1,0 +1,954 @@
+<?xml version="1.0" standalone="yes"?>
+<DocumentElement>
+  <Table_Help>
+    <ParamName>TCADJUSTTEMP</ParamName>
+    <HelpText> 
+	1. 通过该值设置温控目标的温度；\n 
+	2. 为了防止用户在调节温度时超出允许范围，可通过“温度设置”目录里的“最低设定温度”和“最高设定温度”来限制调节范围。
+	</HelpText>
+	<ShowPic>false</ShowPic>
+	<PicName></PicName>
+  </Table_Help>
+  <Table_Help>
+    <ParamName>TCADJTEMP</ParamName>
+    <HelpText> 
+	1. 通过该值设置温控目标的温度；\n 
+	2. 为了防止用户在调节温度时超出允许范围，可通过“温度选项”目录里的“最低设定温度”和“最高设定温度”来限制调节范围。
+	</HelpText>
+	<ShowPic>false</ShowPic>
+	<PicName></PicName>
+  </Table_Help>
+  <Table_Help>
+    <ParamName>TCACTUALTEMP</ParamName>
+    <HelpText> 
+	1. 温控目标的实际温度（温度传感器的测量温度）。
+	</HelpText>
+	<ShowPic>false</ShowPic>
+	<PicName></PicName>
+  </Table_Help>
+  <Table_Help>
+    <ParamName>TCACTTEMP</ParamName>
+    <HelpText> 
+	1. 温控目标的实际温度（温度传感器的测量温度）。
+	</HelpText>
+	<ShowPic>false</ShowPic>
+	<PicName></PicName>
+  </Table_Help>
+  <Table_Help>
+    <ParamName>TCHELP</ParamName>
+    <HelpText> 
+	1. 详细温控帮助请阅读用户手册。\n
+	2. 软件使用帮助请点击菜单栏下拉菜单“帮助”。\n
+	3. 温控需要进行一些必要的初始设置，主要设置如下图所示。
+	</HelpText>
+	<ShowPic>true</ShowPic>
+	<PicName>TCHELP.PNG</PicName>
+  </Table_Help>
+  <Table_Help>
+    <ParamName>TCSETTEMP</ParamName>
+    <HelpText>
+	1. “调节温度”由用户设置，用户设置到哪个值，就立即变化到哪个值。\n
+	2. “设定温度”是模块自动计算的。它被“温度限速”后向“调节温度”变化，直至和“调节温度”相同。\n
+	3. 温控器输出功率，控制温控目标的“实际温度”追踪“设定温度”。通常情况下，“实际温度”的变化速度小于或等于“温度限速”值。
+	</HelpText>
+	<ShowPic>false</ShowPic>
+	<PicName></PicName>
+  </Table_Help>
+  <Table_Help>
+    <ParamName>TCRAMPSPEED</ParamName>
+    <HelpText>
+	1. “温度限速”会限制“设定温度”的变化速度；\n
+	2. 当温控器输出关闭时，“设定温度”会自动被设置为温控目标的“实际温度”，防止下次输出开启时出现跳变；\n
+	3. 通过减小“温度限速”可以防止温控目标的温度变化过快；合理设置可以得到温度曲线效果。
+	</HelpText>
+	<ShowPic>false</ShowPic>
+	<PicName></PicName>
+  </Table_Help>
+  <Table_Help>
+    <ParamName>TCMAXSETTEMP</ParamName>
+    <HelpText> 
+	1. "调节温度"允许调节的最大值，防止用户调节时超出范围，可根据需要修改。
+	</HelpText>
+	<ShowPic>false</ShowPic>
+	<PicName></PicName>
+  </Table_Help>
+  <Table_Help>
+    <ParamName>TCMAXTEMP</ParamName>
+    <HelpText> 
+	1. "调节温度"允许调节的最大值，防止用户调节时超出范围，可根据需要修改。
+	</HelpText>
+	<ShowPic>false</ShowPic>
+	<PicName></PicName>
+  </Table_Help>
+  <Table_Help>
+    <ParamName>TCMINSETTEMP</ParamName>
+    <HelpText> 
+	1. "调节温度"允许调节的最小值，防止用户调节时超出范围，可根据需要修改。
+	</HelpText>
+	<ShowPic>false</ShowPic>
+	<PicName></PicName>
+  </Table_Help>
+  <Table_Help>
+    <ParamName>TCMINTEMP</ParamName>
+    <HelpText> 
+	1. "调节温度"允许调节的最小值，防止用户调节时超出范围，可根据需要修改。
+	</HelpText>
+	<ShowPic>false</ShowPic>
+	<PicName></PicName>
+  </Table_Help>
+  <Table_Help>
+    <ParamName>TCSTEPTEMP</ParamName>
+    <HelpText> 
+	1. 用户使用旋钮或者按钮增大、减小参数"调节温度"时的步进值，跟控温分辨率精度无关。
+	</HelpText>
+	<ShowPic>false</ShowPic>
+	<PicName></PicName>	
+  </Table_Help>
+  <Table_Help>
+    <ParamName>TCMAXV</ParamName>
+    <HelpText> 
+	1. 为了安全，在有功率输出时，温控器会禁止调节“最大输出电压”；所以用户要先关闭温控的功率输出，然后才可以修改该参数。\n
+	2. 调节时，最大输出电压被限定在0.1V与“过压保护阈值”之间。当调节无法增大该值时，请检查“过压保护阈值”的设置值。\n
+	3. 温控器的“最大输出电压”可以通过软件设置，因此用户可以先根据自己的温控系统需要选择合适的TEC，然后再根据所选TEC设置该参数。\n
+	4. 温控器“最大输出电压”对应着最大温控功率，需要根据温控系统的极限工作条件来确定。如果设置过大，可能会造成TEC损坏或者电源功率不够；如果过小，会导致TEC功率不够，无法温控到设定温度。\n
+	5. 温控模块最大输出电压 ≧ 所需的最大温控功率对应的电压。\n
+	6. 温控模块最大输出电压 &lt; 过压保护阈值 - 噪声容限。要注意，最大输出电压和过压保护阈值不能太接近，否则容易误报错；噪声容限一般取电源电压的3%-10%。\n
+	7. 温控模块实际输出电压 在区间[负向最大输出电压, 正向最大输出电压]范围内。实际输出电压是根据温度反馈实时PID控制的结果，其绝对值在0和最大输出电压之间。\n
+	8. 实际使用时，可以先设置一个较小值，然后实验，如果功率不够，再逐步增大。\n
+	9. 过压保护阈值 &lt; 温控模块的电源电压*95%；过压保护阈值 &lt; TEC最大工作电压。关于过压保护阈值的详细内容,参见过压保护阈值的帮助和用户手册。\n
+	10. 更详细的说明请参考用户手册。
+	</HelpText>
+	<ShowPic>false</ShowPic>
+	<PicName></PicName>
+  </Table_Help>
+  <Table_Help>
+    <ParamName>TCCOOLVRATIO</ParamName>
+    <HelpText> 
+	1. 最大制冷电压相对于最大加热电压的比值，通过该参数，可以实现加热和制冷电压不相同。\n
+	2. 如果该比值小于1，则最大加热电压等于“最大输出电压”；最大致冷电压等于该比值乘以“最大输出电压”。\n
+	3. 如果该比值大于1，则最大致冷电压等于“最大输出电压”；最大加热电压等于“最大输出电压”除以该比值。\n
+	4. 一般情况下，该值不需要修改。
+	</HelpText>
+	<ShowPic>false</ShowPic>
+	<PicName></PicName>	
+  </Table_Help>
+  <Table_Help>
+    <ParamName>TCMODE</ParamName>
+    <HelpText> 
+	1. 为了安全，在温控器有功率输出时，程序禁止“输出模式”被改变；所以用户要先关闭温控的功率输出，然后才可以修改该参数。\n
+	2. 致冷模式：温控器只致冷，不加热；适合情况：有内热或温控温度低于环境温度；适合TEC。\n
+	3. 加热模式：温控器只加热，不致冷。适合情况：温控温度高于环境温度；适合TEC、加热棒。\n
+	4. 双向模式：双向温控器既可以加热，也可以致冷；适合TEC。
+	</HelpText>
+	<ShowPic>false</ShowPic>
+	<PicName></PicName>	
+  </Table_Help>
+  <Table_Help>
+    <ParamName>TCSW</ParamName>
+    <HelpText> 
+	1. 温控器的开关。指用户对温控器的是否输出的设定。接到打开设定后，如果没有错误，温控会试图打开输出。\n
+	2. 也可以通过软件右侧的按钮操作开关。\n
+	3. 通常也提供机械开关和远程开关，进一步信息见用户手册
+	</HelpText>
+	<ShowPic>false</ShowPic>
+	<PicName></PicName>	
+  </Table_Help>
+  <Table_Help>
+    <ParamName>TCOE</ParamName>
+    <HelpText> 
+	1. 代表的实际功率输出状态。\n
+	2. 即使用户把温控器的开关打开了，温控器也有可能因为检测到某些错误而保护性的关闭输出，不输出功率。
+	</HelpText>
+	<ShowPic>false</ShowPic>
+	<PicName></PicName>	
+  </Table_Help>
+  <Table_Help>
+    <ParamName>TCSETVOLTAGE</ParamName>
+    <HelpText> 
+	1. 温控器计算出来的理想输出电压值。\n
+	2. 电压值为负值代表“加热”，接线端子“TEC-”的电压高于“TEC+”的电压。\n
+	3. 电压值为正值代表“制冷”，接线端子“TEC+”的电压高于“TEC-”的电压。
+	</HelpText>
+	<ShowPic>false</ShowPic>
+	<PicName></PicName>	
+  </Table_Help>
+  <Table_Help>
+    <ParamName>TCSETVOL</ParamName>
+    <HelpText> 
+	1. 温控器计算出来的理想输出电压值。\n
+	2. 电压值为负值代表“加热”，接线端子“TEC-”的电压高于“TEC+”的电压。\n
+	3. 电压值为正值代表“制冷”，接线端子“TEC+”的电压高于“TEC-”的电压。
+	</HelpText>
+	<ShowPic>false</ShowPic>
+	<PicName></PicName>	
+  </Table_Help>
+  <Table_Help>
+    <ParamName>TCACTUALVOLTAGE</ParamName>
+    <HelpText> 
+	1. 温控器的实际输出电压值。应该和“预计输出电压”接近，又不超过“最大输出电压”。\n
+	2. 电压值为负值代表“加热”，接线端子“TEC-”的电压高于“TEC+”的电压。\n
+	3. 电压值为正值代表“制冷”，接线端子“TEC+”的电压高于“TEC-”的电压。
+	</HelpText>
+	<ShowPic>false</ShowPic>
+	<PicName></PicName>	
+  </Table_Help>
+  <Table_Help>
+    <ParamName>TCACTVOL</ParamName>
+    <HelpText> 
+	1. 温控器的实际输出电压值。应该和“预计输出电压”接近，又不超过“最大输出电压”。\n
+	2. 电压值为负值代表“加热”，接线端子“TEC-”的电压高于“TEC+”的电压。\n
+	3. 电压值为正值代表“制冷”，接线端子“TEC+”的电压高于“TEC-”的电压。
+	</HelpText>
+	<ShowPic>false</ShowPic>
+	<PicName></PicName>	
+  </Table_Help>
+  <Table_Help>
+    <ParamName>TCACTUALCURRENT</ParamName>
+    <HelpText> 
+	1. 温控器的实际输出电流的绝对值。
+	</HelpText>
+	<ShowPic>false</ShowPic>
+	<PicName></PicName>	
+  </Table_Help>
+  <Table_Help>
+    <ParamName>TCACTCUR</ParamName>
+    <HelpText> 
+	1. 温控器的实际输出电流。
+	</HelpText>
+	<ShowPic>false</ShowPic>
+	<PicName></PicName>	
+  </Table_Help>
+  <Table_Help>
+    <ParamName>TCTEMPSENSOR</ParamName>
+    <HelpText> 
+	1. 关于NTC热敏电阻和PT铂电阻的介绍，请参见我司文档：“应用笔记2：NTC热敏电阻”和“应用笔记3：PT铂电阻”。
+	</HelpText>
+	<ShowPic>false</ShowPic>
+	<PicName></PicName>	
+  </Table_Help>  
+  <Table_Help>
+    <ParamName>TCSENSOR</ParamName>
+    <HelpText> 
+	1. 关于NTC热敏电阻和PT铂电阻的介绍，请参见我司文档：“应用笔记2：NTC热敏电阻”和“应用笔记3：PT铂电阻”。
+	</HelpText>
+	<ShowPic>false</ShowPic>
+	<PicName></PicName>	
+  </Table_Help>  
+  <Table_Help>
+    <ParamName>TCTSTYPE</ParamName>
+    <HelpText> 
+	1. 温度传感器类型。
+	</HelpText>
+	<ShowPic>false</ShowPic>
+	<PicName></PicName>	
+  </Table_Help>  
+  <Table_Help>
+    <ParamName>TCSENSOROFFSET</ParamName>
+    <HelpText> 
+	1. 温度系统、温度探测器在制造时都有可能有偏差，因此测量的温度值也可能有一个偏差。\n
+	2. 温度的测量结果会加上该参数值，实现一个校准的效果。\n
+	3. 由于线性度的原因，不能保证在某点校正的结果能够适应整个温度范围。
+	</HelpText>
+	<ShowPic>false</ShowPic>
+	<PicName></PicName>	
+  </Table_Help>  
+  <Table_Help>
+    <ParamName>TCOFFSET</ParamName>
+    <HelpText> 
+	1. 温度系统、温度探测器在制造时都有可能有偏差，因此测量的温度值也可能有一个偏差。\n
+	2. 温度的测量结果会加上该参数值，实现一个校准的效果。\n
+	3. 由于线性度的原因，不能保证在某点校正的结果能够适应整个温度范围。
+	</HelpText>
+	<ShowPic>false</ShowPic>
+	<PicName></PicName>	
+  </Table_Help> 
+  <Table_Help>
+    <ParamName>TCRT</ParamName>
+    <HelpText> 
+	1. 阻值型的温度传感器，比如热敏电阻、PT铂电阻，被温控器测量到的当前的实际阻值。\n
+	</HelpText>
+	<ShowPic>false</ShowPic>
+	<PicName></PicName>	
+  </Table_Help>   
+  <Table_Help>
+    <ParamName>TCR0</ParamName>
+    <HelpText> 
+	1. 温度传感器的基准电阻。\n
+	2. 如果传感器是热敏电阻，该参数应该是该热敏电阻在25度时的阻值。\n
+	3. 如果传感器是PT1000，该参数应该是1。\n
+	4. 如果传感器是PT10000，该参数应该是10。
+	</HelpText>
+	<ShowPic>false</ShowPic>
+	<PicName></PicName>	
+  </Table_Help> 
+  <Table_Help>
+    <ParamName>TCNTCR0</ParamName>
+    <HelpText> 
+	1. 如果传感器是热敏电阻，该参数应该是该热敏电阻在25度时的阻值。\n
+	</HelpText>
+	<ShowPic>false</ShowPic>
+	<PicName></PicName>	
+  </Table_Help> 
+  <Table_Help>
+    <ParamName>TCPTR0</ParamName>
+    <HelpText> 
+	1. PT传感器在0度的电阻值。\n
+	2. 如果传感器是PT1000，该参数应该是1。\n
+	3. 如果传感器是PT10000，该参数应该是10。
+	</HelpText>
+	<ShowPic>false</ShowPic>
+	<PicName></PicName>	
+  </Table_Help> 
+  <Table_Help>
+    <ParamName>TCRS</ParamName>
+    <HelpText> 
+	1. 温度传感器连接时所选择的参考电阻。\n
+	2. 该值和温度传感器接口插针的选择有关，选择不同的插针连接传感器，则选择了不同的参考电阻。\n
+	3. 更具体的信息，请阅读用户手册。
+	</HelpText>
+	<ShowPic>false</ShowPic>
+	<PicName></PicName>	
+  </Table_Help>
+  <Table_Help>
+    <ParamName>TCNTCCAL</ParamName>
+    <HelpText> 
+	1. NTC热敏电阻的计算公式有两种：设置简单方便的指数方程，或者高精度的Steinhart-Hart方程。通常使用指数方程，但是对于在较大温度范围内均要求有较高精度的应用，建议客户使用Steinhart-Hart方程。\n
+	2. 温控器通过测量热敏电阻的阻值来计算目标温度。温度和阻值之间的对应关系的计算公式见文档：“应用笔记2：NTC热敏电阻”。
+	</HelpText>
+	<ShowPic>true</ShowPic>
+	<PicName>TCNTCCAL.PNG</PicName>	
+  </Table_Help>  
+  <Table_Help>
+    <ParamName>TCNTCFORMULA</ParamName>
+    <HelpText> 
+	1. NTC热敏电阻的计算公式有两种：设置简单方便的指数方程，或者高精度的Steinhart-Hart方程。通常使用指数方程，但是对于在较大温度范围内均要求有较高精度的应用，建议客户使用Steinhart-Hart方程。\n
+	2. 温控器通过测量热敏电阻的阻值来计算目标温度。温度和阻值之间的对应关系的计算公式见文档：“应用笔记2：NTC热敏电阻”。
+	</HelpText>
+	<ShowPic>true</ShowPic>
+	<PicName>TCNTCCAL.PNG</PicName>	
+  </Table_Help> 
+  <Table_Help>
+    <ParamName>TCNTCBETA</ParamName>
+    <HelpText> 
+	1. 如果“NTC热敏电阻计算公式”选择指数方式来计算，则需要设置该值。\n
+	2. 该参数即指数方程中的β值。
+	</HelpText>
+	<ShowPic>true</ShowPic>
+	<PicName>TCNTCCAL.PNG</PicName>	
+  </Table_Help>    
+  <Table_Help>
+    <ParamName>TCNTCC1</ParamName>
+    <HelpText> 
+	1. 如果“NTC热敏电阻计算公式”选择了Steinhart-Hart方程来计算，则需要设置该值。\n
+	2. 该参数即Steinhart-Hart方程中的C1值。\n
+	3. 该系数的获得，可参考“应用笔记4：NTC热敏电阻的Steinhart-Hart方程系数”。
+	</HelpText>
+	<ShowPic>true</ShowPic>
+	<PicName>TCNTCCAL.PNG</PicName>	
+  </Table_Help> 
+  <Table_Help>
+    <ParamName>TCNTCC2</ParamName>
+    <HelpText> 
+	1. 如果“NTC热敏电阻计算公式”选择了Steinhart-Hart方程来计算，则需要设置该值。\n
+	2. 该参数即Steinhart-Hart方程中的C2值。\n
+	3. 该系数的获得，可参考“应用笔记4：NTC热敏电阻的Steinhart-Hart方程系数”。
+	</HelpText>
+	<ShowPic>true</ShowPic>
+	<PicName>TCNTCCAL.PNG</PicName>	
+  </Table_Help>   
+  <Table_Help>
+    <ParamName>TCNTCC3</ParamName>
+    <HelpText> 
+	1. 如果“NTC热敏电阻计算公式”选择了Steinhart-Hart方程来计算，则需要设置该值。\n
+	2. 该参数即Steinhart-Hart方程中的C3值。\n
+	3. 该系数的获得，可参考“应用笔记4：NTC热敏电阻的Steinhart-Hart方程系数”。
+	</HelpText>
+	<ShowPic>true</ShowPic>
+	<PicName>TCNTCCAL.PNG</PicName>	
+  </Table_Help>  
+  <Table_Help>
+    <ParamName>TCPTC1</ParamName>
+    <HelpText> 
+	1. 如果使用铂电阻传感器，则需要设置该值。\n
+	2. 该参数即方程中的C1值。\n
+	3. 可参考“应用笔记3：PT铂电阻”。
+	</HelpText>
+	<ShowPic>true</ShowPic>
+	<PicName>TCPTCAL.PNG</PicName>	
+  </Table_Help>     
+  <Table_Help>
+    <ParamName>TCPTC2</ParamName>
+    <HelpText> 
+	1. 如果使用铂电阻传感器，则需要设置该值。\n
+	2. 该参数即方程中的C2值。\n
+	3. 可参考“应用笔记3：PT铂电阻”。
+	</HelpText>
+	<ShowPic>true</ShowPic>
+	<PicName>TCPTCAL.PNG</PicName>	
+  </Table_Help>    
+  <Table_Help>
+    <ParamName>TCRTOCEF</ParamName>
+    <HelpText> 
+	1. 当传感器未连接或工作过程中意外断开时，会出现温度监测结果异常大或者异常小，如果不能排除这种情况，温控器的功率输出对温控目标出现错误加热或者错误致冷的情况，因此该功能很重要。\n
+	2. 为了判断传感器是否异常，需要设置1个开路保护温度区间。当检查到测量温度在该区间外时，即认定为异常或者是传感器开路，然后温控器会关闭温控功率输出。\n
+	3. 该温度区间的合理设置和用户的使用情况相关。开路保护温度区间应包含用户的工作温度区间，同时包含温控器的工作环境温度变化区间。
+	</HelpText>
+	<ShowPic>false</ShowPic>
+	<PicName></PicName>	
+  </Table_Help>     
+  <Table_Help>
+    <ParamName>TCRTOCPSTATUS</ParamName>
+    <HelpText> 
+	1. 当传感器未连接或工作过程中意外断开时，会出现温度监测结果异常大或者异常小，如果不能排除这种情况，温控器的功率输出对温控目标出现错误加热或者错误致冷的情况，因此该功能很重要。\n
+	2. 为了判断传感器是否异常，需要设置1个开路保护温度区间。当检查到测量温度在该区间外时，即认定为异常或者是传感器开路，然后温控器会关闭温控功率输出。\n
+	3. 该温度区间的合理设置和用户的使用情况相关。开路保护温度区间应包含用户的工作温度区间，同时包含温控器的工作环境温度变化区间。
+	</HelpText>
+	<ShowPic>false</ShowPic>
+	<PicName></PicName>	
+  </Table_Help>   
+  <Table_Help>
+    <ParamName>TCRTOCPE</ParamName>
+    <HelpText> 
+	1. 传感器开路保护开关。\n
+	</HelpText>
+	<ShowPic>false</ShowPic>
+	<PicName></PicName>	
+  </Table_Help> 
+  <Table_Help>
+    <ParamName>TCRTOCPHT</ParamName>
+    <HelpText> 
+	1. 传感器开路保护的高阈值。\n
+	2. 当检查到测量温度高于该值时，即认定为异常或者是传感器开路，
+	</HelpText>
+	<ShowPic>false</ShowPic>
+	<PicName></PicName>	
+  </Table_Help>  
+  <Table_Help>
+    <ParamName>TCRTOCPLT</ParamName>
+    <HelpText> 
+	1. 传感器开路保护的低阈值。\n
+	2. 当检查到测量温度低于该值时，即认定为异常或者是传感器开路，
+	</HelpText>
+	<ShowPic>false</ShowPic>
+	<PicName></PicName>	
+  </Table_Help>  
+  <Table_Help>
+    <ParamName>TCPIDTYPE</ParamName>
+    <HelpText> 
+	1. 正常温控一般建议选择PI或者PID。\n
+	2. 如果对过冲和振荡的指标要求较高，可用PID方式，观察温控效果。\n
+	3. 噪声比较严重的环境，建议使用PI，因为微分D对干扰噪声比较敏感。
+	</HelpText>
+	<ShowPic>false</ShowPic>
+	<PicName></PicName>	
+  </Table_Help>    
+  <Table_Help>
+    <ParamName>TCP</ParamName>
+    <HelpText> 
+	1. 比例系数增大，系统响应加快，静差减小，但系统振荡增强，稳定性变坏。
+	</HelpText>
+	<ShowPic>true</ShowPic>
+	<PicName>TCPIDSOLUTION.PNG</PicName>	
+  </Table_Help> 
+  <Table_Help>
+    <ParamName>TCTI</ParamName>
+    <HelpText> 
+	1. 积分时间增大，系统超调减小，振荡减弱，但系统静差的消除也随之减慢。
+	</HelpText>
+	<ShowPic>true</ShowPic>
+	<PicName>TCPIDSOLUTION.PNG</PicName>	
+  </Table_Help> 
+  <Table_Help>
+    <ParamName>TCTD</ParamName>
+    <HelpText> 
+	1. 微分时间增大，系统振荡减弱，过冲减小，但系统对噪声会更加敏感。\n
+	2. 如果使用PI方式，发现系统的过冲较大，或者需要多次振荡才能够稳定下来，则可以改成PID，加入微分效果。\n
+	3. 首先把微分时间设置为0.1，然后逐渐增加微分时间，每增加一次，测试一下温控器曲线，直到过冲减小，初始振荡次数减少到满意值。\n
+	4. 增大微分时间的过程中，注意观察实际输出电压的波形，如果实际输出电压波形的毛刺波动达到了最大输出电压的10%，请不要再增大微分时间（微分对噪声敏感，因此要控制微分的幅度）。
+	</HelpText>
+	<ShowPic>true</ShowPic>
+	<PicName>TCPIDSOLUTION.PNG</PicName>	
+  </Table_Help> 
+ <Table_Help>
+    <ParamName>TCPIDP</ParamName>
+    <HelpText> 
+	1. 比例系数增大，系统响应加快，静差减小，但系统振荡增强，稳定性变坏。
+	</HelpText>
+	<ShowPic>true</ShowPic>
+	<PicName>TCPIDSOLUTION.PNG</PicName>	
+  </Table_Help> 
+  <Table_Help>
+    <ParamName>TCPIDTI</ParamName>
+    <HelpText> 
+	1. 积分时间增大，系统超调减小，振荡减弱，但系统静差的消除也随之减慢。
+	</HelpText>
+	<ShowPic>true</ShowPic>
+	<PicName>TCPIDSOLUTION.PNG</PicName>	
+  </Table_Help> 
+  <Table_Help>
+    <ParamName>TCPIDTD</ParamName>
+    <HelpText> 
+	1. 微分时间增大，系统振荡减弱，过冲减小，但系统对噪声会更加敏感。\n
+	2. 如果使用PI方式，发现系统的过冲较大，或者需要多次振荡才能够稳定下来，则可以改成PID，加入微分效果。\n
+	3. 首先把微分时间设置为0.1，然后逐渐增加微分时间，每增加一次，测试一下温控器曲线，直到过冲减小，初始振荡次数减少到满意值。\n
+	4. 增大微分时间的过程中，注意观察实际输出电压的波形，如果实际输出电压波形的毛刺波动达到了最大输出电压的10%，请不要再增大微分时间（微分对噪声敏感，因此要控制微分的幅度）。
+	</HelpText>
+	<ShowPic>true</ShowPic>
+	<PicName>TCPIDSOLUTION.PNG</PicName>	
+  </Table_Help> 
+  <Table_Help>
+    <ParamName>TCCTRLINTERVAL</ParamName>
+    <HelpText> 
+	1. 温控间隔，通常使用默认值。\n
+	2. 如果使用自动整定功能，则自动整定会生成1个合理的温控间隔，请保存使用生成值。
+	</HelpText>
+	<ShowPic>false</ShowPic>
+	<PicName></PicName>	
+  </Table_Help> 
+  <Table_Help>
+    <ParamName>TCPIDCAL</ParamName>
+    <HelpText> 
+	1. 正常温控运行，用户可在“位置式”和“增量式”之间任选一种，本温控对两种方式的处理略有不同，根据效果确定使用哪一种。\n
+	2. 提供最大正向输出和最大负向输出功能，仅供高级用户测试自己温控目标的热特性。\n
+	3. 提供“自动整定”功能，但是在开始“自动整定”之前，需要先完成：确定电源电压，“最大输出电压”设置，“输出模式”设置、传感器设置、过压保护和过流保护设置，连接实际温控系统的温度传感器和TEC，否则整定结果将不正确。\n
+	4. “自动整定”功能：算法选择“自动整定”，然后打开温控器输出，此时温控器不控温，而是会让温度在用户调节温度附近振荡以便测量温控系统的温度特性，然后自动计算出合适的4个PID参数：比例系数，积分时间，微分时间，控制间隔。\n
+	5. “自动整定”过程中，目标温度会振荡，因此如果温控目标对温度极其敏感，容易损坏，请不要使用自动整定功能。\n
+	6. “自动整定”完成后，温控器会自动关闭输出，并把PID参数设置成整定后的值，用户可以对整定的PID参数进行测试，如果满意，请保存这些参数，不然下次开机这些参数又会恢复到默认值。\n
+	7. “自动整定”是针对用户调节温度点测试的，因此结果是以该温度点优化的，对其它温度点的效果可能不理想。\n
+	8. “自动整定”是针对PID方式整定的，整定结果使用PID方式最佳；但用户也可以对整定的参数用PI或者PID类型做个比较，根据结果选择PID类型。\n
+	9. “自动整定”的结果不满意，或者不正确，请用户手动微调或整定。如果觉得响应速度慢，或者温度长时间和设定值之间有微小差距，可以微调：比例系数在整定结果的1～2倍之间调整，积分时间在0.5～1倍之间调整；如果过冲较大或振荡长时间不减小，可以微调：比例系数在整定结果的0.5～1倍之间调整，积分时间在1～2倍之间调整；微分时间和控制间隔一般不要变动（但是如果电源电压大于12V，且温控物体很小，则PID参数里的“控制间隔”改成不小于100ms的值）。
+	</HelpText>
+	<ShowPic>false</ShowPic>
+	<PicName></PicName>	
+  </Table_Help> 
+  <Table_Help>
+    <ParamName>TCPIDALGO</ParamName>
+    <HelpText> 
+	1. 正常温控运行，用户可在“位置式”和“增量式”之间任选一种，本温控对两种方式的处理略有不同，根据效果确定使用哪一种。\n
+	2. 提供最大正向输出和最大负向输出功能，仅供高级用户测试自己温控目标的热特性。\n
+	3. 提供“自动整定”功能，但是在开始“自动整定”之前，需要先完成：确定电源电压，“最大输出电压”设置，“输出模式”设置、传感器设置、过压保护和过流保护设置，连接实际温控系统的温度传感器和TEC，否则整定结果将不正确。\n
+	4. “自动整定”功能：算法选择“自动整定”，然后打开温控器输出，此时温控器不控温，而是会让温度在用户调节温度附近振荡以便测量温控系统的温度特性，然后自动计算出合适的4个PID参数：比例系数，积分时间，微分时间，控制间隔。\n
+	5. “自动整定”过程中，目标温度会振荡，因此如果温控目标对温度极其敏感，容易损坏，请不要使用自动整定功能。\n
+	6. “自动整定”完成后，温控器会自动关闭输出，并把PID参数设置成整定后的值，用户可以对整定的PID参数进行测试，如果满意，请保存这些参数，不然下次开机这些参数又会恢复到默认值。\n
+	7. “自动整定”是针对用户调节温度点测试的，因此结果是以该温度点优化的，对其它温度点的效果可能不理想。\n
+	8. “自动整定”是针对PID方式整定的，整定结果使用PID方式最佳；但用户也可以对整定的参数用PI或者PID类型做个比较，根据结果选择PID类型。\n
+	9. “自动整定”的结果不满意，或者不正确，请用户手动微调或整定。如果觉得响应速度慢，或者温度长时间和设定值之间有微小差距，可以微调：比例系数在整定结果的1～2倍之间调整，积分时间在0.5～1倍之间调整；如果过冲较大或振荡长时间不减小，可以微调：比例系数在整定结果的0.5～1倍之间调整，积分时间在1～2倍之间调整；微分时间和控制间隔一般不要变动（但是如果电源电压大于12V，且温控物体很小，则PID参数里的“控制间隔”改成不小于100ms的值）。
+	</HelpText>
+	<ShowPic>false</ShowPic>
+	<PicName></PicName>	
+  </Table_Help> 
+  <Table_Help>
+    <ParamName>TCTUNESTATUS</ParamName>
+    <HelpText> 
+	1. 自动整定的进度，当进度100%时，表示自动整定完成。\n
+	2. 关于自动整定的详细信息，请查看参数“PID的计算方法”的帮助内容。
+	</HelpText>
+	<ShowPic>false</ShowPic>
+	<PicName></PicName>	
+  </Table_Help> 
+  <Table_Help>
+    <ParamName>TCPIDWINDOW</ParamName>
+    <HelpText> 
+	1. 当温差大于该值时，温控器将以最大输出电压满输出；\n
+	2. “PID的计算方法”选择“位置式”时，开关控制窗口通常使用默认值；\n
+	3. “PID的计算方法”选择“增量式”时，开关控制窗口可以调大一些，最好大于初始环境温度和目标温度的差值。\n
+	4. 温控过程中，如果发现实际温度总是在 调节温度+开关窗口，或调节温度-开关窗口 这两个温度点上振荡，说明系统振荡大，应该增大开关窗口，有时还需要把温控公式改成 增量式。
+	</HelpText>
+	<ShowPic>false</ShowPic>
+	<PicName></PicName>	
+  </Table_Help> 
+  <Table_Help>
+    <ParamName>TCPIDACCWINDOW</ParamName>
+    <HelpText> 
+	1. 变速积分窗口，通常使用默认值。
+	</HelpText>
+	<ShowPic>false</ShowPic>
+	<PicName></PicName>	
+  </Table_Help> 
+  <Table_Help>
+    <ParamName>TCOVPE</ParamName>
+    <HelpText> 
+	1. 输出电压作用于温控执行器件：如TEC，陶瓷加热棒、电阻丝等。温控执行器件具有一定的安全电压范围，超过该范围会导致温控执行器件损坏。\n
+	2. 为了保护温控对象和温控执行元件，温控器有输出过压保护。在设定了输出电压后，可以设置过压保护阈值。\n
+	3. 过压错误是瞬时发生的，因此为了便于用户观察，错误发生时，系统保护关断输出，过压错误消失，保护结果却仍然显示为“错误”，借此提示用户：曾经发生过过压错误。下一次重新上电时，保护结果才恢复显示为正常。
+	</HelpText>
+	<ShowPic>false</ShowPic>
+	<PicName></PicName>	
+  </Table_Help> 
+  <Table_Help>
+    <ParamName>TCADJUSTOVPV</ParamName>
+    <HelpText> 
+	1. 为了安全，在有功率输出时，温控器会禁止调节“过压保护阈值”；所以用户要先关闭温控的功率输出，然后才可以修改该参数。\n
+	2. 过压保护阈值 &lt; 温控模块的电源电压*95%。\n
+	3. 过压保护阈值 &lt; TEC最大工作电压。TEC最大工作电压是指半导体制冷片的极限电压承受能力，具体值请咨询半导体制冷片供应商。\n
+	4. 过压保护阈值 - 噪声容限 &gt; 温控模块最大输出电压。即最大输出电压和过压保护阈值不能太接近，否则容易误报错；噪声容限一般取电源电压的3%-10%。\n
+	5. 举例：TEC1-12710 最大工作电压为15V，最佳工作电压10.5V；假设温控器的电源电压12V，如果最大输出电压设为8V，那么过压保护阈值可以设为9～11V。
+	</HelpText>
+	<ShowPic>false</ShowPic>
+	<PicName></PicName>	
+  </Table_Help> 
+  <Table_Help>
+    <ParamName>TCOVPADJTHR</ParamName>
+    <HelpText> 
+	1. 为了安全，在有功率输出时，温控器会禁止调节“过压保护阈值”；所以用户要先关闭温控的功率输出，然后才可以修改该参数。\n
+	2. 过压保护阈值 &lt; 温控模块的电源电压*95%。\n
+	3. 过压保护阈值 &lt; TEC最大工作电压。TEC最大工作电压是指半导体制冷片的极限电压承受能力，具体值请咨询半导体制冷片供应商。\n
+	4. 过压保护阈值 - 噪声容限 &gt; 温控模块最大输出电压。即最大输出电压和过压保护阈值不能太接近，否则容易误报错；噪声容限一般取电源电压的3%-10%。\n
+	5. 举例：TEC1-12710 最大工作电压为15V，最佳工作电压10.5V；假设温控器的电源电压12V，如果最大输出电压设为8V，那么过压保护阈值可以设为9～11V。
+	</HelpText>
+	<ShowPic>false</ShowPic>
+	<PicName></PicName>	
+  </Table_Help> 
+  <Table_Help>
+    <ParamName>TCOVPV</ParamName>
+    <HelpText> 
+	1. 实际的过压保护阈值。
+	</HelpText>
+	<ShowPic>false</ShowPic>
+	<PicName></PicName>	
+  </Table_Help> 
+  <Table_Help>
+    <ParamName>TCOVPACTTHR</ParamName>
+    <HelpText> 
+	1. 实际的过压保护阈值。
+	</HelpText>
+	<ShowPic>false</ShowPic>
+	<PicName></PicName>	
+  </Table_Help> 
+  <Table_Help>
+    <ParamName>TCOVEF</ParamName>
+    <HelpText> 
+	1. 过压错误是瞬时发生的，因此为了便于用户观察，错误发生时，系统保护关断输出，过压错误消失，保护结果却仍然显示为“错误”，借此提示用户：曾经发生过过压错误。下一次重新上电时，保护结果才恢复显示为正常。
+	</HelpText>
+	<ShowPic>false</ShowPic>
+	<PicName></PicName>	
+  </Table_Help> 
+  <Table_Help>
+    <ParamName>TCOVPSTATUS</ParamName>
+    <HelpText> 
+	1. 过压错误是瞬时发生的，因此为了便于用户观察，错误发生时，系统保护关断输出，过压错误消失，保护结果却仍然显示为“错误”，借此提示用户：曾经发生过过压错误。下一次重新上电时，保护结果才恢复显示为正常。
+	</HelpText>
+	<ShowPic>false</ShowPic>
+	<PicName></PicName>	
+  </Table_Help> 
+  <Table_Help>
+    <ParamName>TCADJUSTOCPC</ParamName>
+    <HelpText> 
+	1. 为了安全，在有功率输出时，温控器会禁止调节“过流保护阈值”；所以用户要先关闭温控的功率输出，然后才可以修改该参数。\n
+	2. 稍大于最大需求输出电流。\n
+	3. 小于TEC最大承受电流。
+	</HelpText>
+	<ShowPic>true</ShowPic>
+	<PicName>TCOCP.PNG</PicName>	
+  </Table_Help> 
+  <Table_Help>
+    <ParamName>TCOCPADJTHR</ParamName>
+    <HelpText> 
+	1. 为了安全，在有功率输出时，温控器会禁止调节“过流保护阈值”；所以用户要先关闭温控的功率输出，然后才可以修改该参数。\n
+	2. 稍大于最大需求输出电流。\n
+	3. 小于TEC最大承受电流。
+	</HelpText>
+	<ShowPic>true</ShowPic>
+	<PicName>TCOCP.PNG</PicName>	
+  </Table_Help> 
+  <Table_Help>
+    <ParamName>TCOCPC</ParamName>
+    <HelpText> 
+	1. 实际的过流保护阈值。
+	</HelpText>
+	<ShowPic>false</ShowPic>
+	<PicName></PicName>	
+  </Table_Help> 
+  <Table_Help>
+    <ParamName>TCOCPACTTHR</ParamName>
+    <HelpText> 
+	1. 实际的过流保护阈值。
+	</HelpText>
+	<ShowPic>false</ShowPic>
+	<PicName></PicName>	
+  </Table_Help> 
+  <Table_Help>
+    <ParamName>TCOCEF</ParamName>
+    <HelpText> 
+	1. 过流错误是瞬时发生的，因此为了便于用户观察，错误发生时，系统保护关断输出，过流错误消失，保护结果却仍然显示为“错误”，借此提示用户：曾经发生过过流错误。下一次重新上电时，保护结果才恢复显示为正常。
+	</HelpText>
+	<ShowPic>false</ShowPic>
+	<PicName></PicName>	
+  </Table_Help> 
+  <Table_Help>
+    <ParamName>TCOCPSTATUS</ParamName>
+    <HelpText> 
+	1. 过流错误是瞬时发生的，因此为了便于用户观察，错误发生时，系统保护关断输出，过流错误消失，保护结果却仍然显示为“错误”，借此提示用户：曾经发生过过流错误。下一次重新上电时，保护结果才恢复显示为正常。
+	</HelpText>
+	<ShowPic>false</ShowPic>
+	<PicName></PicName>	
+  </Table_Help> 
+  <Table_Help>
+    <ParamName>TCOCLE</ParamName>
+    <HelpText> 
+	1. 温控器会在过流保护触发之前先行试图进行限流保护，限流保护不成功，再触发过流保护关断输出，这样可以避免频繁进入过流保护。
+	</HelpText>
+	<ShowPic>false</ShowPic>
+	<PicName></PicName>	
+  </Table_Help> 
+  <Table_Help>
+    <ParamName>TCCURLIMITEN</ParamName>
+    <HelpText> 
+	1. 温控器会在过流保护触发之前先行试图进行限流保护，限流保护不成功，再触发过流保护关断输出，这样可以避免频繁进入过流保护。
+	</HelpText>
+	<ShowPic>false</ShowPic>
+	<PicName></PicName>	
+  </Table_Help> 
+  <Table_Help>
+    <ParamName>TCOCLC</ParamName>
+    <HelpText> 
+	1. “限流保护值”为“实际的过流保护阈值”减去“电流设置余量”。\n
+	2. 温控器试图把输出电流控制在该值以下。\n
+	3. 请通过改变“过流保护阈值调节”来改变限流值。
+	</HelpText>
+	<ShowPic>false</ShowPic>
+	<PicName></PicName>	
+  </Table_Help> 
+  <Table_Help>
+    <ParamName>TCCURLIMIT</ParamName>
+    <HelpText> 
+	1. “限流保护值”为“实际的过流保护阈值”减去“电流设置余量”。\n
+	2. 温控器试图把输出电流控制在该值以下。\n
+	3. 请通过改变“过流保护阈值调节”来改变限流值。
+	</HelpText>
+	<ShowPic>false</ShowPic>
+	<PicName></PicName>	
+  </Table_Help> 
+  <Table_Help>
+    <ParamName>TCOTPE</ParamName>
+    <HelpText> 
+	1. 本产品可以设置对温控对象的温度保护，当温控对象的实际温度超出了设定的安全温度范围时，会触发过温保护。\n
+	2. 触发过温保护后，温控器会出现错误提示信息，LED ERR指示灯闪烁；如果远程接口中有TOK输出，则它的电平会置低为0。
+	</HelpText>
+	<ShowPic>false</ShowPic>
+	<PicName></PicName>	
+  </Table_Help> 
+  <Table_Help>
+    <ParamName>TCOTPEN</ParamName>
+    <HelpText> 
+	1. 本产品可以设置对温控对象的温度保护，当温控对象的实际温度超出了设定的安全温度范围时，会触发过温保护。\n
+	2. 触发过温保护后，温控器会出现错误提示信息，LED ERR指示灯闪烁；如果产品的远程接口中有TOK输出口，则它的电平会置低为0（当TOK输出极性=正）。
+	</HelpText>
+	<ShowPic>false</ShowPic>
+	<PicName></PicName>	
+  </Table_Help> 
+  <Table_Help>
+    <ParamName>TCOTPMODE</ParamName>
+    <HelpText> 
+	1. 位置：低温保护值=低阈值；高温保护值=高阈值\n
+	2. 距离：低温保护值=调节温度-低阈值；高温保护值=调节温度+高阈值\n
+	3. 低位高距：低温保护值=低阈值；高温保护值=调节温度+高阈值\n
+	4. 低距高位：低温保护值=调节温度-低阈值；高温保护值=高阈值
+	</HelpText>
+	<ShowPic>false</ShowPic>
+	<PicName></PicName>	
+  </Table_Help> 
+  <Table_Help>
+    <ParamName>TCTOKPOLARITY</ParamName>
+    <HelpText> 
+	1. 默认情况（TOK输出极性=正）下，温度正常时TOK输出高电平(如果模块的TOK输出是开漏形式的，则此时输出高阻)，温度异常时输出低电平。\n
+	2. 如果把TOK输出极性设置为负，则TOK输出和默认情况相反。
+	</HelpText>
+	<ShowPic>false</ShowPic>
+	<PicName></PicName>	
+  </Table_Help> 
+  <Table_Help>
+    <ParamName>TCTOKPOL</ParamName>
+    <HelpText> 
+	1. 默认情况（TOK输出极性=正）下，温度正常时TOK输出高电平，温度异常时输出低电平。\n
+	2. 如果把TOK输出极性设置为负，则TOK输出和默认情况相反。
+	</HelpText>
+	<ShowPic>false</ShowPic>
+	<PicName></PicName>	
+  </Table_Help> 
+  <Table_Help>
+    <ParamName>TCOTPHYS</ParamName>
+    <HelpText> 	
+	1.设置保护滞回值，即处于过温状态时，安全温度范围两端内缩，防止频繁报错，也可提高安全性。比如，高阈值设定为50度，滞回值设置为1度时，当温度从25度上升到50度以上时，开始处于过温状态；此时只有下降到49度以下，才能再次处于非过温状态。
+	</HelpText>
+	<ShowPic>false</ShowPic>
+	<PicName></PicName>	
+  </Table_Help> 
+
+  <Table_Help>
+    <ParamName>TCEXTSTATUS</ParamName>
+    <HelpText> 	
+	外部状态：用于记录影响温控的外部错误。下面四种情况都会导致外部状态错误（=0），温控输出会被关闭，系统会报外部状态错误。\n
+	1. 系统检测到电源电压不正确；\n
+	2. 模块电路板处于危险温度状态；\n
+	3. 用户通过串口发送外部控制等于0（TCEXTCTRL=0，如果温控模块有外部控制功能时）；\n
+	4. 外部锁处于已锁状态(如果温控模块有外部锁功能时)；
+	</HelpText>
+	<ShowPic>false</ShowPic>
+	<PicName></PicName>	
+  </Table_Help>   
+
+  <Table_Help>
+    <ParamName>TCEXTCTRL</ParamName>
+    <HelpText> 	
+	该参数可以由外部发送命令控制。\n	
+	值可选0和1，0表示外部控制异常，1表示外部控制正常。\n
+	可用于上位机控制设备在意外情况下发送一个命令关闭驱动输出。
+	</HelpText>
+	<ShowPic>false</ShowPic>
+	<PicName></PicName>	
+  </Table_Help> 
+  
+  <Table_Help>
+    <ParamName>TCEXTLOCK</ParamName>
+    <HelpText> 	
+	外部锁功能。这是一个硬件功能，在模块上有一个ExtLock或Lock接口，该参数表示外部锁接口的输入电平状态。
+	</HelpText>
+	<ShowPic>false</ShowPic>
+	<PicName></PicName>	
+  </Table_Help>   
+ 
+  <Table_Help>
+    <ParamName>TCEXTLOCKPOLARITY</ParamName>
+    <HelpText> 	
+	外部锁极性可以设置外部输入电平的含义。\n
+	正1：表示外部输入信号为高时正常未锁，外部输入信号为低时锁定；\n
+	负0：表示外部输入信号为高时锁定，外部输入信号为低时正常未锁。
+	</HelpText>
+	<ShowPic>false</ShowPic>
+	<PicName></PicName>	
+  </Table_Help>   
+   <Table_Help>
+    <ParamName>TCEXTLOCKPOL</ParamName>
+    <HelpText> 	
+	外部锁极性可以设置外部输入电平的含义。\n
+	正1：表示外部输入信号为高时正常未锁，外部输入信号为低时锁定；\n
+	负0：表示外部输入信号为高时锁定，外部输入信号为低时正常未锁。
+	</HelpText>
+	<ShowPic>false</ShowPic>
+	<PicName></PicName>	
+  </Table_Help>   
+  <Table_Help>
+    <ParamName>TCARE</ParamName>
+    <HelpText> 	
+	1. 输出自动恢复：当出现过压、过流或温控器本身危险温度状态后，温控器进入保护状态，温控器的输出关闭；当这些错误状态消失后，如果使能了自动恢复功能，则错误状态消失后，温控器恢复功率输出；如果没有使能自动恢复功能，则不恢复输出。\n
+	2. 自动恢复只有在温控器输出开关打开时，才会执行。
+	</HelpText>
+	<ShowPic>false</ShowPic>
+	<PicName></PicName>	
+  </Table_Help> 
+  <Table_Help>
+    <ParamName>TCMAXAR</ParamName>
+    <HelpText> 	
+	1. 最大自动恢复次数：温控器能够自动恢复的次数不会超过该设定值。当设置为255时，自动恢复永远执行。
+	</HelpText>
+	<ShowPic>false</ShowPic>
+	<PicName></PicName>	
+  </Table_Help> 
+  <Table_Help>
+    <ParamName>TCAR</ParamName>
+    <HelpText> 	
+	1. 自动恢复次数：温控器能够自动恢复的次数不会超过该设定值。另外，设置为0，无自动恢复；设置为255，自动恢复永远执行。
+	</HelpText>
+	<ShowPic>false</ShowPic>
+	<PicName></PicName>	
+  </Table_Help>   
+  <Table_Help>
+    <ParamName>TCARCNT</ParamName>
+    <HelpText> 	
+	1. 已自动恢复次数：已发生的自动恢复的次数。温控器每自动恢复一次，该值加1。
+	</HelpText>
+	<ShowPic>false</ShowPic>
+	<PicName></PicName>	
+  </Table_Help> 
+  <Table_Help>
+    <ParamName>TCARDELAY</ParamName>
+    <HelpText> 	
+	1. 自动恢复延迟：错误发生到自动恢复的延时。当温控器被错误关闭后，自动恢复会检测时间，只有时间间隔超过该延时设置时，才进行一次自动恢复。
+	</HelpText>
+	<ShowPic>false</ShowPic>
+	<PicName></PicName>	
+  </Table_Help> 
+  <Table_Help>
+    <ParamName>TCERRORLOG</ParamName>
+    <HelpText> 	
+	1. 用于记录自温控器上电以来该子模块曾经发生过的错误。\n
+	2. 用1个8位二进制数来记录错误状态；每1位代表1种错误；正常，则对应位为1；如果发生错误，则对应位为0。
+	第0位：外部； 
+	第1位：过压；
+	第2位：过流；
+	第3位：过温；
+	第4位：温度传感器开路；
+	第5位：负载短路；
+	第6位：负载开路；
+	其它位：保留。
+
+	</HelpText>
+	<ShowPic>false</ShowPic>
+	<PicName></PicName>	
+  </Table_Help> 
+  <Table_Help>
+    <ParamName>TCERRORSTATUS</ParamName>
+    <HelpText> 	
+	1. 用于记录温控器子模块当前的错误状态。\n
+	2. 用1个8位二进制数来记录错误状态；每1位代表1种错误；正常，则对应位为1；如果错误，则对应位为0。
+	第0位：外部； 
+	第1位：过压；
+	第2位：过流；
+	第3位：过温；
+	第4位：温度传感器开路；
+	第5位：负载短路；
+	第6位：负载开路；
+	其它位：保留。
+	</HelpText>
+	<ShowPic>false</ShowPic>
+	<PicName></PicName>	
+  </Table_Help> 
+  <Table_Help>
+    <ParamName>TCERRORMASK</ParamName>
+    <HelpText> 	
+	1. 错误掩码：用于设定不可恢复的错误。\n
+	2. 系统具有完善的监控和保护功能，能够发现错误关闭输出，同时具有输出自动恢复功能，能在错误消失后自动恢复功率输出。但是，某些错误的出现可能代表温控系统出现了一些严重问题，因此用户可以设置这些错误导致的温控器关闭不能被自动恢复功能恢复。\n
+	3. 用1个8位二进制数来记录错误掩码；每1位代表1种错误；某种错误发生后，即使故障消除也不允许恢复，则对应位为0；某种错误发生后，如果故障消除允许恢复，则对应位为1。\n
+	4. 错误掩码对应位代表的错误和错误日志对应位代表的错误一样。
+	第0位：外部； 
+	第1位：过压；
+	第2位：过流；
+	第3位：过温；
+	第4位：温度传感器开路；
+	第5位：负载短路；
+	第6位：负载开路；
+	其它位：保留。\n
+	5. 比如，允许任何错误情况下，都能够自动恢复，则错误掩码是255（二进制为11111111）；如果只不允许过压和过流错误自动恢复，则错误掩码为249（二进制为11111001）。\n
+	6. 更详细的信息参考用户手册。
+	</HelpText>
+	<ShowPic>false</ShowPic>
+	<PicName></PicName>	
+  </Table_Help> 
+  <Table_Help>
+    <ParamName>TCLOADRES</ParamName>
+    <HelpText> 	
+	1. 有输出电压电流检测的温控模块中，可以进行负载电阻估算。\n
+	2. 输出关闭时，通过最大输出电压除以限流值进行估算。\n
+	3. 输出打开时，通过实际电压和实际电流估算。\n
+	</HelpText>
+	<ShowPic>false</ShowPic>
+	<PicName></PicName>	
+  </Table_Help> 
+  <Table_Help>
+    <ParamName>TCLOADRESLT</ParamName>
+    <HelpText> 	
+	1. 负载电阻如果过低于此阈值，判断为短路。\n
+	</HelpText>
+	<ShowPic>false</ShowPic>
+	<PicName></PicName>	
+  </Table_Help> 
+  <Table_Help>
+    <ParamName>TCLOADRESHT</ParamName>
+    <HelpText> 	
+	1. 负载电阻如果过高于此阈值，判断为开路。\n
+	</HelpText>
+	<ShowPic>false</ShowPic>
+	<PicName></PicName>	
+  </Table_Help> 
+</DocumentElement>

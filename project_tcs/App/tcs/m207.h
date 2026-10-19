@@ -32,6 +32,7 @@ typedef enum {
     M207_KIND_NONE = 0,
     M207_KIND_POLL,        /* '？' 查询（本机下发方向）*/
     M207_KIND_REPLY,       /* '=' 回复/回显 */
+    M207_KIND_ERRCODE,     /* CMD:REPLY=N 错误/执行应答（现行M207协议_v1.md §2/§3）*/
 } m207_kind_t;
 
 typedef struct {
@@ -39,6 +40,7 @@ typedef struct {
     char    param[16];           /* "TCACTTEMP"/"TCADJTEMP"/"TCSW"（大写）*/
     m207_kind_t kind;
     float   value;               /* '=' 后的浮点值（缺等号时 0）*/
+    uint8_t errcode;             /* KIND_ERRCODE：ERRORCODE 0-8 */
 } m207_reply_t;
 
 /* 行长上限（任务书：行长上限 64）*/

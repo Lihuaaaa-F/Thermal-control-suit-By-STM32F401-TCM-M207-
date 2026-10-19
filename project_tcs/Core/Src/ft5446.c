@@ -5,27 +5,50 @@
  *   - SCL=PD12 推挽、SDA=PD13 开漏+上拉
  *   - ct_iic_start/stop/wait_ack/ack/nack/send_byte/read_byte（抄原码）
  *   - ft5206_wr_reg/rd_reg/ft5206_init/ft5206_scan（抄原码，FT5446 同协议）
- *   - X 镜像：tp_dev.x = lcddev.width - (buf[0]<<8|buf[1])（抄原码横屏分支）
  *
- * 不依赖 HAL_I2C（用户决策 D1 软件 bit-bang）。
+ * WP-M2（v10.11）：
+ *   - 坐标映射恢复 GS 验证版（交换 X/Y 不镜像，2026-07-28 真手指实测），收敛到
+ *     唯一纯函数 ft5446_map_raw()；旧"X 镜像"映射为 D1 头号嫌疑已废弃（T-13）。
+ *   - 读路径不再做帧级幽灵过滤（H1 跨会话误杀根因），过滤决策移交会话状态机。
+ *   - 新增 raw 日志环形缓冲（M0：ghost/真击分布取证 + T-11 IC 版本入日志头）。
+ *   - 新增 raw 级注入（TCS_SIM，T-13：封死"注入绕过变换层"盲区）。
  */
 #include "ft5446.h"
-#ifndef TCS_UNIT_TEST
-#include "ltdc.h"      /* LCD_WIDTH/HEIGHT */
-#include "segger_rtt.h"
+
+/* ====== 纯逻辑（PC 单测）：坐标映射唯一出口（T-13）====== */
+#ifdef TCS_UNIT_TEST
+#define LCD_WIDTH   1024
+#define LCD_HEIGHT  600
+#else
+#include "ltdc.h"
+/* 触摸校准：映射后仿射微调。默认恒等（四点校准留 I5）。*/
+static float g_cal_a = 1.0f, g_cal_b = 0.0f, g_cal_c = 1.0f, g_cal_d = 0.0f;
 #endif
 
-/* ====== 纯逻辑（PC 单测）：幽灵触点突跳判定（H1）====== */
-uint8_t ft5446_ghost_jump_ok(int have, int px, int py, int x, int y)
+void ft5446_map_raw(uint16_t xr, uint16_t yr, int *sx, int *sy)
 {
-    if (!have) return 1;
-    int dx = x - px, dy = y - py;
-    if (dx < 0) dx = -dx;
-    if (dy < 0) dy = -dy;
-    return (dx <= FT5446_GHOST_JUMP_PX && dy <= FT5446_GHOST_JUMP_PX) ? 1u : 0u;
+    /* GS 验证版（2026-07-28 本屏真手指实测）：交换 X/Y，不镜像 */
+    int mx = (int)yr;
+    int my = (int)xr;
+#ifndef TCS_UNIT_TEST
+    /* 仿射校准（默认恒等；四点校准留 I5）*/
+    mx = (int)(g_cal_a * mx + g_cal_b);
+    my = (int)(g_cal_c * my + g_cal_d);
+#endif
+    if (mx < 0) mx = 0;
+    if (mx >= LCD_WIDTH) mx = LCD_WIDTH - 1;
+    if (my < 0) my = 0;
+    if (my >= LCD_HEIGHT) my = LCD_HEIGHT - 1;
+    *sx = mx;
+    *sy = my;
 }
 
 #ifndef TCS_UNIT_TEST
+#include "segger_rtt.h"
+
+/* 映射常量一致性编译断言（纯函数段 fallback 与 ltdc.h 真值）*/
+_Static_assert(LCD_WIDTH == 1024 && LCD_HEIGHT == 600,
+               "ft5446 map fallback dims must match ltdc.h");
 
 /* ====== 软件 I2C 引脚（抄 ctiic.h，SCL=PD12/SDA=PD13）====== */
 #define CT_IIC_SCL_PORT   GPIOD
@@ -45,10 +68,10 @@ uint8_t ft5446_ghost_jump_ok(int have, int px, int py, int x, int y)
 #define FT_RST(x)     HAL_GPIO_WritePin(FT_RST_PORT, FT_RST_PIN, (x)?GPIO_PIN_SET:GPIO_PIN_RESET)
 
 static int g_touch_ok = 0;
-
-/* 触摸校准：原始坐标 → 屏幕像素。默认恒等（M3b 待人校准）。
- * X 已在读取时做了镜像（横屏），这里再仿射微调。*/
-static float g_cal_a = 1.0f, g_cal_b = 0.0f, g_cal_c = 1.0f, g_cal_d = 0.0f;
+static uint16_t g_fw_version;          /* T-11：IC 固件版本（init 锁存）*/
+uint16_t ft5446_fw_version(void) { return g_fw_version; }
+volatile uint32_t g_ft5446_nak_cnt;    /* M1：读事务地址/寄存器/读相位 NAK 计数 */
+volatile uint32_t g_ft5446_read_cnt;   /* M1：读事务总数（NAK 率分母）*/
 
 static void ct_iic_init(void);
 static void ct_iic_stop(void);
@@ -57,6 +80,35 @@ static uint8_t ct_iic_wait_ack(void);
 static void ct_iic_send_byte(uint8_t data);
 static uint8_t ct_iic_read_byte(uint8_t ack);
 static uint8_t ft5446_probe(uint8_t wr_cmd);
+
+/* ====== raw 日志环（M0）====== */
+static ftlog_ent_t s_ftlog[FTLOG_RING_N];
+static uint32_t s_ftlog_head;      /* 下一写入位 */
+static uint32_t s_ftlog_total;     /* 累计入环条数（覆盖不减少）*/
+static uint8_t  s_ftlog_on;
+static uint8_t  s_ftlog_last_n;    /* 上一记录的 n（抬起沿标记用）*/
+
+void ftlog_clear(void)  { s_ftlog_head = 0; s_ftlog_total = 0; s_ftlog_last_n = 0; }
+void ftlog_enable(uint8_t on) { s_ftlog_on = on; }
+uint32_t ftlog_count(void) { return s_ftlog_total; }
+const ftlog_ent_t *ftlog_at(uint32_t idx)
+{
+    if (idx >= s_ftlog_total) return 0;
+    uint32_t base = (s_ftlog_total >= FTLOG_RING_N)
+                  ? (s_ftlog_total - FTLOG_RING_N) : 0u;
+    return &s_ftlog[(base + idx) % FTLOG_RING_N];
+}
+
+static void ftlog_push(uint32_t t_ms, int16_t xr, int16_t yr,
+                       uint8_t n, uint8_t ev, uint8_t id, uint8_t src)
+{
+    if (!s_ftlog_on) return;
+    ftlog_ent_t *e = &s_ftlog[s_ftlog_head];
+    e->t_ms = t_ms; e->xr = xr; e->yr = yr;
+    e->n = n; e->ev = ev; e->id = id; e->src = src;
+    s_ftlog_head = (s_ftlog_head + 1u) % FTLOG_RING_N;
+    s_ftlog_total++;
+}
 
 /* ====== 软件 I2C（抄 ctiic.c 原码）====== */
 
@@ -215,14 +267,15 @@ static uint8_t ft5446_wr_reg(uint8_t reg, uint8_t *buf, uint8_t len)
 
 static void ft5446_rd_reg(uint8_t reg, uint8_t *buf, uint8_t len)
 {
+    g_ft5446_read_cnt++;
     ct_iic_start();
     ct_iic_send_byte(FT5446_CMD_WR);
-    ct_iic_wait_ack();
+    if (ct_iic_wait_ack()) { ct_iic_stop(); g_ft5446_nak_cnt++; return; }
     ct_iic_send_byte(reg);
-    ct_iic_wait_ack();
+    if (ct_iic_wait_ack()) { ct_iic_stop(); g_ft5446_nak_cnt++; return; }
     ct_iic_start();
     ct_iic_send_byte(FT5446_CMD_RD);
-    ct_iic_wait_ack();
+    if (ct_iic_wait_ack()) { ct_iic_stop(); g_ft5446_nak_cnt++; return; }
     for (uint8_t i = 0; i < len; i++) {
         buf[i] = ct_iic_read_byte(i == (len - 1) ? 0 : 1);
     }
@@ -272,14 +325,7 @@ static void ft5446_diagnose(void)
     SEGGER_RTT_printf(0, "RTT: tp_diag scan done, %d device(s)\n", found);
 }
 
-/* ====== 初始化（抄 ft5206.c ft5206_init）======
- * ⚠️ 硬件状态（2026-07-26）：本板 FT5446U 触摸 IC 经多轮调试 I2C 无应答
- *   （wr_reg 全 NAK / 总线扫描 0 设备 / SCL·SDA·RST·INT 四线 GPIO 翻转均正常）。
- *   引脚映射（PD12=SCL/PD13=SDA/PH6=RST/PH7=INT）经原理图+用户手册+屏规格书
- *   三方核实正确，软件时序照抄官方 ft5206_init。判定：硬件层问题（触摸 IC 供电/
- *   FFC 排线接触/IC 损坏），需人物理检查，不阻塞固件主线。
- *   g_touch_ok 保持 0 → 主循环 touch_ready()=0 跳过触摸轮询，协议/显示/键盘照跑。
- *   人修好硬件后无需改代码，重新上电即自动 g_touch_ok=1。*/
+/* ====== 初始化（抄 ft5206.c ft5206_init）====== */
 int ft5446_init(void)
 {
     GPIO_InitTypeDef gi = {0};
@@ -320,7 +366,7 @@ int ft5446_init(void)
     temp[0] = 12;
     ft5446_wr_reg(FT5446_ID_G_PERIODACTIVE, temp, 1); /* 激活周期 12 */
 
-    /* 读版本号验证在线（抄 ft5206_init：版本 0x3003/0x0001/0x0002/CST340）。
+    /* 读版本号验证在线（T-11：值锁存供日志头/自检）。
      * H3 加固：SWD 会话期位bang总线偶发 NAK → 版本/触点读带 3 次重试 */
     for (int t = 0; t < 3 && !ver_ok; t++) {
         ft5446_rd_reg(FT5446_ID_G_LIB_VERSION, temp, 2);
@@ -331,6 +377,7 @@ int ft5446_init(void)
             HAL_Delay(20);
         }
     }
+    g_fw_version = (uint16_t)((temp[0] << 8) | temp[1]);
 
     /* 进一步验证：读触点数寄存器 0x02，在线应 ≤ 5 */
     uint8_t fingers = 0xFF;
@@ -356,70 +403,155 @@ int ft5446_init(void)
 
 int touch_ready(void) { return g_touch_ok; }
 
+/* ====== 配置寄存器回读诊断（M0/M1）：数据通路健康判据 ======
+ * 写入→回读一致 = I2C 双向数据通路健康；此时 TD_STATUS 恒 0x0F 应解释为
+ * IC 空闲态合法输出（非读数失效）。不一致 = 数据相位坏（ACK 假象）。*/
+void ft5446_diag_readback(void)
+{
+    static const struct { uint8_t reg; uint8_t wr; const char *name; } tab[] = {
+        { FT5446_DEVIDE_MODE,       0,  "DEVIDE_MODE" },
+        { FT5446_ID_G_MODE,         0,  "ID_G_MODE" },
+        { FT5446_ID_G_THGROUP,      22, "THGROUP" },
+        { FT5446_ID_G_PERIODACTIVE, 12, "PERIODACTIVE" },
+    };
+    uint8_t v;
+    for (unsigned i = 0; i < sizeof(tab) / sizeof(tab[0]); i++) {
+        uint32_t r0 = g_ft5446_read_cnt, n0 = g_ft5446_nak_cnt;
+        v = 0xFF;
+        ft5446_rd_reg(tab[i].reg, &v, 1);
+        SEGGER_RTT_printf(0, "RTT: tp_diag %s reg=0x%02x wrote=%u read=%u %s (nak +%lu/%lu)\n",
+                          tab[i].name, tab[i].reg, tab[i].wr, v,
+                          (v == tab[i].wr) ? "OK" : "MISMATCH",
+                          (unsigned long)(g_ft5446_nak_cnt - n0),
+                          (unsigned long)(g_ft5446_read_cnt - r0));
+        /* 同步一份到控制台（mb_console 只读 RTT 环）*/
+        printf("tp_diag %s wrote=%u read=%u %s\n", tab[i].name, tab[i].wr, v,
+               (v == tab[i].wr) ? "OK" : "MISMATCH");
+    }
+}
+
 void ft5446_set_calibration(float a, float b, float c, float d)
 {
     g_cal_a = a; g_cal_b = b; g_cal_c = c; g_cal_d = d;
 }
 
-/* ====== 读触摸点（抄 ft5206_scan 单点简化 + H1 幽灵触点过滤）====== */
-static int s_flt_have;                 /* 突跳过滤基准点有效性 */
-static int s_flt_x, s_flt_y;
-volatile uint32_t g_ft5446_ghost_drops;/* 丢弃计数（诊断可见）*/
+/* ====== raw 级注入（TCS_SIM，T-13：携带 raw 坐标走完整变换链）====== */
+#ifdef TCS_SIM
+static uint8_t s_rinj_active;      /* 0=无 1=按下 2=抬起沿（消费一次）*/
+static uint16_t s_rinj_xr, s_rinj_yr;
+
+void ft5446_raw_inject(int down, uint16_t xr, uint16_t yr)
+{
+    if (down) { s_rinj_xr = xr; s_rinj_yr = yr; s_rinj_active = 1; }
+    else      { s_rinj_active = 2; }
+}
+#endif
+
+/* ====== 读触摸样本（raw→映射→日志；过滤决策在会话机）====== */
+volatile uint32_t g_ft5446_badsample_drops;   /* 坏包/越界（会话机外驱动层防御）*/
 
 int ft5446_read(touch_event_t *ev)
 {
     ev->touched = 0;
+    ev->valid = 0;
+    ev->injected = 0;
+    ev->contacts = 0;
+    ev->touch_id = 0;
+    ev->weight = 0;
+    ev->area = 0;
     if (!g_touch_ok) return -1;
-
     uint8_t sta = 0;
-    ft5446_rd_reg(FT5446_REG_NUM_FINGER, &sta, 1);
-    uint8_t n = sta & 0x0F;
-    if (n == 0 || n > 5) {
-        s_flt_have = 0;                /* 抬手：清除突跳基准 */
-        return 0;   /* 无触摸 */
+    int16_t xr = 0, yr = 0;
+    uint8_t evflag = 0, tid = 0, wt = 0, ar = 0;
+    uint8_t inject_sample = 0;
+
+#ifdef TCS_SIM
+    if (s_rinj_active == 1u) {
+        /* raw 注入：合成首触点 6 字节，走与真 IC 完全相同的解析/映射/日志链 */
+        sta = 1;
+        xr = (int16_t)s_rinj_xr;
+        yr = (int16_t)s_rinj_yr;
+        evflag = 0x80;   /* contact 事件 */
+        tid = 0;
+        inject_sample = 1;
+    } else if (s_rinj_active == 2u) {
+        s_rinj_active = 0;   /* 抬起沿消费一次：sta=0 走正常无触点路径 */
+    } else
+#endif
+    {
+        ft5446_rd_reg(FT5446_REG_NUM_FINGER, &sta, 1);
     }
 
-    /* 读第1触点 4 字节（0x03 起）*/
-    uint8_t buf[4];
-    ft5446_rd_reg(FT5446_TP1_REG, buf, 4);
+    uint8_t n = sta & 0x0F;
+    if (n == 0) {
+        if (s_ftlog_last_n != 0) {
+            ftlog_push(HAL_GetTick(), 0, 0, 0, 0, 0, 0);   /* 抬起沿标记 */
+            s_ftlog_last_n = 0;
+        }
+        ev->valid = 1;   /* 合法"无触摸"样本——会话机据此结算抬起（M2）*/
+        return 0;
+    }
+    if (n > 5) {
+        /* 本屏 FT5446 空闲态实测（2026-10-20 touch diag 回读佐证数据通路健康）：
+         * TD_STATUS 恒 0x0F（非法触点数=无有效触点）。按空闲处理——样本有效但
+         * 无触摸，会话机静默忽略；不计坏包、不进日志环（否则 100Hz 灌水）。
+         * 旧固件同路径静默丢弃=行为一致。*/
+        if (s_ftlog_last_n != 0) {
+            ftlog_push(HAL_GetTick(), 0, 0, 0, 0, 0, 0);   /* 视为抬起沿 */
+            s_ftlog_last_n = 0;
+        }
+        ev->valid = 1;   /* 空闲态=合法样本，非坏包 */
+        return 0;
+    }
+
+    /* 读第1触点 6 字节（0x03 起：X_H X_L Y_H Y_L weight area）*/
+    uint8_t buf[6];
+#ifdef TCS_SIM
+    if (inject_sample) {
+        buf[0] = (uint8_t)((evflag & 0xF0) | ((xr >> 8) & 0x0F));
+        buf[1] = (uint8_t)(xr & 0xFF);
+        buf[2] = (uint8_t)((tid << 4) | ((yr >> 8) & 0x0F));
+        buf[3] = (uint8_t)(yr & 0xFF);
+        buf[4] = 0; buf[5] = 0;
+    } else
+#endif
+    {
+        ft5446_rd_reg(FT5446_TP1_REG, buf, 6);
+    }
 
     /* FT5446 datasheet：
      *   buf[0]=X_H（高4位事件标志，低4位 X[11:8]）
      *   buf[1]=X_L（X[7:0]）
      *   buf[2]=Y_H（高4位触摸ID，低4位 Y[11:8]）
-     *   buf[3]=Y_L（Y[7:0]）
-     * 横屏 X 镜像（抄 ft5206_scan else 分支）：
-     *   x = lcddev.width - (buf[0]<<8|buf[1])
-     *   y = buf[2]<<8|buf[3] */
-    uint16_t xr = (uint16_t)(((uint16_t)(buf[0] & 0x0F) << 8) | buf[1]);
-    uint16_t yr = (uint16_t)(((uint16_t)(buf[2] & 0x0F) << 8) | buf[3]);
+     *   buf[3]=Y_L（Y[7:0]）  buf[4]=weight  buf[5]=area */
+    xr = (int16_t)((((uint16_t)(buf[0] & 0x0F)) << 8) | buf[1]);
+    yr = (int16_t)((((uint16_t)(buf[2] & 0x0F)) << 8) | buf[3]);
+    evflag = (uint8_t)(buf[0] & 0xF0);
+    tid = (uint8_t)(buf[2] >> 4);
+    wt = buf[4];
+    ar = buf[5];
 
-    /* 必须 contact 事件（buf[0] 高4位=0x80），否则视为无效 */
-    if ((buf[0] & 0xF0) != 0x80) return 0;
-
-    /* X 镜像（横屏，屏排线方向与显示相反）*/
-    int sx = LCD_WIDTH - xr;
-    int sy = yr;
-
-    /* 仿射校准（M3b 调参，默认恒等）*/
-    sx = (int)(g_cal_a * sx + g_cal_b);
-    sy = (int)(g_cal_c * sy + g_cal_d);
-    if (sx < 0) sx = 0;
-    if (sx >= LCD_WIDTH) sx = LCD_WIDTH - 1;
-    if (sy < 0) sy = 0;
-    if (sy >= LCD_HEIGHT) sy = LCD_HEIGHT - 1;
-
-    /* H1 幽灵触点：相邻帧位移 >200px 丢弃该帧（返回 2=丢弃，上层不得合成释放沿）*/
-    if (!ft5446_ghost_jump_ok(s_flt_have, s_flt_x, s_flt_y, sx, sy)) {
-        g_ft5446_ghost_drops++;
-        ev->touched = 0;
-        return 2;
+    /* 必须 contact 事件（buf[0] 高4位=0x80），否则视为无效（防御性丢弃）*/
+    if (evflag != 0x80) {
+        g_ft5446_badsample_drops++;
+        ftlog_push(HAL_GetTick(), xr, yr, n, evflag, tid, inject_sample);
+        return 0;
     }
-    s_flt_have = 1;
-    s_flt_x = sx;
-    s_flt_y = sy;
+
+    int sx, sy;
+    ft5446_map_raw((uint16_t)xr, (uint16_t)yr, &sx, &sy);
+
+    /* M0 raw 日志：触点期间全记录（按下/移动/抬起全序列）*/
+    ftlog_push(HAL_GetTick(), xr, yr, n, evflag, tid, inject_sample);
+    s_ftlog_last_n = n;
 
     ev->touched = 1;
+    ev->valid = 1;
+    ev->injected = inject_sample;
+    ev->contacts = n;
+    ev->touch_id = tid;
+    ev->weight = wt;
+    ev->area = ar;
     ev->x = sx;
     ev->y = sy;
     return 0;

@@ -74,6 +74,7 @@ set(APP_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/App/tcs/post.c
     ${CMAKE_CURRENT_SOURCE_DIR}/App/tcs/qr/qrcodegen.c
     ${CMAKE_CURRENT_SOURCE_DIR}/App/tcs/console.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/App/tcs/touch_session.c
     ${CMAKE_CURRENT_SOURCE_DIR}/App/tcs/tcs_ui.c
 )
 

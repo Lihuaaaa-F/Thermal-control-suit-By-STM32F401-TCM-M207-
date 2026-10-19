@@ -22,6 +22,7 @@
 #include "ui_layout.h"
 #include "ltdc.h"
 #include "ft5446.h"
+#include "touch_session.h"
 #include "param_registry.h"
 #include "control.h"
 #include "post.h"
@@ -243,6 +244,22 @@ static void ui_aux20(int x, int y, const char *s, uint16_t fg, uint16_t bg)
     ui_text20(x, y, buf, fg, bg);
 }
 
+/* 单串 20px 宽度（D3 表宽渲染用；与 ui_aux20→prop_text 同一度量）*/
+static int ui_aux20_w(const char *s)
+{
+    char buf[8];
+    int i = 0;
+    while (*s && i < (int)sizeof(buf) - 1) {
+        unsigned int cp;
+        int n = utf8_next(s, &cp);
+        buf[i++] = (char)(cp < 0x80 ? cp : '?');
+        s += n;
+    }
+    buf[i] = 0;
+    return prop_w(tcs_font20, (int)TCS_FONT20_N, buf);
+}
+
+
 /* ====== K3 渲染路径 ======
  * 整页期间组件内的 patch 调用必须降级为无操作——否则绘制目标中途切到
  * 陈旧显示缓冲，flip 后旧页内容现形（真机实测：主页边缘残留标定页）。*/
@@ -272,6 +289,7 @@ volatile uint32_t g_stat_hero_us_max;    /* hero 数值区重绘耗时（预算 
 volatile uint32_t g_stat_full_us_last;   /* 整页重绘耗时（预算 ≤25000µs）*/
 volatile uint32_t g_stat_patch_cnt;      /* 小更新直绘次数 */
 volatile uint32_t g_stat_touch_hz;       /* K12：真实触摸 IC 报点率（点/s，1s 窗口）*/
+volatile uint32_t g_stat_touch_gap_ms_max; /* M1④/T-12：触摸轮询最大间隔（调度饥饿可见）*/
 volatile uint32_t g_stat_flip_cnt;       /* flip 次数（闪屏指标：应仅切页/弹窗增长）*/
 
 /* ====== 图元 ====== */
@@ -358,9 +376,8 @@ static int   s_last_x, s_last_y;
 static uint32_t s_press_t0;
 static uint8_t  s_press_lp_fired;
 static uint32_t s_last_lp_ms;
-static uint32_t s_touch_release_ok;
-static int s_prev_touched;
 static uint8_t s_sl_cancelled;   /* 拖出取消后抑制本次抬手的 tap（取消≠点选）*/
+static ts_state_t s_ts;          /* WP-M2：触摸会话状态机（帧级 H1 过滤已废）*/
 
 /* 新鲜度：UI 自记最近变更时刻（param/control 零改动红线）*/
 static uint32_t s_fresh_tc1, s_fresh_tc2, s_fresh_body;
@@ -436,13 +453,17 @@ static void draw_banner_icon(int x, int y, int red, uint16_t tx, uint16_t bg)
 {
     if (red) {
         gfx_fill_rect(x, y, x + 19, y + 19, tx);
-    } else {
-        for (int r = 0; r < 20; r++) {
-            int hw = (r + 2) * 11 / 20;   /* 半宽随行增长 */
-            gfx_fill_rect(x + 10 - hw, y + r, x + 10 + hw, y + r, tx);
-        }
+        return;
     }
-    (void)bg;
+    /* D3b 修复：▲ 警示三角必须含叹号（用户真机首验 D3b：只有外框没叹号）。
+     * 实心三角 + 底色「!」（杆 3px×7 @y+8，点 3×3 @y+16）——警示色像素数下限
+     * 由 nightly/L1 断言兜底。*/
+    for (int r = 0; r < 20; r++) {
+        int hw = (r + 2) * 11 / 20;
+        gfx_fill_rect(x + 10 - hw, y + r, x + 10 + hw, y + r, tx);
+    }
+    gfx_fill_rect(x + 9, y + 8, x + 11, y + 14, bg);   /* ! 杆 */
+    gfx_fill_rect(x + 9, y + 16, x + 11, y + 18, bg);  /* ! 点 */
 }
 
 static void draw_banner_content(void)
@@ -489,15 +510,15 @@ static void topbar_content(void)
     gfx_draw_vline(24, 22, 50, C_BORDER);
     gfx_draw_vline(183, 22, 50, C_BORDER);
     int auto_m = (g_tcs.mode != 0);
-    ui_dot8(52, 36, auto_m ? C_GREEN : C_GRAY);
+    ui_dot8(UI_DOT_MODE_C, auto_m ? C_GREEN : C_GRAY);   /* D4：mock 锚定 */
     ui_text24(68, 24, auto_m ? "自动" : "手动", C_TX, C_CARD);
 
     if (g_tcs.alarm_bits) {
         draw_banner_content();   /* 报警时链路点并入横幅（隐藏）*/
     } else {
-        ui_dot8(784, 26, g_tcs.m207_online ? C_GREEN : C_GRAY);
+        ui_dot8(UI_DOT_M207_C, g_tcs.m207_online ? C_GREEN : C_GRAY);   /* D4 */
         ui_aux20(796, 18, "M207", C_TX2, C_BG);
-        ui_dot8(856, 26, g_tcs.esp_link_ok ? C_GREEN : C_GRAY);
+        ui_dot8(UI_DOT_ESP_C, g_tcs.esp_link_ok ? C_GREEN : C_GRAY);   /* D4 */
         ui_aux20(868, 18, "ESP", C_TX2, C_BG);
     }
 
@@ -559,10 +580,16 @@ static void draw_tc_value(int cx, int ch)
     gfx_fill_rect(nx - 4, ny, nx + tw + 64, ny + 106, C_CARD);
     ui_text96(nx, ny, big, lost ? C_GRAY : C_HERO, C_CARD);
     ui_text32(nx + tw + 8, ny + 64, "°C", C_TX2, C_CARD);
-    int lit = (millis() - (ch ? s_fresh_tc2 : s_fresh_tc1)) <= 1000u;
-    /* 呼吸点跟随字尾（1.4"数值旁"），与数值同一同步区——避免跨区二次 sync */
-    ui_dot8(nx + tw + 44, ny + 8, (lit && !lost) ? C_GREEN : C_GRAY);
     ui_patch_commit(nx - 4, ny, nx + tw + 64, ny + 106);
+    /* D4 修复：呼吸点=mock 锚定固定坐标（不随字宽）；且在数值 patch 同步区外，
+     * 必须自带小 patch（旧实现"跟随字尾"恰在区内的假象掩盖了跨区问题）*/
+    {
+        int lit = (millis() - (ch ? s_fresh_tc2 : s_fresh_tc1)) <= 1000u;
+        ui_patch_begin();
+        ui_dot8(cx + UI_DOT_TC_DX, UI_DOT_TC_Y, (lit && !lost) ? C_GREEN : C_GRAY);
+        ui_patch_commit(cx + UI_DOT_TC_DX - 8, UI_DOT_TC_Y - 8,
+                        cx + UI_DOT_TC_DX + 8, UI_DOT_TC_Y + 8);
+    }
     uint32_t us = (DWT->CYCCNT - t0) / (SystemCoreClock / 1000000u);
     if (us > g_stat_hero_us_max) g_stat_hero_us_max = us;
     g_stat_patch_cnt++;
@@ -612,7 +639,7 @@ static void draw_body_card(void)
     ui_text48(152, 372, big, g_tcs.body_sensor_ok ? C_HERO : C_GRAY, C_CARD);
     ui_aux20(152 + ui_text48_w(big) + 6, 400, "°C", C_TX2, C_CARD);
     int lit = (millis() - s_fresh_body) <= 1000u;
-    ui_dot8(328, 392, (lit && g_tcs.body_sensor_ok) ? C_GREEN : C_GRAY);
+    ui_dot8(UI_DOT_BODY_C, (lit && g_tcs.body_sensor_ok) ? C_GREEN : C_GRAY);   /* D4 */
     if (!g_tcs.body_sensor_ok) {
         ui_round_rect(380, 380, 88, 40, 20, C_WARNBG, C_CARD);
         ui_text24(392, 388, "▲失联", C_WARNTX, C_WARNBG);
@@ -630,9 +657,26 @@ static void draw_fan_card_hl(int hl)
     ui_text24(556, 364, "风扇", C_TX, base);
     ui_text24(556, 402, g_tcs.fan_on ? "运行中" : "已停止", C_TX2, base);
     int tx0 = 840, ty0 = 368;
-    ui_round_rect(tx0, ty0, 128, 64, 32, g_tcs.fan_on ? C_GREEN : C_GRAY, base);
+    uint16_t trk = g_tcs.fan_on ? C_GREEN : C_GRAY;
+    ui_round_rect(tx0, ty0, 128, 64, 32, trk, base);
     int bx = tx0 + (g_tcs.fan_on ? 64 : 0);
-    ui_round_rect(bx, ty0, 64, 64, 32, C_WHITE, g_tcs.fan_on ? C_GREEN : C_GRAY);
+    ui_round_rect(bx, ty0, 64, 64, 32, C_WHITE, trk);
+    /* D2 修复：旋钮与轨道端帽同圆（同心 r=32），旋钮角像素曾用轨道色外溢胶囊
+     * 呈右端方形。按端帽角几何把圆外像素切回卡片底色（镜像对称恢复）。*/
+    for (int dy = 0; dy < 32; dy++)
+        for (int dx = 0; dx < 32; dx++) {
+            int cx2 = 31 - dx, cy2 = 31 - dy;
+            if (cx2 * cx2 + cy2 * cy2 >= 32 * 32) {
+                /* dx 量向与 ui_round_rect 一致：左帽从左缘、右帽从右缘 */
+                if (g_tcs.fan_on) {
+                    gfx_draw_pixel(tx0 + 127 - dx, ty0 + dy, base);
+                    gfx_draw_pixel(tx0 + 127 - dx, ty0 + 63 - dy, base);
+                } else {
+                    gfx_draw_pixel(tx0 + dx, ty0 + dy, base);
+                    gfx_draw_pixel(tx0 + dx, ty0 + 63 - dy, base);
+                }
+            }
+        }
     ui_text24(bx + 20, ty0 + 20, g_tcs.fan_on ? "开" : "关", C_TX, C_WHITE);
     ui_patch_commit(532, 352, 992, 448);
     g_stat_patch_cnt++;
@@ -776,7 +820,16 @@ static void draw_tune_topbar(void)
     snprintf(ts, sizeof(ts), "%02lu:%02lu:%02lu",
              (unsigned long)(t / 3600u), (unsigned long)((t / 60u) % 60u),
              (unsigned long)(t % 60u));
-    ui_aux20(896, 24, ts, C_TX2, C_BG);
+    /* D3 修复（类推条）：时钟=周期重绘文本，比例宽数字逐秒变宽=「字间距一会大
+     * 一会小」。表宽渲染：每字符固定 12px 单元右对齐（0-9 与 ':' 同宽口径）。*/
+    {
+        int tx = 896;
+        for (const char *q = ts; *q; q++, tx += 12) {
+            char one[2] = { *q, 0 };
+            int w = ui_aux20_w(one);
+            ui_aux20(tx + (12 - w), 24, one, C_TX2, C_BG);
+        }
+    }
     if (s_saved_toast_on) {
         ui_round_rect(716, 8, 168, 40, 8, C_PRESS, C_BG);
         gfx_draw_rect(716, 8, 883, 47, C_BLUE);
@@ -1347,9 +1400,13 @@ static void touch_poll(uint32_t now)
 #endif
     if (!injected) {
         if (!touch_ready()) return;
-        int rv = ft5446_read(&ev);
-        if (rv != 0) return;   /* -1 未就绪；2=幽灵帧丢弃 */
-        /* K12 报点率：真实 IC 触点样本计数（1s 窗口锁存）*/
+        /* M1④/T-12：轮询间隔统计——整页重绘期触摸停摆多久，直接可见 */
+        static uint32_t last_poll;
+        if (last_poll && now - last_poll > g_stat_touch_gap_ms_max)
+            g_stat_touch_gap_ms_max = now - last_poll;
+        last_poll = now;
+        (void)ft5446_read(&ev);   /* raw→映射→日志；坏包防御在驱动，会话决策在状态机 */
+        /* K12 报点率：真实 IC 样本计数（1s 窗口锁存，口径不变）*/
         static uint32_t cnt = 0, t0 = 0;
         cnt++;
         if (!t0) t0 = now;
@@ -1359,54 +1416,67 @@ static void touch_poll(uint32_t now)
         }
     }
 
-    if (ev.touched) {
-        if (!s_touch_down) {
-            s_touch_down = 1;
-            s_press_t0 = now;
-            s_press_lp_fired = 0;
-            s_last_lp_ms = now;
-            s_touch_release_ok = now;
-            s_last_x = ev.x;
-            s_last_y = ev.y;
+    ts_sample_t s = {
+        .touched  = (uint8_t)(ev.touched ? 1 : 0),
+        .valid    = (uint8_t)(injected ? 1 : ev.valid),
+        .injected = (uint8_t)(injected ? 1 : ev.injected),
+        .contacts = ev.contacts,
+        .touch_id = ev.touch_id,
+        .area     = ev.area,
+        .x = ev.x, .y = ev.y,
+    };
+    ts_out_t o;
+    ts_feed(&s_ts, &s, now, &o);
 
-            /* K4b：选中行滑条热区按下 → 进入拖动 */
-            if (s_dlg == DLG_NONE && s_page == UI_PAGE_TUNE) {
-                int base = s_tune_page * UI_TUNE_ROW_N;
-                int ry = tune_row_y(s_tune_sel - base);
-                int tx0 = UI_TUNE_ROW_X + 320, tw = UI_ROW_TRACK_W;
-                const param_desc_t *p = tune_sel_desc();
-                if (p && ui_in(ev.x, ev.y, tx0 - 8, ry + 4, tw + 16, UI_TUNE_ROW_H - 8)) {
-                    s_sl.st = SL_DRAG;
-                    s_sl.id = p->id;
-                    s_sl.orig = p->value;
-                    s_sl.val = slider_px2val(p, ev.x);
-                    s_sl.t_last_draw = 0;
-                    draw_slider(ry, p, s_sl.val, 1, 1, C_PRESS);
-                }
+    switch (o.evt) {
+    case TS_EVT_DOWN:
+        s_touch_down = 1;
+        s_press_t0 = now;
+        s_press_lp_fired = 0;
+        s_last_lp_ms = now;
+        s_sl_cancelled = 0;
+        s_last_x = o.x;
+        s_last_y = o.y;
+
+        /* K4b：选中行滑条热区按下 → 进入拖动 */
+        if (s_dlg == DLG_NONE && s_page == UI_PAGE_TUNE) {
+            int base = s_tune_page * UI_TUNE_ROW_N;
+            int ry = tune_row_y(s_tune_sel - base);
+            int tx0 = UI_TUNE_ROW_X + 320, tw = UI_ROW_TRACK_W;
+            const param_desc_t *p = tune_sel_desc();
+            if (p && ui_in(o.x, o.y, tx0 - 8, ry + 4, tw + 16, UI_TUNE_ROW_H - 8)) {
+                s_sl.st = SL_DRAG;
+                s_sl.id = p->id;
+                s_sl.orig = p->value;
+                s_sl.val = slider_px2val(p, o.x);
+                s_sl.t_last_draw = 0;
+                draw_slider(ry, p, s_sl.val, 1, 1, C_PRESS);
             }
-            press_hl_update(1, ev.x, ev.y);
-        } else {
-            s_last_x = ev.x;
-            s_last_y = ev.y;
-            /* 拖动跟手（≤20Hz 回显）*/
-            if (s_sl.st == SL_DRAG && s_dlg == DLG_NONE && s_page == UI_PAGE_TUNE) {
-                int base = s_tune_page * UI_TUNE_ROW_N;
-                int ry = tune_row_y(s_tune_sel - base);
-                int ty0 = ry + 36, th = 16;
-                if (ev.y < ty0 - UI_SLIDER_CANCEL_DY
-                    || ev.y > ty0 + th + UI_SLIDER_CANCEL_DY) {
-                    const param_desc_t *p = param_find(s_sl.id);
-                    s_sl.st = SL_IDLE;
-                    s_sl_cancelled = 1;
-                    tcs_log("[APP]", "slider cancel");
-                    if (p) draw_slider(ry, p, s_sl.orig, 0, 1, C_PRESS);
-                } else if (now - s_sl.t_last_draw >= UI_SLIDER_MIN_PERIOD_MS) {
-                    const param_desc_t *p = param_find(s_sl.id);
-                    if (p) {
-                        s_sl.val = slider_px2val(p, ev.x);
-                        s_sl.t_last_draw = now;
-                        draw_slider(ry, p, s_sl.val, 1, 1, C_PRESS);
-                    }
+        }
+        press_hl_update(1, o.x, o.y);
+        break;
+
+    case TS_EVT_MOVE:
+        s_last_x = o.x;
+        s_last_y = o.y;
+        /* 拖动跟手（≤20Hz 回显）*/
+        if (s_sl.st == SL_DRAG && s_dlg == DLG_NONE && s_page == UI_PAGE_TUNE) {
+            int base = s_tune_page * UI_TUNE_ROW_N;
+            int ry = tune_row_y(s_tune_sel - base);
+            int ty0 = ry + 36, th = 16;
+            if (o.y < ty0 - UI_SLIDER_CANCEL_DY
+                || o.y > ty0 + th + UI_SLIDER_CANCEL_DY) {
+                const param_desc_t *p = param_find(s_sl.id);
+                s_sl.st = SL_IDLE;
+                s_sl_cancelled = 1;
+                tcs_log("[APP]", "slider cancel");
+                if (p) draw_slider(ry, p, s_sl.orig, 0, 1, C_PRESS);
+            } else if (now - s_sl.t_last_draw >= UI_SLIDER_MIN_PERIOD_MS) {
+                const param_desc_t *p = param_find(s_sl.id);
+                if (p) {
+                    s_sl.val = slider_px2val(p, o.x);
+                    s_sl.t_last_draw = now;
+                    draw_slider(ry, p, s_sl.val, 1, 1, C_PRESS);
                 }
             }
         }
@@ -1426,25 +1496,52 @@ static void touch_poll(uint32_t now)
                 tune_step(in_m ? -1.0f : 1.0f);
             }
         }
-        s_prev_touched = 1;
-    } else if (s_prev_touched) {
-        s_prev_touched = 0;
+        break;
+
+    case TS_EVT_UP_OK:
         press_hl_update(0, 0, 0);
-        if (s_touch_down && now - s_touch_release_ok >= 30u) {
-            if (s_sl_cancelled) {
-                s_sl_cancelled = 0;   /* 取消的拖动不放行 tap（回弹即终结）*/
-            } else if (s_press_lp_fired == 0) {
-                if (s_sl.st == SL_DRAG) {
-                    s_sl.st = SL_PENDING;
-                    s_sl.t_release = now;
-                    tcs_log("[APP]", "slider pending %.2f", (double)s_sl.val);
-                } else {
-                    touch_tap(s_last_x, s_last_y);
-                }
+        if (s_sl_cancelled) {
+            s_sl_cancelled = 0;   /* 取消的拖动不放行 tap（回弹即终结）*/
+        } else if (s_press_lp_fired == 0) {
+            if (s_sl.st == SL_DRAG) {
+                s_sl.st = SL_PENDING;
+                s_sl.t_release = now;
+                tcs_log("[APP]", "slider pending %.2f", (double)s_sl.val);
+            } else {
+                touch_tap(o.x, o.y);
             }
         }
         s_touch_down = 0;
+        break;
+
+    case TS_EVT_UP_GHOST:
+        /* 幽灵会话（WP-M2①）：只清理（灭高亮/滑条回弹），严禁 tap/提交 */
+        press_hl_update(0, 0, 0);
+        if (s_sl.st == SL_DRAG) {
+            const param_desc_t *p = param_find(s_sl.id);
+            s_sl.st = SL_IDLE;
+            if (p && s_page == UI_PAGE_TUNE && s_dlg == DLG_NONE) {
+                int base = s_tune_page * UI_TUNE_ROW_N;
+                int ry = tune_row_y(s_tune_sel - base);
+                draw_slider(ry, p, s_sl.orig, 0, 1, C_PRESS);
+            }
+        }
+        s_sl_cancelled = 0;
+        s_touch_down = 0;
+        break;
+
+    default:
+        break;
     }
+}
+
+void tcs_ui_touch_debug(char *out, int cap)
+{
+    const ts_state_t *d = ts_debug(&s_ts);
+    snprintf(out, (size_t)cap, "sess state=%u x=%d y=%d dur_ms=%u inj=%u | ui down=%d last=%d,%d",
+             d->state, d->x, d->y,
+             (unsigned)(millis() - d->t_down), d->injected_s,
+             s_touch_down, s_last_x, s_last_y);
 }
 
 /* ====== 500ms 状态扫描 → 小更新直绘（零 flip）====== */
@@ -1653,7 +1750,16 @@ void tcs_ui_poll(uint32_t now)
                          (unsigned long)(t / 3600u), (unsigned long)((t / 60u) % 60u),
                          (unsigned long)(t % 60u));
                 gfx_fill_rect(890, 20, 1015, 48, C_BG);
-                ui_aux20(896, 24, ts, C_TX2, C_BG);
+                /* D3 修复（类推条）：时钟=周期重绘文本，比例宽数字逐秒变宽=「字间距一会大
+     * 一会小」。表宽渲染：每字符固定 12px 单元右对齐（0-9 与 ':' 同宽口径）。*/
+    {
+        int tx = 896;
+        for (const char *q = ts; *q; q++, tx += 12) {
+            char one[2] = { *q, 0 };
+            int w = ui_aux20_w(one);
+            ui_aux20(tx + (12 - w), 24, one, C_TX2, C_BG);
+        }
+    }
                 ui_patch_commit(890, 20, 1015, 48);
                 g_stat_patch_cnt++;
             }

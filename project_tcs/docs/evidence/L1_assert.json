@@ -1,0 +1,15 @@
+{
+ "A_mirror": {
+  "max": 0,
+  "pass": true
+ },
+ "B_dots": {
+  "ok": 6,
+  "pass": true
+ },
+ "C_bang": {
+  "warn_px": 217,
+  "bang_px": 21,
+  "pass": true
+ }
+}

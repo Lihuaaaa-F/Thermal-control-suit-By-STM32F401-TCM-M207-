@@ -86,6 +86,30 @@ def load_font_cps():
     return set(int(x, 16) for x in re.findall(r'0x([0-9A-Fa-f]{4,6})', m.group(1)))
 
 
+def screen_only_registry(txt: str) -> str:
+    """从注册表提取 PF_SCREEN 参数行块拼回（name/unit 上屏口径）。"""
+    lines = txt.splitlines(keepends=True)
+    out, buf, in_entry = [], [], False
+    for ln in lines:
+        if not in_entry and ln.lstrip().startswith("{ 0x"):
+            in_entry = True
+            buf = [ln]
+            continue
+        if in_entry:
+            buf.append(ln)
+            if "}," in ln or "}," in ln.rstrip():
+                block = "".join(buf)
+                if "PF_SCREEN" in block:
+                    out.append(block)
+                in_entry = False
+                buf = []
+        else:
+            out.append(ln)
+    if in_entry and buf and "PF_SCREEN" in "".join(buf):
+        out.append("".join(buf))
+    return "".join(out)
+
+
 def main():
     have = load_font_cps()
     missing = {}
@@ -95,6 +119,10 @@ def main():
             print(f"[font_audit] UI 源文件不存在: {src}")
             sys.exit(2)
         txt = src.read_text(encoding='utf-8')
+        if src.name == "param_registry.c":
+            # v1.2 H10：只收 PF_SCREEN 参数行的字符串（M207 参数屏不显=D6 红线，
+            # 其 name/unit 仅网页渲染，不进屏字库门禁）
+            txt = screen_only_registry(txt)
         for m in STR_RE.finditer(txt):
             cps, bad = decode_literal(m.group(1))
             literals += 1

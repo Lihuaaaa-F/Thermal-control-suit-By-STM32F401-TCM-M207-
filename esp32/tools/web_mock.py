@@ -23,28 +23,68 @@ ROOT = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)),
                                      "..", "components", "tcs_web", "web_files"))
 PORT = 8123
 
-REG = [
-    {"id": 1, "type": 0, "flags": 31, "min": 5, "max": 45, "step": 0.1, "def": 25.0,
-     "key": "tc1_set", "name": "贴身水箱设定温度", "unit": "°C"},
-    {"id": 2, "type": 0, "flags": 31, "min": 5, "max": 45, "step": 0.1, "def": 25.0,
-     "key": "tc2_set", "name": "环境水箱设定温度", "unit": "°C"},
-    {"id": 3, "type": 0, "flags": 15, "min": 36, "max": 40, "step": 0.1, "def": 37.5,
-     "key": "body_hot", "name": "体温过热阈值", "unit": "°C"},
-    {"id": 4, "type": 0, "flags": 15, "min": 35, "max": 39, "step": 0.1, "def": 36.5,
-     "key": "body_cold", "name": "体温过冷阈值", "unit": "°C"},
-    {"id": 5, "type": 0, "flags": 15, "min": 0.1, "max": 1, "step": 0.1, "def": 0.2,
-     "key": "hyst", "name": "滞回回差", "unit": "°C"},
-    {"id": 6, "type": 1, "flags": 15, "min": 0, "max": 1, "step": 1, "def": 0,
-     "key": "mode", "name": "控制模式", "unit": ""},
-    {"id": 7, "type": 0, "flags": 13, "min": 38, "max": 45, "step": 0.5, "def": 40,
-     "key": "tc_set_confirm", "name": "高温二次确认阈值", "unit": "°C"},
-    {"id": 8, "type": 1, "flags": 15, "min": 0, "max": 2, "step": 1, "def": 0,
-     "key": "commissioned", "name": "布防模式", "unit": ""},
-    {"id": 256, "type": 0, "flags": 4, "min": 0, "max": 10, "step": 0.1, "def": 1.0,
-     "key": "pid_kp", "name": "M207 PID 比例", "unit": ""},
-    {"id": 257, "type": 0, "flags": 4, "min": 0, "max": 1, "step": 0.01, "def": 0.1,
-     "key": "pid_ki", "name": "M207 PID 积分", "unit": ""},
-]
+def _extract_registry():
+    """WP-P3 golden：直接解析固件 param_registry.c 的 s_params 表——
+    mock 与固件注册表逐条一致（CDP 断言"字典行数=H10 表行数"的锚）。
+    纯字符串解析（无正则转义风险）：{ 0xID, "key", "name", "unit", TYPE,
+    FLAGS..., min, max, step, value, 0, 0 },"""
+    path = os.path.normpath(os.path.join(ROOT, "..", "..", "..", "..", "project_tcs",
+                                          "App", "tcs", "param_registry.c"))
+    txt = open(path, encoding="utf-8").read()
+    txt = txt[txt.index("s_params[PARAM_CAPACITY]"):txt.index("#define PARAM_N_REGISTERED")]
+    PF = {"PF_RW": 1, "PF_SCREEN": 2, "PF_WEB": 4, "PF_PERSIST": 8,
+          "PF_M207": 16, "PF_DANGER": 32}
+    TY = {"PARAM_TYPE_F32": 0, "PARAM_TYPE_U8": 1, "PARAM_TYPE_U16": 2}
+    out = []
+    pos = 0
+    while True:
+        i = txt.find("{ 0x", pos)
+        if i < 0:
+            break
+        j = txt.find("},", i)
+        if j < 0:
+            break
+        block = txt[i:j]
+        # 四个引号字段：key/name/unit + 类型
+        q1 = block.find(chr(34))
+        q2 = block.find(chr(34), q1 + 1)
+        key = block[q1 + 1:q2]
+        q3 = block.find(chr(34), q2 + 1)
+        q4 = block.find(chr(34), q3 + 1)
+        name = block[q3 + 1:q4]
+        q5 = block.find(chr(34), q4 + 1)
+        q6 = block.find(chr(34), q5 + 1)
+        unit = block[q5 + 1:q6] if q5 >= 0 else ""
+        # 类型
+        ty = 0
+        for k, v in TY.items():
+            if k in block:
+                ty = v
+                break
+        # flags：块内 PF_ 名求和
+        flags = 0
+        for k, v in PF.items():
+            if k in block:
+                flags |= v
+        # 数值段：最后一个逗号段里的浮点（形如 '0.0f, 100.0f, 0.1f, 0.4f,  0, 0'）
+        tail = block[block.rfind(",", 0, block.rfind(",")) - 0:]
+        nums = []
+        for tok in block.split(","):
+            tok = tok.strip()
+            if tok.endswith("f"):
+                try:
+                    nums.append(float(tok[:-1]))
+                except ValueError:
+                    pass
+        mn, mx, st, dv = nums[0], nums[1], nums[2], nums[3]
+        out.append({"id": int(block[2:block.find(chr(44))].strip(), 16), "type": ty, "flags": flags,
+                    "min": mn, "max": mx, "step": st, "def": dv,
+                    "key": key, "name": name, "unit": unit})
+        pos = j + 2
+    return out
+
+
+REG = _extract_registry()
 
 STATE = {"tc1": 25.0, "tc2": 25.0, "body": 36.8, "tec1": 0, "tec2": 0, "fan": 0,
          "mode": 0, "alarm": 0, "seq": 0, "tc1_set": 25.0, "tc2_set": 25.0}
@@ -83,6 +123,8 @@ def demo_set(pid, v):
             STATE["mode"] = int(v)
         elif pid == 8:
             STATE["commissioned"] = int(v)
+        else:
+            STATE["p_%d" % pid] = v   # H10 高级参数：mock 层存值即回显（R5 接真传输）
 
 
 def demo_cmd(c):
@@ -104,6 +146,8 @@ def demo_cmd(c):
             STATE["fan"] = 1
         elif c == 9:
             STATE["alarm"] &= ~4
+        elif c == 10:
+            STATE["m207_save_requested"] = True   # WP-P3 保存按钮帧序断言锚
 
 
 def push_all(obj):

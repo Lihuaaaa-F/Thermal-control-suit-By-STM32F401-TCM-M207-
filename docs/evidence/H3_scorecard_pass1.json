@@ -2,21 +2,21 @@
  "pass_no": 1,
  "all_green": true,
  "npass": 20,
- "boot_to_ui_ms": 1344,
+ "boot_to_ui_ms": 1266,
  "items": [
   {
    "no": 1,
    "name": "开机≤3s 亮屏",
    "pass": true,
-   "ms": 1344,
-   "detail": "boot→UI 首帧 954ms",
+   "ms": 1266,
+   "detail": "boot→UI 首帧 937ms",
    "note": ""
   },
   {
    "no": 2,
    "name": "自检角标 3s",
    "pass": true,
-   "ms": 14014,
+   "ms": 14445,
    "detail": "角标帧=True done=1 PASS=6/6（触屏 IC 硬件离线时如实 ✗）",
    "note": ""
   },
@@ -24,7 +24,7 @@
    "no": 3,
    "name": "未接线无横幅(安静)",
    "pass": true,
-   "ms": 28184,
+   "ms": 27975,
    "detail": "alarm=0x0000 ctrl=0（传感器类位=0 即安静；EEPROM 提示位另记风险）",
    "note": ""
   },
@@ -32,7 +32,7 @@
    "no": 4,
    "name": "主页四卡片零?",
    "pass": true,
-   "ms": 60023,
+   "ms": 59914,
    "detail": "home frame ok, sensor=1 m207=1（'?'=font_audit 门禁覆盖）",
    "note": ""
   },
@@ -40,7 +40,7 @@
    "no": 5,
    "name": "触摸调参±0.1",
    "pass": true,
-   "ms": 31310,
+   "ms": 30745,
    "detail": "−Δ=-0.100(期望-0.1) +Δ=0.100(期望+0.1)",
    "note": ""
   },
@@ -48,7 +48,7 @@
    "no": 6,
    "name": "长按连发150ms",
    "pass": true,
-   "ms": 30578,
+   "ms": 30899,
    "detail": "连发 40 步/持按4~8.5s（150ms 节奏理论 6.67 步/s）",
    "note": ""
   },
@@ -56,7 +56,7 @@
    "no": 7,
    "name": "步进0.1/1.0",
    "pass": true,
-   "ms": 35128,
+   "ms": 34974,
    "detail": "1.0 档 +Δ=1.000",
    "note": ""
   },
@@ -64,7 +64,7 @@
    "no": 8,
    "name": "保存重启保持",
    "pass": true,
-   "ms": 25009,
+   "ms": 25264,
    "detail": "复位后 0x01=27.5（=27.5 保持；save 回显含 rv=0=否-毛刺不影响判据；真断电 10s 往返留用户动作③）",
    "note": ""
   },
@@ -72,7 +72,7 @@
    "no": 9,
    "name": "切自动确认框",
    "pass": true,
-   "ms": 110192,
+   "ms": 110139,
    "detail": "确认框帧 H3_mode_dlg.png（取消路径，改自动走 A-10 联动验证）",
    "note": ""
   },
@@ -80,7 +80,7 @@
    "no": 10,
    "name": ">37.7自动制冷",
    "pass": true,
-   "ms": 20388,
+   "ms": 20257,
    "detail": "ctrl=1 tec1=1 fan=1（无 COOL 横幅=现行为，过热告警横幅见 A-12 口径，已记待决）",
    "note": ""
   },
@@ -88,7 +88,7 @@
    "no": 11,
    "name": "回区间待机",
    "pass": true,
-   "ms": 12377,
+   "ms": 12303,
    "detail": "ctrl=0 tec1=0",
    "note": ""
   },
@@ -96,7 +96,7 @@
    "no": 12,
    "name": "拔传感器SAFE",
    "pass": true,
-   "ms": 17595,
+   "ms": 17543,
    "detail": "ctrl=3 fan=1 alarm=0x0001 frame=True",
    "note": ""
   },
@@ -104,7 +104,7 @@
    "no": 13,
    "name": "人工确认恢复",
    "pass": true,
-   "ms": 23788,
+   "ms": 23641,
    "detail": "恢复源恢复但报警保持=True，ack 后 alarm=0x0000 ctrl=0",
    "note": ""
   },
@@ -112,7 +112,7 @@
    "no": 14,
    "name": "急停二次确认",
    "pass": true,
-   "ms": 69203,
+   "ms": 69058,
    "detail": "alarm=0x0004 fan=1 tec1=0 mode=0",
    "note": ""
   },

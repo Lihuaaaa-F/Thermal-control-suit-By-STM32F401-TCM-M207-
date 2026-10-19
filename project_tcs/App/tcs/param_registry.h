@@ -28,6 +28,7 @@ typedef enum {
     PF_WEB      = 0x04,   /* 出现在网页参数区 */
     PF_PERSIST  = 0x08,   /* EEPROM 持久化 */
     PF_M207     = 0x10,   /* 变更需下发 M207 */
+    PF_DANGER   = 0x20,   /* 危险参数（网页二次确认；H10 v1.2 ✓ 列）*/
 } param_flags_t;
 
 /* 值类型（协议/EEPROM 共用编码）*/
@@ -46,7 +47,7 @@ typedef enum {
 #define PARAM_ID_COMMISSIONED   0x08   /* 布防（WP-A.5）：0=未布防传感器报警只记日志，1=完整 FMEA */
 #define PARAM_ID_M207_BASE      0x100  /* M207 底层参数段（文档到后启用，WP9）*/
 
-#define PARAM_CAPACITY      32    /* 注册表数组容量（含全部段）*/
+#define PARAM_CAPACITY      64    /* 注册表数组容量（v1.2 H10 全表 0x100~0x135 入表后 53 条）*/
 #define PARAM_EEPROM_MAX    31    /* EEPROM count 字段上限（u8 纪录数；物理布局另限 30，见 param_serialize）*/
 #define PARAM_PERSIST_DEBOUNCE_MS  2000u
 

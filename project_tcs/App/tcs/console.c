@@ -6,6 +6,7 @@
  * CLI 行缓冲 \r 或 \n 结尾；命令表见 §3.8。
  */
 #include "console.h"
+#include "ft5446.h"
 #include "param_registry.h"
 #include "proto.h"
 #include "control.h"
@@ -115,6 +116,35 @@ void console_uart_error_recover(void)
     HAL_UART_Receive_IT(s_uart, &s_rx_byte, 1);
 }
 
+/* ====== touch log 分块 dump（WP-M0）======
+ * 2 行/拍 ≈ 8KB/s < UART 11.5KB/s，防 TX 环（2KB）溢出丢行；
+ * ftlog_at 老→新序输出，环形覆盖由 count/at 抽象消化。*/
+static uint8_t s_dump_on;
+static uint32_t s_dump_idx;
+static void touch_log_dump_poll(void)
+{
+    if (!s_dump_on) return;
+    extern uint32_t ftlog_count(void);
+    extern const ftlog_ent_t *ftlog_at(uint32_t idx);
+    extern uint16_t ft5446_fw_version(void);
+    if (s_dump_idx == 0) {
+        printf("# ft5446 ver=0x%04x map=GS_SWAP_V1\n", ft5446_fw_version());
+        printf("seq,t_ms,n,xr,yr,ev,id,src\n");
+    }
+    uint32_t total = ftlog_count();
+    for (int i = 0; i < 2 && s_dump_idx < total; i++, s_dump_idx++) {
+        const ftlog_ent_t *e = ftlog_at(s_dump_idx);
+        printf("%lu,%lu,%u,%d,%d,0x%02x,%u,%u\n",
+               (unsigned long)s_dump_idx, (unsigned long)e->t_ms, e->n,
+               (int)e->xr, (int)e->yr, e->ev, e->id, e->src & 1u);
+    }
+    if (s_dump_idx >= total) {
+        printf("touch log dump done (%lu lines)\n", (unsigned long)total);
+        s_dump_on = 0;
+        s_dump_idx = 0;
+    }
+}
+
 /* ====== 命令执行 ====== */
 static void cmd_exec(char *line)
 {
@@ -200,7 +230,7 @@ static void cmd_exec(char *line)
         uint32_t rate = up_s ? (g_stat_loop_passes / up_s) : 0;
         /* v9.5 K3：hero/page/flips/patches 四计数入 perf（预算表回填口）*/
         printf("work avg=%luus max=%luus ovf=%lu | ui_full=%lu.%lu ms | "
-               "touch max=%luus | loop=%lu rate=%lu/s | "
+               "touch max=%luus gap=%lums | loop=%lu rate=%lu/s | "
                "hero_max=%luus page=%luus flips=%lu patches=%lu "
                "touch_hz=%lu | up=%lus\n",
                (unsigned long)g_stat_work_us_avg, (unsigned long)g_stat_work_us_max,
@@ -208,6 +238,7 @@ static void cmd_exec(char *line)
                (unsigned long)(g_stat_ui_ms_x10 / 10u),
                (unsigned long)(g_stat_ui_ms_x10 % 10u),
                (unsigned long)g_stat_touch_us_max,
+               (unsigned long)g_stat_touch_gap_ms_max,
                (unsigned long)g_stat_loop_passes, (unsigned long)rate,
                (unsigned long)g_stat_hero_us_max, (unsigned long)g_stat_full_us_last,
                (unsigned long)g_stat_flip_cnt, (unsigned long)g_stat_patch_cnt,
@@ -295,6 +326,65 @@ static void cmd_exec(char *line)
         printf("touch cal set\n");
         return;
     }
+    /* --- touch log on|off|clear|stat|dump（WP-M0：幽灵/真击分布取证）--- */
+    if (strcmp(argv[0], "touch") == 0 && argc >= 2 && strcmp(argv[1], "log") == 0) {
+        extern void ftlog_clear(void);
+        extern void ftlog_enable(uint8_t on);
+        extern uint32_t ftlog_count(void);
+        extern uint16_t ft5446_fw_version(void);
+        extern volatile uint32_t g_ft5446_badsample_drops;
+        extern volatile uint32_t g_ft5446_nak_cnt;
+        extern volatile uint32_t g_ft5446_read_cnt;
+        extern volatile uint32_t g_ts_ghost_sessions;
+        extern volatile uint32_t g_ts_multipoint_drops;
+        extern volatile uint32_t g_ts_badsample_drops;
+        extern volatile uint32_t g_ts_jump_drops;
+        extern volatile uint32_t g_ts_glitch_resume;
+        if (argc == 3 && strcmp(argv[2], "on") == 0) {
+            ftlog_enable(1);
+            printf("touch log on\n");
+        } else if (argc == 3 && strcmp(argv[2], "off") == 0) {
+            ftlog_enable(0);
+            printf("touch log off\n");
+        } else if (argc == 3 && strcmp(argv[2], "clear") == 0) {
+            ftlog_clear();
+            printf("touch log clear\n");
+        } else if (argc == 3 && strcmp(argv[2], "stat") == 0) {
+            /* T-11：IC 固件版本入日志头 */
+            printf("# ft5446 ver=0x%04x ready=%d\n",
+                   ft5446_fw_version(), touch_ready());
+            printf("log count=%lu\n", (unsigned long)ftlog_count());
+            printf("drv badsample=%lu nak=%lu read=%lu nak_pct=%lu%%\n",
+                   (unsigned long)g_ft5446_badsample_drops,
+                   (unsigned long)g_ft5446_nak_cnt,
+                   (unsigned long)g_ft5446_read_cnt,
+                   (unsigned long)(g_ft5446_read_cnt
+                                   ? (g_ft5446_nak_cnt * 100u / g_ft5446_read_cnt) : 0u));
+            {
+                char dbg[128];
+                extern void tcs_ui_touch_debug(char *out, int cap);
+                tcs_ui_touch_debug(dbg, (int)sizeof(dbg));
+                printf("%s\n", dbg);
+            }
+            printf("sess ghost=%lu multipoint=%lu badsample=%lu jump=%lu glitch_resume=%lu\n",
+                   (unsigned long)g_ts_ghost_sessions,
+                   (unsigned long)g_ts_multipoint_drops,
+                   (unsigned long)g_ts_badsample_drops,
+                   (unsigned long)g_ts_jump_drops,
+                   (unsigned long)g_ts_glitch_resume);
+        } else if (argc == 3 && strcmp(argv[2], "dump") == 0) {
+            s_dump_on = 1;   /* console_poll 分块出 CSV（2 行/拍，防 TX 环溢出丢数据）*/
+        } else {
+            printf("usage: touch log on|off|clear|stat|dump\n");
+        }
+        return;
+    }
+    /* --- touch diag：配置寄存器回读（M0/M1 数据通路健康判据）--- */
+    if (strcmp(argv[0], "touch") == 0 && argc == 2 && strcmp(argv[1], "diag") == 0) {
+        extern void ft5446_diag_readback(void);
+        ft5446_diag_readback();
+        return;
+    }
     /* --- wdttest：死循环不喂狗 → IWDG 2s 复位（WP-C.1 实验命令）--- */
     if (strcmp(argv[0], "wdttest") == 0) {
         tcs_log("[SYSTEM]", "IWDG test: busy-loop 5s (timeout=2s)");
@@ -367,6 +457,16 @@ static void cmd_exec(char *line)
             extern void tcs_ui_inject_touch(int down, int x, int y);
             tcs_ui_inject_touch(0, 0, 0);
             printf("sim touchr (release)\n");
+        } else if (strcmp(argv[1], "touchraw") == 0 && argc == 4) {
+            /* T-13：raw 级注入——携带 raw 坐标走完整变换链（映射→会话机→UI）*/
+            extern void ft5446_raw_inject(int down, uint16_t xr, uint16_t yr);
+            ft5446_raw_inject(1, (uint16_t)strtoul(argv[2], NULL, 0),
+                              (uint16_t)strtoul(argv[3], NULL, 0));
+            printf("sim touchraw %s %s\n", argv[2], argv[3]);
+        } else if (strcmp(argv[1], "touchrawr") == 0) {
+            extern void ft5446_raw_inject(int down, uint16_t xr, uint16_t yr);
+            ft5446_raw_inject(0, 0, 0);
+            printf("sim touchrawr (release)\n");
         } else if (strcmp(argv[1], "arm") == 0) {
             (void)param_set(PARAM_ID_COMMISSIONED, 1.0f, PARAM_SRC_CONSOLE);
             printf("sim armed=%u\n", (unsigned)param_get(PARAM_ID_COMMISSIONED));
@@ -391,6 +491,7 @@ static void cmd_exec(char *line)
 void console_poll(void)
 {
     tx_drain();
+    touch_log_dump_poll();   /* WP-M0：分块 CSV 导出（每拍续传）*/
 
     /* 主机邮箱命令注入（probe-rs 写 RAM 触发，先于 UART 行处理）*/
     if (s_mb_magic == MB_MAGIC_RUN) {

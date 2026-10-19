@@ -1,0 +1,9 @@
+{
+ "fail": 0,
+ "v0": 11.6,
+ "v_drag": 40.0,
+ "v_cancel": 40.0,
+ "v_redrag": 11.6,
+ "expected_drag": 40.0,
+ "expected_redrag": 11.59090909090909
+}

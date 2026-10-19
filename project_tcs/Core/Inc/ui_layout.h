@@ -37,11 +37,11 @@
 #define UI_C_BORDER_HEX 0xD8DEE6  /* 卡描边 */
 #define UI_C_CLINE_HEX  0xD8DEE6  /* 底饰线 2px */
 #define UI_C_TX_HEX     0x1F2937  /* 主文字 */
-#define UI_C_TX2_HEX    0x5F6B7A  /* 次级文字（加深至 bg 4.79:1 达标）*/
+#define UI_C_TX2_HEX    0x44506B  /* 次级文字（v1.1 加深：card 6.5:1 / bg 6.9:1，总师 3.3:1 微瑕闭环）*/
 #define UI_C_HERO_HEX   0x111827  /* 大数值 */
 #define UI_C_BLUE_HEX   0x2563EB  /* 交互强调：按钮边/选中/拖动（数据层零蓝）*/
 #define UI_C_PRESS_HEX  0xDBEAFE  /* 按住反馈 */
-#define UI_C_GREEN_HEX  0x16A34A  /* 正常/开 */
+#define UI_C_GREEN_HEX    0x15803D  /* v1.1 加深(green-700): card 4.0:1 非文本≥3 达标 */  /* 正常/开 */
 #define UI_C_GRAY_HEX   0x9CA3AF  /* 停/禁用/失联 */
 #define UI_C_YELLOW_HEX 0xD97706  /* 注意（失联类）*/
 #define UI_C_RED_HEX    0xDC2626  /* 危险/急停/过温 */
@@ -174,6 +174,22 @@ typedef enum { UI_FS_HERO = 96, UI_FS_HERO2 = 48, UI_FS_TITLE = 32,
 #define UI_PRESS_FEED_MS 100u                 /* 触摸→变色 */
 #define UI_REPEAT_FIRST_MS 400u               /* 长按首连发 */
 #define UI_REPEAT_MS     150u                 /* 连发节奏 */
+
+/* ===== 触摸会话参数（WP-M2，v10.11 T-3/M0）=====
+ * 依据：合成人类参数（真击 80-200ms 按压）；阈值画在幽灵/真击分布间隙，
+ * 真击补录复核前为工作值（结果文档 WP-M.md 标注数据局限，复验当天复核）。 */
+#define UI_TOUCH_GHOST_MAX_MS  50u   /* 幽灵会话上限：时长<50ms+零位移+面积恒定 整会话丢弃 */
+#define UI_TOUCH_JUMP_PX       200   /* 会话内单样本瞬移丢弃阈值（>人手极限 20px/ms）*/
+#define UI_TOUCH_LIFT_GRACE_MS 20u   /* 抬起宽限（2 拍）：单帧 n==0 毛刺不拆会话 */
+
+/* ===== 状态点锚定（v1.1 WP-L2/D4：正典 mock 真值，中心坐标；随字宽浮动已废） =====
+ * mock/final/home.png 绿点聚类实测：(76,36)(780,31)(863,31)(cx+423,173)(333,397) */
+#define UI_DOT_MODE_C   76, 36     /* 模式胶囊点 */
+#define UI_DOT_M207_C   780, 31    /* 顶栏 M207 链路点 */
+#define UI_DOT_ESP_C    863, 31    /* 顶栏 ESP 链路点 */
+#define UI_DOT_TC_DX    423        /* TC 卡点 = 卡 x + 423 */
+#define UI_DOT_TC_Y     173
+#define UI_DOT_BODY_C   333, 397   /* 体温卡点 */
 
 /* ===== 编译期断言（机器门禁，规范进代码不靠自觉） ===== */
 #define UI_RECT_ASSERT_N(name, x, y, w, h, min_h) \

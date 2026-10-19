@@ -1,0 +1,16 @@
+﻿<?xml version="1.0" encoding="utf-8" standalone="yes"?>
+<EasyHost>
+  <ConnCfg value="Serial, COM3, 57600"></ConnCfg>
+  <Language value="zh-CN"></Language>
+  <DefaultAddr value="0"></DefaultAddr>
+  <SendInterval value="0.05"></SendInterval>
+  <StepRate value="1"></StepRate>
+  <RecordInterval value="0.3"></RecordInterval>
+  <ScriptInterval value="0.2"></ScriptInterval>
+  <LogFileFlag value="false"></LogFileFlag>
+  <CurveDataEnable value="true"></CurveDataEnable>
+  <RecordDataEnable value="true"></RecordDataEnable>
+  <ProjectFileName value=""></ProjectFileName>
+  <AutoLoadFlag value="true"></AutoLoadFlag>
+  <AutoCheckFlag value="false"></AutoCheckFlag>
+</EasyHost>

@@ -125,3 +125,10 @@ details summary { cursor: pointer; font-size: 15px; color: var(--tx2);
   background: #111827; color: #fff; padding: 10px 18px; border-radius: 8px;
   z-index: 30; font-size: 14px;
 }
+
+/* WP-P3 高级区分组卡 */
+.adv-group { margin: 10px 0; padding: 8px 10px; border: 1px solid var(--border, #D8DEE6); border-radius: 10px; }
+.adv-gtitle { font-size: 13px; font-weight: 600; color: var(--tx2, #5F6B7A); margin: 2px 0 6px; }
+.adv-hint { font-size: 12px; color: var(--tx2, #5F6B7A); margin: 8px 2px; line-height: 1.5; }
+.prow[data-danger] .pname span:first-child::after { content: "⚠"; color: #B45309; margin-left: 6px; font-size: 12px; }
+.ro-hint { font-size: 12px; color: var(--tx2, #5F6B7A); }

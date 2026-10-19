@@ -67,6 +67,10 @@ void HAL_IncTick(void)
     g_tick_ms++;
 }
 
+/* ====== 注册表节拍化下发状态（P3）====== */
+static uint8_t s_dump_active;
+static int     s_dump_idx;
+
 /* ====== 链路实例 ====== */
 comm_link_t g_link;
 
@@ -213,30 +217,11 @@ void on_frame(const uint8_t *payload, size_t len)
         break;
     }
     case MT_TCS_GET_REGISTRY: {
-        /* 注册表全量 → 0x14 帧 ×N（txq 16 深：WP-A.5 后 8 条目 + ACK = 9 ≤ 16 富余）*/
+        /* 注册表全量 → 0x14 帧 ×N。v1.2 H10 全表 50 条 > txq 16 深 → 改节拍化
+         * 下发（registry_dump_tick 每拍 2 帧，50 条≈250ms，前端零感知）。*/
         link_send_ack(seq, mt, TCS_ACK_OK, 0.0f);
-        int n = param_count();
-        for (int i = 0; i < n; i++) {
-            const param_desc_t *p = param_at(i);
-            tcs_reg_entry_t e;
-            memset(&e, 0, sizeof(e));
-            e.count = (uint8_t)n;
-            e.idx   = (uint8_t)i;
-            e.id = p->id; e.type = p->type; e.flags = p->flags;
-            e.min = p->min; e.max = p->max; e.step = p->step;
-            strncpy(e.key,  p->key,  sizeof(e.key) - 1);
-            strncpy(e.name, p->name, sizeof(e.name) - 1);
-            strncpy(e.unit, p->unit, sizeof(e.unit) - 1);
-            uint8_t pl[250];
-            size_t pn = tcs_pl_registry_entry(pl, sizeof(pl), &e);
-            if (pn) {
-                uint8_t frame[MAX_FRAME];
-                size_t fn = proto_encode_frame_with_mt(MT_TCS_REGISTRY_ENTRY,
-                                                       comm_next_seq(&g_link),
-                                                       pl, pn, frame, sizeof(frame));
-                if (fn) comm_txq_push(&g_link, frame, fn);
-            }
-        }
+        s_dump_idx = 0;
+        s_dump_active = 1;
         break;
     }
     case MT_TCS_CMD: {
@@ -253,6 +238,10 @@ void on_frame(const uint8_t *payload, size_t len)
         case TCS_CMD_MODE_MANUAL: (void)param_set(PARAM_ID_MODE, 0.0f, PARAM_SRC_WEB); break;
         case TCS_CMD_ESTOP:      tcs_emergency_stop(); break;
         case TCS_CMD_ALARM_ACK:  tcs_alarm_ack(); break;
+        case TCS_CMD_M207_SAVE:
+            /* P3：保存到模块。R5（ESP32）接 M207 `!` 传输+逐参可存性；本册=帧序打通 */
+            tcs_log("[NET]", "m207 save-all requested (R5 transport)");
+            break;
         default: st = TCS_ACK_BAD_ID; break;
         }
         link_send_ack(seq, mt, st, 0.0f);
@@ -262,6 +251,35 @@ void on_frame(const uint8_t *payload, size_t len)
     default:
         break;   /* 0x10/0x11 不会从 ESP 发来；0x90 已被 comm 层消费 */
     }
+}
+
+/* ====== 注册表节拍化下发（P3：H10 全表 50 条，2 帧/拍防 txq 溢出）====== */
+static void registry_dump_tick(void)
+{
+    if (!s_dump_active) return;
+    int n = param_count();
+    for (int k = 0; k < 2 && s_dump_idx < n; k++, s_dump_idx++) {
+        const param_desc_t *p = param_at(s_dump_idx);
+        tcs_reg_entry_t e;
+        memset(&e, 0, sizeof(e));
+        e.count = (uint8_t)n;
+        e.idx   = (uint8_t)s_dump_idx;
+        e.id = p->id; e.type = p->type; e.flags = p->flags;
+        e.min = p->min; e.max = p->max; e.step = p->step;
+        strncpy(e.key,  p->key,  sizeof(e.key) - 1);
+        strncpy(e.name, p->name, sizeof(e.name) - 1);
+        strncpy(e.unit, p->unit, sizeof(e.unit) - 1);
+        uint8_t pl[250];
+        size_t pn = tcs_pl_registry_entry(pl, sizeof(pl), &e);
+        if (pn) {
+            uint8_t frame[MAX_FRAME];
+            size_t fn = proto_encode_frame_with_mt(MT_TCS_REGISTRY_ENTRY,
+                                                   comm_next_seq(&g_link),
+                                                   pl, pn, frame, sizeof(frame));
+            if (fn) comm_txq_push(&g_link, frame, fn);
+        }
+    }
+    if (s_dump_idx >= n) s_dump_active = 0;
 }
 
 /* ====== 500ms STATUS 帧 ====== */
@@ -492,7 +510,7 @@ int main(void)
 
     console_init(&huart_console);
     console_print_reset_source();
-    tcs_log("[SYSTEM]", "boot project_tcs fw=v1.1.0 HCLK=%lu MHz",
+    tcs_log("[SYSTEM]", "boot project_tcs fw=v1.2.0 HCLK=%lu MHz",
             (unsigned long)(SystemCoreClock / 1000000U));
 
     iwdg_init();   /* ~2s */
@@ -574,6 +592,7 @@ int main(void)
         comm_poll_tx(&g_link);           /* 链路 TX 串行消费（唯一 HAL_UART_Transmit 处之一）*/
         console_poll();
         m207_poll(now);
+        registry_dump_tick();    /* P3：注册表全量节拍化下发 */
         /* M207 实际水温 → 全局快照（WP-G 仿真暴露的集成缺口：此前
          * m207_last_temp 从未同步进 g_tcs，屏/网页水温恒 0、过热保护失效）*/
         g_tcs.tc1_act = m207_last_temp(1);

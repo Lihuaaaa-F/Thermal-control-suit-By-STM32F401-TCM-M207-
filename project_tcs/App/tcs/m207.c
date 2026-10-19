@@ -67,6 +67,23 @@ int m207_parse_line(const char *line, m207_reply_t *out)
     if (colon <= 0) return 0;                  /* 缺冒号（或冒号在首位）*/
     if (eq < 0 && qm < 0) return 0;            /* 缺等号/问号 */
 
+    /* CMD:REPLY=N（现行M207协议_v1.md §2/§3）：设/存/错的统一应答。
+     * 正典约定不是回显参数名——解析器按此分路（WP-P2 板无关部分）。*/
+    if (up[0] == 'C' && up[1] == 'M' && up[2] == 'D' && up[3] == ':'
+        && eq >= 0 && strncmp(&up[4], "REPLY", 5) == 0) {
+        const char *vs = &up[eq + 1];
+        if (*vs == '\0') return 0;
+        char *end = NULL;
+        long code = strtol(vs, &end, 10);
+        if (end == vs || code < 0 || code > 255) return 0;
+        out->module = M207_MOD_NONE;
+        out->param[0] = '\0';
+        out->kind = M207_KIND_ERRCODE;
+        out->value = 0.0f;
+        out->errcode = (uint8_t)code;
+        return 1;
+    }
+
     /* 模块名 TC1/TC2，其它（如 TC3/空）→ module=NONE 且解析失败 */
     int mlen = colon;
     if (mlen != 3 || up[0] != 'T' || up[1] != 'C') return 0;
@@ -148,8 +165,48 @@ static m207_setpend_t s_pend[2];
  * 0x100/0x101 为假参数占位（PIDKP/PIDKI 非真指令名），验证通用通道
  * 下发→回读确认→NAK 重发全链；真参数到达后替换 cmd 字段即可。 */
 static const m207_map_entry_t s_map[] = {
-    { 0x100, 1, "PIDKP", 3 },
-    { 0x101, 1, "PIDKI", 3 },
+    /* H10 全表（v1.2 §2.5；cmd=《现行M207协议_v1.md》字典参数名，TC1/TC2 双通道）
+     * decimals=下发小数位（回读容差 0.5×10^-decimals）。R5 接真实传输。 */
+    /* TC1 */
+    { 0x100, 1, "TCPIDP",       3 },
+    { 0x101, 1, "TCPIDTI",      2 },
+    { 0x102, 1, "TCPIDTD",      3 },
+    { 0x103, 1, "TCOTPHT",      1 },
+    { 0x104, 1, "TCOTPLT",      1 },
+    { 0x105, 1, "TCOTPHHYS",    1 },
+    { 0x106, 1, "TCOTPMODE",    0 },
+    { 0x107, 1, "TCOCPADJTHR",  2 },
+    { 0x108, 1, "TCOVPADJTHR",  2 },
+    { 0x109, 1, "TCRTOCPHT",    1 },
+    { 0x10A, 1, "TCRTOCPLT",    1 },
+    { 0x10B, 1, "TCMINTEMP",    1 },
+    { 0x10C, 1, "TCMAXTEMP",    1 },
+    { 0x10D, 1, "TCMAXV",       2 },
+    { 0x10E, 1, "TCCOOLVRATIO", 2 },
+    { 0x10F, 1, "TCSTEPTEMP",   3 },
+    /* TC2 */
+    { 0x110, 2, "TCPIDP",       3 },
+    { 0x111, 2, "TCPIDTI",      2 },
+    { 0x112, 2, "TCPIDTD",      3 },
+    { 0x113, 2, "TCOTPHT",      1 },
+    { 0x114, 2, "TCOTPLT",      1 },
+    { 0x115, 2, "TCOTPHHYS",    1 },
+    { 0x116, 2, "TCOTPMODE",    0 },
+    { 0x117, 2, "TCOCPADJTHR",  2 },
+    { 0x118, 2, "TCOVPADJTHR",  2 },
+    { 0x119, 2, "TCRTOCPHT",    1 },
+    { 0x11A, 2, "TCRTOCPLT",    1 },
+    { 0x11B, 2, "TCMINTEMP",    1 },
+    { 0x11C, 2, "TCMAXTEMP",    1 },
+    { 0x11D, 2, "TCMAXV",       2 },
+    { 0x11E, 2, "TCCOOLVRATIO", 2 },
+    { 0x11F, 2, "TCSTEPTEMP",   3 },
+    /* 系统/PCB（PCB 模块无通道概念，ch=1 占位仅用于模板 TC 前缀不适用——
+     * PCB:* 类下发由 R5 按 module 字段扩展，本表 ch 仅 TC 类有效）*/
+    { 0x120, 1, "PCBOTPHT",     1 },
+    { 0x121, 1, "PCBOTPLT",     1 },
+    { 0x122, 1, "PCBOTPHHYS",   1 },
+    { 0x126, 1, "COMADDR",      0 },
 };
 #define M207_MAP_N  (sizeof(s_map) / sizeof(s_map[0]))
 

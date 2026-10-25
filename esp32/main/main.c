@@ -25,6 +25,8 @@
 #include "softap.h"
 #include "link_task.h"
 #include "http_server.h"
+#include "param_registry.h"
+#include "nvs_store.h"
 
 static const char *TAG = "TCS";
 
@@ -104,6 +106,18 @@ void app_main(void)
     const esp_partition_t *run = esp_ota_get_running_partition();
     const esp_app_desc_t *desc = esp_app_get_description();
     ESP_LOGI(TAG, "=== 调温服 ESP32-S3 bridge boot ===");
+
+    /* R1a（任务书 v11.1）：注册表唯一真值迁至 ESP32。本步只起服务+恢复 NVS；
+     * 链路/网页数据源切换在 R2，屏端语义不变。 */
+    param_registry_init(&(param_hooks_t){ .eeprom_commit = nvs_registry_commit });
+    {
+        uint8_t img[EE_IMG_SIZE];
+        if (eeprom_read_image(img) == 0 && param_deserialize(img) == 0)
+            ESP_LOGI(TAG, "R1a registry: %d params restored from NVS", param_count());
+        else
+            ESP_LOGI(TAG, "R1a registry: %d params loaded (defaults, first boot)",
+                     param_count());
+    }
     ESP_LOGI(TAG, "boot part=%s proj=%s ver=%s", run->label, desc->project_name, desc->version);
 
     softap_start();

@@ -1,0 +1,16 @@
+/**
+ * nvs_store.h — 参数注册表 NVS 持久化（R1a，任务书 v11.1）
+ *
+ * 256B 镜像格式与 AT24C02 v2 布局完全同构（magic 0xA6/ver 2/记录/CRC8@0xF8），
+ * 校验逻辑复用 param_serialize/param_deserialize——NVS 只当"一片不磨损超限的 EEPROM"。
+ * eeprom_* 别名满足 param_registry.c 的 param_load_eeprom 外部引用（双向同源，Q5）。
+ */
+#pragma once
+#include <stdint.h>
+#include "param_registry.h"
+
+int nvs_registry_commit(const uint8_t img[EE_IMG_SIZE]);  /* hooks.eeprom_commit 落点 */
+
+/* param_registry.c 的 param_load_eeprom() 外部引用（NVS 实现）*/
+int eeprom_ready(void);
+int eeprom_read_image(uint8_t img[EE_IMG_SIZE]);

@@ -27,6 +27,7 @@
 #include "http_server.h"
 #include "param_registry.h"
 #include "nvs_store.h"
+#include "m207_service.h"
 
 static const char *TAG = "TCS";
 
@@ -108,8 +109,12 @@ void app_main(void)
     ESP_LOGI(TAG, "=== 调温服 ESP32-S3 bridge boot ===");
 
     /* R1a（任务书 v11.1）：注册表唯一真值迁至 ESP32。本步只起服务+恢复 NVS；
-     * 链路/网页数据源切换在 R2，屏端语义不变。 */
-    param_registry_init(&(param_hooks_t){ .eeprom_commit = nvs_registry_commit });
+     * 链路/网页数据源切换在 R2，屏端语义不变。
+     * R1b（v11.3）：PF_M207 写入口接 m207 服务（50ms 节流+写后读回）。 */
+    param_hooks_t hooks = { .eeprom_commit = nvs_registry_commit,
+                            .on_m207_set = m207_hook_set_temp,
+                            .on_m207_map_set = m207_hook_map_set };
+    param_registry_init(&hooks);
     {
         uint8_t img[EE_IMG_SIZE];
         if (eeprom_read_image(img) == 0 && param_deserialize(img) == 0)
@@ -124,5 +129,12 @@ void app_main(void)
     link_loopback_run();          /* WP-F.1：真机自环自测（独占 UART1，~2.5s，证据=[LPBK]）*/
     link_start();
     web_start();
-    ESP_LOGI(TAG, "WiFi AP + loopback + link + web all up");
+    /* R1b：M207 服务（UART2 21/47@57600）。回环自测先行（独占 UART2 ~1s，
+     * 含物理短接探测），随后常驻服务钉核 1（第八章预算）。 */
+    m207_lb_boottest();
+    m207_service_start();
+#if CONFIG_TCS_M207_SELFLOOP
+    m207_selfloop_run();          /* 取证构建：应答器注入全路径（[M207SL]，~20s）*/
+#endif
+    ESP_LOGI(TAG, "WiFi AP + loopback + link + web + m207 all up");
 }

@@ -46,9 +46,13 @@ from c_strip import strip_c_comments
 
 def collect_ui_chars():
     """扫 UI 源码字符串字面量 → 非 ASCII 码点集合（自动收集，取代手工清单）"""
+    from font_audit import screen_only_registry   # 与门禁同一口径（PF_SCREEN 才上屏）
     chars = set()
     for src in UI_SOURCES:
         txt = src.read_text(encoding='utf-8')
+        if src.name == "param_registry.c":
+            txt = screen_only_registry(txt)   # M207 参数屏不显=D6 红线，不进字库
+        txt = strip_c_comments(txt)   # 注释内引号短语不收集（2026-10-26 误报教训）
         for m in STR_RE.finditer(txt):
             raw = m.group(1)
             i = 0

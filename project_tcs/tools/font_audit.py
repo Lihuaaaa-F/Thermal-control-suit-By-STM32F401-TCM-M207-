@@ -123,6 +123,8 @@ def main():
             # v1.2 H10：只收 PF_SCREEN 参数行的字符串（M207 参数屏不显=D6 红线，
             # 其 name/unit 仅网页渲染，不进屏字库门禁）
             txt = screen_only_registry(txt)
+        txt = strip_c_comments(txt)   # 注释内引号短语不是 UI 字符串（v9.5 K6 教训；
+                                      # 2026-10-26 实测：D4 注释"跟随字尾"曾致 3 缺字误报）
         for m in STR_RE.finditer(txt):
             cps, bad = decode_literal(m.group(1))
             literals += 1

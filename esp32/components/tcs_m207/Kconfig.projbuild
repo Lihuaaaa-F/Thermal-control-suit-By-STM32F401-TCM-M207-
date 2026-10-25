@@ -1,0 +1,16 @@
+menu "M207 Service (R1b)"
+
+    config TCS_M207_SELFLOOP
+        bool "R1b 取证构建：UART 内部回环+应答器注入全路径自测（[M207SL]）"
+        default n
+        help
+          开机自测后追加 ~20s 注入序列（在线/写后读回/重发/NAK/离线/恢复/ack/停写）。
+          仅取证构建使用；日常构建保持 n。
+
+    config TCS_M207_RAWLOG
+        bool "M207 RX 原始字节逐块日志（COMPUSHLIST 自发现试跑取证用）"
+        default n
+        help
+          每块 RX 以原文打印（[M207R]）。真机 M5-M7 接通后试跑 COMPUSHLIST 时开启。
+
+endmenu

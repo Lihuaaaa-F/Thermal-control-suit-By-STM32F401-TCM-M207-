@@ -136,5 +136,8 @@ void app_main(void)
 #if CONFIG_TCS_M207_SELFLOOP
     m207_selfloop_run();          /* 取证构建：应答器注入全路径（[M207SL]，~20s）*/
 #endif
+#if CONFIG_TCS_M207_REALPROBE
+    m207_realprobe_run();         /* 真机取证构建：P-2 判活+协议探针+E-06 录帧（[RP]/[P2]/[E06]）*/
+#endif
     ESP_LOGI(TAG, "WiFi AP + loopback + link + web + m207 all up");
 }

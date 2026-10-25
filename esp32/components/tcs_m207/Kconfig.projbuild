@@ -13,4 +13,10 @@ menu "M207 Service (R1b)"
         help
           每块 RX 以原文打印（[M207R]）。真机 M5-M7 接通后试跑 COMPUSHLIST 时开启。
 
+    config TCS_M207_REALPROBE
+        bool "R1b 真机取证：P-2 电平判活+协议探针（SYSMODEL/别名/V-5/COMPUSHLIST/压测）+E-06 60s 录帧"
+        default n
+        help
+          需配合 TCS_M207_RAWLOG=y。M5-M7 接通后的真机清账构建；取证完还原 n。
+
 endmenu

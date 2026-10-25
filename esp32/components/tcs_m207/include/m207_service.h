@@ -37,6 +37,7 @@ uint16_t m207_stats_nak(void);                       /* NAK 累计（写路径�
 uint16_t m207_stats_verify_ok(void);                 /* 写后读回确认成功累计 */
 uint16_t m207_stats_resend(void);                    /* 自动重发累计 */
 uint16_t m207_stats_offline(void);                   /* 离线沿累计 */
+uint16_t m207_stats_wdrop(void);                     /* 离线/未启动拒写累计 */
 void    m207_perf_reset(void);                       /* perf 窗口清零 */
 
 /* ====== 报警（F5：置位在服务内；清除走 tcs_alarm_ack 人工确认）====== */
@@ -50,6 +51,11 @@ void m207_lb_boottest(void);
 /* ====== R1b 取证专用构建（CONFIG_TCS_M207_SELFLOOP=y）====== */
 #if CONFIG_TCS_M207_SELFLOOP
 void m207_selfloop_run(void);   /* 应答器注入全路径取证（[M207SL]），~15s */
+#endif
+
+/* ====== R1b 真机取证构建（CONFIG_TCS_M207_REALPROBE=y）====== */
+#if CONFIG_TCS_M207_REALPROBE
+void m207_realprobe_run(void);  /* P-2 判活+协议探针+E-06 60s 录帧（[P2]/[RP]/[E06]）*/
 #endif
 
 #ifdef __cplusplus

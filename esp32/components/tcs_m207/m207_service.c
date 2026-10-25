@@ -621,6 +621,7 @@ uint16_t m207_stats_nak(void) { return s_stat.nak; }
 uint16_t m207_stats_verify_ok(void) { return s_stat.verify_ok; }
 uint16_t m207_stats_resend(void) { return s_stat.resend; }
 uint16_t m207_stats_offline(void) { return s_stat.offline; }
+uint16_t m207_stats_wdrop(void) { return s_stat.wdrop; }
 uint8_t m207_alarm_active(void) { return tcs_alarm_active(ALM_M207); }
 
 void m207_perf_reset(void)
@@ -888,3 +889,98 @@ void m207_selfloop_run(void)
     ESP_LOGI(TAG, "[M207SL] === selfloop evidence end ===");
 }
 #endif /* CONFIG_TCS_M207_SELFLOOP */
+
+/* ===================================================================== */
+/*      R1b 真机取证（CONFIG_TCS_M207_REALPROBE；M5-M7 接通后清账用）     */
+/* ===================================================================== */
+#if CONFIG_TCS_M207_REALPROBE
+#include "driver/gpio.h"
+
+/* P-2 软件子集：RS232 静态判活。
+ * ① 真模块上电时其 TX 恒发 mark(负压)，经 MAX3232 后 TTL 侧(GPIO47)必读高——
+ *    读低即模块 TX 未到达（未供电/断路；注意：即便 M5/M6 对调，对端有电也读高）。
+ * ② 二级判别（内部上拉）：GPIO47 读低时挂 45k 上拉复测——仍低=MAX3232 在主动驱动
+ *    低电平（=有电但 RIN 悬空，M6 支路未真正接到有电模块）；变高=MAX3232 输出
+ *    高阻（=MAX3232 未上电/损坏，查 M3 3V3）。
+ * GPIO21 为 TX 脚（输入缓冲未开），软件读数无效——TX 判活由模块是否应答决定。 */
+static void realprobe_p2_levels(void)
+{
+    int rx_hi = 0, rx_pu_hi = 0;
+    for (int i = 0; i < 100; i++) {
+        rx_hi += gpio_get_level(M207_RXD_GPIO);
+        vTaskDelay(pdMS_TO_TICKS(2));
+    }
+    gpio_pullup_en(M207_RXD_GPIO);
+    vTaskDelay(pdMS_TO_TICKS(5));
+    for (int i = 0; i < 100; i++) {
+        rx_pu_hi += gpio_get_level(M207_RXD_GPIO);
+        vTaskDelay(pdMS_TO_TICKS(2));
+    }
+    const char *v = (rx_hi >= 95) ?
+        "RS232 对端在线（模块供电+M6 支路通）——若仍无应答再查 TX 侧/M5" :
+        (rx_hi <= 5 && rx_pu_hi <= 5) ?
+        "MAX3232 有电且输出恒低=RIN 悬空：模块未供电，或 M6/M7 未真正接通到模块引脚" :
+        (rx_hi <= 5 && rx_pu_hi >= 95) ?
+        "MAX3232 输出高阻=其自身未上电/损坏：查 M3（ESP32 3V3→MAX3232 VCC）" :
+        "RXD 抖动——接触不良";
+    ESP_LOGI(TAG, "[P2] GPIO47(RX) idle high=%u/100；挂 45k 上拉后 high=%u/100 → %s",
+             (unsigned)rx_hi, (unsigned)rx_pu_hi, v);
+}
+
+void m207_realprobe_run(void)
+{
+    ESP_LOGI(TAG, "[RP] === real-machine probe start ===");
+    realprobe_p2_levels();
+
+    uint32_t w = 0;
+    while (!m207_online() && w < 6000) { vTaskDelay(pdMS_TO_TICKS(100)); w += 100; }
+    ESP_LOGI(TAG, "[RP] online=%u (after %lums)", m207_online(), (unsigned long)w);
+    if (!m207_online()) {
+        ESP_LOGW(TAG, "[RP] 模块无应答——按 [P2] 结论查供电/接线/R-K1 一次对调法");
+        return;
+    }
+
+    /* C3 变体 + C1 别名 + V-5 ERRORCODE 注入（只读/安全值；TCSW 全程 0）*/
+    (void)m207_send_raw("SYSTEM:SYSMODEL?");    /* C3 型号变体裁定 */
+    vTaskDelay(pdMS_TO_TICKS(800));
+    (void)m207_send_raw("TC1:TCADJTEMP?");
+    vTaskDelay(pdMS_TO_TICKS(800));
+    (void)m207_send_raw("TC1:TCADJUSTTEMP?");   /* C1 别名裁定 */
+    vTaskDelay(pdMS_TO_TICKS(800));
+    (void)m207_send_raw("FOO:BAR=1");           /* V-5 期望 err=0 未知模块 */
+    vTaskDelay(pdMS_TO_TICKS(800));
+    (void)m207_send_raw("TC1:NOTEXIST?");       /* 期望 err=2 未知参数 */
+    vTaskDelay(pdMS_TO_TICKS(800));
+    (void)m207_send_raw("GARBAGE");             /* 期望 err=6/0 语法 */
+    vTaskDelay(pdMS_TO_TICKS(800));
+    (void)m207_send_raw("TC1:TCACTTEMP=999");   /* 期望 err=3/2/4 只读拒绝 */
+    vTaskDelay(pdMS_TO_TICKS(800));
+
+    /* COMPUSHLIST 自发现试跑（正典 §7；行超 64B 由 RAWLOG hex 兜底）*/
+    (void)m207_send_raw("PCRS232:COMPUSHLIST=1");
+    vTaskDelay(pdMS_TO_TICKS(4000));
+
+    /* E-23 提前：节流压测 10 连写（R1b 形态；期望 0 丢 0 NAK 全确认）*/
+    uint16_t v0 = m207_stats_verify_ok(), n0 = m207_stats_nak(), d0 = m207_stats_wdrop();
+    for (int i = 0; i < 10; i++) {
+        int rc = m207_set_temp(1, 25.0f + (i % 2));
+        if (rc) ESP_LOGW(TAG, "[RP] burst enqueue rc=%d i=%d", rc, i);
+    }
+    vTaskDelay(pdMS_TO_TICKS(4000));
+    ESP_LOGI(TAG, "[RP] burst: vok+%u nak+%u wdrop+%u (expect 10/0/0)",
+             (unsigned)(m207_stats_verify_ok() - v0),
+             (unsigned)(m207_stats_nak() - n0),
+             (unsigned)(m207_stats_wdrop() - d0));
+    ESP_LOGI(TAG, "[RP] safe state: tec1=%u tec2=%u (expect 0/0)", 
+             g_tcs.tec1_on, g_tcs.tec2_on);
+
+    /* E-06 前半：双通道真值 60s 录帧（每 5s 一行；值差/合理性由 H6.7 服务侧把关）*/
+    for (int t = 5; t <= 60; t += 5) {
+        vTaskDelay(pdMS_TO_TICKS(5000));
+        ESP_LOGI(TAG, "[E06] t=%ds tc1=%.2f tc2=%.2f online=%u nak=%u",
+                 t, (double)m207_last_temp(1), (double)m207_last_temp(2),
+                 m207_online(), m207_stats_nak());
+    }
+    ESP_LOGI(TAG, "[RP] === realprobe end ===");
+}
+#endif /* CONFIG_TCS_M207_REALPROBE */

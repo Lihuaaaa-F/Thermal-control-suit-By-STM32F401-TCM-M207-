@@ -1,3 +1,6 @@
+# SOP（W5，v13.4 §6）：新增源文件（esp32 四树+project_tcs 四树）必须在同一 commit 更新本清单
+# 提交前自查：python esp32/tools/official_lib_audit.py → 红（未入清单/未归类）= 补登记后再提交
+# （'#'开头行由脚本加载时忽略——本头三行即机制自证）
 esp32/components/tcs_core/control.c
 esp32/components/tcs_core/control.h
 esp32/components/tcs_core/control_service.c
@@ -60,7 +63,6 @@ project_tcs/App/eeprom/eeprom.h
 project_tcs/App/iwdg/iwdg.c
 project_tcs/App/iwdg/iwdg.h
 project_tcs/App/lvgl_port/lv_conf.h
-project_tcs/App/lvgl_port/lv_conf_dma2d.h
 project_tcs/App/lvgl_port/lv_port_disp.c
 project_tcs/App/lvgl_port/lv_port_disp.h
 project_tcs/App/lvgl_port/lv_port_indev.c
@@ -117,6 +119,7 @@ project_tcs/tools/c_strip.py
 project_tcs/tools/colorblind_check.py
 project_tcs/tools/fb_dump.py
 project_tcs/tools/font_audit.py
+project_tcs/tools/g4_e04_tl9b.py
 project_tcs/tools/gen_font_cn.py
 project_tcs/tools/gen_font_ui.py
 project_tcs/tools/geom_audit.py

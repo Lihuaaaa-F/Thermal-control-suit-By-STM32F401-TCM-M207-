@@ -113,6 +113,24 @@ else
     echo "[font_audit] SKIP: python not found"; FAIL=1
 fi
 
+# RTT printf 调用点总数对账（W5，W4.1 红队发现 5 采纳）：总数恒 14
+# （防"删日志行使 %f/%lu 门禁 grep 归零"的捷径；增删调用点须同步本数并说明）
+RTTN=$(grep -rn "SEGGER_RTT_printf" App Core --include=*.c | wc -l)
+if [ "$RTTN" -ne 14 ]; then
+    echo "[rtt_count] FAIL: SEGGER_RTT_printf 调用点 $RTTN ≠ 14（增删须同步本门禁并说明）"
+    FAIL=1
+else
+    echo "[rtt_count] PASS (14)"
+fi
+
+# 官方库审计门禁（W5，v13.4 §6）：未入清单/未归类文件 → FAIL
+# 脚本内部自锚定仓库根（W5 改造）；新增源文件须同 commit 更新 docs/审计文件清单.txt
+if [ -n "$PYBIN" ]; then
+    if "$PYBIN" ../esp32/tools/official_lib_audit.py; then :; else FAIL=1; fi
+else
+    echo "[audit] SKIP: python not found"; FAIL=1
+fi
+
 echo "==================="
 if [ "$FAIL" = 0 ]; then echo "run_all: ALL GREEN"; else echo "run_all: HAS FAILURES"; fi
 exit $FAIL

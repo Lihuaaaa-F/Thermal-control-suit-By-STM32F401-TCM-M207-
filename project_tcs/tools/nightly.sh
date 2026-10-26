@@ -110,5 +110,9 @@ else
     FAIL=1
 fi
 
+# ⑧ 官方库审计门禁（W5，v13.4 §6）：未入清单/未归类文件 → 红
+#    audit 脚本内部自锚定仓库根，本步命令 cwd 无关（nightly.sh 启动仍依赖 L12 的 cd 锚定）；EXIT 码经 step 透传
+step audit python ../esp32/tools/official_lib_audit.py
+
 echo "=== nightly 结束：$([ $FAIL = 0 ] && echo ALL GREEN || echo HAS FAILURES) ===" | tee -a "$LOG"
 exit $FAIL

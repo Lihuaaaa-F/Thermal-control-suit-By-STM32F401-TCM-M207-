@@ -50,8 +50,10 @@ CATEGORIES = [
     ('私有协议',       r'm207|tcs_pl_|mt_frame',          '无官方库(厂商私有,合法自研)'),
 ]
 
-SKIP_DIRS = {'build', 'build-sim', 'managed_components', 'build-g4', 'build-g4dma',
-             'build-g4lv', 'build-lvgl', '.git', 'node_modules', 'qr'}
+# 构建目录一律前缀匹配（与五桶清点 skip_re 的 build* 通配口径一致，防新增 build-xxx 变体假红）
+def _is_skip_dir(name):
+    return (name.startswith('build') or name in
+            {'managed_components', '.git', 'node_modules', 'qr'})
 # qr/ 为第三方 nayuki 库（LICENSE 在库），单独标注不参与分类判定
 VENDORED = ('qrcodegen.c', 'qrcodegen.h')
 
@@ -61,13 +63,17 @@ def iter_files():
         if not os.path.isdir(root):
             continue
         for dirpath, dirnames, filenames in os.walk(root):
-            dirnames[:] = [d for d in dirnames if d not in SKIP_DIRS]
+            dirnames[:] = [d for d in dirnames if not _is_skip_dir(d)]
             for fn in filenames:
                 if fn.endswith(EXTS) and fn not in VENDORED:
                     yield os.path.join(dirpath, fn)
 
 
 def main():
+    # W5（v13.4 §6）：锚定仓库根——ROOTS 与五桶 os.walk('.') 都按仓库根解析，
+    # 使 nightly.sh/run_all.sh 从 project_tcs 侧调用结果与仓库根直跑一致
+    os.chdir(os.path.normpath(os.path.join(
+        os.path.dirname(os.path.abspath(__file__)), '..', '..')))
     ap = argparse.ArgumentParser()
     ap.add_argument('--update-manifest', action='store_true')
     args = ap.parse_args()
@@ -84,14 +90,21 @@ def main():
              '第三方引入(qrcodegen)单独标注不参与判定。', '']
 
     if args.update_manifest:
+        # W5 红队发现 1：覆写前保留既有 '#' SOP 注释行（读写两端对称，防刷新自毁）
+        keep = []
+        if os.path.isfile(manifest_path):
+            with open(manifest_path, encoding='utf-8') as f:
+                keep = [l.rstrip('\r\n') for l in f if l.strip().startswith('#')]
         with open(manifest_path, 'w', encoding='utf-8', newline='\n') as f:
-            f.write('\n'.join(files) + '\n')
-        print('manifest updated: %d files' % len(files))
+            f.write('\n'.join(keep + files) + '\n')
+        print('manifest updated: %d files (%d SOP lines kept)' % (len(files), len(keep)))
 
     covered = set()
     if os.path.isfile(manifest_path):
         with open(manifest_path, encoding='utf-8') as f:
-            covered = {l.strip().replace(chr(92), '/') for l in f if l.strip()}
+            # '# '开头=SOP 注释行（W5），不算清单条目
+            covered = {l.strip().replace(chr(92), '/') for l in f
+                       if l.strip() and not l.strip().startswith('#')}
 
     missing = [f for f in files if f not in covered]
     stale = [f for f in covered if f not in files]
@@ -177,8 +190,11 @@ def main():
     out = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)),
                                         '..', '..', REPORT))
     os.makedirs(os.path.dirname(out), exist_ok=True)
-    with open(out, 'w', encoding='utf-8', newline='\n') as f:
+    # W5 红队发现 2：临时文件+原子替换（防并发互踩产生半截报告）
+    tmp_out = out + '.tmp'
+    with open(tmp_out, 'w', encoding='utf-8', newline='\n') as f:
         f.write('\n'.join(lines) + '\n')
+    os.replace(tmp_out, out)
     print('report: %s (%d files, %d uncovered, %d unclassified)'
           % (out, len(files), len(missing), len(unclassified)))
     return 1 if (missing or unclassified) else 0

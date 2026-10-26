@@ -1,0 +1,16 @@
+# W5 探针双向验证（v13.4 §6 协议）
+
+- 日期: 2026-10-27 01:11:05
+- 调用口径=nightly.sh ⑧ 步同款命令（step audit python ../esp32/tools/official_lib_audit.py，cwd=project_tcs）
+
+== 状态A：探针在位（echo test > project_tcs/tmp_probe.c） ==
+report: D:\Espressif\ws\tcs\docs\evidence\官方库审计_机器报告.md (135 files, 0 uncovered, 1 unclassified)
+exit=1
+
+- **未入清单(缺口): 0** 
+- F 未归类: 1
+- **未归类: 1 ['project_tcs/tmp_probe.c']**
+
+== 状态B：探针删除 ==
+report: D:\Espressif\ws\tcs\docs\evidence\官方库审计_机器报告.md (135 files, 0 uncovered, 0 unclassified)
+exit=0

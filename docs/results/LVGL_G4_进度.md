@@ -59,3 +59,50 @@
 
 ### 剩余（更新）
 DMA2D 开/关四组对照；E-04 三入口 =1 回归；TL-9b 兜底注入；TL-17 交替×10（脚本化）；TL-7 24h tick；U-10 port 人审；hello 手机实拍；**闪屏滑动复测（用户）**。
+
+## G4 会话记录（2026-10-26 续3；TL-17×10 ✅ + DMA2D 变体崩溃立案）
+
+- **TL-17 双栈交替 ×10 全绿 ✅**（`scripts/tl17_alternate.sh` 后台跑完，日志 tl17_run.log）：
+  每轮双目录全清重建，=0 bin md5 恒等规范基线 9d97cb5e ×10/10 + =1 编译绿 ×10/10。
+- **G4② DMA2D-ON 变体：构建绿（FLASH 735340，+2KB）但真机崩溃循环**（早期 fault→IWDG 2s 复位；
+  诊断实证=probe 读 SDRAM 全 0xFFFFFFFF=未初始化态+长读失败）。疑似 v9.6 DMA2D draw 单元与
+  固件 HAL-DMA2D 配置/缓存策略冲突。**已刷回 SW 渲染版恢复运行**（46FPS/49%CPU 实证）。
+  待办：RTT 挂故障定位（HardFault PC/Backtrace）→ 定责 v9.6 DMA2D 后端 vs 我方 HAL 时序（D-L2 三边定责表）。
+  **四组对照现状**：DMA2D-OFF 全表 ✅（43FPS avg）；DMA2D-ON ❌崩溃立案；位置/尺寸组=benchmark 场景内已覆盖。
+- 设备现状：G4 SW-render bench 固件运行中。
+
+## G4 会话记录（2026-10-26 续4；G4-Z19 修复复测确认 + 官方双警告清零）
+
+- **G4-Z19 滑动闪屏：用户真机复测确认修复 ✅**（"确实解决了"）。
+- **官方双警告清零 ✅**（用户指出的顶部两条提示，逐条落实）：
+  ①`LV_USE_CHECK_ARG 0`（参数校验调试件关断，-3.5KB）；
+  ②`LV_DRAW_LAYER_SIMPLE_BUF_SIZE (64*1024)`（≥屏 1/20=60KB 建议）——该缓冲从 LVGL 池分配，
+    48KB 池装不下 → **LVGL 池迁 AXIRAM**：`LV_MEM_POOL_ALLOC` 官方钩子 + ld 新增
+    `AXIRAM 0x24000000/320K` 区块与 `.axi_pool (NOLOAD)` 段 + `tcs_lv_axi_pool[96KB]`。
+  内存布局收益：**DTCM 94.65%→57.29%**（池出 DTCM）；AXI 96KB/30%。
+  AXI 缓存一致性：MPU 默认图+CACR WT ⇒ 与 SDRAM 同待遇（CPU-only 访问零维护）。
+- **调优后 benchmark（L3）**：All scenes 49%/40FPS/15ms——与调优前（50%/43FPS/12ms）同水位
+  （运行方差内；FPS 上限受 16ms 刷新周期钳制 40-54FPS 带）。证据 `evidence/LVGL/g4/g4_bench_summary_tuned.png`。
+- **G4② 口径**：位置/尺寸组=benchmark 场景内覆盖；DMA2D OFF=本表；DMA2D ON=崩溃立案待 RTT 定责。
+
+## G4 会话记录（2026-10-26 续5；E-04 + TL-9b）
+
+### E-04 急停三入口回归（=1 固件；G4⑤）
+| 入口 | 触发方式 | 结果 |
+|---|---|---|
+| ③ console estop | mb_console 邮箱注入 "estop" | ✅ calls 0→1，ALM_ESTOP=0x0004 置位，mode→手动，fan→开 |
+| ① 屏入口（热区+兜底层） | probe 点击注入 g_tap_inject=(1,1,876,528) | ✅ estop_watch 触发（见 TL-9b 各态） |
+| ② 硬件 KEY0 | 物理按键 | 复验同场项（需人在场） |
+时延：屏入口=同 10ms 节拍内直接调用（设计上限 ≤10ms+采样周期）；端到端 240fps 物理测量=P-3（复验同场）。
+测试工具：`tools/g4_e04_tl9b.py`（可重复执行）。
+
+### TL-9b 兜底注入 ✅（法1 PASS；法2 两阶段=真实安全发现）
+- **法1 停喂 handler：PASS**——`g_lvgl_freeze=1`（probe 写）LVGL 完全冻结 → 屏入口注入 →
+  estop_watch 触发（calls 1→2）、ALM_ESTOP 置位。**D-L7② 设计实证：estop_watch 与 LVGL 存活零耦合。**
+- **法2 池耗尽：两阶段**——
+  耗尽**过程窗口**（~12 次 4KB 分配，<200ms）内注入 → 触发 ✅（calls 0→1，ALM_ESTOP 置位）；
+  池**完全耗尽后** lv_timer_handler 深处阻塞 → 主循环停摆 → **IWDG 2s 兜底复位**（.bss 计数清零实证）。
+  → **发现：完全耗尽态下屏入口不可达时段 >500ms，最终防线=IWDG**（非 500ms 门内）。
+  处置：①G5 生产栈规避（堆水位监控+渲染失败降级，防完全耗尽）；②IWDG 2s 兜底入安全档案；
+  ③上游可选项：LVGL 临界分配失败即安全停渲染（挂上游/定责清单）。
+- 测试后设备自恢复运行（IWDG 复位→正常重启→benchmark 运行实证）。

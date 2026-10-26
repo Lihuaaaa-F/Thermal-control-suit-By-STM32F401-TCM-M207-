@@ -25,6 +25,9 @@ void fan_set_duty(uint8_t pct);       /* 0-100；0=关（引脚恒高），100=�
 void fan_set_on(uint8_t on);          /* 二值包装（control ops 用）：0→0 / 非0→100 */
 uint8_t fan_get_duty(void);           /* 当前设定值（0-100）*/
 
+void fan_ws2812_black_frame(int gpio_num);  /* 对任意脚发 WS2812 全黑帧（LED 排查/清灯）*/
+void fan_ws2812_ledtest(int gpio_num);      /* 红闪 700ms→黑（人眼可视自证帧时序+引脚）*/
+
 /* 上电自测：0/100 两态引脚电平回读（低=开红线）+ 中点不炸；证据=[FANLB] */
 void fan_lb_boottest(void);
 

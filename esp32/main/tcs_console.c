@@ -12,6 +12,7 @@
 #include "m207_service.h"
 #include "tmp117_service.h"
 #include "fan_service.h"
+#include "driver/gpio.h"
 
 #include <string.h>
 #include <stdio.h>
@@ -166,6 +167,42 @@ static int cmd_m207(int argc, char **argv)
     return 0;
 }
 
+static int cmd_ledblk(int argc, char **argv)
+{
+    if (argc < 2) { printf("ledblk <gpio>（对任意脚发 WS2812 全黑帧）\n"); return 1; }
+    int g = atoi(argv[1]);
+    if (g < 0 || g > 48) { printf("gpio 0-48\n"); return 1; }
+    fan_ws2812_black_frame(g);
+    printf("ledblk %d sent (WS2812 black frame)\n", g);
+    return 0;
+}
+
+static int cmd_ledblink(int argc, char **argv)
+{
+    if (argc < 2) { printf("ledblink <gpio>（低/高各 300ms 闪 3 次，用眼睛定位灯脚）\n"); return 1; }
+    int g = atoi(argv[1]);
+    if (g < 0 || g > 48) { printf("gpio 0-48\n"); return 1; }
+    gpio_config_t io = { .pin_bit_mask = 1ULL << g, .mode = GPIO_MODE_INPUT_OUTPUT,
+                         .pull_up_en = 0, .pull_down_en = 0, .intr_type = GPIO_INTR_DISABLE };
+    gpio_config(&io);
+    for (int i = 0; i < 3; i++) {
+        gpio_set_level(g, 0); vTaskDelay(pdMS_TO_TICKS(300));
+        gpio_set_level(g, 1); vTaskDelay(pdMS_TO_TICKS(300));
+    }
+    printf("ledblink %d done (3 pulses)\n", g);
+    return 0;
+}
+
+static int cmd_ledtest(int argc, char **argv)
+{
+    if (argc < 2) { printf("ledtest <gpio>（红闪 700ms 再灭，验证帧时序+引脚）\n"); return 1; }
+    int g = atoi(argv[1]);
+    if (g < 0 || g > 48) { printf("gpio 0-48\n"); return 1; }
+    fan_ws2812_ledtest(g);
+    printf("ledtest %d done\n", g);
+    return 0;
+}
+
 static int cmd_reset(int argc, char **argv)
 {
     (void)argc; (void)argv;
@@ -211,6 +248,12 @@ int tcs_console_start(void)
           .func=cmd_status, .argtable=NULL },
         { .command="m207", .help="m207 raw <帧>（直查/注入；自动补 \r）", .hint="raw <frame>",
           .func=cmd_m207, .argtable=NULL },
+        { .command="ledblk", .help="ledblk <gpio>（WS2812 全黑帧）", .hint="<gpio>",
+          .func=cmd_ledblk, .argtable=NULL },
+        { .command="ledblink", .help="ledblink <gpio>（闪 3 次定位灯脚）", .hint="<gpio>",
+          .func=cmd_ledblink, .argtable=NULL },
+        { .command="ledtest", .help="ledtest <gpio>（红闪→黑，可视自证）", .hint="<gpio>",
+          .func=cmd_ledtest, .argtable=NULL },
         { .command="perf", .help="服务统计+vTaskList", .hint=NULL,
           .func=cmd_perf, .argtable=NULL },
         { .command="reset", .help="软复位", .hint=NULL,

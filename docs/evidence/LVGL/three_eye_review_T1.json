@@ -1,0 +1,59 @@
+{
+  "batch": "T1",
+  "date": "2026-10-26",
+  "policy_ref": "v12.5 Q-L7 三眼评审（自视裁片+视觉模型+用户抽≥20%）",
+  "inspector": "同会话视觉模型复检（执行者=审阅者，独立性弱于 R2/R3 盲审；盲审轮承担独立终审）",
+  "objects": [
+    {
+      "object": "VL-3 裁片包 T1（34 片）",
+      "method": "来源帧逐帧目检（G1 八状态整帧 + G0 字体帧）+ 8× 抽检 10 片（fonts_dual 5 类 + widgets 5 类）",
+      "verdict": "pass",
+      "findings": [
+        "Z1 点阵 24px 表缺 ℃ → 占位框（已修复：32px fallback 链；回归通过）",
+        "Z2 widgets demo montserrat_16 回退告警（已修复）",
+        "Z3 RGB565 渐变量化色带（归因色深，VL-2 素材）",
+        "G1 帧级：文字逐像素=fb（bbox 42 项中 22 项 0 差）"
+      ],
+      "user_sampling": "pending（用户 ≥20% 抽检）"
+    },
+    {
+      "object": "VL-16 对拍联系表（42 行 / 5 表）",
+      "method": "全量 8× 双列目检 + 逐行残差量化",
+      "verdict": "pass",
+      "findings": [
+        "一致 22 / 有意差异 20 / 缺陷 0",
+        "REF 状态错配 1 处（badge≠报警态）→ 已换 home_lost/home_badge 重生成",
+        "现屏方形急停图标=固件正确实现（mock svg 圆形为设计稿差异）"
+      ],
+      "user_sampling": "pending"
+    },
+    {
+      "object": "G2 chart 裁片（19 片）",
+      "method": "六态整帧目检 + 8× 抽检 6 片（normal/axis、overrange/spike、empty/th_cross、full/header、normal/header、negative 整帧）",
+      "verdict": "pass",
+      "findings": [
+        "豆腐块（标题/轴标签/现在/前）→ 已修复（ext24/ext32 双字号链 + 标签档位纠正）",
+        "越界尖峰穿越红阈值线（顶格 clip）语义正确",
+        "轴标签与量程线对齐为近似 ≤4px（观察项入规格草案）"
+      ],
+      "user_sampling": "pending"
+    },
+    {
+      "object": "AA vs 点阵双列组（aa_vs_point_24_T1.png）",
+      "method": "全幅目检",
+      "verdict": "pass",
+      "findings": ["点阵轨=复刻现屏；AA 轨平滑无子像素彩边（灰度 AA 预期）"]
+    },
+    {
+      "object": "G2 手势/动画过程帧（90+36+36+36）",
+      "method": "关键帧目检（slider_018 拖动中 / trans_008 滑动中 / wheel_089 静止对齐 / trans_060 回程）+ 90 帧终帧对齐检查",
+      "verdict": "pass",
+      "findings": [
+        "滚轮布局被 visible_row_count 覆盖 → 已修复（7 行对齐无裁切）",
+        "G2 按钮缺描边 → 已修复",
+        "单像素采样误判“按钮变蓝” → 8× 实为字形墨迹（方法教训：颜色判定采样须避文字盒）"
+      ]
+    }
+  ],
+  "summary": "本轮视觉复检：5 对象全 pass；坐实缺陷 3 项（豆腐块/滚轮布局/描边）已修复回归，方法误判 1 项已纠正；用户抽检与 R2/R3 独立盲审待时点窗口。"
+}

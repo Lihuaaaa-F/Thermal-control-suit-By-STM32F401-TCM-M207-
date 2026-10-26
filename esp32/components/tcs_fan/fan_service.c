@@ -7,7 +7,7 @@
 #include "freertos/task.h"
 #include "driver/ledc.h"
 #include "driver/gpio.h"
-#include "driver/rmt_tx.h"
+#include "led_strip.h"
 #include "esp_log.h"
 
 #include "param_registry.h"     /* g_tcs.fan_on */
@@ -20,6 +20,7 @@
 
 static uint8_t  s_pct;          /* 当前设定 0-100 */
 static uint32_t s_set_cnt;      /* 设定次数（变更路径统计）*/
+static uint8_t  s_ledc_ready;   /* LEDC 通道已配置（WS2812 借脚前停/还逻辑的门）*/
 
 /* 低=开：低电平占空比 = pct% → LEDC duty（高电平计数）= (100-pct)/100 × 满 */
 static uint32_t pct_to_duty(uint8_t pct)
@@ -28,42 +29,73 @@ static uint32_t pct_to_duty(uint8_t pct)
            / FAN_DUTY_MAX;
 }
 
-/* ====== WS2812 开机清灯（GPIO48 在 N16R8 板上并联板载 RGB 灯；D6 无屏参数不进字库）======
- * LEDC 25kHz 会被灯珠当噪声数据锁存随机亮色；上电时先发一帧全黑（GRB=0,0,0）
- * 再交给 LEDC（duty0=恒高=无数据），灯保持灭。真风扇光耦耐受 ~30µs 低脉冲，无害。*/
-static void ws2812_black_frame(void)
+/* ====== WS2812 清灯（官方 ESP32-S3-DevKitC-1：v1.0 RGB=GPIO48 / v1.1 RGB=GPIO38，
+ * "Addressable RGB LED"；两代都在板载，风扇 PWM 会被灯珠当噪声数据锁存随机亮色）======
+ * 发任意 RGB 帧后**必须把脚收成输出高**：浮空的 DIN 会采集噪声重新锁存（清了白清）；
+ * 恒高=无数据=灯保持最后一帧颜色。真风扇光耦耐受 ~30µs 低脉冲，无害。*/
+static void ws2812_send_frame(int gpio_num, uint8_t g, uint8_t r, uint8_t b)
 {
-    rmt_channel_handle_t ch = NULL;
-    rmt_tx_channel_config_t tcfg = {
-        .gpio_num = FAN_GPIO,
-        .clk_src = RMT_CLK_SRC_DEFAULT,
-        .resolution_hz = 10000000,          /* 0.1µs/tick */
+    /* 若目标是风扇脚（48），先停 LEDC 让出引脚，发完恢复 */
+    uint8_t on_fan_pin = (gpio_num == FAN_GPIO) && s_ledc_ready;
+    if (on_fan_pin) ledc_stop(FAN_LEDC_SPEED_MODE, FAN_LEDC_CHANNEL, 1);
+
+    /* 官方 led_strip 驱动（手搓 RMT 编码被证伪：0.2/0.3/0.4µs T0H 全被读成 1）*/
+    led_strip_handle_t strip = NULL;
+    led_strip_config_t scfg = {
+        .strip_gpio_num = gpio_num,
+        .max_leds = 1,
+        .led_model = LED_MODEL_WS2812,
+    };
+    led_strip_rmt_config_t rcfg = {
+        .resolution_hz = 10000000,          /* 官方默认 10MHz */
         .mem_block_symbols = 64,
-        .trans_queue_depth = 1,
     };
-    if (rmt_new_tx_channel(&tcfg, &ch) != ESP_OK) return;
-    rmt_bytes_encoder_config_t bcfg = {
-        /* WS2812: T0H 0.3µs/T0L 0.8µs; T1H 0.8µs/T1L 0.3µs（全 0 帧只用 bit0）*/
-        .bit0 = { .level0 = 1, .duration0 = 3, .level1 = 0, .duration1 = 8 },
-        .bit1 = { .level0 = 1, .duration0 = 8, .level1 = 0, .duration1 = 3 },
-        .flags.msb_first = 1,
-    };
-    rmt_encoder_handle_t enc = NULL;
-    if (rmt_new_bytes_encoder(&bcfg, &enc) != ESP_OK) { rmt_del_channel(ch); return; }
-    rmt_enable(ch);
-    uint8_t black[3] = {0, 0, 0};          /* 1 颗灯珠：G R B 全 0 */
-    rmt_transmit_config_t xcfg = { .loop_count = 0 };
-    rmt_transmit(ch, enc, black, sizeof(black), &xcfg);
-    rmt_tx_wait_all_done(ch, 100);
-    rmt_disable(ch);
-    rmt_del_encoder(enc);
-    rmt_del_channel(ch);
-    vTaskDelay(pdMS_TO_TICKS(1));          /* >50µs reset 保持，灯珠锁存"灭" */
+    esp_err_t e = led_strip_new_rmt_device(&scfg, &rcfg, &strip);
+    if (e != ESP_OK) {
+        ESP_LOGE(TAG, "led_strip new g%d fail %s", gpio_num, esp_err_to_name(e));
+        goto restore;
+    }
+    e = led_strip_set_pixel(strip, 0, r, g, b);
+    if (e != ESP_OK) ESP_LOGE(TAG, "set_pixel fail %s", esp_err_to_name(e));
+    e = led_strip_refresh(strip);           /* 阻塞发送 */
+    if (e != ESP_OK) ESP_LOGE(TAG, "refresh fail %s", esp_err_to_name(e));
+    led_strip_del(strip);
+    /* 关键：锁存=帧后数据线保持低 ≥50µs（reset）；拉低 2ms 再停泊高 */
+    gpio_config_t io = { .pin_bit_mask = 1ULL << gpio_num,
+                         .mode = GPIO_MODE_OUTPUT, .intr_type = GPIO_INTR_DISABLE };
+    gpio_config(&io);
+    gpio_set_level(gpio_num, 0);
+    vTaskDelay(pdMS_TO_TICKS(2));
+restore:
+    if (on_fan_pin) {                      /* 恢复 LEDC（恒高=duty0）*/
+        ledc_channel_config_t ccfg = {
+            .speed_mode = FAN_LEDC_SPEED_MODE, .channel = FAN_LEDC_CHANNEL,
+            .timer_sel = FAN_LEDC_TIMER, .intr_type = LEDC_INTR_DISABLE,
+            .gpio_num = FAN_GPIO, .duty = pct_to_duty(s_pct), .hpoint = 0,
+        };
+        ledc_channel_config(&ccfg);
+    } else {
+        gpio_set_level(gpio_num, 1);       /* 非风扇脚停泊高：无数据=保持 */
+    }
+}
+
+void fan_ws2812_black_frame(int gpio_num)
+{
+    ws2812_send_frame(gpio_num, 0, 0, 0);
+}
+
+/* 可视自证：红→黑（用户眼见红灯闪一下再灭 = 帧时序与引脚双确认）*/
+void fan_ws2812_ledtest(int gpio_num)
+{
+    ws2812_send_frame(gpio_num, 0, 0xFF, 0);
+    vTaskDelay(pdMS_TO_TICKS(700));
+    ws2812_send_frame(gpio_num, 0, 0, 0);
 }
 
 int fan_service_start(void)
 {
-    ws2812_black_frame();                  /* 开机先清板载 RGB（若有）*/
+    fan_ws2812_black_frame(48);            /* 开机清板载 RGB：v1.0 脚 */
+    fan_ws2812_black_frame(38);            /* v1.1 脚（官方文档 user_guide_v1.1）*/
     ledc_timer_config_t tcfg = {
         .speed_mode      = FAN_LEDC_SPEED_MODE,
         .timer_num       = FAN_LEDC_TIMER,
@@ -76,6 +108,7 @@ int fan_service_start(void)
         ESP_LOGE(TAG, "ledc timer fail %s", esp_err_to_name(err));
         return -1;
     }
+    s_ledc_ready = 1;
     ledc_channel_config_t ccfg = {
         .speed_mode = FAN_LEDC_SPEED_MODE,
         .channel    = FAN_LEDC_CHANNEL,

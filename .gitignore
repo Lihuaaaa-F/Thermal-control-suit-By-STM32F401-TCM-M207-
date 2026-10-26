@@ -4,3 +4,6 @@ project_tcs/build/
 *.exe
 esp32/tools/_chrome_prof/
 esp32/tools/_web_audit_page.html
+
+# ESP32 组件管理器产物
+esp32/managed_components/

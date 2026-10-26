@@ -7,6 +7,7 @@
 #include "freertos/task.h"
 #include "driver/ledc.h"
 #include "driver/gpio.h"
+#include "driver/rmt_tx.h"
 #include "esp_log.h"
 
 #include "param_registry.h"     /* g_tcs.fan_on */
@@ -27,8 +28,42 @@ static uint32_t pct_to_duty(uint8_t pct)
            / FAN_DUTY_MAX;
 }
 
+/* ====== WS2812 开机清灯（GPIO48 在 N16R8 板上并联板载 RGB 灯；D6 无屏参数不进字库）======
+ * LEDC 25kHz 会被灯珠当噪声数据锁存随机亮色；上电时先发一帧全黑（GRB=0,0,0）
+ * 再交给 LEDC（duty0=恒高=无数据），灯保持灭。真风扇光耦耐受 ~30µs 低脉冲，无害。*/
+static void ws2812_black_frame(void)
+{
+    rmt_channel_handle_t ch = NULL;
+    rmt_tx_channel_config_t tcfg = {
+        .gpio_num = FAN_GPIO,
+        .clk_src = RMT_CLK_SRC_DEFAULT,
+        .resolution_hz = 10000000,          /* 0.1µs/tick */
+        .mem_block_symbols = 64,
+        .trans_queue_depth = 1,
+    };
+    if (rmt_new_tx_channel(&tcfg, &ch) != ESP_OK) return;
+    rmt_bytes_encoder_config_t bcfg = {
+        /* WS2812: T0H 0.3µs/T0L 0.8µs; T1H 0.8µs/T1L 0.3µs（全 0 帧只用 bit0）*/
+        .bit0 = { .level0 = 1, .duration0 = 3, .level1 = 0, .duration1 = 8 },
+        .bit1 = { .level0 = 1, .duration0 = 8, .level1 = 0, .duration1 = 3 },
+        .flags.msb_first = 1,
+    };
+    rmt_encoder_handle_t enc = NULL;
+    if (rmt_new_bytes_encoder(&bcfg, &enc) != ESP_OK) { rmt_del_channel(ch); return; }
+    rmt_enable(ch);
+    uint8_t black[3] = {0, 0, 0};          /* 1 颗灯珠：G R B 全 0 */
+    rmt_transmit_config_t xcfg = { .loop_count = 0 };
+    rmt_transmit(ch, enc, black, sizeof(black), &xcfg);
+    rmt_tx_wait_all_done(ch, 100);
+    rmt_disable(ch);
+    rmt_del_encoder(enc);
+    rmt_del_channel(ch);
+    vTaskDelay(pdMS_TO_TICKS(1));          /* >50µs reset 保持，灯珠锁存"灭" */
+}
+
 int fan_service_start(void)
 {
+    ws2812_black_frame();                  /* 开机先清板载 RGB（若有）*/
     ledc_timer_config_t tcfg = {
         .speed_mode      = FAN_LEDC_SPEED_MODE,
         .timer_num       = FAN_LEDC_TIMER,

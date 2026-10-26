@@ -1,0 +1,82 @@
+<Project Sdk="Microsoft.NET.Sdk.WindowsDesktop">
+  <PropertyGroup>
+    <AssemblyName>EasyHost</AssemblyName>
+    <GenerateAssemblyInfo>False</GenerateAssemblyInfo>
+    <OutputType>WinExe</OutputType>
+    <UseWindowsForms>True</UseWindowsForms>
+    <TargetFramework>net40</TargetFramework>
+    <PlatformTarget>x86</PlatformTarget>
+  </PropertyGroup>
+  <PropertyGroup>
+    <LangVersion>12.0</LangVersion>
+    <AllowUnsafeBlocks>True</AllowUnsafeBlocks>
+  </PropertyGroup>
+  <PropertyGroup>
+    <ApplicationIcon>app.ico</ApplicationIcon>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+    <RootNamespace />
+  </PropertyGroup>
+  <ItemGroup>
+    <None Remove="EasyHost.Resources.curve.png" />
+    <None Remove="EasyHost.Resources.edit.png" />
+    <None Remove="EasyHost.Resources.erase.png" />
+    <None Remove="EasyHost.Resources.folder.png" />
+    <None Remove="EasyHost.Resources.led00r.png" />
+    <None Remove="EasyHost.Resources.page.png" />
+    <None Remove="EasyHost.Resources.red-led-off-md.png" />
+    <None Remove="EasyHost.Resources.red-led-on-md.png" />
+    <None Remove="EasyHost.Resources.refresh.png" />
+    <None Remove="EasyHost.Resources.mouse_select_left.png" />
+    <None Remove="EasyHost.Resources.green-led-on-md.png" />
+    <None Remove="EasyHost.Resources.add.png" />
+    <None Remove="EasyHost.Resources.led000.png" />
+    <None Remove="EasyHost.Resources.led111.png" />
+    <None Remove="EasyHost.Resources.led001.png" />
+    <None Remove="EasyHost.Resources.led010.png" />
+    <None Remove="EasyHost.Resources.led011.png" />
+    <None Remove="EasyHost.Resources.led100.png" />
+    <None Remove="EasyHost.Resources.led101.png" />
+    <None Remove="EasyHost.Resources.led110.png" />
+    <None Remove="EasyHost.Resources.cmd.png" />
+    <None Remove="EasyHost.Resources.script.png" />
+    <None Remove="EasyHost.Resources.gearpage.png" />
+    <None Remove="EasyHost.Resources.search.png" />
+    <None Remove="EasyHost.shine.ico" />
+    <None Remove="EasyHost.Resources.shine.ico" />
+    <EmbeddedResource Include="EasyHost.Resources.curve.png" LogicalName="EasyHost.Resources.curve.png" />
+    <EmbeddedResource Include="EasyHost.Resources.edit.png" LogicalName="EasyHost.Resources.edit.png" />
+    <EmbeddedResource Include="EasyHost.Resources.erase.png" LogicalName="EasyHost.Resources.erase.png" />
+    <EmbeddedResource Include="EasyHost.Resources.folder.png" LogicalName="EasyHost.Resources.folder.png" />
+    <EmbeddedResource Include="EasyHost.Resources.led00r.png" LogicalName="EasyHost.Resources.led00r.png" />
+    <EmbeddedResource Include="EasyHost.Resources.page.png" LogicalName="EasyHost.Resources.page.png" />
+    <EmbeddedResource Include="EasyHost.Resources.red-led-off-md.png" LogicalName="EasyHost.Resources.red-led-off-md.png" />
+    <EmbeddedResource Include="EasyHost.Resources.red-led-on-md.png" LogicalName="EasyHost.Resources.red-led-on-md.png" />
+    <EmbeddedResource Include="EasyHost.Resources.refresh.png" LogicalName="EasyHost.Resources.refresh.png" />
+    <EmbeddedResource Include="EasyHost.Resources.mouse_select_left.png" LogicalName="EasyHost.Resources.mouse_select_left.png" />
+    <EmbeddedResource Include="EasyHost.Resources.green-led-on-md.png" LogicalName="EasyHost.Resources.green-led-on-md.png" />
+    <EmbeddedResource Include="EasyHost.Resources.add.png" LogicalName="EasyHost.Resources.add.png" />
+    <EmbeddedResource Include="EasyHost.Resources.led000.png" LogicalName="EasyHost.Resources.led000.png" />
+    <EmbeddedResource Include="EasyHost.Resources.led111.png" LogicalName="EasyHost.Resources.led111.png" />
+    <EmbeddedResource Include="EasyHost.Resources.led001.png" LogicalName="EasyHost.Resources.led001.png" />
+    <EmbeddedResource Include="EasyHost.Resources.led010.png" LogicalName="EasyHost.Resources.led010.png" />
+    <EmbeddedResource Include="EasyHost.Resources.led011.png" LogicalName="EasyHost.Resources.led011.png" />
+    <EmbeddedResource Include="EasyHost.Resources.led100.png" LogicalName="EasyHost.Resources.led100.png" />
+    <EmbeddedResource Include="EasyHost.Resources.led101.png" LogicalName="EasyHost.Resources.led101.png" />
+    <EmbeddedResource Include="EasyHost.Resources.led110.png" LogicalName="EasyHost.Resources.led110.png" />
+    <EmbeddedResource Include="EasyHost.Resources.cmd.png" LogicalName="EasyHost.Resources.cmd.png" />
+    <EmbeddedResource Include="EasyHost.Resources.script.png" LogicalName="EasyHost.Resources.script.png" />
+    <EmbeddedResource Include="EasyHost.Resources.gearpage.png" LogicalName="EasyHost.Resources.gearpage.png" />
+    <EmbeddedResource Include="EasyHost.Resources.search.png" LogicalName="EasyHost.Resources.search.png" />
+    <EmbeddedResource Include="EasyHost.shine.ico" LogicalName="EasyHost.shine.ico" />
+    <EmbeddedResource Include="EasyHost.Resources.shine.ico" LogicalName="EasyHost.Resources.shine.ico" />
+  </ItemGroup>
+  <ItemGroup>
+    <Reference Include="System.Data" />
+    <Reference Include="System.Core" />
+    <Reference Include="System.Windows.Forms.DataVisualization" />
+    <Reference Include="JoyD.Windows.CS.Utils" />
+    <Reference Include="System.Xml.Linq" />
+    <Reference Include="System.Xml" />
+    <Reference Include="System.Data.DataSetExtensions" />
+  </ItemGroup>
+</Project>

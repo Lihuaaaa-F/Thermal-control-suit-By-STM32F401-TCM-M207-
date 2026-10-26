@@ -2,4 +2,4 @@ build/
 sdkconfig
 sdkconfig.old
 managed_components/
-dependencies.lock
+# dependencies.lock 已入 git（W9：官方可复现构建机制，版本钉 3.1.1）

@@ -1,0 +1,5 @@
+== M207 真机故障码/状态全套 COM7@57600 (2026-10-26, RX/TX 交换后) ==
+TC1:TCSENSORTYPE?            -> b'CMD:REPLY=2\r'
+TC2:TCSENSORTYPE?            -> b'CMD:REPLY=2\r'
+TC1:TCMINTEMP?               -> b'TC1:TCMINTEMP=-5.00\r'
+TC1:TCACTVOL?                -> b'TC1:TCACTVOL=0.034\r'

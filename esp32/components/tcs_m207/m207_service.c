@@ -661,6 +661,17 @@ int m207_send_raw(const char *cmd)
 uint8_t m207_online(void) { return s_online; }
 uint8_t m207_ch_sensor_open(uint8_t ch) { return (ch == 1 || ch == 2) ? s_ch_open[ch] : 0u; }
 float m207_last_temp(uint8_t ch) { return (ch == 1 || ch == 2) ? s_temp[ch] : 0.0f; }
+uint32_t m207_temp_age_ms(void)
+{
+    if (!s_ever_online) return 0xFFFFu;
+    uint32_t worst = 0;                                /* 取较旧通道=显示新鲜度下界 */
+    for (int ch = 1; ch <= 2; ch++) {
+        if (!s_have_temp[ch]) continue;
+        uint32_t age = (s_tick - s_temp_tick[ch]) * M207_TICK_MS;
+        if (age > worst) worst = age;
+    }
+    return (worst > 0xFFFFu) ? 0xFFFFu : worst;
+}
 uint16_t m207_stats_nak(void) { return s_stat.nak; }
 uint16_t m207_stats_verify_ok(void) { return s_stat.verify_ok; }
 uint16_t m207_stats_resend(void) { return s_stat.resend; }

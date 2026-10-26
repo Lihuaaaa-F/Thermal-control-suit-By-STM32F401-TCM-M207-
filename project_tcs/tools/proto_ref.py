@@ -109,6 +109,57 @@ def dec_reg_entry(b: bytes) -> dict:
                 min=mn, max=mx, step=st, key=key, name=name, unit=unit)
 
 
+# ====== R2：0x20 SNAPSHOT（40B）/0x21 DELTA（变长位图）======
+D_TC1_SET, D_TC2_SET, D_TEC, D_FAN, D_MODE, D_ALARM, D_BODY, D_BADGE =     1 << 0, 1 << 1, 1 << 2, 1 << 3, 1 << 4, 1 << 5, 1 << 6, 1 << 7
+
+
+def enc_snapshot(ver=1, seq=0, ms=0, tc1_act=0.0, tc2_act=0.0, body=0.0,
+                 tc1_set=0.0, tc2_set=0.0, tec1=0, tec2=0, fan=0, mode=0,
+                 alarm=0, online=0, fresh_ms=0xFFFF, badge=0, rfu=0) -> bytes:
+    b = struct.pack("<BIIfffff BBBBHBHBB", ver, seq, ms,
+                    tc1_act, tc2_act, body, tc1_set, tc2_set,
+                    tec1, tec2, fan, mode, alarm, online, fresh_ms, badge, rfu)
+    assert len(b) == 40, len(b)
+    return b
+
+
+def dec_snapshot(b: bytes) -> dict:
+    (ver, seq, ms, tc1_act, tc2_act, body, tc1_set, tc2_set,
+     tec1, tec2, fan, mode, alarm, online, fresh_ms, badge, rfu) =         struct.unpack("<BIIfffff BBBBHBHBB", b[:40])
+    return dict(ver=ver, seq=seq, ms=ms, tc1_act=tc1_act, tc2_act=tc2_act,
+                body=body, tc1_set=tc1_set, tc2_set=tc2_set, tec1=tec1,
+                tec2=tec2, fan=fan, mode=mode, alarm=alarm, online=online,
+                fresh_ms=fresh_ms, badge=badge, rfu=rfu)
+
+
+def enc_delta(mask: int, d: dict) -> bytes:
+    b = struct.pack("<H", mask)
+    if mask & D_TC1_SET: b += struct.pack("<f", d["tc1_set"])
+    if mask & D_TC2_SET: b += struct.pack("<f", d["tc2_set"])
+    if mask & D_TEC:     b += struct.pack("<B", d["tec"])
+    if mask & D_FAN:     b += struct.pack("<B", d["fan"])
+    if mask & D_MODE:    b += struct.pack("<B", d["mode"])
+    if mask & D_ALARM:   b += struct.pack("<H", d["alarm"])
+    if mask & D_BODY:    b += struct.pack("<f", d["body"])
+    if mask & D_BADGE:   b += struct.pack("<B", d["badge"])
+    return b
+
+
+def dec_delta(b: bytes):
+    (mask,) = struct.unpack_from("<H", b, 0)
+    o = 2
+    d = {}
+    if mask & D_TC1_SET: d["tc1_set"] = struct.unpack_from("<f", b, o)[0]; o += 4
+    if mask & D_TC2_SET: d["tc2_set"] = struct.unpack_from("<f", b, o)[0]; o += 4
+    if mask & D_TEC:     d["tec"] = b[o]; o += 1
+    if mask & D_FAN:     d["fan"] = b[o]; o += 1
+    if mask & D_MODE:    d["mode"] = b[o]; o += 1
+    if mask & D_ALARM:   d["alarm"] = struct.unpack_from("<H", b, o)[0]; o += 2
+    if mask & D_BODY:    d["body"] = struct.unpack_from("<f", b, o)[0]; o += 4
+    if mask & D_BADGE:   d["badge"] = b[o]; o += 1
+    return mask, d
+
+
 def describe(mt, seq, body) -> str:
     if mt == MT_STATUS:
         s = dec_status(body)
@@ -129,6 +180,16 @@ def describe(mt, seq, body) -> str:
                 f"name={e['name']} [{e['min']},{e['max']}/{e['step']}] flags=0x{e['flags']:02x}")
     if mt == MT_CMD:
         return f"CMD c={body[0]}"
+    if mt == 0x20:
+        s = dec_snapshot(body)
+        return (f"SNAP seq={s['seq']} ms={s['ms']} tc1={s['tc1_act']} tc2={s['tc2_act']} "
+                f"body={s['body']} set={s['tc1_set']}/{s['tc2_set']} "
+                f"tec={s['tec1']}/{s['tec2']} fan={s['fan']} mode={s['mode']} "
+                f"alarm=0x{s['alarm']:04x} online=0x{s['online']:02x} "
+                f"fresh={s['fresh_ms']}ms badge={s['badge']}")
+    if mt == 0x21:
+        mask, d = dec_delta(body)
+        return f"DELTA mask=0x{mask:04x} {d}"
     if mt == MT_ACK:
         acked_seq, acked_mt, status = body[0], body[1], body[2]
         ret = struct.unpack("<f", body[3:7])[0]

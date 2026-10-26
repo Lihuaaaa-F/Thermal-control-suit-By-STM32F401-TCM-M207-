@@ -324,6 +324,16 @@ int link_set_param(uint16_t id, float v)
     return 0;
 }
 
+int link_send_frame_mt(uint8_t mt, const uint8_t *pl, size_t n)
+{
+    if (s_demo_on) return 0;                       /* 演示模式不发（本地闭环）*/
+    uint8_t frame[MAX_FRAME];
+    size_t fn = mt_frame(mt, comm_next_seq(&s_link), pl, n, frame, sizeof(frame));
+    if (!fn) return -1;
+    comm_send(&s_link, frame, fn, mt);
+    return 0;
+}
+
 int link_send_cmd(uint8_t cmd)
 {
     if (s_demo_on) return demo_cmd(cmd);           /* WP-F.2：演示模式本地闭环 */

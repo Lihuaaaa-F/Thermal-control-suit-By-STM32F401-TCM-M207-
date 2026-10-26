@@ -33,6 +33,7 @@
 #include "control.h"
 #include "control_service.h"
 #include "tcs_console.h"
+#include "tcs_snap.h"
 #include "r1e_probe.h"
 
 static const char *TAG = "TCS";
@@ -161,6 +162,9 @@ void app_main(void)
     });
     control_service_start();
     tcs_console_start();
+    /* R2：0x20 快照（200ms 全量，核 0）+0x21 位图增量。旧屏固件对未知消息号
+     * 静默丢弃（switch 无 default）→ 前向兼容；屏端读快照缓存在 R2-H743 侧接。 */
+    tcs_snap_start();
 #if CONFIG_TCS_M207_SELFLOOP
     m207_selfloop_run();          /* 取证构建：应答器注入全路径（[M207SL]，~20s）*/
 #endif

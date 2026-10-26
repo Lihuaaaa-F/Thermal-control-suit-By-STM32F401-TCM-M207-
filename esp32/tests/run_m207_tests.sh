@@ -40,6 +40,7 @@ run() {  # run <name> <test.c> <sources...>
 run m207proto tests/test_m207_proto.c  components/tcs_m207/m207_proto.c
 run m207golden tests/test_m207_golden.c components/tcs_m207/m207_proto.c
 run tmp117pure tests/test_tmp117_pure.c    components/tcs_tmp117/tmp117_pure.c
+run tcsproto  tests/test_tcs_proto.c
 run control   tests/test_control_esp32.c   components/tcs_core/control.c components/tcs_core/param_registry.c components/tcs_core/post_pure.c components/tcs_link/proto.c
 
 [ $FAIL = 0 ] && echo "esp32-tests: ALL GREEN" || echo "esp32-tests: HAS FAILURES"

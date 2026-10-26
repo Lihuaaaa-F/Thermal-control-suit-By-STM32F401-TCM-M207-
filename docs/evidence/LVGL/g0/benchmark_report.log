@@ -1,0 +1,23 @@
+LV_USE_CHECK_ARG is enabled possibly making the widgets demo slower
+LV_DRAW_LAYER_SIMPLE_BUF_SIZE is small making opa_layered slow. Consider 1/20 screen size for it (> 60kB)
+Benchmark Summary (9.6.0 )
+Name, Avg. CPU, Avg. FPS, Avg. time, render time, flush time
+Empty screen, 10%, 35, 0, 0, 0
+Moving wallpaper, 0%, 39, 0, 0, 0
+Single rectangle, 0%, 39, 0, 0, 0
+Multiple rectangles, 0%, 39, 0, 0, 0
+Multiple RGB images, 0%, 39, 0, 0, 0
+Multiple ARGB images, 0%, 39, 0, 0, 0
+Rotated ARGB images, 0%, 39, 0, 0, 0
+Multiple labels, 0%, 39, 0, 0, 0
+Screen sized text, 0%, 39, 0, 0, 0
+Multiple arcs, 0%, 39, 0, 0, 0
+Containers, 0%, 39, 0, 0, 0
+Containers with overlay, 0%, 39, 0, 0, 0
+Containers with opa, 0%, 39, 0, 0, 0
+Containers with opa_layer, 0%, 39, 0, 0, 0
+Containers with scrolling, 0%, 39, 0, 0, 0
+Widgets demo, 0%, 39, 0, 0, 0
+All scenes avg.,0%, 38, 0, 0, 0
+[sim] dump out/frames/benchmark_result.bin (frame 9087)
+[sim] benchmark done -> out/frames

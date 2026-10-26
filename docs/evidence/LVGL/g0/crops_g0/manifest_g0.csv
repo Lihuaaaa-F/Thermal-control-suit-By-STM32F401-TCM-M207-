@@ -1,0 +1,11 @@
+page,state,part,t,input,x,y,w,h
+fonts,dual,hanzi_trackA,T1,out/fonts_dual_track.png,40,90,260,44
+fonts,dual,hanzi_trackB,T1,out/fonts_dual_track.png,40,210,260,44
+fonts,dual,degC_trackA,T1,out/fonts_dual_track.png,850,80,170,60
+fonts,dual,degC_trackB,T1,out/fonts_dual_track.png,660,200,170,60
+fonts,dual,baseline_trackA,T1,out/fonts_dual_track.png,40,108,200,24
+widgets,profile,title_text,T1,out/frames/widgets_0000.png,224,112,200,44
+widgets,profile,avatar_edge,T1,out/frames/widgets_0000.png,40,112,160,160
+widgets,profile,tab_underline,T1,out/frames/widgets_0000.png,500,0,200,80
+widgets,charts,line_aa,T1,out/frames/widgets_0011.png,84,48,240,120
+widgets,charts,bars_edge,T1,out/frames/widgets_0011.png,440,360,200,140

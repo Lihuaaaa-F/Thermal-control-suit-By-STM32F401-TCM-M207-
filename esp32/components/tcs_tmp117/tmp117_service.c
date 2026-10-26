@@ -24,7 +24,8 @@
 #define TMP117_REG_DEVID    0x0F
 #define TMP117_DEVID_EXPECT 0x0117u
 #define TMP117_SAMPLE_MS    100u
-#define TMP117_I2C_TIMEOUT_MS 50
+#define TMP117_I2C_TIMEOUT_MS 10
+#define TMP117_LOST_PERIOD_MS 1000u   /* 失联降频：错满 10 次后 1s 试联 */
 
 static i2c_master_bus_handle_t s_bus;
 static i2c_master_dev_handle_t s_dev;
@@ -71,12 +72,14 @@ static int sample_accept(float c, uint32_t tick_now)
 static void tmp117_task(void *arg)
 {
     (void)arg;
-    TickType_t last_wake = xTaskGetTickCount();
     uint8_t reg = TMP117_REG_TEMP;
     uint8_t buf[2];
     uint32_t p_win = 0;
     for (;;) {
-        vTaskDelayUntil(&last_wake, pdMS_TO_TICKS(TMP117_SAMPLE_MS));
+        /* 失联降频：错满 TRIP 且非 sim → 1s 试联（F4 恢复检测 ≤1s 首样，3 成 ≤1.3s）*/
+        uint32_t period = (s_health.err_run >= TMP117_ERR_TRIP && !s_sim_on)
+                          ? TMP117_LOST_PERIOD_MS : TMP117_SAMPLE_MS;
+        vTaskDelay(pdMS_TO_TICKS(period));
         s_tick++;
         int32_t t0 = (int32_t)esp_timer_get_time();
         int ok = 0;

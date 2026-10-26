@@ -1,0 +1,17 @@
+{
+ "batch": "20261026_134317",
+ "seed": null,
+ "mapping": {
+  "B01.png": "fonts_dual_degC_trackA_T1.png",
+  "B02.png": "widgets_profile_title_text_T1.png",
+  "B03.png": "fonts_dual_baseline_trackA_T1.png",
+  "B04.png": "widgets_profile_tab_underline_T1.png",
+  "B05.png": "fonts_dual_hanzi_trackB_T1.png",
+  "B06.png": "fonts_dual_hanzi_trackA_T1.png",
+  "B07.png": "fonts_dual_degC_trackB_T1.png",
+  "B08.png": "widgets_charts_line_aa_T1.png",
+  "B09.png": "widgets_profile_avatar_edge_T1.png",
+  "B10.png": "widgets_charts_bars_edge_T1.png"
+ },
+ "rule": "盲审记录只写 B 号；映射表不进 blind 目录、不随盲审件流转"
+}

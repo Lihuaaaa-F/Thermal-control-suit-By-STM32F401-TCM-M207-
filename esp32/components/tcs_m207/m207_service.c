@@ -292,7 +292,9 @@ static void m207_handle_line(const char *line)
                          (unsigned)r.errcode, (unsigned)s_wait_ch);
             }
         } else {
-            s_stat.unexpected++;         /* 无事务 ACK（如上电 TCSW=0）*/
+            s_stat.unexpected++;         /* 无事务 ACK/注入回码 → 留痕可见 */
+            ESP_LOGI(TAG, "unexpected CMD:REPLY=%u (no poll wait)",
+                     (unsigned)r.errcode);
         }
         return;
     }
@@ -683,7 +685,7 @@ void m207_hook_map_set(uint16_t pid, float v) { (void)m207_map_set(pid, v); }
 static const char *const s_lb_frames[] = {
     "TC1:TCACTTEMP=25.5",
     "TC2:TCACTTEMP=-10.05",
-    "TC1:TCRTOCPHT=1.0",
+    "TC1:TCACTTEMP=1.0",    /* 只读参写→模块回 =3 拒绝（无害）；原 TCRTOCPHT=1.0 会真改保护参，禁入自检帧 */
     "CMD:REPLY=0", "CMD:REPLY=1", "CMD:REPLY=2", "CMD:REPLY=3",
     "CMD:REPLY=4", "CMD:REPLY=5", "CMD:REPLY=6", "CMD:REPLY=7",
     "CMD:REPLY=8",
@@ -702,6 +704,8 @@ static int lb_frame_pass(const char *f)
         return r.module == M207_MOD_TC1 && r.value > 25.49f && r.value < 25.51f;
     if (strcmp(f, "TC2:TCACTTEMP=-10.05") == 0)
         return r.module == M207_MOD_TC2 && r.value < -10.04f && r.value > -10.06f;
+    if (strcmp(f, "TC1:TCACTTEMP=1.0") == 0)
+        return r.module == M207_MOD_TC1 && r.value > 0.99f && r.value < 1.01f;
     return r.param[0] != '\0';           /* 其余：参数名非空即过 */
 }
 

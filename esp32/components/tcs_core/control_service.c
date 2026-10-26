@@ -59,6 +59,7 @@ static void control_task(void *arg)
         int32_t t0 = (int32_t)esp_timer_get_time();
         control_poll((uint32_t)(t0 / 1000));
         post_step_100ms();
+        param_persist_flush((uint32_t)(t0 / 1000));   /* H743 同款 2s 防抖落盘 */
         int32_t dt = (int32_t)esp_timer_get_time() - t0;
         if (dt > 0 && (uint32_t)dt > s_poll_max_us) s_poll_max_us = (uint32_t)dt;
         s_polls++;

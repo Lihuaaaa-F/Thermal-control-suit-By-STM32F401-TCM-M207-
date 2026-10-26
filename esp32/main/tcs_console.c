@@ -80,6 +80,10 @@ static int cmd_fan(int argc, char **argv)
     if (argc < 2) { printf("fan <0-100> (now %u%%)\n", (unsigned)fan_get_duty()); return 1; }
     int p = atoi(argv[1]);
     if (p < 0 || p > 100) { printf("fan 0-100\n"); return 1; }
+    if (control_state() == CTRL_SAFE && p < 100) {
+        printf("SAFE 期风扇锁全开：拒绝降档（先 ack 退出 SAFE）\n");
+        return 1;
+    }
     fan_set_duty((uint8_t)p);
     printf("fan duty=%u%%\n", (unsigned)fan_get_duty());
     return 0;
@@ -150,6 +154,18 @@ static int cmd_perf(int argc, char **argv)
     return 0;
 }
 
+static int cmd_m207(int argc, char **argv)
+{
+    if (argc < 3 || strcmp(argv[1], "raw") != 0) {
+        printf("usage: m207 raw <MODULE:PARAM...>  (例: m207 raw TC1:TCERRORSTATUS?)\n");
+        return 1;
+    }
+    int rc = m207_send_raw(argv[2]);
+    printf("m207 raw '%s' -> rc=%d (0=已入队；应答行见下方 reply/CMD:REPLY 日志)\n",
+           argv[2], rc);
+    return 0;
+}
+
 static int cmd_reset(int argc, char **argv)
 {
     (void)argc; (void)argv;
@@ -193,6 +209,8 @@ int tcs_console_start(void)
           .func=cmd_ack, .argtable=NULL },
         { .command="status", .help="状态一行", .hint=NULL,
           .func=cmd_status, .argtable=NULL },
+        { .command="m207", .help="m207 raw <帧>（直查/注入；自动补 \r）", .hint="raw <frame>",
+          .func=cmd_m207, .argtable=NULL },
         { .command="perf", .help="服务统计+vTaskList", .hint=NULL,
           .func=cmd_perf, .argtable=NULL },
         { .command="reset", .help="软复位", .hint=NULL,

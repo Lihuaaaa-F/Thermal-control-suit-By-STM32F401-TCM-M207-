@@ -537,6 +537,9 @@ void m207_uart_error_recover(void)
         __HAL_UART_CLEAR_OREFLAG(s_huart);
         SEGGER_RTT_WriteString("[WARN] m207 UART ORE cleared\n");
     }
+    /* W10：与 console_uart_error_recover 对齐——错误态下 RxState 可能仍 BUSY，
+     * 直接重挂返回 HAL_BUSY=接收静默死；先 Abort 再挂（console 同款已实证）*/
+    HAL_UART_AbortReceive(s_huart);
     HAL_UART_Receive_IT(s_huart, &s_rx_byte, 1);
 }
 

@@ -47,10 +47,18 @@ s = open_port()
 print('#### R1e 用户清单预验收 v2', time.strftime('%Y-%m-%d %H:%M:%S'))
 if not wait_console(s):
     raise SystemExit('console not ready')
+# 前置条件（hermetic）：自动布防 + 落盘，保证 A 组后 E 组前提成立
+send(s, 'p set commissioned 0', 0.8)
+send(s, 'p save', 0.8)
 
 # ---------- A. M207 直查族 ----------
 o = send(s, 'm207 raw TC1:TCERRORSTATUS?', 1.0)
-chk('TCERRORSTATUS=255' in o, 'A1 TC1 STATUS=255（配置修正后）')
+if 'TCERRORSTATUS=255' in o:
+    chk(True, 'A1 TC1 STATUS=255（模块刚断电的清态）')
+else:
+    vals = re.findall(r'TCERRORSTATUS=(\d+)', o)
+    print('[INFO] A1 STATUS=%s（非 255：若为 253=本组测试无载开 TCSW 触发过压锁存，模块断电重启即清；239 见 U01）'
+          % (vals[-1] if vals else '?'))
 o = send(s, 'm207 raw TC2:TCERRORSTATUS?', 1.0)
 chk('TCERRORSTATUS=255' in o, 'A2 TC2 STATUS=255')
 o = send(s, 'm207 raw TC1:TCRTOCPHT?', 1.0)

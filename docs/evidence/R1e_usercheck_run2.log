@@ -1,0 +1,344 @@
+#### R1e 用户清单预验收 v2 2026-10-26 16:44:51
+==================================================================
+>>> m207 raw TC1:TCERRORSTATUS?
+m207 raw TC1:TCERRORSTATUS?
+m207 raw 'TC1:TCERRORSTATUS?' -> rc=0 (0=已入队；应答行见下方 reply/CMD:REPLY 日志)
+tcs 
+tcs I (877606) M207: reply ch=1 TCERRORSTATUS=253.000
+[CHK] A1 TC1 STATUS=255（配置修正后） : FAIL
+==================================================================
+>>> m207 raw TC2:TCERRORSTATUS?
+m207 raw TC2:TCERRORSTATUS?
+m207 raw 'TC2:TCERRORSTATUS?' -> rc=0 (0=已入队；应答行见下方 reply/CMD:REPLY 日志)
+tcs 
+tcs I (878906) M207: reply ch=2 TCERRORSTATUS=255.000
+[CHK] A2 TC2 STATUS=255 : PASS
+==================================================================
+>>> m207 raw TC1:TCRTOCPHT?
+m207 raw TC1:TCRTOCPHT?
+m207 raw 'TC1:TCRTOCPHT?' -> rc=0 (0=已入队；应答行见下方 reply/CMD:REPLY 日志)
+tcs 
+tcs I (880256) M207: reply ch=1 TCRTOCPHT=120.000
+[CHK] A3 TC1 开路保护上限=120 回读 : PASS
+==================================================================
+>>> m207 raw FOO:BAR=1
+m207 raw FOO:BAR=1
+m207 raw 'FOO:BAR=1' -> rc=0 (0=已入队；应答行见下方 reply/CMD:REPLY 日志)
+tcs 
+tcs I (881556) M207: unexpected CMD:REPLY=2 (no poll wait)
+[CHK] A4 V-5 未知模块 -> =2（留痕可见） : PASS
+==================================================================
+>>> m207 raw GARBAGE
+m207 raw GARBAGE
+m207 raw 'GARBAGE' -> rc=0 (0=已入队；应答行见下方 reply/CMD:REPLY 日志)
+tcs 
+tcs I (882856) M207: unexpected CMD:REPLY=6 (no poll wait)
+I (883556) M207: [M207P] tick_max=1175ous (fsm_max=85ous; budget 1000/300) tx=1773 rxline=1773 perr=0 nak=0 vok=0 rsend=0 off=0 qdrop=0 wdrop=0 stk=1252W
+[CHK] A5 语法错 -> =6 : PASS
+==================================================================
+>>> m207 raw TC1:TCSW?@0#FF
+m207 raw TC1:TCSW?@0#FF
+m207 raw 'TC1:TCSW?@0#FF' -> rc=0 (0=已入队；应答行见下方 reply/CMD:REPLY 日志)
+tcs 
+tcs I (884156) M207: unexpected CMD:REPLY=7 (no poll wait)
+[CHK] A6 坏校验 -> =7@0#.. : PASS
+==================================================================
+>>> p list
+p list
+id      key            unit        value       min       max
+0x0001 tc1_set        °C         5.000      5.00     45.00
+0x0002 tc2_set        °C        25.000      5.00     45.00
+0x0003 body_hot       °C        37.500     36.00     40.00
+0x0004 body_cold      °C        36.500     35.00     39.00
+0x0005 hyst           °C         0.200      0.10      1.00
+0x0006 mode                       0.000      0.00      1.00
+0x0007 tc_set_confirm °C        40.000     38.00     45.00
+0x0008 commissioned               2.000      0.00      2.00
+0x0100 m207_kp                    0.400      0.00    100.00
+0x0101 m207_ki                   40.000      0.00   9999.00
+0x0102 m207_kd                    0.100      0.00   9999.00
+0x0103 m207_t1_otp_ht °C        30.000    -50.00    150.00
+0x0104 m207_t1_otp_lt °C        15.000    -50.00    150.00
+0x0105 m207_t1_otp_hy °C         1.000      0.00     50.00
+0x0106 m207_t1_otpm               0.000      0.00      2.00
+0x0107 m207_t1_ocp    A           5.000      0.00     10.00
+0x0108 m207_t1_ovp    V           9.000      0.00     24.00
+0x0109 m207_t1_rtoch  °C       100.000    -50.00    200.00
+0x010A m207_t1_rtocl  °C       -20.000    -50.00    200.00
+0x010B m207_t1_mint   °C       -10.000    -50.00    150.00
+0x010C m207_t1_maxt   °C       120.000    -50.00    200.00
+0x010D m207_t1_maxv   V           8.000      0.00     12.00
+0x010E m207_t1_vratio             1.000      0.10     10.00
+0x010F m207_t1_step   °C         0.010      0.00     10.00
+0x0110 m207_t2_kp                 0.400      0.00    100.00
+0x0111 m207_t2_ki                40.000      0.00   9999.00
+0x0112 m207_t2_kd                 0.100      0.00   9999.00
+0x0113 m207_t2_otp_ht °C        30.000    -50.00    150.00
+0x0114 m207_t2_otp_lt °C        15.00
+[CHK] B1 p list 含注册表 : PASS
+==================================================================
+>>> p set tc1_set 31
+p set tc1_set 31
+p set 0x0001 = 31.000 -> rc=0 (0=ok 1=clamped -1=bad -2=constraint)
+tcs 
+tcs I (886806) M207: verify OK ch=1 TCADJTEMP=31.000 (want 31.000)
+I (886806) M207: module TCADJTEMP ch=1 = 31.00 (cache mirror at R5)
+[CHK] B2 p set 31 生效 : PASS
+==================================================================
+>>> reset
+reset
+soft reset in 1s
+[CHK] B3 reset 后 console 恢复 : PASS
+==================================================================
+>>> p list
+p list
+id      key            unit        value       min       max
+0x0001 tc1_set        °C        31.000      5.00     45.00
+0x0002 tc2_set        °C        25.000      5.00     45.00
+0x0003 body_hot       °C        37.500     36.00     40.00
+0x0004 body_cold      °C        36.500     35.00     39.00
+0x0005 hyst           °C         0.200      0.10      1.00
+0x0006 mode                       0.000      0.00      1.00
+0x0007 tc_set_confirm °C        40.000     38.00     45.00
+0x0008 commissioned               2.000      0.00      2.00
+0x0100 m207_kp                    0.400      0.00    100.00
+0x0101 m207_ki                   40.000      0.00   9999.00
+0x0102 m207_kd                    0.100      0.00   9999.00
+0x0103 m207_t1_otp_ht °C        30.000    -50.00    150.00
+0x0104 m207_t1_otp_lt °C        15.000    -50.00    150.00
+0x0105 m207_t1_otp_hy °C         1.000      0.00     50.00
+0x0106 m207_t1_otpm               0.000      0.00      2.00
+0x0107 m207_t1_ocp    A           5.000      0.00     10.00
+0x0108 m207_t1_ovp    V           9.000      0.00     24.00
+0x0109 m207_t1_rtoch  °C       100.000    -50.00    200.00
+0x010A m207_t1_rtocl  °C       -20.000    -50.00    200.00
+0x010B m207_t1_mint   °C       -10.000    -50.00    150.00
+0x010C m207_t1_maxt   °C       120.000    -50.00    200.00
+0x010D m207_t1_maxv   V           8.000      0.00     12.00
+0x010E m207_t1_vratio             1.000      0.10     10.00
+0x010F m207_t1_step   °C         0.010      0.00     10.00
+0x0110 m207_t2_kp                 0.400      0.00    100.00
+0x0111 m207_t2_ki                40.000      0.00   9999.00
+0x0112 m207_t2_kd                 0.100      0.00   9999.00
+0x0113 m207_t2_otp_ht °C        30.000    -50.00    150.00
+0x0114 m207_t2_otp_lt °C        15.00
+[CHK] B4 自动落盘：复位后 tc1_set 仍 31 : PASS
+==================================================================
+>>> body 37.8
+body 37.8
+W (6458) TMP117: [SIM] body temp forced 37.80
+body sim 37.80
+tcs 
+tcs W (6708) TMP117: RECOVERED (data flow; alarm stays until ack)
+[CHK] C1 注入 37.8 : PASS
+==================================================================
+>>> ack
+ack
+ack: alarm=0x0000 armed=0 state=0
+tcs 
+tcs
+==================================================================
+>>> mode 1
+mode 1
+mode=1 rc=0
+tcs 
+tcs I (10658) M207: verify OK ch=1 TCADJTEMP=15.000 (want 15.000)
+I (10658) M207: module TCADJTEMP ch=1 = 15.00 (cache mirror at R5)
+I (10758) M207: verify OK ch=1 TCSW=1.000 (want 1.000)
+[CHK] C2 自动模式 : PASS
+==================================================================
+>>> status
+status
+tc1=21.83 tc2=22.96 body=37.80(ok=1) fan=100% mode=1 m207=1 alarm=0x0000 armed=0 state=1 sim=1 heap=8527884
+tcs 
+tcs
+[CHK] C3 COOL（state=1） : PASS
+[CHK] C3 fan=100% : PASS
+==================================================================
+>>> m207 raw TC1:TCADJTEMP?
+m207 raw TC1:TCADJTEMP?
+m207 raw 'TC1:TCADJTEMP?' -> rc=0 (0=已入队；应答行见下方 reply/CMD:REPLY 日志)
+tcs 
+tcs I (13508) M207: [M207P] tick_max=2122ous (fsm_max=88ous; budget 1000/300) tx=33 rxline=33 perr=0 nak=0 vok=2 rsend=0 off=0 qdrop=0 wdrop=0 stk=1444W
+I (13558) M207: module TCADJTEMP ch=1 = 15.00 (cache mirror at R5)
+[CHK] C4 FSM 真下发 TC1=15.0 到模块 : PASS
+==================================================================
+>>> body 37.0
+body 37.0
+W (14798) TMP117: [SIM] body temp forced 37.00
+body sim 37.00
+tcs 
+tcs I (15308) TMP117: [TMP117P] tick_max=1633us (budget 500) err=11 samples=89 lost=0 rec=1 sim=1
+I (15658) M207: verify OK ch=1 TCSW=0.000 (want 0.000)
+==================================================================
+>>> status
+status
+tc1=21.84 tc2=22.96 body=37.00(ok=1) fan=0% mode=1 m207=1 alarm=0x0000 armed=0 state=0 sim=1 heap=8527884
+tcs 
+tcs
+[CHK] C5 回带内 -> IDLE : PASS
+==================================================================
+>>> estop
+estop
+ESTOP: TCSW x0 + fan on + mode=manual + ALM_ESTOP (ack to clear)
+tcs 
+tcs I (18758) M207: verify OK ch=1 TCSW=0.000 (want 0.000)
+I (18858) M207: verify OK ch=2 TCSW=0.000 (want 0.000)
+==================================================================
+>>> status
+status
+tc1=21.85 tc2=22.96 body=37.00(ok=1) fan=100% mode=0 m207=1 alarm=0x0004 armed=0 state=3 sim=1 heap=8527884
+tcs 
+tcs
+[CHK] D1 急停 -> SAFE+fan100+手动 : PASS
+==================================================================
+>>> fan 50
+fan 50
+SAFE 期风扇锁全开：拒绝降档（先 ack 退出 SAFE）
+Command returned non-zero error code: 0x1 (ERROR)
+tcs 
+tcs
+[CHK] D2 SAFE 期风扇锁全开（降档被策略门拒绝） : PASS
+==================================================================
+>>> status
+status
+tc1=21.86 tc2=22.96 body=37.00(ok=1) fan=100% mode=0 m207=1 alarm=0x0004 armed=0 state=3 sim=1 heap=8527884
+tcs 
+tcs
+[CHK] D2b 风扇仍 100% : PASS
+==================================================================
+>>> ack
+ack
+ack: alarm=0x0000 armed=0 state=3
+tcs 
+tcs I (23508) M207: [M207P] tick_max=1280ous (fsm_max=89ous; budget 1000/300) tx=59 rxline=60 perr=0 nak=0 vok=5 rsend=0 off=0 qdrop=0 wdrop=0 stk=1444W
+==================================================================
+>>> status
+status
+tc1=21.86 tc2=22.96 body=37.00(ok=1) fan=0% mode=0 m207=1 alarm=0x0000 armed=0 state=0 sim=1 heap=8527884
+tcs 
+tcs I (25308) TMP117: [TMP117P] tick_max=1633us (budget 500) err=11 samples=189 lost=0 rec=1 sim=1
+[CHK] D3 ack 清 ESTOP 回 IDLE : PASS
+==================================================================
+>>> fan 50
+fan 50
+fan duty=50%
+tcs 
+tcs
+==================================================================
+>>> status
+status
+tc1=21.86 tc2=22.97 body=37.00(ok=1) fan=50% mode=0 m207=1 alarm=0x0000 armed=0 state=0 sim=1 heap=8527884
+tcs 
+tcs
+[CHK] D4 IDLE 期 duty 50 可调 : PASS
+==================================================================
+>>> fan 0
+fan 0
+fan duty=0%
+tcs 
+tcs
+==================================================================
+>>> status
+status
+tc1=21.86 tc2=22.97 body=37.00(ok=1) fan=0% mode=0 m207=1 alarm=0x0000 armed=0 state=0 sim=1 heap=8527884
+tcs 
+tcs
+[CHK] D5 IDLE 期 fan 0 可关 : PASS
+==================================================================
+>>> body off
+body off
+W (30918) TMP117: [SIM] body temp OFF (real I2C path; absent=loss path)
+body sim OFF (real I2C path)
+tcs 
+tcs W (31908) TMP117: LOST (unarmed, log only)
+I (33508) M207: [M207P] tick_max=212ous (fsm_max=89ous; budget 1000/300) tx=79 rxline=80 perr=0 nak=0 vok=5 rsend=0 off=0 qdrop=0 wdrop=0 stk=1444W
+==================================================================
+>>> status
+status
+tc1=21.87 tc2=22.99 body=37.00(ok=0) fan=0% mode=0 m207=1 alarm=0x0000 armed=0 state=0 sim=0 heap=8527884
+tcs 
+tcs
+[CHK] E1 失联 -> SAFE+ALM_BODY_SENSOR : FAIL
+==================================================================
+>>> ack
+ack
+ack: alarm=0x0000 armed=0 state=0
+tcs 
+tcs
+==================================================================
+>>> status
+status
+tc1=21.87 tc2=22.99 body=37.00(ok=0) fan=0% mode=0 m207=1 alarm=0x0000 armed=0 state=0 sim=0 heap=8527884
+tcs 
+tcs
+[CHK] E2 源未恢复 ack 不清 : FAIL
+==================================================================
+>>> m207 raw PCRS232:COMPUSHLIST=1
+m207 raw PCRS232:COMPUSHLIST=1
+m207 raw 'PCRS232:COMPUSHLIST=1' -> rc=0 (0=已入队；应答行见下方 reply/CMD:REPLY 日志)
+tcs 
+tcs I (37008) M207: unexpected CMD:REPLY=1 (no poll wait)
+I (37008) M207: reply ch=1 TCACTTEMP.REG=3001.000
+I (37308) M207: reply ch=1 TCOE.REG=3003.000
+I (37608) M207: reply ch=1 TCLED.REG=3004.000
+I (37908) M207: reply ch=1 TCACTVOL.REG=3005.000
+I (38208) M207: reply ch=1 TCACTCUR.REG=3007.000
+I (38508) M207: reply ch=1 TCSETTEMP.REG=3009.000
+I (38808) M207: reply ch=1 TCRT.REG=3011.000
+I (39108) M207: parse-err line: 'TC1:TCRTOCPSTATUS.REG=3013_UINT16_2'
+I (39408) M207: reply ch=1 TCOTPSTATUS.REG=3014.000
+I (39708) M207: reply ch=1 TCSETVOL.REG=3015.000
+I (40008) M207: reply ch=1 TCOVPSTATUS.REG=3017.000
+[CHK] F1 COMPUSHLIST 寄存器流（首 3s 捕获 11 行） : PASS
+==================================================================
+>>> perf
+perf
+[perf] m207 nak=0 vok=5 rsend=0 off=0 wdrop=0 rx?unexpected | ctrl pollmax=12597us polls=73 armed=0
+Task            Abs Time     CPU%
+console_repl   	124665		<1%
+IDLE0          	39134097		98%
+IDLE1          	39457987		99%
+tcs_link       	31784		<1%
+ctrl_svc       	12589		<1%
+tcs_ws         	27553		<1%
+tiT            	12376		<1%
+tmp117_svc     	21349		<1%
+m207_svc       	85916		<1%
+ipc1           	24156		<1%
+httpd          	711		<1%
+sys_evt        	485		<1%
+ipc0           	6317		<1%
+esp_timer      	34706		<1%
+wifi           	183672		<1%
+Tmr Svc        	18		<1%
+Task            State Prio  Stack  Num
+console_repl   	X	2	1864	17
+IDLE1          	R	0	804	6
+IDLE0          	R	0	700	5
+ctrl_svc       	B	4	1880	16
+tcs_ws         	B	4	3572	13
+tiT            	B	18	1480	8
+tmp117_svc     	B	5	2028	15
+m207_svc       	B	5	1444	14
+tcs_link       	B	5	1848	11
+httpd          	B	5	6672	12
+sys_evt        	B	20	1584	9
+ipc0           	S	24	532	1
+esp_timer      	S	22	3076	3
+wifi           	B	23	4164	10
+Tmr Svc        	B	1	1324	7
+ipc1           	S	24	540	2
+tcs 
+tcs I (40308) M207: reply ch=1 TCOVPACTTHR.REG=3018.000
+I (40608) M207: reply ch=1 TCOCPSTATUS.REG=3020.000
+I (40908) M207: reply ch=1 TCOCPACTTHR.REG=3021.000
+I (41208) M207: reply ch=1 TCCURLIMIT.REG=3023.000
+I (41508) M207: parse-err line: 'TC1:TCTUNESTATUS.REG=3025_UINT16_2'
+I (41808) M207: reply ch=1 TCEXTSTATUS.REG=3026.000
+[CHK] G1 运行时统计表 : PASS
+==================================================================
+#### SUMMARY: 23/26 PASS
+#### FAIL: A1 TC1 STATUS=255（配置修正后）
+#### FAIL: E1 失联 -> SAFE+ALM_BODY_SENSOR
+#### FAIL: E2 源未恢复 ack 不清

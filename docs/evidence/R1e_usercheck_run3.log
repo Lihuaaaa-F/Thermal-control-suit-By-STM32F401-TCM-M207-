@@ -1,0 +1,450 @@
+#### R1e 用户清单预验收 v2 2026-10-26 16:50:13
+==================================================================
+>>> p set commissioned 0
+p set commissioned 0
+p set 0x0008 = 0.000 -> rc=0 (0=ok 1=clamped -1=bad -2=constraint)
+tcs 
+tcs I (20206) M207: verify OK ch=1 TCSW=0.000 (want 0.000)
+I (20306) M207: verify OK ch=2 TCSW=0.000 (want 0.000)
+I (20706) M207: verify OK ch=1 TCSW=0.000 (want 0.000)
+I (20806) M207: verify OK ch=2 TCSW=0.000 (want 0.000)
+==================================================================
+>>> p save
+p save
+p save -> 1 (0=committed 1=no dirty -1=fail)
+tcs 
+tcs I (21206) M207: verify OK ch=1 TCSW=0.000 (want 0.000)
+I (21306) M207: verify OK ch=2 TCSW=0.000 (want 0.000)
+I (21706) M207: verify OK ch=1 TCSW=0.000 (want 0.000)
+I (21806) M207: verify OK ch=2 TCSW=0.000 (want 0.000)
+I (22206) M207: verify OK ch=1 TCSW=0.000 (want 0.000)
+==================================================================
+>>> m207 raw TC1:TCERRORSTATUS?
+m207 raw TC1:TCERRORSTATUS?
+m207 raw 'TC1:TCERRORSTATUS?' -> rc=0 (0=已入队；应答行见下方 reply/CMD:REPLY 日志)
+tcs 
+tcs I (22306) M207: verify OK ch=2 TCSW=0.000 (want 0.000)
+I (22356) M207: reply ch=1 TCERRORSTATUS=253.000
+I (22706) M207: verify OK ch=1 TCSW=0.000 (want 0.000)
+I (22806) M207: verify OK ch=2 TCSW=0.000 (want 0.000)
+I (23206) M207: verify OK ch=1 TCSW=0.000 (want 0.000)
+I (23306) M207: verify OK ch=2 TCSW=0.000 (want 0.000)
+[INFO] A1 STATUS=253（非 255：若为 253=本组测试无载开 TCSW 触发过压锁存，模块断电重启即清；239 见 U01）
+==================================================================
+>>> m207 raw TC2:TCERRORSTATUS?
+m207 raw TC2:TCERRORSTATUS?
+m207 raw 'TC2:TCERRORSTATUS?' -> rc=0 (0=已入队；应答行见下方 reply/CMD:REPLY 日志)
+tcs 
+tcs I (23556) M207: [M207P] tick_max=1219ous (fsm_max=89ous; budget 1000/300) tx=202 rxline=201 perr=0 nak=0 vok=76 rsend=0 off=0 qdrop=0 wdrop=0 stk=1252W
+I (23606) M207: reply ch=2 TCERRORSTATUS=255.000
+I (23706) M207: verify OK ch=1 TCSW=0.000 (want 0.000)
+I (23806) M207: verify OK ch=2 TCSW=0.000 (want 0.000)
+I (24206) M207: verify OK ch=1 TCSW=0.000 (want 0.000)
+I (24306) M207: verify OK ch=2 TCSW=0.000 (want 0.000)
+I (24706) M207: verify OK ch=1 TCSW=0.000 (want 0.000)
+I (24806) M207: verify OK ch=2 TCSW=0.000 (want 0.000)
+[CHK] A2 TC2 STATUS=255 : PASS
+==================================================================
+>>> m207 raw TC1:TCRTOCPHT?
+m207 raw TC1:TCRTOCPHT?
+m207 raw 'TC1:TCRTOCPHT?' -> rc=0 (0=已入队；应答行见下方 reply/CMD:REPLY 日志)
+tcs 
+tcs I (24906) M207: reply ch=1 TCRTOCPHT=120.000
+I (25206) M207: verify OK ch=1 TCSW=0.000 (want 0.000)
+I (25306) M207: verify OK ch=2 TCSW=0.000 (want 0.000)
+I (25706) M207: verify OK ch=1 TCSW=0.000 (want 0.000)
+I (25806) M207: verify OK ch=2 TCSW=0.000 (want 0.000)
+[CHK] A3 TC1 开路保护上限=120 回读 : PASS
+==================================================================
+>>> m207 raw FOO:BAR=1
+m207 raw FOO:BAR=1
+m207 raw 'FOO:BAR=1' -> rc=0 (0=已入队；应答行见下方 reply/CMD:REPLY 日志)
+tcs 
+tcs I (26206) M207: verify OK ch=1 TCSW=0.000 (want 0.000)
+I (26306) M207: verify OK ch=2 TCSW=0.000 (want 0.000)
+I (26356) M207: unexpected CMD:REPLY=2 (no poll wait)
+I (26706) M207: verify OK ch=1 TCSW=0.000 (want 0.000)
+I (26806) M207: verify OK ch=2 TCSW=0.000 (want 0.000)
+I (27206) M207: verify OK ch=1 TCSW=0.000 (want 0.000)
+I (27306) M207: verify OK ch=2 TCSW=0.000 (want 0.000)
+[CHK] A4 V-5 未知模块 -> =2（留痕可见） : PASS
+==================================================================
+>>> m207 raw GARBAGE
+m207 raw GARBAGE
+m207 raw 'GARBAGE' -> rc=0 (0=已入队；应答行见下方 reply/CMD:REPLY 日志)
+tcs 
+tcs I (27556) M207: unexpected CMD:REPLY=6 (no poll wait)
+I (27706) M207: verify OK ch=1 TCSW=0.000 (want 0.000)
+I (27806) M207: verify OK ch=2 TCSW=0.000 (want 0.000)
+I (28206) M207: verify OK ch=1 TCSW=0.000 (want 0.000)
+I (28306) M207: verify OK ch=2 TCSW=0.000 (want 0.000)
+I (28706) M207: verify OK ch=1 TCSW=0.000 (want 0.000)
+[CHK] A5 语法错 -> =6 : PASS
+==================================================================
+>>> m207 raw TC1:TCSW?@0#FF
+m207 raw TC1:TCSW?@0#FF
+m207 raw 'TC1:TCSW?@0#FF' -> rc=0 (0=已入队；应答行见下方 reply/CMD:REPLY 日志)
+tcs 
+tcs I (28806) M207: verify OK ch=2 TCSW=0.000 (want 0.000)
+I (28856) M207: unexpected CMD:REPLY=7 (no poll wait)
+I (29206) M207: verify OK ch=1 TCSW=0.000 (want 0.000)
+I (29306) M207: verify OK ch=2 TCSW=0.000 (want 0.000)
+I (29706) M207: verify OK ch=1 TCSW=0.000 (want 0.000)
+I (29806) M207: verify OK ch=2 TCSW=0.000 (want 0.000)
+[CHK] A6 坏校验 -> =7@0#.. : PASS
+==================================================================
+>>> p list
+p list
+id      key            unit        value       min       max
+0x0001 tc1_set        °C        32.500      5.00     45.00
+0x0002 tc2_set        °C        25.000      5.00     45.00
+0x0003 body_hot       °C        37.500     36.00     40.00
+0x0004 body_cold      °C        36.500     35.00     39.00
+0x0005 hyst           °C         0.200      0.10      1.00
+0x0006 mode                       0.000      0.00      1.00
+0x0007 tc_set_confirm °C        40.000     38.00     45.00
+0x0008 commissioned               0.000      0.00      2.00
+0x0100 m207_kp                    0.400      0.00    100.00
+0x0101 m207_ki                   40.000      0.00   9999.00
+0x0102 m207_kd                    0.100      0.00   9999.00
+0x0103 m207_t1_otp_ht °C        30.000    -50.00    150.00
+0x0104 m207_t1_otp_lt °C        15.000    -50.00    150.00
+0x0105 m207_t1_otp_hy °C         1.000      0.00     50.00
+0x0106 m207_t1_otpm               0.000      0.00      2.00
+0x0107 m207_t1_ocp    A           5.000      0.00     10.00
+0x0108 m207_t1_ovp    V           9.000      0.00     24.00
+0x0109 m207_t1_rtoch  °C       100.000    -50.00    200.00
+0x010A m207_t1_rtocl  °C       -20.000    -50.00    200.00
+0x010B m207_t1_mint   °C       -10.000    -50.00    150.00
+0x010C m207_t1_maxt   °C       120.000    -50.00    200.00
+0x010D m207_t1_maxv   V           8.000      0.00     12.00
+0x010E m207_t1_vratio             1.000      0.10     10.00
+0x010F m207_t1_step   °C         0.010      0.00     10.00
+0x0110 m207_t2_kp                 0.400      0.00    100.00
+0x0111 m207_t2_ki                40.000      0.00   9999.00
+0x0112 m207_t2_kd                 0.100      0.00   9999.00
+0x0113 m207_t2_otp_ht °C        30.000    -50.00    150.00
+0x0114 m207_t2_otp_lt °C        15.00
+[CHK] B1 p list 含注册表 : PASS
+==================================================================
+>>> p set tc1_set 31
+p set tc1_set 31
+p set 0x0001 = 31.000 -> rc=0 (0=ok 1=clamped -1=bad -2=constraint)
+tcs 
+tcs I (31506) M207: verify OK ch=1 TCADJTEMP=31.000 (want 31.000)
+I (31506) M207: module TCADJTEMP ch=1 = 31.00 (cache mirror at R5)
+I (31706) M207: verify OK ch=1 TCSW=0.000 (want 0.000)
+I (31806) M207: verify OK ch=2 TCSW=0.000 (want 0.000)
+I (32206) M207: verify OK ch=1 TCSW=0.000 (want 0.000)
+I (32306) M207: verify OK ch=2 TCSW=0.000 (want 0.000)
+I (32706) M207: verify OK ch=1 TCSW=0.000 (want 0.000)
+[CHK] B2 p set 31 生效 : PASS
+==================================================================
+>>> reset
+I (32806) M207: verify OK ch=2 TCSW=0.000 (want 0.000)
+I (33206) M207: verify OK ch=1 TCSW=0.000 (want 0.000)
+I (33306) M207: verify OK ch=2 TCSW=0.000 (want 0.000)
+I (33556) M207: [M207P] tick_max=2255ous (fsm_max=88ous; budget 1000/300) tx=308 rxline=308 perr=0 nak=0 vok=117 rsend=0 off=0 qdrop=0 wdrop=0 stk=1252W
+I (33706) M207: verify OK ch=1 TCSW=0.000 (want 0.000)
+I (33806) M207: verify OK ch=2 TCSW=0.000 (want 0.000)
+I (34206) M207: verify OK ch=1 TCSW=0.000 (want 0.000)
+I (34306) M207: verify OK ch=2 TCSW=0.000 (want 0.000)
+I (34706) M207: verify OK ch=1 TCSW=0.000 (want 0.000)
+I (34806) M207: verify OK ch=2 TCSW=0.000 (want 0.000)
+I (35206) M207: verify OK ch=1 TCSW=0.000 (want 0.000)
+reset
+soft reset in 1s
+I (35306) M207: verify OK ch=2 TCSW=0.000 (want 0.000)
+I (35706) M207: verify OK ch=1 TCSW=0.000 (want 0.000)
+I (35806) M207: verify OK ch=2 TCSW=0.000 (want 0.000)
+[CHK] B3 reset 后 console 恢复 : PASS
+==================================================================
+>>> p list
+p list
+id      key            unit        value       min       max
+0x0001 tc1_set        °C        31.000      5.00     45.00
+0x0002 tc2_set        °C        25.000      5.00     45.00
+0x0003 body_hot       °C        37.500     36.00     40.00
+0x0004 body_cold      °C        36.500     35.00     39.00
+0x0005 hyst           °C         0.200      0.10      1.00
+0x0006 mode                       0.000      0.00      1.00
+0x0007 tc_set_confirm °C        40.000     38.00     45.00
+0x0008 commissioned               0.000      0.00      2.00
+0x0100 m207_kp                    0.400      0.00    100.00
+0x0101 m207_ki                   40.000      0.00   9999.00
+0x0102 m207_kd                    0.100      0.00   9999.00
+0x0103 m207_t1_otp_ht °C        30.000    -50.00    150.00
+0x0104 m207_t1_otp_lt °C        15.000    -50.00    150.00
+0x0105 m207_t1_otp_hy °C         1.000      0.00     50.00
+0x0106 m207_t1_otpm               0.000      0.00      2.00
+0x0107 m207_t1_ocp    A           5.000      0.00     10.00
+0x0108 m207_t1_ovp    V           9.000      0.00     24.00
+0x0109 m207_t1_rtoch  °C       100.000    -50.00    200.00
+0x010A m207_t1_rtocl  °C       -20.000    -50.00    200.00
+0x010B m207_t1_mint   °C       -10.000    -50.00    150.00
+0x010C m207_t1_maxt   °C       120.000    -50.00    200.00
+0x010D m207_t1_maxv   V           8.000      0.00     12.00
+0x010E m207_t1_vratio             1.000      0.10     10.00
+0x010F m207_t1_step   °C         0.010      0.00     10.00
+0x0110 m207_t2_kp                 0.400      0.00    100.00
+0x0111 m207_t2_ki                40.000      0.00   9999.00
+0x0112 m207_t2_kd                 0.100      0.00   9999.00
+0x0113 m207_t2_otp_ht °C        30.000    -50.00    150.00
+0x0114 m207_t2_otp_lt °C        15.00
+[CHK] B4 自动落盘：复位后 tc1_set 仍 31 : PASS
+==================================================================
+>>> body 37.8
+body 37.8
+W (6478) TMP117: [SIM] body temp forced 37.80
+body sim 37.80
+tcs 
+tcs I (6668) M207: verify OK ch=1 TCSW=0.000 (want 0.000)
+W (6718) TMP117: RECOVERED (data flow; alarm stays until ack)
+I (6768) M207: verify OK ch=2 TCSW=0.000 (want 0.000)
+[CHK] C1 注入 37.8 : PASS
+==================================================================
+>>> ack
+ack
+ack: alarm=0x0000 armed=1 state=3
+tcs 
+tcs
+==================================================================
+>>> mode 1
+mode 1
+mode=1 rc=0
+tcs 
+tcs I (10668) M207: verify OK ch=1 TCADJTEMP=15.000 (want 15.000)
+I (10668) M207: module TCADJTEMP ch=1 = 15.00 (cache mirror at R5)
+I (10768) M207: verify OK ch=1 TCSW=1.000 (want 1.000)
+[CHK] C2 自动模式 : PASS
+==================================================================
+>>> status
+I (11548) CTRL: arm LOST->ARMED (10 healthy samples)
+status
+tc1=21.86 tc2=23.00 body=37.80(ok=1) fan=100% mode=1 m207=1 alarm=0x0000 armed=1 state=1 sim=1 heap=8527756
+tcs 
+tcs
+[CHK] C3 COOL（state=1） : PASS
+[CHK] C3 fan=100% : PASS
+==================================================================
+>>> m207 raw TC1:TCADJTEMP?
+m207 raw TC1:TCADJTEMP?
+m207 raw 'TC1:TCADJTEMP?' -> rc=0 (0=已入队；应答行见下方 reply/CMD:REPLY 日志)
+tcs 
+tcs I (13518) M207: [M207P] tick_max=2129ous (fsm_max=91ous; budget 1000/300) tx=53 rxline=53 perr=0 nak=0 vok=12 rsend=0 off=0 qdrop=0 wdrop=0 stk=1444W
+I (13568) M207: module TCADJTEMP ch=1 = 15.00 (cache mirror at R5)
+[CHK] C4 FSM 真下发 TC1=15.0 到模块 : PASS
+==================================================================
+>>> body 37.0
+body 37.0
+W (14818) TMP117: [SIM] body temp forced 37.00
+body sim 37.00
+tcs 
+tcs I (15318) TMP117: [TMP117P] tick_max=1649us (budget 500) err=11 samples=89 lost=1 rec=1 sim=1
+I (15668) M207: verify OK ch=1 TCSW=0.000 (want 0.000)
+==================================================================
+>>> status
+status
+tc1=21.84 tc2=22.96 body=37.00(ok=1) fan=0% mode=1 m207=1 alarm=0x0000 armed=1 state=0 sim=1 heap=8527756
+tcs 
+tcs
+[CHK] C5 回带内 -> IDLE : PASS
+==================================================================
+>>> estop
+estop
+ESTOP: TCSW x0 + fan on + mode=manual + ALM_ESTOP (ack to clear)
+tcs 
+tcs I (18768) M207: verify OK ch=1 TCSW=0.000 (want 0.000)
+I (18868) M207: verify OK ch=2 TCSW=0.000 (want 0.000)
+==================================================================
+>>> status
+status
+tc1=21.81 tc2=22.96 body=37.00(ok=1) fan=100% mode=0 m207=1 alarm=0x0004 armed=1 state=3 sim=1 heap=8527756
+tcs 
+tcs
+[CHK] D1 急停 -> SAFE+fan100+手动 : PASS
+==================================================================
+>>> fan 50
+fan 50
+SAFE 期风扇锁全开：拒绝降档（先 ack 退出 SAFE）
+Command returned non-zero error code: 0x1 (ERROR)
+tcs 
+tcs
+[CHK] D2 SAFE 期风扇锁全开（降档被策略门拒绝） : PASS
+==================================================================
+>>> status
+status
+tc1=21.79 tc2=22.94 body=37.00(ok=1) fan=100% mode=0 m207=1 alarm=0x0004 armed=1 state=3 sim=1 heap=8527756
+tcs 
+tcs
+[CHK] D2b 风扇仍 100% : PASS
+==================================================================
+>>> ack
+ack
+ack: alarm=0x0000 armed=1 state=3
+tcs 
+tcs I (23518) M207: [M207P] tick_max=1281ous (fsm_max=89ous; budget 1000/300) tx=79 rxline=80 perr=0 nak=0 vok=15 rsend=0 off=0 qdrop=0 wdrop=0 stk=1444W
+==================================================================
+>>> status
+status
+tc1=21.78 tc2=22.93 body=37.00(ok=1) fan=0% mode=0 m207=1 alarm=0x0000 armed=1 state=0 sim=1 heap=8527756
+tcs 
+tcs I (25318) TMP117: [TMP117P] tick_max=1649us (budget 500) err=11 samples=189 lost=1 rec=1 sim=1
+[CHK] D3 ack 清 ESTOP 回 IDLE : PASS
+==================================================================
+>>> fan 50
+fan 50
+fan duty=50%
+tcs 
+tcs
+==================================================================
+>>> status
+status
+tc1=21.77 tc2=22.92 body=37.00(ok=1) fan=50% mode=0 m207=1 alarm=0x0000 armed=1 state=0 sim=1 heap=8527756
+tcs 
+tcs
+[CHK] D4 IDLE 期 duty 50 可调 : PASS
+==================================================================
+>>> fan 0
+fan 0
+fan duty=0%
+tcs 
+tcs
+==================================================================
+>>> status
+status
+tc1=21.75 tc2=22.91 body=37.00(ok=1) fan=0% mode=0 m207=1 alarm=0x0000 armed=1 state=0 sim=1 heap=8527756
+tcs 
+tcs
+[CHK] D5 IDLE 期 fan 0 可关 : PASS
+==================================================================
+>>> body off
+body off
+W (30928) TMP117: [SIM] body temp OFF (real I2C path; absent=loss path)
+body sim OFF (real I2C path)
+tcs 
+tcs W (31918) TMP117: LOST (10 err-run) -> ALM_BODY_SENSOR (sticky)
+I (32048) CTRL: arm ARMED->LOST (source lost)
+I (32168) M207: verify OK ch=1 TCSW=0.000 (want 0.000)
+I (32268) M207: verify OK ch=2 TCSW=0.000 (want 0.000)
+I (32668) M207: verify OK ch=1 TCSW=0.000 (want 0.000)
+I (32768) M207: verify OK ch=2 TCSW=0.000 (want 0.000)
+I (33168) M207: verify OK ch=1 TCSW=0.000 (want 0.000)
+I (33268) M207: verify OK ch=2 TCSW=0.000 (want 0.000)
+I (33518) M207: [M207P] tick_max=1123ous (fsm_max=91ous; budget 1000/300) tx=111 rxline=112 perr=0 nak=0 vok=21 rsend=0 off=0 qdrop=0 wdrop=0 stk=1444W
+==================================================================
+>>> status
+status
+tc1=21.73 tc2=22.90 body=37.00(ok=0) fan=100% mode=0 m207=1 alarm=0x0001 armed=1 state=3 sim=0 heap=8527756
+tcs 
+tcs I (33668) M207: verify OK ch=1 TCSW=0.000 (want 0.000)
+I (33768) M207: verify OK ch=2 TCSW=0.000 (want 0.000)
+I (34168) M207: verify OK ch=1 TCSW=0.000 (want 0.000)
+I (34268) M207: verify OK ch=2 TCSW=0.000 (want 0.000)
+I (34668) M207: verify OK ch=1 TCSW=0.000 (want 0.000)
+[CHK] E1 失联 -> SAFE+ALM_BODY_SENSOR : PASS
+==================================================================
+>>> ack
+ack
+ack: alarm=0x0001 armed=1 state=3
+tcs 
+tcs I (34768) M207: verify OK ch=2 TCSW=0.000 (want 0.000)
+I (35168) M207: verify OK ch=1 TCSW=0.000 (want 0.000)
+I (35268) M207: verify OK ch=2 TCSW=0.000 (want 0.000)
+I (35668) M207: verify OK ch=1 TCSW=0.000 (want 0.000)
+I (35768) M207: verify OK ch=2 TCSW=0.000 (want 0.000)
+==================================================================
+>>> status
+status
+tc1=21.73 tc2=22.90 body=37.00(ok=0) fan=100% mode=0 m207=1 alarm=0x0001 armed=1 state=3 sim=0 heap=8527756
+tcs 
+tcs I (36168) M207: verify OK ch=1 TCSW=0.000 (want 0.000)
+I (36268) M207: verify OK ch=2 TCSW=0.000 (want 0.000)
+I (36668) M207: verify OK ch=1 TCSW=0.000 (want 0.000)
+I (36768) M207: verify OK ch=2 TCSW=0.000 (want 0.000)
+[CHK] E2 源未恢复 ack 不清 : PASS
+==================================================================
+>>> m207 raw PCRS232:COMPUSHLIST=1
+m207 raw PCRS232:COMPUSHLIST=1
+m207 raw 'PCRS232:COMPUSHLIST=1' -> rc=0 (0=已入队；应答行见下方 reply/CMD:REPLY 日志)
+tcs 
+tcs I (37018) M207: unexpected CMD:REPLY=1 (no poll wait)
+I (37018) M207: reply ch=1 TCACTTEMP.REG=3001.000
+I (37168) M207: verify OK ch=1 TCSW=0.000 (want 0.000)
+I (37268) M207: verify OK ch=2 TCSW=0.000 (want 0.000)
+I (37318) M207: reply ch=1 TCOE.REG=3003.000
+I (37618) M207: reply ch=1 TCLED.REG=3004.000
+I (37668) M207: verify OK ch=1 TCSW=0.000 (want 0.000)
+I (37768) M207: verify OK ch=2 TCSW=0.000 (want 0.000)
+I (37918) M207: reply ch=1 TCACTVOL.REG=3005.000
+I (38168) M207: verify OK ch=1 TCSW=0.000 (want 0.000)
+I (38218) M207: reply ch=1 TCACTCUR.REG=3007.000
+I (38268) M207: verify OK ch=2 TCSW=0.000 (want 0.000)
+I (38518) M207: reply ch=1 TCSETTEMP.REG=3009.000
+I (38668) M207: verify OK ch=1 TCSW=0.000 (want 0.000)
+I (38768) M207: verify OK ch=2 TCSW=0.000 (want 0.000)
+I (38818) M207: reply ch=1 TCRT.REG=3011.000
+I (39118) M207: parse-err line: 'TC1:TCRTOCPSTATUS.REG=3013_UINT16_2'
+I (39168) M207: verify OK ch=1 TCSW=0.000 (want 0.000)
+I (39268) M207: verify OK ch=2 TCSW=0.000 (want 0.000)
+I (39418) M207: reply ch=1 TCOTPSTATUS.REG=3014.000
+I (39668) M207: verify OK ch=1 TCSW=0.000 (want 0.000)
+I (39718) M207: reply ch=1 TCSETVOL.REG=3015.000
+I (39768) M207: verify OK ch=2 TCSW=0.000 (want 0.000)
+I (40018) M207: reply ch=1 TCOVPSTATUS.REG=3017.000
+I (40168) M207: verify OK ch=1 TCSW=0.000 (want 0.000)
+[CHK] F1 COMPUSHLIST 寄存器流（首 3s 捕获 11 行） : PASS
+==================================================================
+>>> perf
+perf
+[perf] m207 nak=0 vok=48 rsend=0 off=0 wdrop=0 rx?unexpected | ctrl pollmax=12622us polls=73 armed=1
+I (40268) M207: verify OK ch=2 TCSW=0.000 (want 0.000)
+Task            Abs Time     CPU%
+m207_svc       	136246		<1%
+console_repl   	125233		<1%
+IDLE1          	39411824		99%
+IDLE0          	39118190		98%
+ctrl_svc       	19600		<1%
+tcs_ws         	27035		<1%
+tiT            	12282		<1%
+tmp117_svc     	21703		<1%
+tcs_link       	33207		<1%
+ipc1           	23864		<1%
+httpd          	712		<1%
+sys_evt        	480		<1%
+ipc0           	6482		<1%
+esp_timer      	35197		<1%
+wifi           	202255		<1%
+Tmr Svc        	18		<1%
+Task            State Prio  Stack  Num
+console_repl   	X	2	1816	17
+IDLE1          	R	0	804	6
+IDLE0          	R	0	620	5
+ctrl_svc       	B	4	1880	16
+tcs_ws         	B	4	3572	13
+tiT            	B	18	1476	8
+tmp117_svc     	B	5	2028	15
+tcs_link       	B	5	1848	11
+m207_svc       	B	5	1444	14
+httpd          	B	5	6672	12
+sys_evt        	B	20	1596	9
+ipc0           	S	24	532	1
+esp_timer      	S	22	3076	3
+wifi           	B	23	4164	10
+Tmr Svc        	B	1	1324	7
+ipc1           	S	24	540	2
+tcs 
+tcs I (40318) M207: reply ch=1 TCOVPACTTHR.REG=3018.000
+I (40618) M207: reply ch=1 TCOCPSTATUS.REG=3020.000
+I (40668) M207: verify OK ch=1 TCSW=0.000 (want 0.000)
+I (40768) M207: verify OK ch=2 TCSW=0.000 (want 0.000)
+I (40918) M207: reply ch=1 TCOCPACTTHR.REG=3021.000
+I (41168) M207: verify OK ch=1 TCSW=0.000 (want 0.000)
+I (41218) M207: reply ch=1 TCCURLIMIT.REG=3023.000
+I (41268) M207: verify OK ch=2 TCSW=0.000 (want 0.000)
+I (41518) M207: parse-err line: 'TC1:TCTUNESTATUS.REG=3025_UINT16_2'
+I (41668) M207: verify OK ch=1 TCSW=0.000 (want 0.000)
+I (41768) M207: verify OK ch=2 TCSW=0.000 (want 0.0
+[CHK] G1 运行时统计表 : PASS
+==================================================================
+#### SUMMARY: 25/25 PASS

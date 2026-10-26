@@ -18,9 +18,11 @@ o = send('p set commissioned 2', 1.2)
 chk('= 2.000' in o and 'rc=0' in o, 'Q1 commissioned=2 写入')
 o = send('status', 0.8)
 chk('armed=0' in o, 'Q1b armed=0（强制不布防）', o.split('\n')[-2][:90] if o else '')
-time.sleep(2.0)   # 若在 SAFE 应退出；若未布防应不因传感器缺席进 SAFE
+time.sleep(2.0)
 o = send('status', 0.8)
-chk('state=0' in o, 'Q1c 未布防后不驻 SAFE（state=0）')
+# 语义（2026-10-26 实测坐实）：SAFE 退出只认"源恢复+ack"，切 commissioned=2 不退出
+# （H743 同源）。正确静音路径=改2+落盘+重启（见清单 U13，已实测 state=0）。
+chk('state=3' in o, 'Q1c SAFE 中切不布防不退出（同源行为，正确路径=重启）')
 chk('alarm=0x0000' in o or 'alarm=0x0001' in o, 'Q1d 报警位状态记录', o.split('\n')[-2][:90] if o else '')
 o = send('p set commissioned 0', 1.0)
 chk('rc=0' in o, 'Q1e 恢复 commissioned=0')

@@ -6,14 +6,14 @@ set -u
 cd "$(dirname "$0")/.." || exit 1
 FAIL=0
 
-IFLAGS="-Icomponents/tcs_m207/include"
+IFLAGS="-Icomponents/tcs_m207/include -Icomponents/tcs_tmp117/include"
 VARS64="C:\\Program Files\\Microsoft Visual Studio\\2022\\Community\\VC\\Auxiliary\\Build\\vcvars64.bat"
 OUT=build/tests_m207
 mkdir -p "$OUT"
 
 cl_run() {  # cl_run <out.exe> <src...> — bat 内 cd 到 OUT，产物/对象全落 OUT
     local exe="$1"; shift
-    local cmd_line='cl /nologo /W4 /std:c11 /utf-8 /D_CRT_SECURE_NO_WARNINGS /I..\..\components\tcs_m207\include'
+    local cmd_line='cl /nologo /W4 /std:c11 /utf-8 /D_CRT_SECURE_NO_WARNINGS /I..\..\components\tcs_m207\include /I..\..\components\tcs_tmp117\include /I..\..\components\tcs_core /I..\..\components\tcs_link\include /I..\..\components\tcs_link'
     for s in "$@"; do
         cmd_line="$cmd_line \"$(cygpath -w "$PWD/$s")\""
     done
@@ -39,6 +39,8 @@ run() {  # run <name> <test.c> <sources...>
 
 run m207proto tests/test_m207_proto.c  components/tcs_m207/m207_proto.c
 run m207golden tests/test_m207_golden.c components/tcs_m207/m207_proto.c
+run tmp117pure tests/test_tmp117_pure.c    components/tcs_tmp117/tmp117_pure.c
+run control   tests/test_control_esp32.c   components/tcs_core/control.c components/tcs_core/param_registry.c components/tcs_core/post_pure.c components/tcs_link/proto.c
 
-[ $FAIL = 0 ] && echo "m207-esp32-tests: ALL GREEN" || echo "m207-esp32-tests: HAS FAILURES"
+[ $FAIL = 0 ] && echo "esp32-tests: ALL GREEN" || echo "esp32-tests: HAS FAILURES"
 exit $FAIL

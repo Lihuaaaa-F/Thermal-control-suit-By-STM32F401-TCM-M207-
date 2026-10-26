@@ -29,3 +29,61 @@ uint8_t post_m207_sanity_ok(float prev, float cur, float dt_s)
     if (d < 0) d = -d;
     return (d <= POST_M207_MAX_RATE * dt_s) ? 1u : 0u;
 }
+
+/* ====== H6 布防三态机（R1e 提取；project_tcs post.c 纯逻辑区 37-85/120-125 行逐字）====== */
+void post_arm_init(post_arm_ctx_t *c)
+{
+    c->state = (uint8_t)POST_ARM_UNARMED_ABSENT;      /* 上电默认不布防，auto 由 FSM 升入 */
+    c->healthy_run = 0;
+}
+
+post_arm_t post_arm_step(post_arm_ctx_t *c, uint8_t mode08, uint8_t post_pass,
+                         uint8_t healthy, uint8_t acked)
+{
+    if (mode08 == 2u) {                               /* 强制不布防（安静）*/
+        c->state = (uint8_t)POST_ARM_UNARMED_ABSENT;
+        c->healthy_run = 0;
+        return (post_arm_t)c->state;
+    }
+
+    switch (c->state) {
+    case (uint8_t)POST_ARM_UNARMED_ABSENT:
+        if (mode08 == 1u || (post_pass && healthy)) { /* 强制布防 / auto 首次升入 */
+            c->state = (uint8_t)POST_ARM_ARMED_ONLINE;
+            c->healthy_run = 0;
+        }
+        break;
+
+    case (uint8_t)POST_ARM_ARMED_ONLINE:
+        if (!healthy) {                               /* 失联沿 → LOST_ALARM */
+            c->state = (uint8_t)POST_ARM_LOST_ALARM;
+            c->healthy_run = 0;
+        }
+        break;
+
+    case (uint8_t)POST_ARM_LOST_ALARM:
+        if (healthy) {
+            if (c->healthy_run < 255u) c->healthy_run++;
+        } else {
+            c->healthy_run = 0;
+        }
+        /* 上线补入：人工清报警 且 连续 10 次健康采样 */
+        if (acked && c->healthy_run >= POST_ARM_RECOVER_RUN) {
+            c->state = (uint8_t)POST_ARM_ARMED_ONLINE;
+            c->healthy_run = 0;
+        }
+        break;
+
+    default:
+        c->state = (uint8_t)POST_ARM_UNARMED_ABSENT;
+        break;
+    }
+    return (post_arm_t)c->state;
+}
+
+/* ====== 布防状态（单一存储；目标机 poll 步进后 commit，测试直写）====== */
+static post_arm_t s_cur_state = POST_ARM_UNARMED_ABSENT;
+
+void post_arm_commit(post_arm_t st) { s_cur_state = st; }
+post_arm_t post_arm_state(void)     { return s_cur_state; }
+uint8_t    post_armed(void)         { return (s_cur_state != POST_ARM_UNARMED_ABSENT); }

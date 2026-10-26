@@ -1,0 +1,11 @@
+menu "TCS R1e 取证"
+
+config TCS_R1E_PROBE
+    bool "R1e 自驱取证构建（E-18 前 20 次上电 NVS 往返+E-20 wdt 复位+E-21/22 注入闭环）"
+    default n
+    help
+        取证专用：上电自驱跑 20 次写存复位循环（stage NVS 计数）→ 滞回四向量
+        真机注入 → E-22 失联 SAFE/ack 闭环 → E-20 看门狗饿死复位复验。
+        常态构建必须关断（关单后 sdkconfig 回默认）。
+
+endmenu

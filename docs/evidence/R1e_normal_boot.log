@@ -1,0 +1,267 @@
+--- WARNING: GDB cannot open serial ports accessed as COMx
+--- NOTE: Using \\.\COM3 instead...
+--- esp-idf-monitor 1.10.0 on \\.\COM3 115200
+--- Quit: Ctrl+] | Menu: Ctrl+T | Help: Ctrl+T followed by Ctrl+H
+Executing action: monitor
+Running idf_monitor in directory D:\Espressif\ws\tcs\esp32
+Executing "D:\Espressif\tools\python_env\idf5.5_py3.12_env\Scripts\python.exe D:\Espressif\frameworks\esp-idf-v5.5.5\tools/idf_monitor.py -p COM3 -b 115200 --toolchain-prefix xtensa-esp32s3-elf- --target esp32s3 --revision 0 D:\Espressif\ws\tcs\esp32\build\tcs_wireless.elf D:\Espressif\ws\tcs\esp32\build\bootloader\bootloader.elf --force-color -m 'D:\Espressif\tools\python_env\idf5.5_py3.12_env\Scripts\python.exe' 'D:\Espressif\frameworks\esp-idf-v5.5.5\tools\idf.py' '-p' 'COM3'"...
+ESP-ROM:esp32s3-20210327
+Build:Mar 27 2021
+rst:0x15 (USB_UART_CHIP_RESET),boot:0x28 (SPI_FAST_FLASH_BOOT)
+Saved PC:0x4037a7aa
+--- 0x4037a7aa: esp_cpu_wait_for_intr at D:/Espressif/frameworks/esp-idf-v5.5.5/components/esp_hw_support/cpu.c:64
+SPIWP:0xee
+mode:DIO, clock div:1
+load:0x3fce2820,len:0x16a8
+load:0x403c8700,len:0xe88
+--- 0x403c8700: _stext at ??:?
+load:0x403cb700,len:0x3184
+entry 0x403c8948
+--- 0x403c8948: call_start_cpu0 at D:/Espressif/frameworks/esp-idf-v5.5.5/components/bootloader/subproject/main/bootloader_start.c:27
+I (24) boot: ESP-IDF v5.5.5-dirty 2nd stage bootloader
+I (24) boot: compile time Oct 26 2026 12:56:37
+I (25) boot: Multicore bootloader
+I (25) boot: chip revision: v0.2
+I (25) boot: efuse block revision: v1.3
+I (25) qio_mode: Enabling default flash chip QIO
+I (26) boot.esp32s3: Boot SPI Speed : 80MHz
+I (26) boot.esp32s3: SPI Mode       : QIO
+I (26) boot.esp32s3: SPI Flash Size : 16MB
+I (26) boot: Enabling RNG early entropy source...
+I (27) boot: Partition Table:
+I (27) boot: ## Label            Usage          Type ST Offset   Length
+I (27) boot:  0 nvs              WiFi data        01 02 00009000 00006000
+I (27) boot:  1 otadata          OTA data         01 00 0000f000 00002000
+I (28) boot:  2 ota_0            OTA app          00 10 00020000 00300000
+I (28) boot:  3 ota_1            OTA app          00 11 00320000 00300000
+I (28) boot:  4 www              Unknown data     01 82 00620000 00080000
+I (29) boot:  5 user             Unknown data     01 81 006a0000 00960000
+I (29) boot: End of partition table
+I (30) esp_image: segment 0: paddr=00020020 vaddr=3c0b0020 size=37058h (225368) map
+I (65) esp_image: segment 1: paddr=00057080 vaddr=3fc9e100 size=05f78h ( 24440) load
+I (70) esp_image: segment 2: paddr=0005d000 vaddr=40374000 size=03018h ( 12312) load
+I (73) esp_image: segment 3: paddr=00060020 vaddr=42000020 size=a4110h (672016) map
+I (177) esp_image: segment 4: paddr=00104138 vaddr=40377018 size=1704ch ( 94284) load
+I (196) esp_image: segment 5: paddr=0011b18c vaddr=50000000 size=00020h (    32) load
+I (207) boot: Loaded app from partition at offset 0x20000
+I (207) boot: Disabling RNG early entropy source...
+I (208) octal_psram: vendor id    : 0x0d (AP)
+I (208) octal_psram: dev id       : 0x02 (generation 3)
+I (208) octal_psram: density      : 0x03 (64 Mbit)
+I (208) octal_psram: good-die     : 0x01 (Pass)
+I (209) octal_psram: Latency      : 0x01 (Fixed)
+I (209) octal_psram: VCC          : 0x01 (3V)
+I (209) octal_psram: SRF          : 0x01 (Fast Refresh)
+I (209) octal_psram: BurstType    : 0x01 (Hybrid Wrap)
+I (209) octal_psram: BurstLen     : 0x01 (32 Byte)
+I (210) octal_psram: Readlatency  : 0x02 (10 cycles@Fixed)
+I (210) octal_psram: DriveStrength: 0x00 (1/1)
+I (210) MSPI Timing: Enter psram timing tuning
+I (211) esp_psram: Found 8MB PSRAM device
+I (211) esp_psram: Speed: 80MHz
+I (211) cpu_start: Multicore app
+I (644) esp_psram: SPI SRAM memory test OK
+I (653) cpu_start: Pro cpu start user code
+I (653) cpu_start: cpu freq: 160000000 Hz
+I (653) app_init: Application information:
+I (653) app_init: Project name:     tcs_wireless
+I (653) app_init: App version:      r1b-dirty
+I (654) app_init: Compile time:     Oct 26 2026 12:56:32
+I (654) app_init: ELF file SHA256:  c3db529c0...
+I (654) app_init: ESP-IDF:          v5.5.5-dirty
+I (654) efuse_init: Min chip rev:     v0.0
+I (654) efuse_init: Max chip rev:     v0.99 
+I (654) efuse_init: Chip rev:         v0.2
+I (655) heap_init: Initializing. RAM available for dynamic allocation:
+I (655) heap_init: At 3FCADE98 len 0003B878 (238 KiB): RAM
+I (655) heap_init: At 3FCE9710 len 00005724 (21 KiB): RAM
+I (655) heap_init: At 3FCF0000 len 00008000 (32 KiB): DRAM
+I (656) heap_init: At 600FE000 len 00001FE8 (7 KiB): RTCRAM
+I (656) esp_psram: Adding pool of 8192K of PSRAM memory to heap allocator
+I (657) spi_flash: detected chip: boya
+I (657) spi_flash: flash io: qio
+I (657) sleep_gpio: Configure to isolate all GPIO pins in sleep state
+I (658) sleep_gpio: Enable automatic switching of GPIO sleep configuration
+I (659) main_task: Started on CPU0
+I (659) esp_psram: Reserving pool of 32K of internal memory for DMA/internal allocations
+I (659) main_task: Calling app_main()
+I (679) TCS: === 调温服 ESP32-S3 bridge boot ===
+I (679) TCS: R1a registry: 50 params loaded (defaults, first boot)
+I (679) TCS: boot part=ota_0 proj=tcs_wireless ver=r1b-dirty
+I (679) pp: pp rom version: e7ae62f
+I (679) net80211: net80211 rom version: e7ae62f
+I (689) wifi:wifi driver task: 3fced4a4, prio:23, stack:6656, core=0
+I (689) wifi:wifi firmware version: b9f67df
+I (689) wifi:wifi certification version: v7.0
+I (689) wifi:config NVS flash: enabled
+I (689) wifi:config nano formatting: disabled
+I (689) wifi:Init data frame dynamic rx buffer num: 32
+I (689) wifi:Init static rx mgmt buffer num: 5
+I (689) wifi:Init management short buffer num: 32
+I (689) wifi:Init dynamic tx buffer num: 32
+I (699) wifi:Init static tx FG buffer num: 2
+I (699) wifi:Init static rx buffer size: 1600
+I (699) wifi:Init static rx buffer num: 10
+I (699) wifi:Init dynamic rx buffer num: 32
+I (699) wifi_init: rx ba win: 6
+I (699) wifi_init: accept mbox: 6
+I (699) wifi_init: tcpip mbox: 32
+I (699) wifi_init: udp mbox: 6
+I (699) wifi_init: tcp mbox: 6
+I (699) wifi_init: tcp tx win: 5760
+I (699) wifi_init: tcp rx win: 5760
+I (699) wifi_init: tcp mss: 1440
+I (699) wifi_init: WiFi IRAM OP enabled
+I (699) wifi_init: WiFi RX IRAM OP enabled
+I (699) phy_init: phy_version 712,87e8c20e,Apr 13 2026,18:51:10
+I (739) wifi:mode : softAP (3c:0f:02:d6:a8:a1)
+I (739) wifi:Total power save buffer number: 16
+I (739) wifi:Init max length of beacon: 752/752
+I (739) wifi:Init max length of beacon: 752/752
+I (739) esp_netif_lwip: DHCP server started on interface WIFI_AP_DEF with IP: 192.168.4.1
+I (739) tcs_wifi: AP "TCS-A8A1" up, IP 192.168.4.1 pass=12345678
+I (739) uart: queue free spaces: 20
+I (809) tcs_link: [LPBK] frame loopback PASS (1 frame decoded)
+I (859) tcs_link: [LPBK] dup dedup PASS (dup=1)
+I (909) tcs_link: [LPBK] bad-crc drop PASS
+I (3109) tcs_link: [LPBK] ARQ retransmit PASS (4 copies rx)
+I (3109) tcs_link: [LPBK] RESULT pass=4 fail=0 PASS
+I (3109) tcs_link: registry seeded: 10 entries (H743 0x14 will override)
+I (3109) uart: queue free spaces: 20
+I (3109) tcs_link: link task up
+I (3109) tcs_link: started uart1 230400 baud tx=17 rx=18
+I (3109) tcs_web: httpd up on :80
+I (3109) uart: queue free spaces: 8
+I (3209) M207: [M207LB] int 1/12 byte-identical+parse PASS
+I (3229) M207: [M207LB] int 2/12 byte-identical+parse PASS
+I (3249) M207: [M207LB] int 3/12 byte-identical+parse PASS
+I (3269) M207: [M207LB] int 4/12 byte-identical+parse PASS
+I (3289) M207: [M207LB] int 5/12 byte-identical+parse PASS
+I (3309) M207: [M207LB] int 6/12 byte-identical+parse PASS
+I (3329) M207: [M207LB] int 7/12 byte-identical+parse PASS
+I (3349) M207: [M207LB] int 8/12 byte-identical+parse PASS
+I (3369) M207: [M207LB] int 9/12 byte-identical+parse PASS
+I (3389) M207: [M207LB] int 10/12 byte-identical+parse PASS
+I (3409) M207: [M207LB] int 11/12 byte-identical+parse PASS
+I (3429) M207: [M207LB] int 12/12 byte-identical+parse PASS
+I (3429) M207: [M207LB] RESULT int pass=12 fail=0 PASS
+I (3489) M207: [M207LB] physical probe: no echo (12B) — GPIO21↔47 未短接，物理回环挂账（接线表 v2.0 收尾项）
+I (3499) uart: queue free spaces: 20
+I (3499) M207: service started uart2 57600 baud tx=21 rx=47 core=1
+I (3499) TMP117: [TB117] === boottest start ===
+I (3499) TMP117: [TB117] raw 0 PASS
+I (3499) TMP117: [TB117] raw 400 -> 3.125 PASS
+I (3499) TMP117: [TB117] raw -400 -> -3.125 PASS
+I (3499) TMP117: [TB117] avg 1..8 = 4.5 PASS
+I (3499) TMP117: [TB117] avg wrap = (100,2..8)/8 = 16.875 PASS
+I (3499) TMP117: [TB117] 9 errs still ok PASS
+I (3499) TMP117: [TB117] 10th err trips PASS
+I (3499) TMP117: [TB117] 2 oks still down PASS
+I (3499) TMP117: [TB117] 3rd ok recovers PASS
+I (3499) TMP117: [TB117] RESULT fail=0 PASS
+W (3499) TMP117: DEVID probe NACK — 硬件未接（T1-T3 待接，Q12 标注）
+I (3499) TMP117: service started i2c0 sda=8 scl=9 100k core=1
+I (3499) FAN: [FANLB] === boottest start ===
+I (3499) FAN: service started gpio=48 ledc 25kHz/10bit low=on duty=0(off)
+I (3509) FAN: [FANLB] duty 0 -> pin high (OFF) PASS
+I (3519) FAN: [FANLB] duty 100 -> pin low (ON) PASS
+I (3529) FAN: [FANLB] back to 0 -> high PASS
+I (3529) FAN: [FANLB] g_tcs.fan_on mirrors OFF PASS
+I (3529) FAN: [FANLB] RESULT fail=0 PASS
+I (3529) CTRL: service started core=1 500ms poll + 100ms arm-step, wdt 3s
+[5nI (3699) M207: online (first)
+I (3849) M207: module TCADJTEMP ch=1 = 26.00 (cache mirror at R5)
+I (3899) M207: module TCADJTEMP ch=2 = 45.00 (cache mirror at R5)
+I (4029) CTRL: arm UNARMED->ARMED (sources healthy)
+W (4499) TMP117: LOST (10 err-run) -> ALM_BODY_SENSOR (sticky)
+
+Type 'help' to get the list of commands.
+Use UP/DOWN arrows to navigate through command history.
+Press TAB when typing command name to auto-complete.
+
+Your terminal application does not support escape sequences.
+
+Line editing and history features are disabled.
+
+On Windows, try using Windows Terminal or Putty instead.
+tcs I (4509) CON: console REPL up (USB-Serial-JTAG; help = commands)
+I (4509) TCS: WiFi AP + loopback + link + web + m207 + ctrl + console all up
+I (4509) main_task: Returned from app_main()
+I (4529) CTRL: arm ARMED->LOST (source lost)
+I (4649) M207: verify OK ch=1 TCSW=0.000 (want 0.000)
+I (4749) M207: verify OK ch=2 TCSW=0.000 (want 0.000)
+I (5149) M207: verify OK ch=1 TCSW=0.000 (want 0.000)
+I (5249) M207: verify OK ch=2 TCSW=0.000 (want 0.000)
+I (5649) M207: verify OK ch=1 TCSW=0.000 (want 0.000)
+I (5749) M207: verify OK ch=2 TCSW=0.000 (want 0.000)
+I (6149) M207: verify OK ch=1 TCSW=0.000 (want 0.000)
+I (6249) M207: verify OK ch=2 TCSW=0.000 (want 0.000)
+I (6649) M207: verify OK ch=1 TCSW=0.000 (want 0.000)
+I (6749) M207: verify OK ch=2 TCSW=0.000 (want 0.000)
+I (7149) M207: verify OK ch=1 TCSW=0.000 (want 0.000)
+I (7249) M207: verify OK ch=2 TCSW=0.000 (want 0.000)
+I (7649) M207: verify OK ch=1 TCSW=0.000 (want 0.000)
+I (7749) M207: verify OK ch=2 TCSW=0.000 (want 0.000)
+I (8149) M207: verify OK ch=1 TCSW=0.000 (want 0.000)
+I (8249) M207: verify OK ch=2 TCSW=0.000 (want 0.000)
+I (8649) M207: verify OK ch=1 TCSW=0.000 (want 0.000)
+I (8749) M207: verify OK ch=2 TCSW=0.000 (want 0.000)
+I (9149) M207: verify OK ch=1 TCSW=0.000 (want 0.000)
+I (9249) M207: verify OK ch=2 TCSW=0.000 (want 0.000)
+I (9649) M207: verify OK ch=1 TCSW=0.000 (want 0.000)
+I (9749) M207: verify OK ch=2 TCSW=0.000 (want 0.000)
+I (10149) M207: verify OK ch=1 TCSW=0.000 (want 0.000)
+I (10249) M207: verify OK ch=2 TCSW=0.000 (want 0.000)
+I (10649) M207: verify OK ch=1 TCSW=0.000 (want 0.000)
+I (10749) M207: verify OK ch=2 TCSW=0.000 (want 0.000)
+I (11149) M207: verify OK ch=1 TCSW=0.000 (want 0.000)
+I (11249) M207: verify OK ch=2 TCSW=0.000 (want 0.000)
+I (11649) M207: verify OK ch=1 TCSW=0.000 (want 0.000)
+I (11749) M207: verify OK ch=2 TCSW=0.000 (want 0.000)
+I (12149) M207: verify OK ch=1 TCSW=0.000 (want 0.000)
+I (12249) M207: verify OK ch=2 TCSW=0.000 (want 0.000)
+I (12649) M207: verify OK ch=1 TCSW=0.000 (want 0.000)
+I (12749) M207: verify OK ch=2 TCSW=0.000 (want 0.000)
+I (13149) M207: verify OK ch=1 TCSW=0.000 (want 0.000)
+I (13249) M207: verify OK ch=2 TCSW=0.000 (want 0.000)
+I (13499) M207: [M207P] tick_max=1373ous (fsm_max=86ous; budget 1000/300) tx=100 rxline=101 perr=0 nak=0 vok=36 rsend=0 off=0 qdrop=0 wdrop=0 stk=1440W
+I (13499) TMP117: [TMP117P] tick_max=2358us (budget 500) err=100 samples=0 lost=1 rec=0 sim=0
+I (13649) M207: verify OK ch=1 TCSW=0.000 (want 0.000)
+I (13749) M207: verify OK ch=2 TCSW=0.000 (want 0.000)
+I (14149) M207: verify OK ch=1 TCSW=0.000 (want 0.000)
+I (14249) M207: verify OK ch=2 TCSW=0.000 (want 0.000)
+I (14649) M207: verify OK ch=1 TCSW=0.000 (want 0.000)
+I (14749) M207: verify OK ch=2 TCSW=0.000 (want 0.000)
+I (15149) M207: verify OK ch=1 TCSW=0.000 (want 0.000)
+I (15249) M207: verify OK ch=2 TCSW=0.000 (want 0.000)
+I (15649) M207: verify OK ch=1 TCSW=0.000 (want 0.000)
+I (15749) M207: verify OK ch=2 TCSW=0.000 (want 0.000)
+I (16149) M207: verify OK ch=1 TCSW=0.000 (want 0.000)
+I (16249) M207: verify OK ch=2 TCSW=0.000 (want 0.000)
+I (16649) M207: verify OK ch=1 TCSW=0.000 (want 0.000)
+I (16749) M207: verify OK ch=2 TCSW=0.000 (want 0.000)
+I (17149) M207: verify OK ch=1 TCSW=0.000 (want 0.000)
+I (17249) M207: verify OK ch=2 TCSW=0.000 (want 0.000)
+I (17649) M207: verify OK ch=1 TCSW=0.000 (want 0.000)
+I (17749) M207: verify OK ch=2 TCSW=0.000 (want 0.000)
+I (18149) M207: verify OK ch=1 TCSW=0.000 (want 0.000)
+I (18249) M207: verify OK ch=2 TCSW=0.000 (want 0.000)
+I (18649) M207: verify OK ch=1 TCSW=0.000 (want 0.000)
+I (18749) M207: verify OK ch=2 TCSW=0.000 (want 0.000)
+I (19149) M207: verify OK ch=1 TCSW=0.000 (want 0.000)
+I (19249) M207: verify OK ch=2 TCSW=0.000 (want 0.000)
+I (19649) M207: verify OK ch=1 TCSW=0.000 (want 0.000)
+I (19749) M207: verify OK ch=2 TCSW=0.000 (want 0.000)
+I (20149) M207: verify OK ch=1 TCSW=0.000 (want 0.000)
+I (20249) M207: verify OK ch=2 TCSW=0.000 (want 0.000)
+I (20649) M207: verify OK ch=1 TCSW=0.000 (want 0.000)
+I (20749) M207: verify OK ch=2 TCSW=0.000 (want 0.000)
+I (21149) M207: verify OK ch=1 TCSW=0.000 (want 0.000)
+I (21249) M207: verify OK ch=2 TCSW=0.000 (want 0.000)
+I (21649) M207: verify OK ch=1 TCSW=0.000 (want 0.000)
+I (21749) M207: verify OK ch=2 TCSW=0.000 (want 0.000)
+I (22149) M207: verify OK ch=1 TCSW=0.000 (want 0.000)
+I (22249) M207: verify OK ch=2 TCSW=0.000 (want 0.000)
+I (22649) M207: verify OK ch=1 TCSW=0.000 (want 0.000)
+I (22749) M207: verify OK ch=2 TCSW=0.000 (want 0.000)
+idf_monitor failed with exit code 143, output of the command is in the D:\Espressif\ws\tcs\esp32\build\log\idf_py_stderr_output_60812 and D:\Espressif\ws\tcs\esp32\build\log\idf_py_stdout_output_60812

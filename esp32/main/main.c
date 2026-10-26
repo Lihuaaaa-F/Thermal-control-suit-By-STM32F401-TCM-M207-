@@ -28,8 +28,18 @@
 #include "param_registry.h"
 #include "nvs_store.h"
 #include "m207_service.h"
+#include "tmp117_service.h"
+#include "fan_service.h"
+#include "control.h"
+#include "control_service.h"
+#include "tcs_console.h"
+#include "r1e_probe.h"
 
 static const char *TAG = "TCS";
+
+/* control ops 适配（m207 API 返回 int，ops 签名 void；错误由服务内 NAK/重发计数承载）*/
+static void op_tec_sw(uint8_t ch, uint8_t on) { (void)m207_tec(ch, on); }
+static void op_tec_temp(uint8_t ch, float v) { (void)m207_set_temp(ch, v); }
 
 /* ====== WP-F.4 OTA：镜像实际长度（解析 image header/segments，避免整槽 3MB 拷贝）====== */
 static uint32_t ota_image_size(const esp_partition_t *p)
@@ -113,7 +123,8 @@ void app_main(void)
      * R1b（v11.3）：PF_M207 写入口接 m207 服务（50ms 节流+写后读回）。 */
     param_hooks_t hooks = { .eeprom_commit = nvs_registry_commit,
                             .on_m207_set = m207_hook_set_temp,
-                            .on_m207_map_set = m207_hook_map_set };
+                            .on_m207_map_set = m207_hook_map_set,
+                            .on_mode_change = control_on_mode_change };
     param_registry_init(&hooks);
     {
         uint8_t img[EE_IMG_SIZE];
@@ -133,11 +144,31 @@ void app_main(void)
      * 含物理短接探测），随后常驻服务钉核 1（第八章预算）。 */
     m207_lb_boottest();
     m207_service_start();
+    /* R1c：TMP117 服务（I2C0 8/9@100k）。自测先行（纯逻辑+健康机板上取证），
+     * 随后 100ms 采样任务钉核 1（第八章预算 500µs）。硬件未接（T1-T3）=上电即
+     * NACK→1s 后掉线沿 ALM_BODY_SENSOR=F4 预期行为；注入走 tmp117_sim_*（R1e console）。 */
+    tmp117_lb_boottest();
+    tmp117_service_start();
+    /* R1d：风扇（GPIO48 低=开，LEDC 25kHz）。自测含两态电平回读。 */
+    fan_lb_boottest();
+    /* R1e：control FSM 服务（ops→tcs_fan/tcs_m207；核 1 500ms 节拍+100ms 布防
+     * 步进+esp_task_wdt 3s 订阅）。console REPL（USB-Serial-JTAG，同口共存）。 */
+    control_init(&(control_ops_t){
+        .fan_set = fan_set_on,
+        .tec_sw = op_tec_sw,
+        .tec_temp = op_tec_temp,
+        .on_state = NULL,             /* 迁移沿由 post 步进日志承载 */
+    });
+    control_service_start();
+    tcs_console_start();
 #if CONFIG_TCS_M207_SELFLOOP
     m207_selfloop_run();          /* 取证构建：应答器注入全路径（[M207SL]，~20s）*/
 #endif
 #if CONFIG_TCS_M207_REALPROBE
     m207_realprobe_run();         /* 真机取证构建：P-2 判活+协议探针+E-06 录帧（[RP]/[P2]/[E06]）*/
 #endif
-    ESP_LOGI(TAG, "WiFi AP + loopback + link + web + m207 all up");
+#if CONFIG_TCS_R1E_PROBE
+    r1e_probe_run();              /* R1e 取证构建：E-18 前 20 次+E-20/21/22 自驱（[R1E]）*/
+#endif
+    ESP_LOGI(TAG, "WiFi AP + loopback + link + web + m207 + ctrl + console all up");
 }

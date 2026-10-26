@@ -110,6 +110,28 @@ int main(void)
         if (!(m207_map_format(&e, 1.0f, buf, 8) == -1)) { printf("FAIL: map cap guard\n"); g_fail++; }
     }
 
+    /* 轴分离（R1b 修复）：轮询等待期 ERRCODE 分类——协议错≠通信失败 */
+    CHECK(m207_classify_poll_errcode(2, 0, "TCACTTEMP") == M207_POLLERR_UNEXPECTED,
+          "classify: not waiting -> unexpected");
+    CHECK(m207_classify_poll_errcode(2, 1, "TCACTTEMP") == M207_POLLERR_SENSOR_OPEN,
+          "classify: err2 waiting TCACTTEMP -> sensor open");
+    CHECK(m207_classify_poll_errcode(2, 1, "TCSW") == M207_POLLERR_LINK_ALIVE,
+          "classify: err2 other param -> link alive");
+    CHECK(m207_classify_poll_errcode(2, 1, NULL) == M207_POLLERR_LINK_ALIVE,
+          "classify: err2 NULL param -> link alive");
+    CHECK(m207_classify_poll_errcode(0, 1, "TCACTTEMP") == M207_POLLERR_LINK_ALIVE,
+          "classify: err0 unknown module -> link alive (not comm fail)");
+    CHECK(m207_classify_poll_errcode(4, 1, "TCACTTEMP") == M207_POLLERR_LINK_ALIVE,
+          "classify: err4 -> link alive");
+    CHECK(m207_classify_poll_errcode(6, 1, "TCACTTEMP") == M207_POLLERR_LINK_ALIVE,
+          "classify: err6 -> link alive");
+    CHECK(m207_classify_poll_errcode(7, 1, "TCACTTEMP") == M207_POLLERR_LINK_ALIVE,
+          "classify: err7 bad checksum -> link alive");
+    CHECK(m207_classify_poll_errcode(1, 1, "TCACTTEMP") == M207_POLLERR_LINK_ALIVE,
+          "classify: err1 stray ACK -> link alive (never sensor/comm)");
+    CHECK(m207_classify_poll_errcode(8, 1, "TCACTTEMP") == M207_POLLERR_LINK_ALIVE,
+          "classify: err8 stray SAVE ACK -> link alive");
+
     printf("test_m207_proto: PASS=%d FAIL=%d\n", g_pass, g_fail);
     return g_fail ? 1 : 0;
 }

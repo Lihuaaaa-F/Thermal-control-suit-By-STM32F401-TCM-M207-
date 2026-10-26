@@ -113,3 +113,13 @@ int m207_map_format(const m207_map_entry_t *e, float v, char *out, size_t cap)
     if (n < 0 || (size_t)n >= cap) return -1;
     return 0;
 }
+
+/* ====== 轮询等待期 ERRCODE 处置分类（纯函数；轴分离：协议错≠通信失败）====== */
+m207_pollerr_act_t m207_classify_poll_errcode(uint8_t errcode, int waiting,
+                                              const char *wait_param)
+{
+    if (!waiting) return M207_POLLERR_UNEXPECTED;
+    if (errcode == 2 && wait_param && strcmp(wait_param, "TCACTTEMP") == 0)
+        return M207_POLLERR_SENSOR_OPEN;
+    return M207_POLLERR_LINK_ALIVE;   /* 含 1/8：查询不该回 SET/SAVE ACK，同留痕 */
+}

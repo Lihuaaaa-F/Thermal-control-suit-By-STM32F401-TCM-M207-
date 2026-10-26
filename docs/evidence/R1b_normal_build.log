@@ -1,0 +1,159 @@
+--- WARNING: GDB cannot open serial ports accessed as COMx
+--- NOTE: Using \\.\COM3 instead...
+--- esp-idf-monitor 1.10.0 on \\.\COM3 115200
+--- Quit: Ctrl+] | Menu: Ctrl+T | Help: Ctrl+T followed by Ctrl+H
+Executing action: monitor
+Running idf_monitor in directory D:\Espressif\ws\tcs\esp32
+Executing "D:\Espressif\tools\python_env\idf5.5_py3.12_env\Scripts\python.exe D:\Espressif\frameworks\esp-idf-v5.5.5\tools/idf_monitor.py -p COM3 -b 115200 --toolchain-prefix xtensa-esp32s3-elf- --target esp32s3 --revision 0 D:\Espressif\ws\tcs\esp32\build\tcs_wireless.elf D:\Espressif\ws\tcs\esp32\build\bootloader\bootloader.elf --force-color -m 'D:\Espressif\tools\python_env\idf5.5_py3.12_env\Scripts\python.exe' 'D:\Espressif\frameworks\esp-idf-v5.5.5\tools\idf.py' '-p' 'COM3'"...
+ESP-ROM:esp32s3-20210327
+Build:Mar 27 2021
+rst:0x15 (USB_UART_CHIP_RESET),boot:0x28 (SPI_FAST_FLASH_BOOT)
+Saved PC:0x4037a3aa
+--- 0x4037a3aa: esp_cpu_wait_for_intr at D:/Espressif/frameworks/esp-idf-v5.5.5/components/esp_hw_support/cpu.c:64
+SPIWP:0xee
+mode:DIO, clock div:1
+load:0x3fce2820,len:0x16a8
+load:0x403c8700,len:0xe88
+--- 0x403c8700: _stext at ??:?
+load:0x403cb700,len:0x3184
+entry 0x403c8948
+--- 0x403c8948: call_start_cpu0 at D:/Espressif/frameworks/esp-idf-v5.5.5/components/bootloader/subproject/main/bootloader_start.c:27
+I (24) boot: ESP-IDF v5.5.5-dirty 2nd stage bootloader
+I (24) boot: compile time Oct  6 2026 23:51:55
+I (25) boot: Multicore bootloader
+I (25) boot: chip revision: v0.2
+I (25) boot: efuse block revision: v1.3
+I (25) qio_mode: Enabling default flash chip QIO
+I (26) boot.esp32s3: Boot SPI Speed : 80MHz
+I (26) boot.esp32s3: SPI Mode       : QIO
+I (26) boot.esp32s3: SPI Flash Size : 16MB
+I (26) boot: Enabling RNG early entropy source...
+I (26) boot: Partition Table:
+I (26) boot: ## Label            Usage          Type ST Offset   Length
+I (27) boot:  0 nvs              WiFi data        01 02 00009000 00006000
+I (27) boot:  1 otadata          OTA data         01 00 0000f000 00002000
+I (28) boot:  2 ota_0            OTA app          00 10 00020000 00300000
+I (28) boot:  3 ota_1            OTA app          00 11 00320000 00300000
+I (28) boot:  4 www              Unknown data     01 82 00620000 00080000
+I (29) boot:  5 user             Unknown data     01 81 006a0000 00960000
+I (29) boot: End of partition table
+I (30) esp_image: segment 0: paddr=00020020 vaddr=3c0a0020 size=33f38h (212792) map
+I (63) esp_image: segment 1: paddr=00053f60 vaddr=3fc9d200 size=05ed0h ( 24272) load
+I (68) esp_image: segment 2: paddr=00059e38 vaddr=40374000 size=061e0h ( 25056) load
+I (73) esp_image: segment 3: paddr=00060020 vaddr=42000020 size=96534h (615732) map
+I (169) esp_image: segment 4: paddr=000f655c vaddr=4037a1e0 size=12f48h ( 77640) load
+I (184) esp_image: segment 5: paddr=001094ac vaddr=50000000 size=00020h (    32) load
+I (195) boot: Loaded app from partition at offset 0x20000
+I (195) boot: Disabling RNG early entropy source...
+I (196) octal_psram: vendor id    : 0x0d (AP)
+I (196) octal_psram: dev id       : 0x02 (generation 3)
+I (196) octal_psram: density      : 0x03 (64 Mbit)
+I (197) octal_psram: good-die     : 0x01 (Pass)
+I (197) octal_psram: Latency      : 0x01 (Fixed)
+I (197) octal_psram: VCC          : 0x01 (3V)
+I (197) octal_psram: SRF          : 0x01 (Fast Refresh)
+I (197) octal_psram: BurstType    : 0x01 (Hybrid Wrap)
+I (198) octal_psram: BurstLen     : 0x01 (32 Byte)
+I (198) octal_psram: Readlatency  : 0x02 (10 cycles@Fixed)
+I (198) octal_psram: DriveStrength: 0x00 (1/1)
+I (198) MSPI Timing: Enter psram timing tuning
+I (199) esp_psram: Found 8MB PSRAM device
+I (199) esp_psram: Speed: 80MHz
+I (200) cpu_start: Multicore app
+I (632) esp_psram: SPI SRAM memory test OK
+I (641) cpu_start: Pro cpu start user code
+I (641) cpu_start: cpu freq: 160000000 Hz
+I (641) app_init: Application information:
+I (641) app_init: Project name:     tcs_wireless
+I (641) app_init: App version:      r1a-9-g4f01733-dirty
+I (642) app_init: Compile time:     Oct 26 2026 12:28:38
+I (642) app_init: ELF file SHA256:  835b9f5de...
+I (642) app_init: ESP-IDF:          v5.5.5-dirty
+I (642) efuse_init: Min chip rev:     v0.0
+I (642) efuse_init: Max chip rev:     v0.99 
+I (642) efuse_init: Chip rev:         v0.2
+I (643) heap_init: Initializing. RAM available for dynamic allocation:
+I (643) heap_init: At 3FCAC458 len 0003D2B8 (244 KiB): RAM
+I (643) heap_init: At 3FCE9710 len 00005724 (21 KiB): RAM
+I (643) heap_init: At 3FCF0000 len 00008000 (32 KiB): DRAM
+I (643) heap_init: At 600FE000 len 00001FE8 (7 KiB): RTCRAM
+I (644) esp_psram: Adding pool of 8192K of PSRAM memory to heap allocator
+I (645) spi_flash: detected chip: boya
+I (645) spi_flash: flash io: qio
+I (645) sleep_gpio: Configure to isolate all GPIO pins in sleep state
+I (646) sleep_gpio: Enable automatic switching of GPIO sleep configuration
+I (647) main_task: Started on CPU0
+I (647) esp_psram: Reserving pool of 32K of internal memory for DMA/internal allocations
+I (647) main_task: Calling app_main()
+I (667) TCS: === 调温服 ESP32-S3 bridge boot ===
+I (667) TCS: R1a registry: 50 params loaded (defaults, first boot)
+I (667) TCS: boot part=ota_0 proj=tcs_wireless ver=r1a-9-g4f01733-dirty
+I (667) pp: pp rom version: e7ae62f
+I (667) net80211: net80211 rom version: e7ae62f
+I (677) wifi:wifi driver task: 3fced434, prio:23, stack:6656, core=0
+I (677) wifi:wifi firmware version: b9f67df
+I (677) wifi:wifi certification version: v7.0
+I (677) wifi:config NVS flash: enabled
+I (677) wifi:config nano formatting: disabled
+I (677) wifi:Init data frame dynamic rx buffer num: 32
+I (677) wifi:Init static rx mgmt buffer num: 5
+I (677) wifi:Init management short buffer num: 32
+I (677) wifi:Init dynamic tx buffer num: 32
+I (687) wifi:Init static tx FG buffer num: 2
+I (687) wifi:Init static rx buffer size: 1600
+I (687) wifi:Init static rx buffer num: 10
+I (687) wifi:Init dynamic rx buffer num: 32
+I (687) wifi_init: rx ba win: 6
+I (687) wifi_init: accept mbox: 6
+I (687) wifi_init: tcpip mbox: 32
+I (687) wifi_init: udp mbox: 6
+I (687) wifi_init: tcp mbox: 6
+I (687) wifi_init: tcp tx win: 5760
+I (687) wifi_init: tcp rx win: 5760
+I (687) wifi_init: tcp mss: 1440
+I (687) wifi_init: WiFi IRAM OP enabled
+I (687) wifi_init: WiFi RX IRAM OP enabled
+I (687) phy_init: phy_version 712,87e8c20e,Apr 13 2026,18:51:10
+I (747) wifi:mode : softAP (3c:0f:02:d6:a8:a1)
+I (757) wifi:Total power save buffer number: 16
+I (757) wifi:Init max length of beacon: 752/752
+I (757) wifi:Init max length of beacon: 752/752
+I (757) esp_netif_lwip: DHCP server started on interface WIFI_AP_DEF with IP: 192.168.4.1
+I (757) tcs_wifi: AP "TCS-A8A1" up, IP 192.168.4.1 pass=12345678
+I (757) uart: queue free spaces: 20
+I (827) tcs_link: [LPBK] frame loopback PASS (1 frame decoded)
+I (877) tcs_link: [LPBK] dup dedup PASS (dup=1)
+I (927) tcs_link: [LPBK] bad-crc drop PASS
+I (3127) tcs_link: [LPBK] ARQ retransmit PASS (4 copies rx)
+I (3127) tcs_link: [LPBK] RESULT pass=4 fail=0 PASS
+I (3127) tcs_link: registry seeded: 10 entries (H743 0x14 will override)
+I (3127) uart: queue free spaces: 20
+I (3127) tcs_link: link task up
+I (3127) tcs_link: started uart1 230400 baud tx=17 rx=18
+I (3127) tcs_web: httpd up on :80
+I (3127) uart: queue free spaces: 8
+I (3227) M207: [M207LB] int 1/12 byte-identical+parse PASS
+I (3247) M207: [M207LB] int 2/12 byte-identical+parse PASS
+I (3267) M207: [M207LB] int 3/12 byte-identical+parse PASS
+I (3287) M207: [M207LB] int 4/12 byte-identical+parse PASS
+I (3307) M207: [M207LB] int 5/12 byte-identical+parse PASS
+I (3327) M207: [M207LB] int 6/12 byte-identical+parse PASS
+I (3347) M207: [M207LB] int 7/12 byte-identical+parse PASS
+I (3367) M207: [M207LB] int 8/12 byte-identical+parse PASS
+I (3387) M207: [M207LB] int 9/12 byte-identical+parse PASS
+I (3407) M207: [M207LB] int 10/12 byte-identical+parse PASS
+I (3427) M207: [M207LB] int 11/12 byte-identical+parse PASS
+I (3447) M207: [M207LB] int 12/12 byte-identical+parse PASS
+I (3447) M207: [M207LB] RESULT int pass=12 fail=0 PASS
+I (3507) M207: [M207LB] physical probe: no echo (12B) — GPIO21↔47 未短接，物理回环挂账（接线表 v2.0 收尾项）
+I (3517) uart: queue free spaces: 20
+I (3517) M207: service started uart2 57600 baud tx=21 rx=47 core=1
+I (3517) TCS: WiFi AP + loopback + link + web + m207 all up
+I (3517) main_task: Returned from app_main()
+I (3717) M207: online (first)
+I (3867) M207: module TCADJTEMP ch=1 = 26.00 (cache mirror at R5)
+I (3917) M207: module TCADJTEMP ch=2 = 45.00 (cache mirror at R5)
+I (13517) M207: [M207P] tick_max=703ous (fsm_max=90ous; budget 1000/300) tx=28 rxline=29 perr=0 nak=0 vok=0 rsend=0 off=0 qdrop=0 wdrop=0 stk=1448W
+I (23517) M207: [M207P] tick_max=301ous (fsm_max=87ous; budget 1000/300) tx=48 rxline=49 perr=0 nak=0 vok=0 rsend=0 off=0 qdrop=0 wdrop=0 stk=1448W
+I (33517) M207: [M207P] tick_max=202ous (fsm_max=81ous; budget 1000/300) tx=68 rxline=69 perr=0 nak=0 vok=0 rsend=0 off=0 qdrop=0 wdrop=0 stk=1448W
+idf_monitor failed with exit code 143, output of the command is in the D:\Espressif\ws\tcs\esp32\build\log\idf_py_stderr_output_40708 and D:\Espressif\ws\tcs\esp32\build\log\idf_py_stdout_output_40708

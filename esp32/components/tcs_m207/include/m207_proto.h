@@ -67,6 +67,19 @@ typedef struct {
 /* 模板格式化（纯函数）：`TC{ch}:{cmd}=%.{}f\r`。返回 0=ok，-1=cap 不足/表项非法 */
 int m207_map_format(const m207_map_entry_t *e, float v, char *out, size_t cap);
 
+/* ====== 纯逻辑 3：轮询等待期 ERRCODE 应答处置分类（R1b 轴分离修复）======
+ * 原则：CMD:REPLY 应答本身=链路双向活的证据，永不计入通信失败（comm fail 只由
+ * 应答窗超时静默判定）。errcode=2 且在等温度查询=参数族被固件隐藏=传感器断线
+ * （正典/手册：传感器开路时该通道参数族整体不可见；FMEA F6）。 */
+typedef enum {
+    M207_POLLERR_UNEXPECTED = 0,   /* 无轮询在途 / 查询不该回的 ACK（1/8）→ 留痕 */
+    M207_POLLERR_SENSOR_OPEN,      /* errcode=2 且等待参数==TCACTTEMP → 通道断线态 */
+    M207_POLLERR_LINK_ALIVE,       /* 其他 errcode（0/3-7）→ 链路活，留痕不计败 */
+} m207_pollerr_act_t;
+
+m207_pollerr_act_t m207_classify_poll_errcode(uint8_t errcode, int waiting,
+                                              const char *wait_param);
+
 #ifdef __cplusplus
 }
 #endif

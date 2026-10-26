@@ -52,6 +52,7 @@ static const char *TAG = "M207";
 #define M207_PROBE_TICKS 20u     /* 离线探测 1s */
 #define M207_Q_LEN       16
 #define M207_CMD_MAX     40
+#define M207_OPEN_DEBOUNCE 3   /* 连续 =2 次数达标才判断线（防交错误归属）*/
 #define M207_PEND_MAX    4       /* 在途写确认事务（FIFO）*/
 #define M207_TASK_PRIO   5
 #define M207_TASK_CORE   1    /* 第八章：控制组钉核 1 */
@@ -90,6 +91,9 @@ static uint8_t  s_probing;           /* 0=常规轮询 FSM（含上电首联）1
 static uint8_t  s_ever_online;
 static uint8_t  s_fail;
 static uint8_t  s_waiting;           /* 1=轮询已发在等应答 */
+static uint8_t  s_wait_ch;           /* 轮询在等的通道（轴分离：errcode 归属）*/
+static uint8_t  s_ch_open[3];        /* 1/2=该通道传感器断线态（F6，errcode=2 参数族隐藏）*/
+static uint8_t  s_open_cnt[3];       /* 断线去抖：连续 =2 计数（≥3 才置态，防交错误归属）*/
 static uint8_t  s_poll_ch = 1;       /* 1↔2 交替 */
 static uint32_t s_tick;              /* 50ms 拍号 */
 static uint32_t s_next_poll;         /* 下一轮询拍号 */
@@ -263,9 +267,30 @@ static void m207_handle_line(const char *line)
             } else {
                 pend_nak(p, "module rejected", (int)r.errcode);  /* 协议拒绝，重发无益 */
             }
-        } else if (s_waiting && r.errcode != 1 && r.errcode != 8) {
-            s_fail++;                    /* 轮询得到错误应答 = 失败 */
+        } else if (s_waiting) {
+            /* 轴分离（R1b 修复）：CMD:REPLY 应答=链路双向活的证据，永不计 comm fail；
+             * errcode=2 等温度查询=参数族被固件隐藏=该通道传感器断线（FMEA F6）。 */
+            m207_pollerr_act_t a =
+                m207_classify_poll_errcode(r.errcode, 1, "TCACTTEMP");
             s_waiting = 0;
+            if (a == M207_POLLERR_SENSOR_OPEN) {
+                uint8_t ch = s_wait_ch;
+                if (ch >= 1 && ch <= 2) {
+                    /* 去抖：探测帧/console 帧的 =2 可能落进轮询等待窗被误归属，
+                     * 连续 ≥3 次才判断线（真拔线时每 500ms 一次，1.5s 内坐实）*/
+                    if (s_open_cnt[ch] < 255) s_open_cnt[ch]++;
+                    if (!s_ch_open[ch] && s_open_cnt[ch] >= M207_OPEN_DEBOUNCE) {
+                        s_ch_open[ch] = 1;
+                        ESP_LOGW(TAG, "ch%u SENSOR-OPEN (errcode=2 ×%u param "
+                                 "hidden) — F6 断线态，控制按失联，温度缓存冻结",
+                                 (unsigned)ch, (unsigned)s_open_cnt[ch]);
+                    }
+                }
+            } else {
+                s_stat.unexpected++;   /* 链路活但应答语义意外 → 留痕取证 */
+                ESP_LOGI(TAG, "unexpected CMD:REPLY=%u (poll ch=%u)",
+                         (unsigned)r.errcode, (unsigned)s_wait_ch);
+            }
         } else {
             s_stat.unexpected++;         /* 无事务 ACK（如上电 TCSW=0）*/
         }
@@ -307,6 +332,12 @@ static void m207_handle_line(const char *line)
         s_temp[r.module] = r.value;
         s_temp_tick[r.module] = s_tick;
         s_have_temp[r.module] = 1;
+        if (s_ch_open[r.module]) {                       /* F6 恢复沿（接回传感器）*/
+            s_ch_open[r.module] = 0;
+            ESP_LOGW(TAG, "ch%u sensor RECOVERED (param family visible again)",
+                     (unsigned)r.module);
+        }
+        s_open_cnt[r.module] = 0;
         if (r.module == 1) g_tcs.tc1_act = r.value;
         else               g_tcs.tc2_act = r.value;
         m207_go_online(s_ever_online ? "recover" : "first");
@@ -365,6 +396,7 @@ static const char *m207_fsm_poll(void)
         }
         if (s_tick >= s_next_poll) {
             s_next_poll = s_tick + M207_POLL_MS / M207_TICK_MS;
+            s_wait_ch = s_poll_ch;                      /* 轴分离：errcode 归属通道 */
             snprintf(cmd, sizeof(cmd), "TC%u:TCACTTEMP?\r", (unsigned)s_poll_ch);
             s_poll_ch = (s_poll_ch == 1) ? 2u : 1u;
             s_waiting = 1;
@@ -611,15 +643,21 @@ int m207_map_set(uint16_t pid, float v)
 
 int m207_send_raw(const char *cmd)
 {
-    if (!cmd || !*cmd || strlen(cmd) >= M207_CMD_MAX) return -1;
+    if (!cmd || !*cmd) return -1;
     if (!s_started || !s_online) { s_stat.wdrop++; return -2; }
     m207_msg_t m;
     memset(&m, 0, sizeof(m));
-    strncpy(m.cmd, cmd, sizeof(m.cmd) - 1);
+    /* API 契约：调用方可不带 \r，此处统一补齐（实测：本固件对无 \r 命令按帧间
+     * 隙超时解析并回 CMD:REPLY=2——协议 §1"静默忽略"不成立，见 R1b 试验日志）*/
+    size_t n = strlen(cmd);
+    if (n >= M207_CMD_MAX - 1) return -1;
+    strncpy(m.cmd, cmd, M207_CMD_MAX - 2);
+    if (m.cmd[n - 1] != '\r') m.cmd[n] = '\r';
     return m207_enqueue(&m);
 }
 
 uint8_t m207_online(void) { return s_online; }
+uint8_t m207_ch_sensor_open(uint8_t ch) { return (ch == 1 || ch == 2) ? s_ch_open[ch] : 0u; }
 float m207_last_temp(uint8_t ch) { return (ch == 1 || ch == 2) ? s_temp[ch] : 0.0f; }
 uint16_t m207_stats_nak(void) { return s_stat.nak; }
 uint16_t m207_stats_verify_ok(void) { return s_stat.verify_ok; }
@@ -976,9 +1014,19 @@ void m207_realprobe_run(void)
     vTaskDelay(pdMS_TO_TICKS(800));
     (void)m207_send_raw("TC1:NOTEXIST?");       /* 期望 err=2 未知参数 */
     vTaskDelay(pdMS_TO_TICKS(800));
-    (void)m207_send_raw("GARBAGE");             /* 期望 err=6/0 语法 */
+    (void)m207_send_raw("GARBAGE");             /* 期望 err=6 语法 */
     vTaskDelay(pdMS_TO_TICKS(800));
-    (void)m207_send_raw("TC1:TCACTTEMP=999");   /* 期望 err=3/2/4 只读拒绝 */
+    (void)m207_send_raw("TC1:TCACTTEMP=999");   /* 只读禁写（实录回码 3/4 依实现）*/
+    vTaskDelay(pdMS_TO_TICKS(800));
+    (void)m207_send_raw("TC1:TCADJTEMP=999");   /* 期望 err=4 可写参数越界拒绝 */
+    vTaskDelay(pdMS_TO_TICKS(800));
+    (void)m207_send_raw("TC1:TCADJTEMP?");      /* 回读护栏：确认 999 未被钳位接受 */
+    vTaskDelay(pdMS_TO_TICKS(800));
+    (void)m207_send_raw("TC1:TCSW?@0#FF");      /* 期望 err=7 坏 XOR 校验（#FF 几乎必错）*/
+    vTaskDelay(pdMS_TO_TICKS(800));
+    (void)m207_send_raw("TC1:TCADJTEMP!");      /* 期望 err=8 SAVE ACK（保存当前值=幂等）*/
+    vTaskDelay(pdMS_TO_TICKS(800));
+    (void)m207_send_raw("TC1:TCACTTEMP!");      /* 不可存参数保存——正典§5 实录（回 1/3/2 依实现）*/
     vTaskDelay(pdMS_TO_TICKS(800));
 
     /* COMPUSHLIST 自发现试跑（正典 §7；行超 64B 由 RAWLOG hex 兜底）*/

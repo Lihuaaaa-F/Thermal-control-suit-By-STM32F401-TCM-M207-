@@ -15,7 +15,7 @@
 extern "C" {
 #endif
 
-#define FAN_GPIO        48
+#define FAN_GPIO        42   /* v2.1 换脚：48 与板载 WS2812 RGB 共脚（PWM 被灯珠当噪声），42 空闲无特殊功能 */
 #define FAN_FREQ_HZ     25000
 #define FAN_DUTY_MAX    100
 

@@ -55,6 +55,7 @@ static void ws2812_send_frame(int gpio_num, uint8_t g, uint8_t r, uint8_t b)
         ESP_LOGE(TAG, "led_strip new g%d fail %s", gpio_num, esp_err_to_name(e));
         goto restore;
     }
+    ESP_LOGI(TAG, "ws2812 clear g%d (r=%u g=%u b=%u)", gpio_num, r, g, b);
     e = led_strip_set_pixel(strip, 0, r, g, b);
     if (e != ESP_OK) ESP_LOGE(TAG, "set_pixel fail %s", esp_err_to_name(e));
     e = led_strip_refresh(strip);           /* 阻塞发送 */

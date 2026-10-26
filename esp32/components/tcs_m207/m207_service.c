@@ -318,6 +318,10 @@ static void m207_handle_line(const char *line)
     } else if (r.kind == M207_KIND_REPLY && strcmp(r.param, "TCADJTEMP") == 0) {
         ESP_LOGI(TAG, "module TCADJTEMP ch=%u = %.2f (cache mirror at R5)",
                  (unsigned)r.module, (double)r.value);
+    } else if (r.kind == M207_KIND_REPLY) {
+        /* 非缓存参数的应答（TCERRORSTATUS/TCOTPSTATUS/SYSMODEL 类）——
+         * 原样留痕（R5 字典镜像接入前的通用观测口）*/
+        ESP_LOGI(TAG, "reply ch=%u %s=%.3f", (unsigned)r.module, r.param, (double)r.value);
     }
 }
 
@@ -939,6 +943,27 @@ void m207_realprobe_run(void)
         ESP_LOGW(TAG, "[RP] 模块无应答——按 [P2] 结论查供电/接线/R-K1 一次对调法");
         return;
     }
+
+    /* 故障码读取（用户问询：模块报错灯亮）：位语义见 tc_hlp.xml——
+     * 8 位，正常=1 故障=0：bit0 外部/bit1 过压/bit2 过流/bit3 过温/
+     * bit4 传感器开路/bit5 负载短路/bit6 负载开路；全正常=127。
+     * STATUS=当前态，LOG=上电以来锁存。 */
+    (void)m207_send_raw("TC1:TCERRORSTATUS?");
+    vTaskDelay(pdMS_TO_TICKS(500));
+    (void)m207_send_raw("TC2:TCERRORSTATUS?");
+    vTaskDelay(pdMS_TO_TICKS(500));
+    (void)m207_send_raw("TC1:TCERRORLOG?");
+    vTaskDelay(pdMS_TO_TICKS(500));
+    (void)m207_send_raw("TC1:TCOTPSTATUS?");
+    vTaskDelay(pdMS_TO_TICKS(500));
+    (void)m207_send_raw("TC1:TCOCPSTATUS?");
+    vTaskDelay(pdMS_TO_TICKS(500));
+    (void)m207_send_raw("TC1:TCRTOCPSTATUS?");
+    vTaskDelay(pdMS_TO_TICKS(500));
+    (void)m207_send_raw("PCB:TMACTTEMP?");
+    vTaskDelay(pdMS_TO_TICKS(500));
+    (void)m207_send_raw("PCB:TMOTPSTATUS?");
+    vTaskDelay(pdMS_TO_TICKS(500));
 
     /* C3 变体 + C1 别名 + V-5 ERRORCODE 注入（只读/安全值；TCSW 全程 0）*/
     (void)m207_send_raw("SYSTEM:SYSMODEL?");    /* C3 型号变体裁定 */

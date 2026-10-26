@@ -1,0 +1,21 @@
+# F14+F16 修复前后对照（W4.1 取证）
+
+- 日期: 2026-10-26 23:45:26
+- harness: docs/evidence/W4/rtt_float_probe.c（主机 MSVC 直链目标机同源 App/rtt/segger_rtt.c；/W3 因 acID[16] 无终止符的官方布局触发 MSVC C4295 噪声降一档）
+- 复跑: cmd /c cl /std:c11 /utf-8 /IApp\rtt ..\docs\evidence\W4\rtt_float_probe.c 后执行（或直接执行同目录 rtt_probe.exe；红队注：exe mtime 晚于本 txt 系 harness 迁移后重编，红队实跑输出与本 txt 逐行一致）
+
+=== F14 修复前后对照（同一格式串/同一实参） ===
+BEFORE m207.c:425  |[WARN] m207 implausible ch=1 %.1f->%.1f (dt=%.1fs)
+BEFORE m207.c:461  |[WARN] m207 set NAK ch=2 set=%.1f echo=%.1f
+BEFORE tmp117.c:59  |[SIM] body temp forced %.1f
+BEFORE tmp117.c:161 |[WARN] tmp117 implausible sample %.2f dropped
+AFTER  m207.c:425  |[WARN] m207 implausible ch=1 36.5->37.9 (dt=2.0s)
+AFTER  m207.c:461  |[WARN] m207 set NAK ch=2 set=37.0 echo=0.0
+AFTER  tmp117.c:59  |[SIM] body temp forced 38.5
+AFTER  tmp117.c:161 |[WARN] tmp117 implausible sample 55.25 dropped
+=== 判读：BEFORE 行数值字段为字面量 %.1f/%.2f = 日志静默损坏实锤 ===
+F16BEFORE post.c:184  |[POST] badge reshow %lu ms
+F16BEFORE ft5446.c:422 |RTT: tp_diag THGROUP reg=0x80 wrote=22 read=22 OK (nak +%lu/%lu)
+F16AFTER  post.c:184  |[POST] badge reshow 3000 ms
+F16AFTER  ft5446.c:422 |RTT: tp_diag THGROUP reg=0x80 wrote=22 read=22 OK (nak +0/1)
+=== F16 判读：%lu 同样吐字面量（switch 无 'l' case，va_arg 不消费） ===

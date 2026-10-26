@@ -137,6 +137,7 @@ uint8_t    post_armed(void)         { return (s_cur_state != POST_ARM_UNARMED_AB
 #include "tmp117.h"
 #include "m207.h"
 #include "segger_rtt.h"
+#include <stdio.h>              /* snprintf：F16 浮点/长度修饰符日志预格式化 */
 #include <string.h>
 
 #define POST_ARM_TICK_MS  100u     /* 布防 FSM 步进节拍（健康采样粒度）*/
@@ -181,7 +182,10 @@ void post_badge_reshow(uint32_t ms)
     if (!s_done) return;
     s_badge_dur = ms ? ms : POST_BADGE_MS;
     s_badge_rearm = 1;   /* 时刻由下次 post_poll 以当前 now 重锚 */
-    SEGGER_RTT_printf(0, "[POST] badge reshow %lu ms\n", (unsigned long)s_badge_dur);
+    /* F16：自研 RTT printf 无 'l' 长度修饰符（%lu 落 default 吐字面量），预格式化 */
+    char b[96];
+    snprintf(b, sizeof b, "[POST] badge reshow %lu ms\n", (unsigned long)s_badge_dur);
+    SEGGER_RTT_WriteString(b);
 }
 
 /* 参数表自洽：序列化 CRC 重算一致 + 记录数与持久化标志一致 + 当前值都在 [min,max] */

@@ -7,6 +7,7 @@
  */
 #include "tmp117.h"
 #include "post.h"               /* H6.7 合理性滤波 post_body_sanity_ok */
+#include <stdio.h>              /* snprintf：F14 浮点日志预格式化 */
 
 /* ====== 纯逻辑 ====== */
 float tmp117_raw_to_c(int16_t raw)
@@ -56,8 +57,10 @@ void tmp117_sim_set(float v)
 {
     s_sim_body = v;
     s_sim_on = 1;
-    SEGGER_RTT_printf(0, "[SIM] body temp forced %.1f", (double)v);
-    SEGGER_RTT_WriteString("\n");
+    /* F14：RTT printf 无 %f（自研与 SEGGER 官方实现皆然），浮点必须 snprintf 预格式化 */
+    char b[96];
+    snprintf(b, sizeof b, "[SIM] body temp forced %.1f\n", (double)v);
+    SEGGER_RTT_WriteString(b);
 }
 void tmp117_sim_disable(void)
 {
@@ -158,8 +161,10 @@ void tmp117_poll(uint32_t now_ms)
             s_have_valid = 1;
             ok = 1;
         } else {
-            SEGGER_RTT_printf(0, "[WARN] tmp117 implausible sample %.2f dropped\n",
-                              (double)c);
+            char b[96];         /* F14：同上，%f 预格式化 */
+            snprintf(b, sizeof b, "[WARN] tmp117 implausible sample %.2f dropped\n",
+                     (double)c);
+            SEGGER_RTT_WriteString(b);
         }
     }
     tmp117_health_step(&s_health, ok, on_sensor_lost);

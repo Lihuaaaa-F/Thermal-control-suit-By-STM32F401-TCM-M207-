@@ -422,9 +422,15 @@ static void m207_handle_line(const char *line, uint32_t now_ms)
         if (s_have_temp[r.module]) {
             float dt = (float)(now_ms - s_last_temp_ms[r.module]) / 1000.0f;
             if (!post_m207_sanity_ok(s_last_temp[r.module], r.value, dt)) {
-                SEGGER_RTT_printf(0, "[WARN] m207 implausible ch=%u %.1f->%.1f (dt=%.1fs)\n",
-                                  (unsigned)r.module, (double)s_last_temp[r.module],
-                                  (double)r.value, (double)dt);
+                /* F14：RTT printf 无 %f（自研与 SEGGER 官方实现皆然，官方文档明示），
+                 * 浮点日志一律 snprintf 预格式化 + WriteString（官方推荐模式）。
+                 * 160B：三浮点 %.1f 最坏 3×41B（strtof 无绝对值界）+标签，96 会截尾。*/
+                char b[160];
+                snprintf(b, sizeof b,
+                         "[WARN] m207 implausible ch=%u %.1f->%.1f (dt=%.1fs)\n",
+                         (unsigned)r.module, (double)s_last_temp[r.module],
+                         (double)r.value, (double)dt);
+                SEGGER_RTT_WriteString(b);
                 if (s_fail_cnt < 255) s_fail_cnt++;
                 return;
             }
@@ -458,8 +464,10 @@ static void m207_handle_line(const char *line, uint32_t now_ms)
             m207_txq_push(cmd);
         } else {
             p->active = 0;
-            SEGGER_RTT_printf(0, "[WARN] m207 set NAK ch=%u set=%.1f echo=%.1f\n",
-                              (unsigned)r.module, (double)p->value, (double)r.value);
+            char b[160];         /* F14：同上，%f 预格式化（160 见上注）*/
+            snprintf(b, sizeof b, "[WARN] m207 set NAK ch=%u set=%.1f echo=%.1f\n",
+                     (unsigned)r.module, (double)p->value, (double)r.value);
+            SEGGER_RTT_WriteString(b);
         }
     }
 }

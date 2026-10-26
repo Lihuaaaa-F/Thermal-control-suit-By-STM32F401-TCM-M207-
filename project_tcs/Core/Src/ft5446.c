@@ -45,6 +45,7 @@ void ft5446_map_raw(uint16_t xr, uint16_t yr, int *sx, int *sy)
 
 #ifndef TCS_UNIT_TEST
 #include "segger_rtt.h"
+#include <stdio.h>              /* snprintf/printf：F16 预格式化 + 控制台镜像 */
 
 /* 映射常量一致性编译断言（纯函数段 fallback 与 ltdc.h 真值）*/
 _Static_assert(LCD_WIDTH == 1024 && LCD_HEIGHT == 600,
@@ -419,11 +420,15 @@ void ft5446_diag_readback(void)
         uint32_t r0 = g_ft5446_read_cnt, n0 = g_ft5446_nak_cnt;
         v = 0xFF;
         ft5446_rd_reg(tab[i].reg, &v, 1);
-        SEGGER_RTT_printf(0, "RTT: tp_diag %s reg=0x%02x wrote=%u read=%u %s (nak +%lu/%lu)\n",
-                          tab[i].name, tab[i].reg, tab[i].wr, v,
-                          (v == tab[i].wr) ? "OK" : "MISMATCH",
-                          (unsigned long)(g_ft5446_nak_cnt - n0),
-                          (unsigned long)(g_ft5446_read_cnt - r0));
+        /* F16：同 post.c，%lu 预格式化（自研 printf 无 'l' 修饰符 case）*/
+        char db[96];
+        snprintf(db, sizeof db,
+                 "RTT: tp_diag %s reg=0x%02x wrote=%u read=%u %s (nak +%lu/%lu)\n",
+                 tab[i].name, tab[i].reg, tab[i].wr, v,
+                 (v == tab[i].wr) ? "OK" : "MISMATCH",
+                 (unsigned long)(g_ft5446_nak_cnt - n0),
+                 (unsigned long)(g_ft5446_read_cnt - r0));
+        SEGGER_RTT_WriteString(db);
         /* 同步一份到控制台（mb_console 只读 RTT 环）*/
         printf("tp_diag %s wrote=%u read=%u %s\n", tab[i].name, tab[i].wr, v,
                (v == tab[i].wr) ? "OK" : "MISMATCH");

@@ -54,6 +54,18 @@ CATEGORIES = [
 def _is_skip_dir(name):
     return (name.startswith('build') or name in
             {'managed_components', '.git', 'node_modules', 'qr'})
+# W7（v13.4 §7）：查证注释存在性核查——🟦 自研驱动近邻文件必须带"官方查证："注释。
+# 缺失=黄灯（一个版本期不阻断 exit；§1c W7 门禁=黄灯数 0；新增 🟦 文件应随 SOP 同步登记本表）
+VERIFY_COMMENT_FILES = (
+    'esp32/components/tcs_m207/m207_service.c',
+    'esp32/components/tcs_m207/m207_proto.c',
+    'esp32/components/tcs_link/link_task.c',
+    'esp32/components/tcs_link/comm.c',
+    'esp32/components/tcs_tmp117/tmp117_service.c',
+    'esp32/components/tcs_fan/fan_service.c',
+    'esp32/main/tcs_console.c',
+)
+
 # qr/ 为第三方 nayuki 库（LICENSE 在库），单独标注不参与分类判定
 VENDORED = ('qrcodegen.c', 'qrcodegen.h')
 
@@ -131,6 +143,22 @@ def main():
     lines.append('## 分类学（25 类 × 官方候选）')
     for name, pat, off in CATEGORIES:
         lines.append('- %s（检测 `%s`）→ 官方候选: %s' % (name, pat, off))
+
+    # W7 黄灯：查证注释存在性（缺=黄，不阻断 exit；§1c W7 门禁=黄灯数 0）
+    yellow = []
+    for vf in VERIFY_COMMENT_FILES:
+        try:
+            with open(vf, encoding='utf-8', errors='replace') as f:
+                head = f.read(4096)          # 查证注释约定在文件头注释块
+        except OSError:
+            yellow.append(vf + '  (文件缺失)')
+            continue
+        if '官方查证：' not in head:
+            yellow.append(vf)
+    lines.append('')
+    lines.append('## 查证注释核查（W7 黄灯）')
+    lines.append('- **黄灯数: %d** %s' % (
+        len(yellow), yellow if yellow else '（%d 文件全带官方查证注释）' % len(VERIFY_COMMENT_FILES)))
 
     # ====== 全树五桶清点（每个文件必须有归属；未归类>0 → 失败）======
     import fnmatch

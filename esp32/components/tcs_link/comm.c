@@ -7,6 +7,7 @@
  * 唯一消费点串行 HAL_UART_Transmit。中断里 comm_tick 只判超时+重传入队。
  * 急停 comm_txq_push_front 队头插队（不登记 pending）。
  * tx_head/tx_tail/tx_count 的读改写用 enter/exit_critical 短临界区保护。
+ * 官方查证：FreeRTOS 官方队列族检索 2026-10-26：esp_ringbuf/StreamBuffer 为字节流语义，与本 txq 项缓冲（定界+满丢老+ISR 单生产者）语义不符（差异分析=v13.4 §4 六操作映射表）；清单 F7 定性=官方等价候选（MessageBuffer 双通道）待评估，W3-A 评估中；未定论前自研环形为缺省实现（Q5 PC 双编译）；实现参考：不适用（环形队列=C 语义自持，官方无直接项缓冲原语；官方候选评估即上句 W3-A）
  */
 #include "comm.h"
 #include <string.h>

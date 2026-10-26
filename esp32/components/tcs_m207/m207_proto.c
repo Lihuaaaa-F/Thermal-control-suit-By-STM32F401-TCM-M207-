@@ -3,6 +3,7 @@
  *
  * 逐字提取自 project_tcs/App/tcs/m207.c 纯逻辑区（原 19-122 行），Q5 单向同步：
  * 改协议逻辑只许改 project_tcs 源侧再复制过来。提取时刻源 md5 见 docs/results/R1.md。
+ * 官方查证：检索组件库 2026-10-26 无官方件（M207 私有协议行文法）；Q5 逐字提取件（与 project_tcs/App/tcs/m207.c 纯逻辑区单向同步），字节级正确性由 PC 53+16 断言+真机九码实录+project_tcs/tools/proto_ref.py 双实现互证背书；实现参考：不适用（Q5 逐字提取件，参照物=H743 侧同源纯逻辑区+project_tcs/tools/proto_ref.py 双实现互证，非官方示例移植）
  */
 #include "m207_proto.h"
 #include <string.h>

@@ -1,5 +1,6 @@
 /**
  * fan_service.c — 风扇驱动实现（R1d；LEDC PWM，低=开）
+ * 官方查证：检索 components.espressif.com 2026-10-26，无风扇 PWM 官方件外需求；PWM 用官方 driver/ledc；板载 RGB 已换官方组件 espressif/led_strip v3.1.1（F1，commit b741ef2）；实现参考 IDF examples/peripherals/ledc/ledc_basic
  */
 #include "fan_service.h"
 

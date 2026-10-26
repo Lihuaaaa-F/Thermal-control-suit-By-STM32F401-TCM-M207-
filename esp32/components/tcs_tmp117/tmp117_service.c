@@ -1,6 +1,7 @@
 /**
  * tmp117_service.c — TMP117 体温采样服务实现（R1c；结构与 m207_service 同型：
  * 核 1 定节拍任务+纯函数健康机/均值+掉线沿报警粘滞+注入 API+板上自测）
+ * 官方查证：检索 components.espressif.com 2026-10-26，组件库 TMP117 仅 solderedelectronics GPL-3.0-only 第三方件→合法拒绝（F5 证据 docs/evidence/官方库检索/2026-10-26_components_espressif_com.md）；I2C 用官方 driver/i2c_master（IDF v5.5 新 API）；实现参考 IDF examples/peripherals/i2c/i2c_basic
  */
 #include "tmp117_service.h"
 #include "tmp117_pure.h"

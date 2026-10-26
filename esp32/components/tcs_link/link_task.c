@@ -5,6 +5,7 @@
  * UART 事件队列 → 任务内逐字节 comm_rx_feed_byte（GS §0E 模式：协议处理只在任务上下文）；
  * 100ms comm_tick（重传/断链）；发送经 comm txq，任务内 comm_poll_tx 串行消费。
  * comm 层 0x90 ACK 判定已由 H743 侧同源文件扩展（comm.c 同一份拷贝）。
+ * 官方查证：检索组件库 2026-10-26 无官方件（双板私有协议，GS 血统）；UART 通道用官方 driver/uart，任务用官方 FreeRTOS；实现参考 IDF examples/system/freertos/（任务骨架模式）
  */
 #include "link_task.h"
 #include "proto.h"

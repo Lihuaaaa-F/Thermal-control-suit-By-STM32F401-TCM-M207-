@@ -3,6 +3,7 @@
  *
  * `p` 子命令派发（任务书命名）：p list / p set <id|key> <v> / p save。
  * 其余命令直呼 param/control/m207/tmp117/fan 公共 API，不旁路任何写路径。
+ * 官方查证：检索 components.espressif.com 2026-10-26，esp_console 即官方控制台件；REPL 用官方 esp_console（linenoise/argtable 官方件）；自研仅为命令表与派发；实现参考 IDF examples/system/console/basic
  */
 #include "tcs_console.h"
 #include "param_registry.h"

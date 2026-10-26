@@ -16,6 +16,7 @@
  *   - H6.7 合理性滤波：|Δ|>10°C/s 判不可信→按失败计数（post_pure.c 纯函数）。
  *   - 自测：m207_lb_boottest=[M207LB]（内部回环全套+物理短接探测）；
  *     CONFIG_TCS_M207_SELFLOOP 构建附带应答器注入全路径取证=[M207SL]。
+ * 官方查证：检索 components.espressif.com+IDF v5.5.5 组件库 2026-10-26，无 M207 温控模块官方件（厂商私有协议，合法自研）；串口通道用官方 driver/uart；实现参考 IDF(D:/Espressif/frameworks/esp-idf-v5.5.5) examples/peripherals/uart/uart_async_rxtxtasks（异步收发+环形缓冲模式）
  */
 #include "m207_service.h"
 #include "m207_proto.h"

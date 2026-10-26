@@ -8,6 +8,8 @@
 #ifndef TCS_SNAP_H
 #define TCS_SNAP_H
 
+#include <stdint.h>
+
 #ifdef __cplusplus
 extern "C" {
 #endif

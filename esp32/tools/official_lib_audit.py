@@ -73,6 +73,7 @@ def main():
     args = ap.parse_args()
 
     files = sorted(iter_files())
+    files = [f.replace(chr(92), '/') for f in files]   # 桶清点统一正斜杠
     manifest_path = os.path.join(os.path.dirname(os.path.abspath(__file__)) or '.',
                                  '..', '..', MANIFEST)
     manifest_path = os.path.normpath(manifest_path)
@@ -90,7 +91,7 @@ def main():
     covered = set()
     if os.path.isfile(manifest_path):
         with open(manifest_path, encoding='utf-8') as f:
-            covered = {l.strip() for l in f if l.strip()}
+            covered = {l.strip().replace(chr(92), '/') for l in f if l.strip()}
 
     missing = [f for f in files if f not in covered]
     stale = [f for f in covered if f not in files]
@@ -118,13 +119,69 @@ def main():
     for name, pat, off in CATEGORIES:
         lines.append('- %s（检测 `%s`）→ 官方候选: %s' % (name, pat, off))
 
+    # ====== 全树五桶清点（每个文件必须有归属；未归类>0 → 失败）======
+    import fnmatch
+    skip_re = re.compile(r'/(build[^/]*|managed_components|\.git|node_modules|'
+                         r'__pycache__|epaper)/')   # build* 通配所有构建变体目录
+    buckets = {}
+    unclassified = []
+    for dirpath, dirnames, filenames in os.walk('.'):
+        dirnames[:] = [d for d in dirnames if not skip_re.search('/' + d + '/')]
+        for fn in filenames:
+            f = os.path.join(dirpath, fn).replace(chr(92), '/')
+            if f.startswith('./'):
+                f = f[2:]
+            if fn.endswith('.inc'):
+                b = 'A 自研生成数据(字库, gen_font_cn 产物)'
+            elif 'web_audit' in fn or fn.startswith('_web_'):
+                b = 'C 测试产物(web 审计)'
+            elif fn == 'post_build_objcopy.py':
+                b = 'E 工程/构建配置'
+            elif '/qr/qrcodegen' in f:
+                b = 'B-vendor nayuki QR'
+            elif '/mock/' in f:
+                b = 'C 素材/mock'
+            elif fn.endswith(('.ninja_deps', '.ninja_log', 'build.ninja', '.log',
+                              '.bin', '.elf', '.hex', '.map', '.o', '.yaml')):
+                b = 'C 构建产物/日志'
+            elif fn.endswith(('.png', '.jpg', '.jpeg', '.mp4', '.gif')):
+                b = 'D 取证媒体'
+            elif f.startswith('project_tcs/Drivers/'):
+                b = 'B-vendor ST HAL'
+            elif f.startswith('project_tcs/third_party/'):
+                b = 'B-vendor LVGL'
+            elif f.startswith('docs/'):
+                b = 'D 文档/证据'
+            elif f in covered or f in files:
+                b = 'A 自研代码(已审计)'
+            elif '/web_files/' in f:
+                b = 'C 前端资源(自研页面+Chart.js 官方发行版)'
+            elif fn.endswith(('.csv', '.sh', '.lock', '.yml', '.json') ) or                  fn.startswith(('sdkconfig', 'Kconfig', 'partitions', 'CMakeLists', 'Makefile')) or                  fn.endswith(('.cmake', '.ld', '.s', '.cfg', '.project', '.cproject', '.launch',
+                              '.ioc', '.uvprojx', '.uvoptx', '.gitignore', '.gitattributes',
+                              '.editorconfig', '.prettierrc', '.flake8', '.claude.md')) or                  fn in ('AGENTS.md', 'README.md', 'LICENSE', 'LVGL_PINNED_VERSION'):
+                b = 'E 工程/构建配置(CMake/Keil/Cube/脚本)'
+            elif fn.endswith(('.md', '.txt')):
+                b = 'D 文档/证据'
+            else:
+                b = 'F 未归类'
+                unclassified.append(f)
+            buckets[b] = buckets.get(b, 0) + 1
+
+    lines.append('## 全树五桶清点（总账：每个文件都有归属）')
+    for b in sorted(buckets):
+        lines.append('- %s: %d' % (b, buckets[b]))
+    lines.append('- **未归类: %d %s**' % (len(unclassified),
+                 unclassified[:15] if unclassified else ''))
+    lines.append('')
+
     out = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)),
                                         '..', '..', REPORT))
     os.makedirs(os.path.dirname(out), exist_ok=True)
     with open(out, 'w', encoding='utf-8', newline='\n') as f:
         f.write('\n'.join(lines) + '\n')
-    print('report: %s (%d files, %d uncovered)' % (out, len(files), len(missing)))
-    return 1 if missing else 0
+    print('report: %s (%d files, %d uncovered, %d unclassified)'
+          % (out, len(files), len(missing), len(unclassified)))
+    return 1 if (missing or unclassified) else 0
 
 
 if __name__ == '__main__':

@@ -71,8 +71,13 @@ project_tcs/App/lvgl_port/tcs_lvgl.c
 project_tcs/App/lvgl_port/tcs_lvgl.h
 project_tcs/App/proto/proto.c
 project_tcs/App/proto/proto.h
+project_tcs/App/rtt/SEGGER_RTT_Conf.h
 project_tcs/App/rtt/segger_rtt.c
 project_tcs/App/rtt/segger_rtt.h
+project_tcs/App/rtt/vendor/SEGGER_RTT.c
+project_tcs/App/rtt/vendor/SEGGER_RTT.h
+project_tcs/App/rtt/vendor/SEGGER_RTT_ConfDefaults.h
+project_tcs/App/rtt/vendor/SEGGER_RTT_printf.c
 project_tcs/App/tcs/console.c
 project_tcs/App/tcs/console.h
 project_tcs/App/tcs/control.c

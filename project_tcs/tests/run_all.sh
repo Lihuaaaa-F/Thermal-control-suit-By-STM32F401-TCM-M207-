@@ -113,14 +113,15 @@ else
     echo "[font_audit] SKIP: python not found"; FAIL=1
 fi
 
-# RTT printf 调用点总数对账（W5，W4.1 红队发现 5 采纳）：总数恒 14
-# （防"删日志行使 %f/%lu 门禁 grep 归零"的捷径；增删调用点须同步本数并说明）
-RTTN=$(grep -rn "SEGGER_RTT_printf" App Core --include=*.c | wc -l)
-if [ "$RTTN" -ne 14 ]; then
-    echo "[rtt_count] FAIL: SEGGER_RTT_printf 调用点 $RTTN ≠ 14（增删须同步本门禁并说明）"
+# RTT printf 调用点总数对账（W5 立，W4.2 随 vendor 调整口径）：调用点恒 13
+# （W4.2 后 App/rtt/ 为 vendor+薄壳域——官方 printf 定义/声明不再计入；防"删日志行
+# 使 %f/%lu 门禁归零"捷径；增删调用点须同步本数并说明）
+RTTN=$(grep -rn "SEGGER_RTT_printf" App Core --include=*.c | grep -cv "App/rtt/")
+if [ "$RTTN" -ne 13 ]; then
+    echo "[rtt_count] FAIL: SEGGER_RTT_printf 调用点 $RTTN ≠ 13（增删须同步本门禁并说明）"
     FAIL=1
 else
-    echo "[rtt_count] PASS (14)"
+    echo "[rtt_count] PASS (13)"
 fi
 
 # 官方库审计门禁（W5，v13.4 §6）：未入清单/未归类文件 → FAIL

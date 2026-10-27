@@ -46,8 +46,8 @@ vendor 域说明：`App/rtt/`（SEGGER RTT vendor 五文件）同一 pattern 单
 |---|---|
 | Mem_Read 调用模式（#2/#3） | **符合官方推荐 ✓**——8bit 移位地址（ADDR7<<1）、MemAddSize=8BIT、Timeout=ms、返值必查；W10 表 #12-13 在案（"W1 ft5446 复制本模式"注记原文） |
 | Init/MspInit 配对（#4/#5） | **符合官方推荐 ✓**——用户实现 Msp 回调+Init 返查，与官方 How-to-use 第 1-3 步（MSP→Init→可选 ConfigAnalogFilter）一致；未用项（模拟滤波）保持默认=官方默认即推荐 |
-| 触摸 ft5446 现走软件 bit-bang（GPIO 模拟，见 GPIO 卡） | **偏差+理由**：抄官方 LVGL 例程 ctiic.c/ft5206.c 原码起步；**待整改入 W1**：换硬件 I2C4（含 CubeMX 生成 TIMINGR，W1 既定），届时复制 #2/#3 模式 |
-| W1 将加 I2C4 | **计划项入 W1**：新增 I2C4 实例须同步补 `HAL_I2C_MspInit` 的 I2C4 分支+③ 表重跑（本卡行数即失效重录） |
+| 触摸 ft5446 传输层 | **W1a 已换 HAL I2C4（2026-10-27）**：rd_reg=Mem_Read/wr_reg=Mem_Write/probe=IsDeviceReady，复制 #2/#3 模式；Timing=ST 官方计算器 i2c_timing_utility.c（CubeH7@8ec3113d 零改动 vendor）以 PCLK4 实频现算——CubeMX GUI 路径本机缺 FW_H7 包不可达（两轮 CLI 日志在 project_tcs/cubemx/ 留档）；位bang 域 FT5446_BITBANG 宏保留一个版本期 |
+| W1a I2C4 调用面补录 | **已落地**：底层在 ft5446_i2c4_init（模块自有，eeprom.c 同款惯例——HAL_I2C_MspInit 在 main.c 系 G 线未提交区不可触碰，G 线合入后迁 MspInit 分支=二期正常化）；③ 表补 W1a 行即本行（HAL_I2C_Mem_×2+IsDeviceReady+I2C_GetTiming 在 ft5446.c，nm 门禁 ct_iic=0 在案） |
 | 线挂死/时钟拉伸等 H7 I2C 已知勘误 | 官方 ST 工勘（errata）与 HAL 修复随 HAL 版本走——本工程 HAL=裁剪快照无 tag（W9 GAP 注 1），升级=整树替换全量回归，挂 W9 协议处置（二期录 CubeH7 tag） |
 
-——研学卡完（5/5）。
+——研学卡完（5/5+2 补录行）。

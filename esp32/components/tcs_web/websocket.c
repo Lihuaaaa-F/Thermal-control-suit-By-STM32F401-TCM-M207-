@@ -58,7 +58,8 @@ static void fds_del(int fd)
  * httpd_queue_work 官方线程安全路径投递到 httpd 线程执行发送。*/
 typedef struct {
     size_t len;
-    char json[576];          /* st 实测≈200B / pv≈90B，上限+裕度（超限即丢该帧）*/
+    char json[576];          /* st 最坏 239B（红队 R4 实测：float→double 长尾）/pv≈90B；
+                              * 超 576 即丢该帧——50 参形态 reg 不走此通道（走 8192 路径）*/
 } ws_tx_work_t;
 
 static void ws_tx_work_fn(void *arg)

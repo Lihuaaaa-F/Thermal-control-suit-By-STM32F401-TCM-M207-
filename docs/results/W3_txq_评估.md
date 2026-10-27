@@ -65,8 +65,12 @@
 ## 6 门禁复跑（§1c W3 行）
 
 ```
-$ 调用点级对账（权威口径=红队机器复跑，勿手写计数）：四函数调用点级实测 12 常态+LPBK 3==15 命中，§1 全覆盖零幻影零漏报（§1 表 10 push/consume 行+H3/E3 tick 两行）
-$ diff 双端 comm.c → 仅 W7 注释 1 行
-$ grep MAX_TXQ 双端 comm.h → 16 / 8（§3 定差异在案）
-$ grep -rn comm_txq_push_front 全库 → 0 真调用（死代码坐实，复跑命令即证据）
+# 1) 调用点级对账（权威口径=红队机器复跑 15 命中；逐行归属见 §1）
+grep -rnE 'comm_send\(|comm_txq_push|comm_poll_tx\(|comm_tick|link_send_frame_mt|link_set_param|link_send_cmd|link_request_registry' project_tcs esp32 --include=*.c | grep -v build | wc -l
+# 2) 双端同源（除 W7 注释行）
+diff <(sed 's/\s*$//' project_tcs/App/comm/comm.c) <(sed 's/\s*$//' esp32/components/tcs_link/comm.c) | head -4
+# 3) 双端定差异
+grep -n 'define MAX_TXQ' project_tcs/App/comm/comm.h esp32/components/tcs_link/comm.h
+# 4) push_front 死码已删（W3-A 发现→终审 MF-8 执行）
+grep -rn 'comm_txq_push_front' project_tcs esp32 --include=*.c --include=*.h | wc -l
 ```

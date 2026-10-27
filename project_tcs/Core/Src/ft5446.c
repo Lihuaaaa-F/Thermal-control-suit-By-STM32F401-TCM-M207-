@@ -1,7 +1,7 @@
 /**
- * ft5446.c — FT5446/FT5206 触摸驱动实现（M3，软件 I2C bit-bang）
- *
- * 整体重写为软件 bit-bang，抄官方 LVGL 例程 ctiic.c + ft5206.c 原码：
+ * ft5446.c — FT5446/FT5206 触摸驱动实现（M3；**W1a 起传输层=ST HAL I2C4 缺省**，
+ * 软件 bit-bang 旧实现按册 §2.2 条4 以 FT5446_BITBANG 宏保留一个版本期）。
+ * 寄存器序列抄官方 LVGL 例程 ft5206.c 原码；位bang 域抄 ctiic.c：
  *   - SCL=PD12 推挽、SDA=PD13 开漏+上拉
  *   - ct_iic_start/stop/wait_ack/ack/nack/send_byte/read_byte（抄原码）
  *   - ft5206_wr_reg/rd_reg/ft5206_init/ft5206_scan（抄原码，FT5446 同协议）

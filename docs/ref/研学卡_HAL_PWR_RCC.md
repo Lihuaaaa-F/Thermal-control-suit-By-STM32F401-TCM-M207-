@@ -28,11 +28,11 @@
 
 ```bash
 grep -rnE "HAL_RCC_|HAL_PWR_" project_tcs/App project_tcs/Core/Src --include=*.c
-# → 40 命中（2026-10-27 实测），下表 40 行逐一对应
+# → 42 命中（HEAD ec93db0 锚定；含 W1a 两时钟使能），下表 42 行逐一对应
 ```
 
 vendor 域说明：`App/rtt/`（SEGGER RTT vendor 五文件）同一 pattern 单独跑=**0 命中**（无需列行）。
-补充（pattern 外，供审计）：`grep -rnE "HAL_PWREx_" project_tcs/App project_tcs/Core/Src --include=*.c` → **1 命中**：Core/Src/main.c:320 `HAL_PWREx_ConfigSupply(PWR_LDO_SUPPLY)`（前缀为 `HAL_PWREx_` 不匹配 `HAL_PWR_`，故不在 40 行内）。
+补充（pattern 外，供审计）：`grep -rnE "HAL_PWREx_" project_tcs/App project_tcs/Core/Src --include=*.c` → **1 命中**：Core/Src/main.c:317 `HAL_PWREx_ConfigSupply(PWR_LDO_SUPPLY)`（前缀为 `HAL_PWREx_` 不匹配 `HAL_PWR_`，故不在 40 行内）。
 
 | # | 文件:行 | API | 语义一句话 |
 |---|---|---|---|
@@ -41,8 +41,8 @@ vendor 域说明：`App/rtt/`（SEGGER RTT vendor 五文件）同一 pattern 单
 | 3 | project_tcs/App/iwdg/iwdg.c:30 | __HAL_RCC_GET_FLAG(RCC_FLAG_LSIRDY) | 等待循环内复查 LSIRDY（volatile 循环，最多 ~30ms 兜底） |
 | 4 | project_tcs/App/eeprom/eeprom.c:58 | __HAL_RCC_GPIOH_CLK_ENABLE() | EEPROM 软件 I2C 引脚组（GPIOH）时钟使能 |
 | 5 | project_tcs/App/tcs/console.c:556 | __HAL_RCC_CLEAR_RESET_FLAGS() | 复位源解析打印后清全部复位标志（防下次上电误读旧源） |
-| 6 | project_tcs/Core/Src/ft5446.c:151 | __HAL_RCC_GPIOD_CLK_ENABLE() | 触摸 bit-bang SCL/SDA（PD12/PD13）引脚时钟（ct_iic_init） |
-| 7 | project_tcs/Core/Src/ft5446.c:336 | __HAL_RCC_GPIOH_CLK_ENABLE() | 触摸 RST/INT（PH6/PH7）引脚时钟（ft5446_init） |
+| 6 | project_tcs/Core/Src/ft5446.c:226 | __HAL_RCC_GPIOD_CLK_ENABLE() | 触摸 bit-bang SCL/SDA（PD12/PD13）引脚时钟（ct_iic_init） |
+| 7 | project_tcs/Core/Src/ft5446.c:439 | __HAL_RCC_GPIOH_CLK_ENABLE() | 触摸 RST/INT（PH6/PH7）引脚时钟（ft5446_init） |
 | 8 | project_tcs/Core/Src/keypad.c:32 | __HAL_RCC_GPIOC_CLK_ENABLE() | 矩阵键盘行端口（GPIOC）时钟 |
 | 9 | project_tcs/Core/Src/keypad.c:33 | __HAL_RCC_GPIOD_CLK_ENABLE() | 矩阵键盘列端口（GPIOD）时钟 |
 | 10 | project_tcs/Core/Src/stm32h7xx_hal_msp.c:17 | __HAL_RCC_SYSCFG_CLK_ENABLE() | HAL_MspInit 内开 SYSCFG 时钟（系统配置域，EXTI/补偿依赖） |

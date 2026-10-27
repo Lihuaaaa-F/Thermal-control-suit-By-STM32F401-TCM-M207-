@@ -180,17 +180,17 @@ else
     echo "[card_paths] SKIP: python not found"; FAIL=1
 fi
 
-# W4.2/R7：vendor RTT 完整性门禁（VENDOR_SHA256.txt CRLF 列 sha256sum -c 式机器比对）
+# W4.2/R7：vendor RTT 完整性门禁（VENDOR_SHA256.txt CRLF 列 sha256sum 式机器比对；
+# 终审 R-1：行尾 CR 用 tr 剥离，防 autocrlf/干净克隆把 \r 带进会话名）
 VSHA=App/rtt/vendor/VENDOR_SHA256.txt
 if [ -f "$VSHA" ]; then
     ok=1
-    while read -r h lf name; do
-        h=${h%$'
-'}; lf=${lf%$'
-'}; name=${name%$'
-'}
-        case "$h" in ''|\#*) continue;; esac
-        want=$(echo "$h" | tr -d ' ')
+    while IFS= read -r line; do
+        line=$(printf '%s' "$line" | tr -d '\r')
+        case "$line" in ''|\#*) continue;; esac
+        h=$(printf '%s' "$line" | cut -d' ' -f1)
+        name=$(printf '%s' "$line" | awk '{print $NF}')
+        want=$(printf '%s' "$h" | tr -d ' ')
         got=$(sha256sum "App/rtt/vendor/$name" | cut -d' ' -f1)
         if [ "$want" != "$got" ]; then
             echo "[vendor_sha] FAIL: $name $got != $want"; ok=0

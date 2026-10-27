@@ -72,7 +72,7 @@
 ## 附录 B：基线命令（复跑）
 ```bash
 grep -rnE 'HAL_UART_Receive_IT[ ]*\(|HAL_UART_Transmit[ ]*\(|HAL_I2C_Mem_Read[ ]*\(|httpd_ws_send_frame_async[ ]*\(|nvs_get_blob[ ]*\(|nvs_set_blob[ ]*\(|nvs_commit[ ]*\(|xTaskCreatePinnedToCore[ ]*\(|esp_task_wdt_add[ ]*\(|esp_task_wdt_reset[ ]*\(|ledc_channel_config[ ]*\(|ledc_set_duty[ ]*\(|ledc_update_duty[ ]*\(|esp_wifi_set_config[ ]*\(|uart_driver_install[ ]*\(|IWDG1->KR[ ]*=' project_tcs/App project_tcs/Core/Src esp32/components esp32/main --include=*.c | wc -l
-# → 40（2026-10-26 实测）；本表数据行 41 ≥ 40（40 命中逐行有对应+D3 增补 1）
+# → 41（W1a 后含 ft5446 三新调用点，2026-10-27 实测）；本表数据行 44 ≥ 41（41 命中逐行+3 新行）
 ```
 
 ## 附录 C：三路 UART 错误自愈 Abort 配对门禁（红队建议采纳，W 线新增）

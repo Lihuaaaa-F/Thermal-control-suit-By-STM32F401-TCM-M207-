@@ -27,7 +27,7 @@
 
 ```bash
 grep -rnE "HAL_I2C_" project_tcs/App project_tcs/Core/Src --include=*.c
-# → 5 命中（2026-10-27 实测），下表 5 行逐一对应
+# → 10 命中（HEAD ec93db0 锚定；含 W1a 五调用点），下表 10 行逐一对应
 ```
 
 vendor 域说明：`App/rtt/`（SEGGER RTT vendor 五文件）同一 pattern 单独跑=**0 命中**（RTT 不触 HAL，无需列行）。
@@ -37,8 +37,8 @@ vendor 域说明：`App/rtt/`（SEGGER RTT vendor 五文件）同一 pattern 单
 | 1 | project_tcs/App/tcs/tmp117.c:5 | HAL_I2C_Mem_Read（注释提及） | 文件头注：声明本模块用 Mem_Read 读 0x00 寄存器 2B 大端（非调用点） |
 | 2 | project_tcs/App/tcs/tmp117.c:111 | HAL_I2C_Mem_Read(s_i2c, TMP117_ADDR7<<1, TMP117_REG_DEVID, …, 20u) | 上电自检读 DEVID 寄存器，ADDR7<<1=8bit 写地址、超时 20ms、返值判 HAL_OK（W10 表 #12） |
 | 3 | project_tcs/App/tcs/tmp117.c:147 | HAL_I2C_Mem_Read(…, TMP117_REG_TEMP, …, 20u) | 周期采样读温度寄存器，同款参数面（W10 表 #13） |
-| 4 | project_tcs/Core/Src/main.c:440 | HAL_I2C_MspInit（用户实现回调） | I2C1 实例的 Msp 配置：开 I2C1+GPIOB 时钟，PB8/PB9 配 AF4_OD+上拉（板上无上拉→飞线 4.7kΩ，内部上拉兜底） |
-| 5 | project_tcs/Core/Src/main.c:466 | HAL_I2C_Init(&hi2c_tmp117) | I2C1 句柄初始化（MX_I2C1_Init 内），返值 ≠HAL_OK 即 Error_Handler |
+| 4 | project_tcs/Core/Src/main.c:437 | HAL_I2C_MspInit（用户实现回调） | I2C1 实例的 Msp 配置：开 I2C1+GPIOB 时钟，PB8/PB9 配 AF4_OD+上拉（板上无上拉→飞线 4.7kΩ，内部上拉兜底） |
+| 5 | project_tcs/Core/Src/main.c:463 | HAL_I2C_Init(&hi2c_tmp117) | I2C1 句柄初始化（MX_I2C1_Init 内），返值 ≠HAL_OK 即 Error_Handler |
 
 | 6 | project_tcs/Core/Src/ft5446.c:132 | HAL_I2C_Init(&hi2c4) | W1a：I2C4 初始化（Timing=官方计算器现算，PCLK4 内核） |
 | 7 | project_tcs/Core/Src/ft5446.c:133 | HAL_I2CEx_ConfigAnalogFilter | W1a：模拟滤波开（官方 How-to-use 第 3 步） |

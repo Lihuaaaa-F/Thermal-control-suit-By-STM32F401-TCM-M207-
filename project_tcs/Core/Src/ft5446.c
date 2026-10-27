@@ -51,7 +51,8 @@ void ft5446_map_raw(uint16_t xr, uint16_t yr, int *sx, int *sy)
 _Static_assert(LCD_WIDTH == 1024 && LCD_HEIGHT == 600,
                "ft5446 map fallback dims must match ltdc.h");
 
-/* ====== 软件 I2C 引脚（抄 ctiic.h，SCL=PD12/SDA=PD13）====== */
+#ifdef FT5446_BITBANG
+/* ====== 软件 I2C 引脚（抄 ctiic.h，SCL=PD12/SDA=PD13；仅位bang域）====== */
 #define CT_IIC_SCL_PORT   GPIOD
 #define CT_IIC_SCL_PIN    GPIO_PIN_12
 #define CT_IIC_SDA_PORT   GPIOD
@@ -60,6 +61,7 @@ _Static_assert(LCD_WIDTH == 1024 && LCD_HEIGHT == 600,
 #define CT_IIC_SCL(x)  HAL_GPIO_WritePin(CT_IIC_SCL_PORT, CT_IIC_SCL_PIN, (x)?GPIO_PIN_SET:GPIO_PIN_RESET)
 #define CT_IIC_SDA(x)  HAL_GPIO_WritePin(CT_IIC_SDA_PORT, CT_IIC_SDA_PIN, (x)?GPIO_PIN_SET:GPIO_PIN_RESET)
 #define CT_READ_SDA    HAL_GPIO_ReadPin(CT_IIC_SDA_PORT, CT_IIC_SDA_PIN)
+#endif /* FT5446_BITBANG：引脚宏 */
 
 /* ====== TP_INT/RST（抄 ft5206.h，INT=PH7/RST=PH6）====== */
 #define FT_RST_PORT   GPIOH
@@ -68,18 +70,88 @@ _Static_assert(LCD_WIDTH == 1024 && LCD_HEIGHT == 600,
 #define FT_INT_PIN    GPIO_PIN_7
 #define FT_RST(x)     HAL_GPIO_WritePin(FT_RST_PORT, FT_RST_PIN, (x)?GPIO_PIN_SET:GPIO_PIN_RESET)
 
+/* ====== W1a（v13.4 §2）：传输层 HAL I2C4 化 ==========
+ * 默认走 ST HAL I2C4（PD12=SCL/PD13=SDA，AF4_OD，内核=PCLK4）；
+ * 定义 FT5446_BITBANG 则保留旧位bang实现一个版本期（册 §2.2 条 4）。
+ * 时序值出处（册 §2.2"官方数值唯一合法来源"）：ST 官方计算代码
+ * i2c_timing_utility.c（CubeH7 官方仓 @8ec3113d，NUCLEO-H723ZG I2C 例程自带，
+ * 零改动 vendor 于 Core/Src/，出处/SHA256=docs/ref/CubeH7_I2C/UPSTREAM.md），
+ * init 期以实际 PCLK4 频率×目标速率（FT5446_I2C_FAST=400k，否则 100k）现算
+ * ——比静态常数更强的官方出处：ST 自己的计算器在本工程执行。 */
+/* #define FT5446_BITBANG */   /* 一个版本期后删（册 §2.2 条 4）*/
+#define FT5446_I2C_TIMEOUT_MS  20u    /* 同 tmp117 Mem_Read 超时口径（W10 #12-13）*/
+
+#ifndef FT5446_BITBANG
+/* 档位=真编译开关：缺省 400k；-DFT5446_I2C_100K 切 100k 档（W1d 决策用，
+ * 红队 W1a-F6 勘正原注释宏非开关）*/
+
+static I2C_HandleTypeDef hi2c4;
+
+/* ST 官方时序计算器原文链入（聚合包含，W4.2 同款零 CMake 改动路径）。
+ * 约束（红队 W1a-F7/F11）：①I2C_GetTiming 有静态累加器，全工程每次启动只能调用
+ * 一次（本工程仅 ft5446_i2c4_init 单点调用；运行时降档须先重启或自行重置）；
+ * ②本 .c 严禁再入 CMake 源列表（否则 I2C_GetTiming 重复定义）。*/
+#include "i2c_timing_utility.c"
+
+static int ft5446_i2c4_init(void)
+{
+    /* 内核时钟：I2C4←PCLK4（D3PCLK1=120MHz@本树：480/2(AHB)=240→APB4/2=120；
+     * 无 PLL3 冲突——PLL3 已归 LTDC 50MHz）*/
+    RCC_PeriphCLKInitTypeDef rp = {0};
+    rp.PeriphClockSelection = RCC_PERIPHCLK_I2C4;
+    rp.I2c4ClockSelection = RCC_I2C4CLKSOURCE_D3PCLK1;
+    if (HAL_RCCEx_PeriphCLKConfig(&rp) != HAL_OK) return -1;
+
+    __HAL_RCC_I2C4_CLK_ENABLE();
+    __HAL_RCC_GPIOD_CLK_ENABLE();
+
+    /* PD12/PD13 AF4_OD + 内部上拉（沿用位bang期配置）；速度 HIGH（400k 档边沿）*/
+    GPIO_InitTypeDef gi = {0};
+    gi.Pin = GPIO_PIN_12 | GPIO_PIN_13;
+    gi.Mode = GPIO_MODE_AF_OD;
+    gi.Pull = GPIO_PULLUP;
+    gi.Speed = GPIO_SPEED_FREQ_HIGH;
+    gi.Alternate = GPIO_AF4_I2C4;
+    HAL_GPIO_Init(GPIOD, &gi);
+
+    uint32_t target =
+#ifdef FT5446_I2C_100K
+        100000u;
+#else
+        400000u;
+#endif
+    hi2c4.Instance = I2C4;
+    hi2c4.Init.Timing = I2C_GetTiming(HAL_RCCEx_GetD3PCLK1Freq(), target);
+    hi2c4.Init.OwnAddress1 = 0;
+    hi2c4.Init.AddressingMode = I2C_ADDRESSINGMODE_7BIT;
+    hi2c4.Init.DualAddressMode = I2C_DUALADDRESS_DISABLE;
+    hi2c4.Init.OwnAddress2 = 0;
+    hi2c4.Init.OwnAddress2Masks = I2C_OA2_NOMASK;
+    hi2c4.Init.GeneralCallMode = I2C_GENERALCALL_DISABLE;
+    hi2c4.Init.NoStretchMode = I2C_NOSTRETCH_DISABLE;
+    if (HAL_I2C_Init(&hi2c4) != HAL_OK) return -1;
+    if (HAL_I2CEx_ConfigAnalogFilter(&hi2c4, I2C_ANALOGFILTER_ENABLE) != HAL_OK) return -1;
+    SEGGER_RTT_printf(0, "RTT: i2c4 up pclk4=%luHz target=%luHz timing=0x%08lx\n",
+                      (unsigned long)HAL_RCCEx_GetD3PCLK1Freq(),
+                      (unsigned long)target, (unsigned long)hi2c4.Init.Timing);
+    return 0;
+}
+#endif /* !FT5446_BITBANG */
+
 static int g_touch_ok = 0;
 static uint16_t g_fw_version;          /* T-11：IC 固件版本（init 锁存）*/
 uint16_t ft5446_fw_version(void) { return g_fw_version; }
 volatile uint32_t g_ft5446_nak_cnt;    /* M1：读事务地址/寄存器/读相位 NAK 计数 */
 volatile uint32_t g_ft5446_read_cnt;   /* M1：读事务总数（NAK 率分母）*/
 
+#ifdef FT5446_BITBANG
 static void ct_iic_init(void);
 static void ct_iic_stop(void);
 static void ct_iic_start(void);
 static uint8_t ct_iic_wait_ack(void);
 static void ct_iic_send_byte(uint8_t data);
 static uint8_t ct_iic_read_byte(uint8_t ack);
+#endif /* 位bang 声明域 */
 static uint8_t ft5446_probe(uint8_t wr_cmd);
 
 /* ====== raw 日志环（M0）====== */
@@ -117,6 +189,7 @@ static void ftlog_push(uint32_t t_ms, int16_t xr, int16_t yr,
  * 不用 DWT（DWT 在某些 H743 配置下需解锁 LAR，未验证前不可靠）。
  * SysTick 由 HAL_Init 配成 1ms 中断、HCLK 时钟、递减计数。读 VAL 差值计时。
  * g_fac_us = SystemCoreClock/1000000（CPU 核频，H743=480）。*/
+#ifdef FT5446_BITBANG   /* 位bang 域：HAL 态 delay_us 系列全未用（红队 W1a-F8）*/
 static uint32_t g_fac_us = 480;   /* delay_init 前 HAL 还没改 SystemCoreClock，默认 480 */
 static void delay_us_init(void)
 {
@@ -138,7 +211,9 @@ static void delay_us(uint32_t nus)
         }
     }
 }
+#endif /* FT5446_BITBANG：delay_us 定义域 */
 
+#ifdef FT5446_BITBANG
 static void ct_iic_delay(void)
 {
     /* I2C 半周期。官方例程 delay_us(2)≈250kHz。*/
@@ -248,11 +323,13 @@ static uint8_t ct_iic_read_byte(uint8_t ack)
     }
     return receive;
 }
+#endif /* FT5446_BITBANG：位bang 实现域 */
 
-/* ====== FT5446 寄存器读写（抄 ft5206.c）====== */
+/* ====== FT5446 寄存器读写（抄 ft5206.c；W1a 起双路径）====== */
 
 static uint8_t ft5446_wr_reg(uint8_t reg, uint8_t *buf, uint8_t len)
 {
+#ifdef FT5446_BITBANG
     ct_iic_start();
     ct_iic_send_byte(FT5446_CMD_WR);
     if (ct_iic_wait_ack()) { ct_iic_stop(); return 1; }
@@ -264,11 +341,17 @@ static uint8_t ft5446_wr_reg(uint8_t reg, uint8_t *buf, uint8_t len)
     }
     ct_iic_stop();
     return 0;
+#else   /* W1a：HAL I2C4 寄存器写（官方 Mem_Write 模式，册 §2.1）*/
+    return (HAL_I2C_Mem_Write(&hi2c4, FT5446_CMD_WR, reg,
+                              I2C_MEMADD_SIZE_8BIT, buf, len,
+                              FT5446_I2C_TIMEOUT_MS) == HAL_OK) ? 0 : 1;
+#endif
 }
 
 static void ft5446_rd_reg(uint8_t reg, uint8_t *buf, uint8_t len)
 {
     g_ft5446_read_cnt++;
+#ifdef FT5446_BITBANG
     ct_iic_start();
     ct_iic_send_byte(FT5446_CMD_WR);
     if (ct_iic_wait_ack()) { ct_iic_stop(); g_ft5446_nak_cnt++; return; }
@@ -281,16 +364,31 @@ static void ft5446_rd_reg(uint8_t reg, uint8_t *buf, uint8_t len)
         buf[i] = ct_iic_read_byte(i == (len - 1) ? 0 : 1);
     }
     ct_iic_stop();
+#else   /* W1a：HAL Mem_Read（写 reg→Sr→读 N 字节与位bang序列逐位等价，册 §2.1）；
+         * NAK 计数改由 HAL 返回值累加（g_ft5446_nak_cnt=400k 决策数据源，保留）*/
+    if (HAL_I2C_Mem_Read(&hi2c4, FT5446_CMD_WR, reg,
+                         I2C_MEMADD_SIZE_8BIT, buf, len,
+                         FT5446_I2C_TIMEOUT_MS) != HAL_OK) {
+        /* W1a-F5：仅真 NAK(AF) 计 nak_cnt（W1d 0.5% 阈值口径）；超时/总线错另计 */
+        if (hi2c4.ErrorCode & HAL_I2C_ERROR_AF) g_ft5446_nak_cnt++;
+    }
+#endif
 }
 
 /* 探测指定写地址是否 ACK（不发数据，只 START+addr+STOP）。0=ACK在线，1=NAK。*/
 static uint8_t ft5446_probe(uint8_t wr_cmd)
 {
+#ifdef FT5446_BITBANG
     ct_iic_start();
     ct_iic_send_byte(wr_cmd);
     uint8_t nak = ct_iic_wait_ack();
     ct_iic_stop();
     return nak;
+#else   /* HAL：官方 IsDeviceReady——DevAddress 语义与其他 HAL I2C API 相同，
+         * 要求 8-bit 左移形式（红队 W1a-F1 坐实：曾误传 wr_cmd>>1 致总线寻址减半）*/
+    return (HAL_I2C_IsDeviceReady(&hi2c4, (uint16_t)wr_cmd, 1,
+                                  FT5446_I2C_TIMEOUT_MS) == HAL_OK) ? 0 : 1;
+#endif
 }
 
 /* ====== M3 触摸硬件诊断（2026-07-26 重验）======
@@ -300,7 +398,8 @@ static uint8_t ft5446_probe(uint8_t wr_cmd)
  *   3. 全地址扫描 0x08..0x7E：找任何 ACK 设备（防 IC 实际地址非 0x38）*/
 static void ft5446_diagnose(void)
 {
-    /* 1. SDA/SCL 释放，读空闲电平 */
+#ifdef FT5446_BITBANG
+    /* 1. SDA/SCL 释放，读空闲电平（位bang GPIO 直驱专属诊断；HAL 态引脚归 AF）*/
     CT_IIC_SDA(1);
     CT_IIC_SCL(1);
     delay_us(10);
@@ -313,6 +412,10 @@ static void ft5446_diagnose(void)
     CT_IIC_SDA(1); delay_us(10);
     uint8_t sda_high = CT_READ_SDA;
     SEGGER_RTT_printf(0, "RTT: tp_diag sda_drive low=%d high=%d (expect 0,1)\n", sda_low, sda_high);
+#else
+    /* HAL 态：SDA 直驱诊断不适用（PD12/13 归 AF4），以 IsDeviceReady 扫描代偿 */
+    SEGGER_RTT_printf(0, "RTT: tp_diag (HAL I2C4 mode: SDA direct-drive N/A, AF-owned pins)\n");
+#endif
 
     /* 3. 全地址扫描 */
     uint8_t found = 0;
@@ -334,7 +437,9 @@ int ft5446_init(void)
     uint8_t ver_ok = 0;
 
     __HAL_RCC_GPIOH_CLK_ENABLE();
-    delay_us_init();
+#ifdef FT5446_BITBANG
+    delay_us_init();          /* 位bang 域专属（红队 W1a-F8）*/
+#endif
 
     /* RST=PH6 推挽输出 + 上拉 */
     gi.Pin = FT_RST_PIN;
@@ -350,9 +455,17 @@ int ft5446_init(void)
     gi.Speed = GPIO_SPEED_FREQ_HIGH;
     HAL_GPIO_Init(FT_INT_PORT, &gi);
 
+#ifdef FT5446_BITBANG
     ct_iic_init();
+#else
+    if (ft5446_i2c4_init() != 0) {
+        SEGGER_RTT_printf(0, "RTT: i2c4 init FAIL (clock/pin/handle)\n");
+        return -3;
+    }
+#endif
 
-    /* 复位序列（抄官方 ft5206_init）：RST(0) 20ms → RST(1) → 等 300ms ROM 加载 */
+    /* 复位序列（抄官方 ft5206_init）：RST(0) 20ms → RST(1) → 等 300ms ROM 加载
+     * （W1g 议题：300ms 富余性实测留待板上，序列不动）*/
     FT_RST(0);
     HAL_Delay(20);
     FT_RST(1);

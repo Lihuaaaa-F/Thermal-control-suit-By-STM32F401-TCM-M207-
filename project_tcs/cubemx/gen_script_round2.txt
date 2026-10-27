@@ -1,0 +1,5 @@
+config load D:/Espressif/ws/tcs/project_tcs/cubemx/tcs_i2c4.ioc
+project name tcs_i2c4 D:/Espressif/ws/tcs/project_tcs/cubemx
+project toolchain Makefile
+project generate
+exit

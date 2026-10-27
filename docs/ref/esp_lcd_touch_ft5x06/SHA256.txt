@@ -1,0 +1,5 @@
+70cc85f3f36ceed985133ac4d518d375b95efe3f9c04b915fc5fcdf7a9017989 *esp_lcd_touch_ft5x06.c
+# 获取方式（官方组件管理器，2026-10-27）：临时工程 main/idf_component.yml 依赖
+#   espressif/esp_lcd_touch_ft5x06: "==1.1.1" → idf.py reconfigure → managed_components 拷贝
+# 用途（册 §2.4）：FT5446 同族官方件，仅作寄存器序列/时钟档对照参考，不引入 H743 构建
+# 许可：见 license.txt（Apache-2.0）

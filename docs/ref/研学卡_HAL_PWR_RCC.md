@@ -1,7 +1,7 @@
 # 研学卡：HAL_PWR / HAL_RCC（电源域与时钟树 · H743 480MHz 主频 · LSI 供给 IWDG）
 
 > 任务书 v13.4 §7b W8 · 制卡 2026-10-27 · 基线=git HEAD `43e5f4b` + G 线未提交工作区（ltdc.c 为 M 态，本卡 ltdc.c 行号=G 线工作区快照）
-> 门禁：③ 节表行数 == grep 命中数（本卡 **40 行 == 40 命中** ✓）
+> 门禁：③ 节表行数 == grep 命中数（本卡 **42 行 == 42 命中** ✓）
 
 ## ① 官方文档与版本章节
 
@@ -76,6 +76,9 @@ vendor 域说明：`App/rtt/`（SEGGER RTT vendor 五文件）同一 pattern 单
 | 38 | project_tcs/Core/Src/main.c:434 | __HAL_RCC_GPIOB_CLK_ENABLE() | USART3 引脚（GPIOB）时钟 |
 | 39 | project_tcs/Core/Src/main.c:443 | __HAL_RCC_I2C1_CLK_ENABLE() | 温度 I2C1 内核时钟（HAL_I2C_MspInit） |
 | 40 | project_tcs/Core/Src/main.c:444 | __HAL_RCC_GPIOB_CLK_ENABLE() | I2C1 引脚 PB8/PB9（GPIOB）时钟 |
+
+| 41 | project_tcs/Core/Src/ft5446.c:105 | __HAL_RCC_I2C4_CLK_ENABLE | W1a：I2C4 外设时钟 |
+| 42 | project_tcs/Core/Src/ft5446.c:106 | __HAL_RCC_GPIOD_CLK_ENABLE | W1a：I2C4 引脚组时钟（:103 PeriphCLKConfig 属 HAL_RCCEx_ 前缀不入本 grep，已注） |
 
 ## ④ 对照结论
 

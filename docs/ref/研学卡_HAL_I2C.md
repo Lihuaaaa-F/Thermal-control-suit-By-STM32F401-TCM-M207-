@@ -1,7 +1,7 @@
 # 研学卡：HAL_I2C（I2C 组件 · tmp117 温度传感器通路）
 
 > 任务书 v13.4 §7b W8 · 制卡 2026-10-27 · 基线=git HEAD `43e5f4b` + 工作区（G 线改动不触 I2C 域）
-> 门禁：③ 节表行数 == grep 命中数（本卡 **5 行 == 5 命中** ✓）
+> 门禁：③ 节表行数 == grep 命中数（本卡 **10 行 == 10 命中** ✓（W1a 后含 ft5446 HAL I2C4 五调用点））
 
 ## ① 官方文档与版本章节
 
@@ -39,6 +39,12 @@ vendor 域说明：`App/rtt/`（SEGGER RTT vendor 五文件）同一 pattern 单
 | 3 | project_tcs/App/tcs/tmp117.c:147 | HAL_I2C_Mem_Read(…, TMP117_REG_TEMP, …, 20u) | 周期采样读温度寄存器，同款参数面（W10 表 #13） |
 | 4 | project_tcs/Core/Src/main.c:440 | HAL_I2C_MspInit（用户实现回调） | I2C1 实例的 Msp 配置：开 I2C1+GPIOB 时钟，PB8/PB9 配 AF4_OD+上拉（板上无上拉→飞线 4.7kΩ，内部上拉兜底） |
 | 5 | project_tcs/Core/Src/main.c:466 | HAL_I2C_Init(&hi2c_tmp117) | I2C1 句柄初始化（MX_I2C1_Init 内），返值 ≠HAL_OK 即 Error_Handler |
+
+| 6 | project_tcs/Core/Src/ft5446.c:132 | HAL_I2C_Init(&hi2c4) | W1a：I2C4 初始化（Timing=官方计算器现算，PCLK4 内核） |
+| 7 | project_tcs/Core/Src/ft5446.c:133 | HAL_I2CEx_ConfigAnalogFilter | W1a：模拟滤波开（官方 How-to-use 第 3 步） |
+| 8 | project_tcs/Core/Src/ft5446.c:345 | HAL_I2C_Mem_Write | W1a：ft5446_wr_reg（官方 Mem_Write 模式，20ms 帽） |
+| 9 | project_tcs/Core/Src/ft5446.c:369 | HAL_I2C_Mem_Read | W1a：ft5446_rd_reg（Mem_Read 序=写reg→Sr→读N；NAK 仅计 AF） |
+| 10 | project_tcs/Core/Src/ft5446.c:389 | HAL_I2C_IsDeviceReady | W1a：ft5446_probe（DevAddress=8bit 形式，F1 勘正后） |
 
 ## ④ 对照结论
 

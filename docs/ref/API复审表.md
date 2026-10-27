@@ -2,7 +2,7 @@
 
 日期：2026-10-26。范围=册定首批 10 项+grep 扩全。**规则（红队最差执行者测试采纳）**：一行=一个调用点（禁分组合并）；每行出处列=可点开的官方源路径；门禁=行数 ≥ 基线命中数。
 
-**基线命令（附录 B 全文）实测命中 40；本表数据行 41（40 命中逐行对应+红队 D3 增补 link 错误路径 1 行）≥ 40 ✓**
+**基线命令（附录 B 全文）实测命中 41（W1a 后含 ft5446 三新调用点）；本表数据行 44（41 旧+3 新 W1a 行）=逐行对应 ✓（终审 MF-2 整改版）**
 
 官方语义出处缩写：〔UART-HAL〕= Drivers/STM32H7xx_HAL_Driver/Src/stm32h7xx_hal_uart.c；〔I2C-HAL〕= 同目录 _i2c.c；〔IWDG-HAL〕= Drivers/STM32H7xx_HAL_Driver/Inc/stm32h7xx_hal_iwdg.h（本工程未拉 iwdc.c 源，Inc 头为语义权威）；〔httpd〕= IDF v5.5.5 components/esp_http_server/include/esp_http_server.h；〔nvs〕= components/nvs_flash/include/nvs.h；〔tasks〕= IDF FreeRTOS（components/freertos/FreeRTOS-Kernel/include/freertos/idf_additions.h："NUMBER OF BYTES…differs from vanilla FreeRTOS"）；〔wdt〕= components/esp_system/include/esp_task_wdt.h；〔ledc〕= components/esp_driver_ledc/include/driver/ledc.h；〔wifi〕= components/esp_wifi/include/esp_wifi_types.h；〔uart-drv〕= components/esp_driver_uart/include/driver/uart.h。
 
@@ -56,6 +56,9 @@
 | 39 | main/r1e_probe.c:166 nvs_commit | 同上 | 同上 | ✅正确 |
 | 40 | main/r1e_probe.c:178 nvs_commit | 同上 | 同上 | ✅正确 |
 | 41 | main/r1e_probe.c:205 nvs_commit | 同上 | 同上 | ✅正确 |
+| 42 | project_tcs/Core/Src/ft5446.c:345 HAL_I2C_Mem_Write | 〔I2C-HAL〕Mem_Write：DevAddress=8bit 移位/超时 ms/返 HAL_OK | W1a：ft5446_wr_reg（20ms 帽=同 #12 口径） | ✅正确 |
+| 43 | project_tcs/Core/Src/ft5446.c:369 HAL_I2C_Mem_Read | 同 #12 | W1a：ft5446_rd_reg（写reg→Sr→读N 与位bang 逐位等价=册 §2.1）；**NAK 仅计 ErrorCode&HAL_I2C_ERROR_AF**（F5 整改，W1d 阈值口径纯净） | ✅正确 |
+| 44 | project_tcs/Core/Src/ft5446.c:389 HAL_I2C_IsDeviceReady | 〔I2C-HAL〕IsDeviceReady：DevAddress **8bit 形式**/Trials/Timeout | W1a：ft5446_probe（F1 曾误传 wr_cmd>>1 致寻址减半，已修+ELF 反汇编复验） | ✅正确（整改后） |
 
 ## 三、发现汇总与分流
 

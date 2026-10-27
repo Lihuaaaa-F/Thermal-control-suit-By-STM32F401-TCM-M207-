@@ -30,8 +30,8 @@
 | §1c-3 TIMINGR 一致性 | L1（变体） | 计算器=官方源码零改动（SHA256 在案）+运行时打点行设计；cubemx_timing.json 式静态比对不适用（无静态值） | 出处链在档 |
 | §1c-4 perf 平均+最坏双组 | **L3 ⏸** | 板上（W1c/T-12 批） | 挂账 |
 | §1c-5 A/B 对拍 20 行 CSV | **L3 ⏸** | 板上（W1b） | 挂账 |
-| 零警告编译 | L1 | build+build-sim 0 error，**新警告 0**（存量 3 条=RWX/qrcodegen.h:359/tcs_ui.c:172 均在 W1a diff 外） | ✓ |
-| map 体积对比 | L1 | text 163600→**164520（+920B=HAL I2C4+计算器）**；bss 68512→71160（+2.6KB=hi2c4+计算器静态表） | 在案 |
+| 零警告编译 | L1 | build+build-sim 0 error，**新警告 0**（存量 6 行/4 类=RWX/qrcodegen.h:359/qrcodegen.c:211,299/tcs_ui.c:172；终审 F-2 勘正原"3 条"） | ✓ |
+| map 体积对比 | L1 | text →**164520（增量 +912~+992B 视构建环境；干净树全量复测 +992B=终审 F-3）**；bss 68512→71160（+2.6KB=hi2c4+计算器静态表） | 在案 |
 | 位bang 保留期可编 | L1 | `gcc -DFT5446_BITBANG -c ft5446.c` 单 TU 编译 **0 error/0 warning**（/tmp/ft_bitbang.o 6.1K） | ✓ |
 | 上层零改动（册 §2.1 表末行） | L1 | touch_session/坐标映射/T-13 断言未触碰（diff 仅 ft5446.c 传输层+新增文件） | ✓ |
 
@@ -81,3 +81,23 @@ $ arm-none-eabi-gcc -DFT5446_BITBANG … -c ft5446.c            → 0 error/0 wa
 | F11[微瑕] 聚合包含重复定义风险 | 已注：ft5446.c include 处"严禁再入 CMake 源列表" | 同 F7 注释 |
 | F12[微瑕] LICENSE 无留档 | 已补：UPSTREAM 许可结论 BSD-3-Clause | UPSTREAM v2 |
 | F13[流程] 末动作 | 本关单 commit 落（代码+报告+红队+证据+台账） | git log |
+
+
+## 10 W1f 传输模式评估（册 §2.5；终审 MF-5 补做，非板依赖）
+
+| 模式 | 官方例程对照（CubeH7 仓 @8ec3113d） | 单次事务成本估算（7B 级短读@400k） | 结论 |
+|---|---|---|---|
+| **轮询（阻塞）** | I2C_TwoBoards_ComPolling（本工程采用，HAL 同步 API） | 总线时间 ≈ (1+8+1+9+8+1)×... 简化=addr+reg+重复起始+6B≈0.2ms；HAL 轮询开销≈数十 µs | **采用**：触摸轮询 10ms 节拍、单事务 ≤0.25ms 级，上下文切换开销（中断/DMA 路径 ≈5-15µs×2+ISR 调度）相对传输时长占比高，且引入并发状态机 |
+| 中断（IT） | I2C_TwoBoards_ComIT | 传输同 ≈0.2ms + ISR 进出+回调调度 | 不采用：为短事务引入 ISR 复杂度；主循环阻塞窗口已可接受（册 §2.3 WCET 约束 ≤250µs 正常路径） |
+| DMA | I2C_TwoBoards_ComDMA | 传输同 + DMA 通道配置/TC 中断 | 不采用：7B 级数据搬运 DMA 无收益（配置开销>搬运），且与 G 线 LTDC/DMA2D 资源占用并存 |
+
+**评估结论（册要求"含数字估算留档"）**：单事务总线时间 ~0.2ms ≫ 中断/DMA 固定开销占比的收益阈值；7 字节级短读场景**轮询=最优**（默认预期命中）。若未来改 50+ 字节块读（如整帧触控缓冲），按本表重估 IT/DMA。若实测中断模式更优才切换——本评估为 W1b 上板后保留复评窗口（结论留档于本表）。
+
+## 11 §2.4 材料补录（终审 MF-5）
+
+| 材料 | 状态 |
+|---|---|
+| CubeH7 I2C 例程 + 官方时序计算器 | ✅ docs/ref/CubeH7_I2C/（UPSTREAM@8ec3113d+SHA256） |
+| esp_lcd_touch_ft5x06 v1.1.1 源码 | ✅ docs/ref/esp_lcd_touch_ft5x06/（官方组件管理器 ==1.1.1 拉取；license.txt=Apache-2.0；仅对照不引入） |
+| FT5446 数据手册 400k 页码 | ⏸ 用户既有件（不在仓）——上板前由用户提供页码截图入 evidence |
+| H743 datasheet DS12110 PD12/13 AF4 截图 | ⏸ 外部 ST 文档（st.com 机器人墙）——替代证据已在案（gpio_ex.h AF 宏+RM0433 复用表经 HAL 头），截图随 W1b 补 |

@@ -185,6 +185,10 @@ VSHA=App/rtt/vendor/VENDOR_SHA256.txt
 if [ -f "$VSHA" ]; then
     ok=1
     while read -r h lf name; do
+        h=${h%$'
+'}; lf=${lf%$'
+'}; name=${name%$'
+'}
         case "$h" in ''|\#*) continue;; esac
         want=$(echo "$h" | tr -d ' ')
         got=$(sha256sum "App/rtt/vendor/$name" | cut -d' ' -f1)
@@ -195,6 +199,43 @@ if [ -f "$VSHA" ]; then
     [ "$ok" = 1 ] && echo "[vendor_sha] PASS (5 files)" || FAIL=1
 else
     echo "[vendor_sha] FAIL: $VSHA 缺失"; FAIL=1
+fi
+
+# MF-3（终审）：RTT printf 格式面门禁——F14(%f)/F16(%l) 归零（业务面，排除 App/rtt）
+FMTF=$(grep -rn "SEGGER_RTT_printf" App Core --include=*.c | grep -v "App/rtt/" | grep -cE "%[0-9.]*[efg]")
+FMTL=$(grep -rn "SEGGER_RTT_printf" App Core --include=*.c | grep -v "App/rtt/" | grep -cE "%[0-9.]*l[a-z]")
+if [ "$FMTF" -eq 0 ] && [ "$FMTL" -eq 0 ]; then
+    echo "[fmt_gate] PASS (%f=0 %l=0)"
+else
+    echo "[fmt_gate] FAIL: %f=$FMTF %l=$FMTL（浮点/长度修饰符须 snprintf 预格式化，见 F14/F16）"
+    FAIL=1
+fi
+
+# MF-1（终审）：研学卡 ③ 行数常驻门禁（基线文件 docs/ref/研学卡_行数基线.txt）
+CARD_BASE=../docs/ref/研学卡_行数基线.txt
+if [ -f "$CARD_BASE" ] && [ -n "$PYBIN" ]; then
+    if "$PYBIN" - "$CARD_BASE" <<'PYEOF2'
+import io,sys,subprocess,re,shutil
+GREP=shutil.which('grep') or 'grep'
+bad=0; n=0
+for line in io.open(sys.argv[1],encoding='utf-8'):
+    line=line.strip()
+    if not line or line.startswith('#'): continue
+    parts=line.split(';;')
+    if len(parts)!=4: continue
+    name,dirs,pat,want=parts[0],parts[1].split(),parts[2],int(parts[3])
+    n+=1
+    out=subprocess.run([GREP,'-rnE',pat]+dirs+['--include=*.c'],
+                       capture_output=True,text=True).stdout
+    got=len([l for l in out.splitlines() if l])
+    if got!=want:
+        print('[card_surface] FAIL %s: got=%d want=%d' % (name,got,want)); bad+=1
+print('[card_surface] %s (%d cards)' % ('PASS' if not bad else 'FAIL',n))
+sys.exit(1 if bad else 0)
+PYEOF2
+    then :; else FAIL=1; fi
+else
+    echo "[card_surface] SKIP: 基线或 python 缺失"; FAIL=1
 fi
 
 echo "==================="

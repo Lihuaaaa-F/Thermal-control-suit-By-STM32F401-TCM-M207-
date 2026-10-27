@@ -4,18 +4,18 @@
 
 ## 1 生产者/消费者枚举表 v2（调用点级对账）
 
-复跑：`grep -rn "comm_send\(\|comm_txq_push\|comm_poll_tx\(\|comm_tick\|link_send_frame_mt\|link_set_param\|link_send_cmd\|link_request_registry" project_tcs esp32 --include=*.c | grep -v build` → 全命中逐一归属如下；**对账规则（红队 DoD 改写采纳）：枚举表调用点级行数 == grep 调用点级命中数**。
+复跑：`grep -rnE 'comm_send\(|comm_txq_push|comm_poll_tx\(|comm_tick|link_send_frame_mt|link_set_param|link_send_cmd|link_request_registry' project_tcs esp32 --include=*.c | grep -v build`（-E 版，可直接粘贴） → 全命中逐一归属如下；**对账规则（红队 DoD 改写采纳）：枚举表调用点级行数 == grep 调用点级命中数**。
 
-**H743 端（裸机主循环单线程；无 FreeRTOS——红队核实）**
+**H743 端（裸机主循环单线程；无 FreeRTOS——红队核实；行号=HEAD ec93db0 锚定，终审 MF-9 重锚版）**
 
 | # | 调用点 | 文件:行 | 上下文 |
 |---|---|---|---|
-| H1a | comm_txq_push（0x90 ACK） | main.c:156 | 主循环 |
-| H1b | comm_txq_push（0x11 PARAM） | main.c:187 | 主循环 |
-| H1c | comm_txq_push（0x14 REGISTRY_ENTRY） | main.c:282 | 主循环 |
-| H1d | comm_txq_push（0x10 STATUS） | main.c:311 | 主循环 |
-| H2 | comm_poll_tx | main.c:599 | 主循环（TX 唯一消费） |
-| H3 | comm_tick | main.c:608 | 主循环 |
+| H1a | comm_txq_push（0x90 ACK） | main.c:153 | 主循环 |
+| H1b | comm_txq_push（0x11 PARAM） | main.c:184 | 主循环 |
+| H1c | comm_txq_push（0x14 REGISTRY_ENTRY） | main.c:279 | 主循环 |
+| H1d | comm_txq_push（0x10 STATUS） | main.c:308 | 主循环 |
+| H2 | comm_poll_tx | main.c:592 | 主循环（TX 唯一消费） |
+| H3 | comm_tick | main.c:601 | 主循环 |
 
 **ESP32 端（多任务经 link API 直调 comm_*；钩子 portMUX 保护）**
 

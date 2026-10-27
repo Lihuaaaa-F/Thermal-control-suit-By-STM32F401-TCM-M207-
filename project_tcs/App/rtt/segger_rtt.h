@@ -11,7 +11,7 @@
  * 用法不变：SEGGER_RTT_Init() / SEGGER_RTT_printf(0, ...) / SEGGER_RTT_WriteString(s)。
  * ⚠️ 只在主循环调用，绝不在 TIM6 中断里调（格式化耗时影响中断延迟）。
  * ⚠️ 官方 printf 同样不支持浮点——F14/F16 的 snprintf 预格式化纪律长期有效
- *    （门禁：tests/run_all.sh rtt_count 段 + W4 grep 三条）。
+ *    （门禁：run_all 的 [fmt_gate] %f/%l 双零 + [rtt_count] 调用数对账）。
  */
 #ifndef SEGGER_RTT_FACADE_H
 #define SEGGER_RTT_FACADE_H

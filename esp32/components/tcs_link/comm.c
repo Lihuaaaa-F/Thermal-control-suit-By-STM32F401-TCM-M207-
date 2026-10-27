@@ -5,7 +5,7 @@
  *
  * §0E 中断重入修复（M1.5）：所有 TX 经环形待发队列，主循环 comm_poll_tx
  * 唯一消费点串行 HAL_UART_Transmit。中断里 comm_tick 只判超时+重传入队。
- * 急停 comm_txq_push_front 队头插队（不登记 pending）。
+ * 急停=常规尾插（队头插队函数已按 W3-A/终审 MF-8 删除：双端 0 调用死码）。
  * tx_head/tx_tail/tx_count 的读改写用 enter/exit_critical 短临界区保护。
  * 官方查证：FreeRTOS 官方队列族检索 2026-10-26：esp_ringbuf/StreamBuffer 为字节流语义，与本 txq 项缓冲（定界+满丢老+ISR 单生产者）语义不符（差异分析=v13.4 §4 六操作映射表）；清单 F7 定性=官方等价候选（MessageBuffer 双通道）待评估，W3-A 评估中；未定论前自研环形为缺省实现（Q5 PC 双编译）；实现参考：不适用（环形队列=C 语义自持，官方无直接项缓冲原语；官方候选评估即上句 W3-A）
  */
@@ -94,22 +94,6 @@ void comm_txq_push(comm_link_t *L, const uint8_t *frame, size_t len)
     if (L->exit_critical) L->exit_critical();
 }
 
-/* 队头插队：head 前移一格放新帧，主循环下次 poll_tx 优先发。*/
-void comm_txq_push_front(comm_link_t *L, const uint8_t *frame, size_t len)
-{
-    if (len > MAX_FRAME) len = MAX_FRAME;
-    if (L->enter_critical) L->enter_critical();
-    if (L->tx_count >= MAX_TXQ) {   /* 满：丢最老腾位 */
-        L->tx_head = (uint8_t)((L->tx_head + 1) % MAX_TXQ);
-        L->tx_count--;
-    }
-    L->tx_head = (uint8_t)((L->tx_head + MAX_TXQ - 1) % MAX_TXQ);
-    memcpy(L->tx_queue[L->tx_head], frame, len);
-    L->tx_len[L->tx_head] = (uint16_t)len;
-    L->tx_count++;
-    if (L->exit_critical) L->exit_critical();
-}
-
 void comm_poll_tx(comm_link_t *L)
 {
     /* 无锁读 tx_count：容忍一拍误差（急停场景可接受）。
@@ -117,9 +101,8 @@ void comm_poll_tx(comm_link_t *L)
     if (L->tx_count == 0) return;
     if (!L->send_fn) return;
 
-    /* 取队头：head 是主循环独占消费索引，ISR 不改 head（只 push 改 tail，
-     * push_front 改 head 但 push_front 只在主循环急停键轮询调用，不在 ISR）。
-     * 故此处 head 无竞态。*/
+    /* 取队头：head 是主循环独占消费索引，ISR 只 push 改 tail 不碰 head
+     * （push_front 已按 W3-A/终审 MF-8 删除）；故此处 head 无竞态。*/
     uint8_t h = L->tx_head;
     L->send_fn(L->tx_queue[h], L->tx_len[h]);
 

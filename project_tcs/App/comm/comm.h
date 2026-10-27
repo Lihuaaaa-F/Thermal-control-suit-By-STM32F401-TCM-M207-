@@ -14,7 +14,7 @@
  *
  * §0E 中断重入修复（M1.5）：所有 TX 经环形待发队列，TX 只在主循环 comm_poll_tx
  * 串行消费（一处调 HAL_UART_Transmit）。中断里 comm_tick 只判超时+重传入队，不 send_fn。
- * 急停走 comm_txq_push_front 队头插队（不进 pending，< 20ms 优先发出）。
+ * 急停=常规尾插（队头插队已删，W3-A/终审 MF-8）。
  *
  * 依赖：proto.h（帧定界/CRC）。不依赖 HAL、不依赖 malloc。
  */
@@ -108,7 +108,6 @@ void comm_txq_push(comm_link_t *L, const uint8_t *frame, size_t len);
  * §0E.2：帧插到待发队列头部（急停优先，不登记 pending，不等 ACK）。
  * 队列满也丢最老腾位。急停直发专用。
  */
-void comm_txq_push_front(comm_link_t *L, const uint8_t *frame, size_t len);
 
 /**
  * §0E：主循环唯一 TX 消费点。队列非空则取队头发一帧（阻塞 send_fn）。

@@ -131,9 +131,9 @@ static int ft5446_i2c4_init(void)
     hi2c4.Init.NoStretchMode = I2C_NOSTRETCH_DISABLE;
     if (HAL_I2C_Init(&hi2c4) != HAL_OK) return -1;
     if (HAL_I2CEx_ConfigAnalogFilter(&hi2c4, I2C_ANALOGFILTER_ENABLE) != HAL_OK) return -1;
-    SEGGER_RTT_printf(0, "RTT: i2c4 up pclk4=%luHz target=%luHz timing=0x%08lx\n",
-                      (unsigned long)HAL_RCCEx_GetD3PCLK1Freq(),
-                      (unsigned long)target, (unsigned long)hi2c4.Init.Timing);
+    SEGGER_RTT_printf(0, "RTT: i2c4 up pclk4=%uHz target=%uHz timing=0x%08x\n",
+                      (unsigned)HAL_RCCEx_GetD3PCLK1Freq(),
+                      (unsigned)target, (unsigned)hi2c4.Init.Timing);
     return 0;
 }
 #endif /* !FT5446_BITBANG */

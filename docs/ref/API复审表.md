@@ -23,10 +23,10 @@
 | 11 | Core/Src/main.c:139 Transmit(&huart_link,...,20u) | 同 #4 | 最大帧 254B（proto.h:30 宏展开）@230400 8N1≈11.0ms，20ms=1.8×裕度（W3-A 重估注记） | ✅正确（裕度偏紧注记） |
 | 12 | App/tcs/tmp117.c:111 Mem_Read(DEVID,20u) | 〔I2C-HAL〕DevAddress=8bit 移位地址/MemAddSize/Timeout ms/返 HAL_OK 判 | ADDR7<<1 ✓ 8BIT ✓ 返查 ✓ | ✅正确（W1 ft5446 复制本模式） |
 | 13 | App/tcs/tmp117.c:147 Mem_Read(TEMP,20u) | 同上 | 同上 | ✅正确 |
-| 14 | App/iwdg/iwdg.c:33 KR=0xCCCC（启动） | 〔IWDG-HAL〕HAL_IWDG_Init 首键 | 同键 | ✅（F15 豁免 1/4，见下） |
-| 15 | App/iwdg/iwdg.c:34 KR=0x5555（解锁） | 同上 | 同键 | ✅（2/4） |
-| 16 | App/iwdg/iwdg.c:39 KR=0xAAAA（装载） | 同上+Refresh 语义 | 同键 | ✅（3/4） |
-| 17 | App/iwdg/iwdg.c:44 KR=0xAAAA（喂狗） | 同上 | 同键=HAL_IWDG_Refresh 等价 | ✅（4/4）——**F15 定论=豁免留档（红队独立裁决=豁免成立）**：序列逐键等价+CMSIS 官方符号+WP-C.1/E3/E-20 历史证；iwdg.c 头查证注释在案 |
+| 14 | App/iwdg/iwdg.c:34 KR=0xCCCC（启动） | 〔IWDG-HAL〕HAL_IWDG_Init 首键 | 同键 | ✅（F15 豁免 1/4，见下） |
+| 15 | App/iwdg/iwdg.c:35 KR=0x5555（解锁） | 同上 | 同键 | ✅（2/4） |
+| 16 | App/iwdg/iwdg.c:40 KR=0xAAAA（装载） | 同上+Refresh 语义 | 同键 | ✅（3/4） |
+| 17 | App/iwdg/iwdg.c:45 KR=0xAAAA（喂狗） | 同上 | 同键=HAL_IWDG_Refresh 等价 | ✅（4/4）——**F15 定论=豁免留档（红队独立裁决=豁免成立）**：序列逐键等价+CMSIS 官方符号+WP-C.1/E3/E-20 历史证；iwdg.c 头查证注释在案 |
 
 ## 二、ESP32 侧（24 行，#18-41）
 

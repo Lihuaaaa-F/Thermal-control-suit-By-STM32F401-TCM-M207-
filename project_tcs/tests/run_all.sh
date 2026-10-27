@@ -160,6 +160,26 @@ else
     FAIL=1
 fi
 
+# W8 研学卡本地路径存在性门禁（红队建议采纳：41 条抓 1 条的实证抓力；0 bad 才绿）
+if [ -n "$PYBIN" ]; then
+    if "$PYBIN" - <<'PYEOF'
+import io,glob,os,re,sys
+bad=[]; n=0
+for card in glob.glob('../docs/ref/研学卡_*.md'):
+    for line in io.open(card,encoding='utf-8'):
+        for m in re.finditer(r'(D:/Espressif/[\w/.-]+|/d/Espressif/[\w/.-]+)', line):
+            p=m.group(1); n+=1
+            win=p.replace('/d/','D:/',1) if p.startswith('/d/') else p
+            win=re.sub(r'\.$','',win)
+            if not os.path.exists(win): bad.append((os.path.basename(card),p))
+print('[card_paths] %d checked, %d bad %s' % (n,len(bad),bad[:3] if bad else ''))
+sys.exit(1 if bad else 0)
+PYEOF
+    then :; else FAIL=1; fi
+else
+    echo "[card_paths] SKIP: python not found"; FAIL=1
+fi
+
 echo "==================="
 if [ "$FAIL" = 0 ]; then echo "run_all: ALL GREEN"; else echo "run_all: HAS FAILURES"; fi
 exit $FAIL

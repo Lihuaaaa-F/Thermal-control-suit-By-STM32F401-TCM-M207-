@@ -132,6 +132,34 @@ else
     echo "[audit] SKIP: python not found"; FAIL=1
 fi
 
+# W2 转义向量单测（v13.4 §3.3）：真实 IDF cJSON 源编译（与固件同库）；
+# IDF 路径机器相关（与 CMake 工具链绝对路径同性质），缺件即红不静默
+CJSON_DIR="${IDF_CJSON:-/d/Espressif/frameworks/esp-idf-v5.5.5/components/json/cJSON}"
+if [ -f "$CJSON_DIR/cJSON.c" ]; then
+    if [ "$MODE" = gcc ]; then
+        if $GCC -Wall -Wextra -std=c11 -O1 "$CJSON_DIR/cJSON.c" \
+             tests/test_ws_json_escape.c -I"$CJSON_DIR" \
+             -lm -o build/tests_ws_json.exe 2> build/ws_json.err \
+           && ./build/tests_ws_json.exe; then :; else
+            echo "[ws_json] FAIL"; cat build/ws_json.err 2>/dev/null; FAIL=1
+        fi
+    else
+        CJW=$(cygpath -w "$CJSON_DIR")
+        cat > build/ws_json.bat <<EOF
+@echo off
+call "C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Auxiliary\Build\vcvars64.bat" >nul 2>&1
+cd /d "$(cygpath -w "$PWD/build")"
+cl /nologo /W3 /std:c11 /utf-8 /D_CRT_SECURE_NO_WARNINGS /I"$CJW" "$CJW\\cJSON.c" "..\\tests\\test_ws_json_escape.c" /Fe:tests_ws_json.exe
+tests_ws_json.exe
+exit /b %ERRORLEVEL%
+EOF
+        if cmd //c "build\\ws_json.bat"; then :; else echo "[ws_json] FAIL"; FAIL=1; fi
+    fi
+else
+    echo "[ws_json] FAIL: IDF cJSON 源缺失（$CJSON_DIR，可用 IDF_CJSON 覆盖路径）"
+    FAIL=1
+fi
+
 echo "==================="
 if [ "$FAIL" = 0 ]; then echo "run_all: ALL GREEN"; else echo "run_all: HAS FAILURES"; fi
 exit $FAIL

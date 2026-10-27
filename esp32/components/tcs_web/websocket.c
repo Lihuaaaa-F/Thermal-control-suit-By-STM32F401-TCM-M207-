@@ -1,6 +1,9 @@
 /**
  * websocket.c — /ws 客户端管理 + 500ms 状态推送 + set/cmd 下行（任务书 §4.2/4.3）
  *
+ * W2（v13.4 §3）：上行 JSON 统一 cJSON（F6 双实现漂移消除；PrintBuffered 堆策略+
+ * reg 代缓存）；发送经 httpd_queue_work 官方线程路径（W10#18 上下文违约修复）。
+ *
  * 推送语义：
  *   {"t":"st",...}      每 500ms（0x10 快照 + boot_s）
  *   {"t":"pv",id,v,src} 参数变更（src=h743 触摸/CLI；src=web_ack 网页自己 set 的回显，
@@ -49,11 +52,21 @@ static void fds_del(int fd)
     taskEXIT_CRITICAL(&s_mux);
 }
 
-static int fds_send(const char *json, size_t len)
+/* W2/W10#18：httpd_ws_send_frame_async 官方口径=仅 httpd 上下文直调
+ * （esp_http_server.h 头注 "rarely called directly, exception … httpd_queue_work"）。
+ * 推送任务（tcs_ws）与 link 事件（tcs_link 任务）均非 httpd 线程——经
+ * httpd_queue_work 官方线程安全路径投递到 httpd 线程执行发送。*/
+typedef struct {
+    size_t len;
+    char json[576];          /* st 实测≈200B / pv≈90B，上限+裕度（超限即丢该帧）*/
+} ws_tx_work_t;
+
+static void ws_tx_work_fn(void *arg)
 {
+    ws_tx_work_t *w = arg;
     httpd_ws_frame_t pkt = {
         .final = true, .fragmented = false,
-        .type = HTTPD_WS_TYPE_TEXT, .payload = (uint8_t *)json, .len = len,
+        .type = HTTPD_WS_TYPE_TEXT, .payload = (uint8_t *)w->json, .len = w->len,
     };
     /* 快照后发送：临界区只做拷贝（旧版循环内 EXIT/ENTER/continue 会打穿
      * 自旋锁配对——空槽触发 assert，演示模式 500ms 推送首次踩中）*/
@@ -63,70 +76,154 @@ static int fds_send(const char *json, size_t len)
     for (int i = 0; i < WS_MAX_CLIENTS; i++)
         if (s_fds[i] > 0) fds[n++] = s_fds[i];
     taskEXIT_CRITICAL(&s_mux);
-
-    int alive = 0;
-    for (int i = 0; i < n; i++) {
-        if (httpd_ws_send_frame_async(s_hd, fds[i], &pkt) != ESP_OK) {
-            fds_del(fds[i]);
-        } else {
-            alive++;
-        }
-    }
-    return alive;
+    for (int i = 0; i < n; i++)
+        if (httpd_ws_send_frame_async(s_hd, fds[i], &pkt) != ESP_OK)
+            fds_del(fds[i]);          /* 死连接除名（重连握手重新入册）*/
+    free(w);
 }
 
-/* ====== JSON 构造 ====== */
+static void fds_send(const char *json, size_t len)
+{
+    if (!s_hd || !len || len > sizeof(((ws_tx_work_t *)0)->json)) return;
+    ws_tx_work_t *w = malloc(sizeof *w);   /* 定长小块，500ms 周期有界（§3.2 堆策略）*/
+    if (!w) return;
+    memcpy(w->json, json, len);
+    w->len = len;
+    if (httpd_queue_work(s_hd, ws_tx_work_fn, w) != ESP_OK) free(w);
+}
+
+/* ====== JSON 构造（W2：上行统一 cJSON，消除手拼/库双实现漂移 F6）======
+ * 堆策略（§3.2）：PrintBuffered 预检缓冲（st 256/pv 128/reg 8192，按实测帧宽），
+ * 树用毕必 Delete、串用毕必 cJSON_free——500ms 周期路径无无界分配；
+ * 各调用栈自建自毁（树/串不跨线程共享），唯一跨线程共享=reg 缓存（带锁，见下）。
+ * 数字格式注记：cJSON 输出 37 而非旧 %.1f 的 "37.0"——JSON 数值语义等价，
+ * 前端 Number()/Chart.js 解析无行为差异（等价性 diff 语义口径，非逐字节）。*/
 size_t ws_status_json(char *buf, size_t cap)
 {
     const link_status_t *s = link_status();
-    int n;
-    if (!s->valid) {
-        n = snprintf(buf, cap, "{\"t\":\"st\",\"valid\":false}");
-    } else {
-        bool sensor_ok = (s->online & TCS_ONLINE_BODY_SENSOR) != 0;
-        n = snprintf(buf, cap,
-                     "{\"t\":\"st\",\"valid\":true,\"ver\":1,\"seq\":%lu,"
-                     "\"tc1_act\":%.1f,\"tc2_act\":%.1f,\"body\":%.1f,"
-                     "\"body_sensor_ok\":%s,"
-                     "\"tec1\":%u,\"tec2\":%u,\"fan\":%u,\"mode\":%u,"
-                     "\"alarm\":%u,\"online\":%u,\"boot_s\":%lld}",
-                     (unsigned long)s->seq, s->tc1_act, s->tc2_act, s->body,
-                     sensor_ok ? "true" : "false",
-                     s->tec1, s->tec2, s->fan, s->mode,
-                     s->alarm, s->online,
-                     (long long)(esp_timer_get_time() / 1000000LL));
-    }
-    return (n < 0 || (size_t)n >= cap) ? 0 : (size_t)n;
+    size_t r = 0;
+    cJSON *root = cJSON_CreateObject();
+    if (!root) return 0;
+    do {
+        if (!cJSON_AddStringToObject(root, "t", "st")) break;
+        if (!s->valid) {
+            if (!cJSON_AddBoolToObject(root, "valid", false)) break;
+        } else {
+            bool sensor_ok = (s->online & TCS_ONLINE_BODY_SENSOR) != 0;
+            if (!cJSON_AddBoolToObject(root, "valid", true) ||
+                !cJSON_AddNumberToObject(root, "ver", 1) ||
+                !cJSON_AddNumberToObject(root, "seq", s->seq) ||
+                !cJSON_AddNumberToObject(root, "tc1_act", s->tc1_act) ||
+                !cJSON_AddNumberToObject(root, "tc2_act", s->tc2_act) ||
+                !cJSON_AddNumberToObject(root, "body", s->body) ||
+                !cJSON_AddBoolToObject(root, "body_sensor_ok", sensor_ok) ||
+                !cJSON_AddNumberToObject(root, "tec1", s->tec1) ||
+                !cJSON_AddNumberToObject(root, "tec2", s->tec2) ||
+                !cJSON_AddNumberToObject(root, "fan", s->fan) ||
+                !cJSON_AddNumberToObject(root, "mode", s->mode) ||
+                !cJSON_AddNumberToObject(root, "alarm", s->alarm) ||
+                !cJSON_AddNumberToObject(root, "online", s->online) ||
+                !cJSON_AddNumberToObject(root, "boot_s",
+                                         (double)(esp_timer_get_time() / 1000000LL)))
+                break;
+        }
+        char *j = cJSON_PrintBuffered(root, 256, 0);
+        if (!j) break;
+        size_t len = strlen(j);
+        if (len < cap) { memcpy(buf, j, len); r = len; }
+        cJSON_free(j);
+    } while (0);
+    cJSON_Delete(root);
+    return r;
 }
+
+/* reg 帧缓存（§3.2 深水区一：50 参≈6-8KB 大对象，官方"immutable 缓存"模式）：
+ * def=当前值随任何 link 事件可能变化 → on_link_event 递增代数；
+ * 代未变直接复用缓存串，变了才重建（重建在锁外，换入在锁内）。*/
+static char *s_reg_cache;
+static size_t s_reg_cache_len;
+static volatile uint32_t s_reg_gen;          /* 事件代（on_link_event 递增） */
+static uint32_t s_reg_built_gen;             /* 缓存构建时的事件代 */
+static portMUX_TYPE s_reg_mux = portMUX_INITIALIZER_UNLOCKED;
 
 size_t ws_registry_json(char *buf, size_t cap)
 {
+    /* 缓存命中：代未变 → 锁内拷贝即走 */
+    taskENTER_CRITICAL(&s_reg_mux);
+    const char *hit = (s_reg_cache && s_reg_built_gen == s_reg_gen) ? s_reg_cache : NULL;
+    size_t hit_len = s_reg_cache_len;
+    if (hit && hit_len < cap) memcpy(buf, hit, hit_len);
+    taskEXIT_CRITICAL(&s_reg_mux);
+    if (hit) return hit_len < cap ? hit_len : 0;
+
     link_reg_t regs[LINK_REGISTRY_MAX];
+    uint32_t g0 = s_reg_gen;      /* 数据快照前代（换入时盖 g0 非 current：构建窗口
+                                     * 内到达的事件须使缓存失配——盖 current 会把陈
+                                     * 帧虚标成新鲜，红队 W2-R2 反例坐实）*/
     int n = link_get_registry(regs, LINK_REGISTRY_MAX);
-    size_t o = 0;
-    o += snprintf(buf + o, cap - o, "{\"t\":\"reg\",\"list\":[");
-    for (int i = 0; i < n && o < cap - 128; i++) {
+    cJSON *root = cJSON_CreateObject();
+    cJSON *arr = cJSON_CreateArray();
+    if (!root || !arr) { cJSON_Delete(root); cJSON_Delete(arr); return 0; }
+    /* root 两 Add 失败=残树不得入缓存；arr 未挂入 root 时须显式回收（W2-R3）*/
+    if (!cJSON_AddStringToObject(root, "t", "reg") ||
+        !cJSON_AddItemToObject(root, "list", arr)) {
+        cJSON_Delete(root);
+        cJSON_Delete(arr);       /* AddItem 失败时 arr 不为 root 所有，双删安全 */
+        return 0;
+    }
+    for (int i = 0; i < n; i++) {
         const tcs_reg_entry_t *e = &regs[i].e;
         float def = link_param_value(e->id);
         if (isnan(def)) def = e->min;   /* 无缓存（未收到 0x11）→ 滑条置 min */
-        o += snprintf(buf + o, cap - o,
-                      "%s{\"id\":%u,\"type\":%u,\"flags\":%u,"
-                      "\"min\":%.3g,\"max\":%.3g,\"step\":%.3g,\"def\":%.3g,"
-                      "\"key\":\"%s\",\"name\":\"%s\",\"unit\":\"%s\"}",
-                      i ? "," : "", e->id, e->type, e->flags,
-                      e->min, e->max, e->step, def, e->key, e->name, e->unit);
+        cJSON *it = cJSON_CreateObject();
+        if (!it) break;
+        cJSON_AddNumberToObject(it, "id", e->id);
+        cJSON_AddNumberToObject(it, "type", e->type);
+        cJSON_AddNumberToObject(it, "flags", e->flags);
+        cJSON_AddNumberToObject(it, "min", e->min);
+        cJSON_AddNumberToObject(it, "max", e->max);
+        cJSON_AddNumberToObject(it, "step", e->step);
+        cJSON_AddNumberToObject(it, "def", def);
+        cJSON_AddStringToObject(it, "key", e->key);
+        cJSON_AddStringToObject(it, "name", e->name);
+        cJSON_AddStringToObject(it, "unit", e->unit);
+        cJSON_AddItemToArray(arr, it);
     }
-    o += snprintf(buf + o, cap - o, "]}");
-    return o;
+    char *j = cJSON_PrintBuffered(root, 8192, 0);
+    cJSON_Delete(root);
+    if (!j) return 0;
+    size_t len = strlen(j);
+    /* 换入缓存：旧串延后释放（读侧持锁拷贝，不会拿到悬垂指针）；
+     * built_gen 盖 g0（数据快照代）——见函数头 g0 注释 */
+    taskENTER_CRITICAL(&s_reg_mux);
+    char *old = s_reg_cache;
+    s_reg_cache = j;
+    s_reg_cache_len = len;
+    s_reg_built_gen = g0;
+    taskEXIT_CRITICAL(&s_reg_mux);
+    if (old) cJSON_free(old);
+    if (len >= cap) return 0;
+    memcpy(buf, j, len);
+    return len;
 }
 
 static void push_pv(uint16_t id, float v, const char *src, int clamped)
 {
-    char buf[128];
-    int n = snprintf(buf, sizeof(buf),
-                     "{\"t\":\"pv\",\"id\":%u,\"v\":%.3f,\"src\":\"%s\"%s}",
-                     id, v, src, clamped ? ",\"clamped\":true" : "");
-    if (n > 0) fds_send(buf, (size_t)n);
+    cJSON *root = cJSON_CreateObject();
+    if (!root) return;
+    char *j = NULL;
+    do {
+        if (!cJSON_AddStringToObject(root, "t", "pv")) break;
+        if (!cJSON_AddNumberToObject(root, "id", id)) break;
+        if (!cJSON_AddNumberToObject(root, "v", v)) break;
+        if (!cJSON_AddStringToObject(root, "src", src)) break;
+        if (clamped && !cJSON_AddBoolToObject(root, "clamped", true)) break;
+        j = cJSON_PrintBuffered(root, 128, 0);
+    } while (0);
+    cJSON_Delete(root);
+    if (!j) return;
+    fds_send(j, strlen(j));
+    cJSON_free(j);
 }
 
 /* link 事件回调（PARAM/REG 变更）：0x11 → pv 推送
@@ -139,6 +236,11 @@ static void on_link_event(void)
     const link_param_change_t *p = link_last_param();
     if (p->us == 0 || p->us == s_seen_param_us) return;
     s_seen_param_us = p->us;
+
+    /* reg 缓存代数递增：def=当前值随本事件已变，缓存即失效（§3.2）*/
+    taskENTER_CRITICAL(&s_reg_mux);
+    s_reg_gen++;
+    taskEXIT_CRITICAL(&s_reg_mux);
 
     int clamped = 0;
     const link_ack_t *ack = link_last_param() ? link_last_ack() : NULL;

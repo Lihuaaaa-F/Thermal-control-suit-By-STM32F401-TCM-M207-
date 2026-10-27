@@ -120,6 +120,7 @@ project_tcs/tests/test_post.c
 project_tcs/tests/test_proto_tcs.c
 project_tcs/tests/test_qr.c
 project_tcs/tests/test_touch_session.c
+project_tcs/tests/test_ws_json_escape.c
 project_tcs/tools/c_strip.py
 project_tcs/tools/colorblind_check.py
 project_tcs/tools/fb_dump.py

@@ -32,7 +32,7 @@ grep -rnE "HAL_RCC_|HAL_PWR_" project_tcs/App project_tcs/Core/Src --include=*.c
 ```
 
 vendor 域说明：`App/rtt/`（SEGGER RTT vendor 五文件）同一 pattern 单独跑=**0 命中**（无需列行）。
-补充（pattern 外，供审计）：`grep -rnE "HAL_PWREx_" project_tcs/App project_tcs/Core/Src --include=*.c` → **1 命中**：Core/Src/main.c:317 `HAL_PWREx_ConfigSupply(PWR_LDO_SUPPLY)`（前缀为 `HAL_PWREx_` 不匹配 `HAL_PWR_`，故不在 40 行内）。
+补充（pattern 外，供审计）：`grep -rnE "HAL_PWREx_" project_tcs/App project_tcs/Core/Src --include=*.c` → **1 命中**：Core/Src/main.c:317 `HAL_PWREx_ConfigSupply(PWR_LDO_SUPPLY)`（前缀为 `HAL_PWREx_` 不匹配 `HAL_PWR_`，故不在 42 行内）。
 
 | # | 文件:行 | API | 语义一句话 |
 |---|---|---|---|
@@ -93,4 +93,4 @@ vendor 域说明：`App/rtt/`（SEGGER RTT vendor 五文件）同一 pattern 单
 | 宏 vs 函数混用面 | `__HAL_RCC_GET_FLAG/CLEAR_RESET_FLAGS/CLK_ENABLE` 宏与 `HAL_RCC_OscConfig/ClockConfig` 函数分层使用——**符合官方 API 设计意图 ✓**（寄存器位操作用宏、流程配置用函数），无整改项 |
 | 行号时效 | ltdc.c 域 17 行（#11-27）行号=G 线未提交工作区快照；**G 线合入后本卡 ltdc.c 域需复核** |
 
-——研学卡完（40/40）。
+——研学卡完（42/42，W1a 实更）。

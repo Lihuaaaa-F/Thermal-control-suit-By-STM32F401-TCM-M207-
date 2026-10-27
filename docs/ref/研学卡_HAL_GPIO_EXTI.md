@@ -103,4 +103,4 @@ vendor 域说明：`App/rtt/`（SEGGER RTT vendor 五文件）同一 pattern 单
 | HAL_GPIO_Init 单点集中（#49） | **符合官方推荐 ✓**——uart_gpio_af 通用函数收敛三路 UART 引脚配置，避免散抄 |
 | 行号时效 | ltdc.c 行号=G 线未提交工作区快照（git M 态）；**G 线合入后本卡 ltdc.c 域 19 行需复核** |
 
-——研学卡完（53/53）。
+——研学卡完（54/54，W1a 实更）。

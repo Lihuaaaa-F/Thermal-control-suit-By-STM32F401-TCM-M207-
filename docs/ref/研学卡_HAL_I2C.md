@@ -56,4 +56,4 @@ vendor 域说明：`App/rtt/`（SEGGER RTT vendor 五文件）同一 pattern 单
 | W1a I2C4 调用面补录 | **已落地**：底层在 ft5446_i2c4_init（模块自有，eeprom.c 同款惯例——HAL_I2C_MspInit 在 main.c 系 G 线未提交区不可触碰，G 线合入后迁 MspInit 分支=二期正常化）；③ 表补 W1a 行即本行（HAL_I2C_Mem_×2+IsDeviceReady+I2C_GetTiming 在 ft5446.c，nm 门禁 ct_iic=0 在案） |
 | 线挂死/时钟拉伸等 H7 I2C 已知勘误 | 官方 ST 工勘（errata）与 HAL 修复随 HAL 版本走——本工程 HAL=裁剪快照无 tag（W9 GAP 注 1），升级=整树替换全量回归，挂 W9 协议处置（二期录 CubeH7 tag） |
 
-——研学卡完（5/5+2 补录行）。
+——研学卡完（10/10，W1a 实更）。

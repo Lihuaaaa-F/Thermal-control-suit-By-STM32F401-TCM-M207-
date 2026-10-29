@@ -21,6 +21,7 @@
 #include "esp_system.h"
 #include "esp_log.h"
 #include "esp_console.h"
+#include "driver/uart.h"   /* ltx 屏链自检 */
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 
@@ -204,6 +205,17 @@ static int cmd_ledtest(int argc, char **argv)
     return 0;
 }
 
+/* 屏链物理自检（2026-10-30）：UART1 连发 100 个 0x55（H743 侧应收到 55 序列）*/
+static int cmd_ltx(int argc, char **argv)
+{
+    (void)argc; (void)argv;
+    uint8_t pat[100];
+    memset(pat, 0x55, sizeof(pat));
+    int n = uart_write_bytes(UART_NUM_1, pat, sizeof(pat));
+    printf("ltx: wrote %d bytes 0x55 to UART1(GPIO17)\n", n);
+    return 0;
+}
+
 static int cmd_reset(int argc, char **argv)
 {
     (void)argc; (void)argv;
@@ -257,6 +269,8 @@ int tcs_console_start(void)
           .func=cmd_ledtest, .argtable=NULL },
         { .command="perf", .help="服务统计+vTaskList", .hint=NULL,
           .func=cmd_perf, .argtable=NULL },
+        { .command="ltx", .help="屏链自检：UART1 连发 100B 0x55", .hint=NULL,
+          .func=cmd_ltx, .argtable=NULL },
         { .command="reset", .help="软复位", .hint=NULL,
           .func=cmd_reset, .argtable=NULL },
     };

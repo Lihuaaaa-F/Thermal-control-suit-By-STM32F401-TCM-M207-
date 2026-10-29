@@ -2,7 +2,8 @@
 # 口径：在 project_tcs/ 目录下执行 grep -rnE <模式> <目录列表> --include=*.c | wc -l
 # （=run_all 的 cwd；目录=App Core/Src），HEAD 实测 2026-10-27 终审整改后
 研学卡_HAL_I2C;;App Core/Src;;HAL_I2C_;;10
-研学卡_HAL_UART;;App Core/Src;;HAL_UART_;;37
+# UART 37→38：R2 链路 RX 自愈新增 __HAL_UART_GET_FLAG（2026-10-30）
+研学卡_HAL_UART;;App Core/Src;;HAL_UART_;;38
 研学卡_HAL_GPIO_EXTI;;App Core/Src;;HAL_GPIO_|HAL_EXTI_;;54
 研学卡_HAL_LTDC;;App Core/Src;;HAL_LTDC_;;6
 研学卡_HAL_DMA2D;;App Core/Src;;DMA2D_;;1

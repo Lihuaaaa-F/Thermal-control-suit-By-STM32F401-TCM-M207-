@@ -182,6 +182,12 @@ static void cmd_exec(char *line)
                (unsigned)param_get(PARAM_ID_COMMISSIONED),
                (unsigned long)g_stat_loop_passes,
                (unsigned long)s_tx_drop_cnt);
+        /* 屏链诊断（2026-10-30）：RX 字节总量+快照帧计数（ltx 自检核对；全 0=方向不通）*/
+        extern volatile uint32_t g_dbg_lrx_total;
+        extern volatile uint32_t g_dbg_snap;
+        printf("lrx=%lu snap=%lu\n",
+               (unsigned long)g_dbg_lrx_total,
+               (unsigned long)g_dbg_snap);
         return;
     }
     /* --- ee：EEPROM 镜像现场重读+校验（诊断）--- */

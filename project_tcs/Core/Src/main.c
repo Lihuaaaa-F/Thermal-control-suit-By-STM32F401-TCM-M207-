@@ -112,6 +112,12 @@ void link_uart_error_recover(void)
     link_rx_rearm();
 }
 
+/* TEMP-DIAG（2026-10-30）：屏链排障全局计数器（探针直读）*/
+volatile uint32_t g_dbg_lrx_total;
+volatile uint32_t g_dbg_snap;
+
+
+
 static void link_rx_drain(void)
 {
     /* R2 真机自愈（2026-10-30，卡死根因坐实）：USART2 首次 ORE 后 HAL 会关闭
@@ -127,6 +133,8 @@ static void link_rx_drain(void)
         if (s_lrx_head == s_lrx_tail) break;
         uint8_t b = s_lrx[s_lrx_tail];
         s_lrx_tail = (uint16_t)((s_lrx_tail + 1u) & LINK_RX_MASK);
+        g_dbg_lrx_total++;   /* 链路 RX 字节总量（屏链诊断/ltx 自检核对用）*/
+
         const uint8_t *pl; size_t plen; int dup;
         if (comm_rx_feed_byte(&g_link, b, &pl, &plen, &dup)) {
             on_frame(pl, plen);
@@ -284,6 +292,7 @@ void on_frame(const uint8_t *payload, size_t len)
         break;
     }
     case MT_TCS_SNAPSHOT: {          /* R2：200ms 全量快照 = 屏唯一读源 */
+        g_dbg_snap++;
         tcs_snap_pl_t s;
         if (tcs_scan_snapshot(body, blen, &s) != 0) break;
         if (s.ver != TCS_PROTO_VER) break;
@@ -509,11 +518,17 @@ static void MX_UART_Init(void)
     uart_gpio_af(GPIOA, GPIO_PIN_9 | GPIO_PIN_10, GPIO_AF7_USART1);
     uart_common_init(&huart_console, USART1, CONSOLE_BAUD, USART1_IRQn);
 
-    /* USART2 PD5(TX)/PA3(RX) AF7 ESP32 链路（接线表 #3/#4：混搭映射合法）*/
+    /* USART2 PD5(TX) AF7 ESP32 链路（接线表 #3）；
+     * RX 缺省 PA3（#4）；-DLINK_RX_PD6 切 PD6（USART2_RX 备选映射，2026-10-30
+     * 屏链排障用：若 PA3 线不可达/不可靠可改接 PD6 免改更多代码）*/
     __HAL_RCC_USART2_CLK_ENABLE();
     __HAL_RCC_GPIOD_CLK_ENABLE();
     uart_gpio_af(GPIOD, GPIO_PIN_5, GPIO_AF7_USART2);
+#ifdef LINK_RX_PD6
+    uart_gpio_af(GPIOD, GPIO_PIN_6, GPIO_AF7_USART2);
+#else
     uart_gpio_af(GPIOA, GPIO_PIN_3, GPIO_AF7_USART2);
+#endif
     uart_common_init(&huart_link, USART2, LINK_BAUD, USART2_IRQn);
 
     /* USART3 PB10/PB11 AF7 M207（接线表 #1/#2）*/

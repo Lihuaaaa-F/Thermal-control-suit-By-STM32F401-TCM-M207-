@@ -131,6 +131,16 @@ endif()
 
 # 转 hex/bin（ASCII 路径可直接 objcopy，仍走 python 统一后处理）
 find_package(Python3 REQUIRED COMPONENTS Interpreter)
+
+# 字体门禁（=1 构建）：新增上屏文案未进字库 → 构建直接失败。
+# 2026-10-29 教训：字体补齐靠手工流程时，改完文案忘重跑 → 上屏豆腐块。
+if(TCS_USE_LVGL)
+    add_custom_target(lvgl_font_gate ALL
+        COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tools/font_audit_lvgl.py
+        WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+        COMMENT "LVGL 字体门禁（font_audit_lvgl.py）")
+    add_dependencies(tcs_main.elf lvgl_font_gate)
+endif()
 add_custom_command(TARGET tcs_main.elf POST_BUILD
     COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/post_build_objcopy.py $<TARGET_FILE_NAME:tcs_main.elf>
     WORKING_DIRECTORY ${CMAKE_BINARY_DIR}

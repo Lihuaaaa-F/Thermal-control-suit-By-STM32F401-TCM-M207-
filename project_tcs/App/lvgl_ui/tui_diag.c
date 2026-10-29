@@ -86,27 +86,37 @@ static void row_text(const uint16_t * cps, uint32_t n, uint32_t start,
     for (uint32_t i = start; i < n && i < start + per; i++) {
         char b[4];
         int m = cp2utf8(cps[i], b);
-        if (k + (size_t)m + 2 >= cap) break;
-        if (k) out[k++] = ' ';
+        if (k + (size_t)m + 1 >= cap) break;
         memcpy(out + k, b, (size_t)m);
         k += (size_t)m;
         out[k] = '\0';
     }
 }
 
-static void tl18_page(lv_obj_t * scr, const uint16_t * cps, uint32_t n,
-                      const lv_font_t * f, uint32_t per, int row_h, const char * tag)
+/* 把一段码点铺成行；返回下一行的 y（多段连续排布，避免两段互相覆盖） */
+static int tl18_rows(lv_obj_t * scr, const uint16_t * cps, uint32_t n,
+                     const lv_font_t * f, uint32_t per, int row_h, int y)
 {
-    char title[64], line[160];
-    snprintf(title, sizeof title, "TL-18 %s  共 %u 字（20/行）", tag, (unsigned)n);
-    ui_text24(scr, 16, 8, title, TKS_TX);
+    char line[160];
     uint32_t rows = (n + per - 1) / per;
-    int y = 40;
     for (uint32_t r = 0; r < rows && y + row_h <= 596; r++) {
         row_text(cps, n, r * per, per, line, sizeof line);
         ui_lab(scr, 16, y, f, TKS_TX, line);
         y += row_h;
     }
+    return y;
+}
+
+static void tl18_page(lv_obj_t * scr, const uint16_t * c1, uint32_t n1, const lv_font_t * f1,
+                      const uint16_t * c2, uint32_t n2, const lv_font_t * f2,
+                      uint32_t per, int row_h1, int row_h2, const char * tag)
+{
+    char title[80];
+    snprintf(title, sizeof title, "TL-18 %s  主体 %u + 扩展 %u = %u 字（%u/行）",
+             tag, (unsigned)n1, (unsigned)n2, (unsigned)(n1 + n2), (unsigned)per);
+    ui_text24(scr, 16, 8, title, TKS_TX);
+    int y = tl18_rows(scr, c1, n1, f1, per, row_h1, 40);
+    (void)tl18_rows(scr, c2, n2, f2, per, row_h2, y);
 }
 
 /* ---------- VL-12：极端内容 ---------- */
@@ -134,14 +144,20 @@ static void vl12_page(lv_obj_t * scr)
     g_diag_stat[1] = (uint32_t)ui_text24_w(b);
 
     ui_card(scr, x, 140, w, 84, TKS_CARD, TKS_BORDER);
-    ui_text24(scr, x + 16, 152, "最长单位", TKS_TX2);
-    snprintf(b, sizeof b, "[%s]  -50.00 / 200.00", pu && pu->unit && pu->unit[0] ? pu->unit : "无单位");
-    ui_text24(scr, x + 16, 180, b, TKS_TX);
-    g_diag_stat[2] = (uint32_t)ui_text24_w(b);
+    ui_text24(scr, x + 16, 148, "最长单位 / 极值", TKS_TX2);
+    snprintf(b, sizeof b, "[%s]", pu && pu->unit && pu->unit[0] ? pu->unit : "无单位");
+    ui_text24(scr, x + 16, 172, b, TKS_TX);
+    ui_text24(scr, x + 16, 198, "-50.00 / 200.00", TKS_TX);
+    {
+        uint32_t wu = (uint32_t)ui_text24_w(b);
+        uint32_t wv = (uint32_t)ui_text24_w("-50.00 / 200.00");
+        g_diag_stat[2] = wu > wv ? wu : wv;   /* 断言：≤ 内宽 */
+    }
 
     ui_card(scr, x, 236, w, 84, TKS_CARD, TKS_BORDER);
-    ui_text24(scr, x + 16, 248, "数值极值与负号", TKS_TX2);
-    ui_text24(scr, x + 16, 276, "-0.01  -50.00  200.00  999.9", TKS_TX);
+    ui_text24(scr, x + 16, 244, "数值极值与负号", TKS_TX2);
+    ui_text24(scr, x + 16, 268, "-0.01   -50.00", TKS_TX);
+    ui_text24(scr, x + 16, 292, "200.00   999.9", TKS_TX);
 
     ui_card(scr, x, 332, w, 84, TKS_CARD, TKS_BORDER);
     ui_text24(scr, x + 16, 344, "空字符串（应零宽、不报错）", TKS_TX2);
@@ -151,6 +167,30 @@ static void vl12_page(lv_obj_t * scr)
     ui_card(scr, x, 428, w, 84, TKS_CARD, TKS_BORDER);
     ui_text24(scr, x + 16, 440, "全角/符号混排", TKS_TX2);
     ui_text24(scr, x + 16, 468, "°C  ℃  25.1  ●○ ▲ ▼ — ‹ › · ‰", TKS_TX);
+
+    /* 超长串：应用层截断（本字体定宽 24px/字 ⇒ 可容纳字数 = 内宽/24）。
+     * LVGL 的 LONG_MODE_DOTS 在文本刷新后会按内容回扩宽度（实测仍换行溢出卡片），
+     * 故产品口径=应用层截断，并记录原始/截断后宽度供机器断言。 */
+    ui_card(scr, x, 520, w, 64, TKS_CARD, TKS_BORDER);
+    ui_text24(scr, x + 16, 528, "超长串（截断）", TKS_TX2);
+    {
+        static const char LONGS[] = "贴身水箱设定温度上限保护值（超长示例）";
+        int maxc = (int)(inner / 24) - 2;      /* 留 2 字给 ".." */
+        char cut[64];
+        int n = 0, i = 0;
+        if (maxc < 1) maxc = 1;
+        while (LONGS[i] && n < maxc) {         /* 按 UTF-8 字符边界截断 */
+            unsigned char c0 = (unsigned char)LONGS[i];
+            int len = (c0 < 0x80) ? 1 : ((c0 >> 5) == 0x6) ? 2 : ((c0 >> 4) == 0xE) ? 3 : 4;
+            memcpy(cut + i, LONGS + i, (size_t)len);
+            i += len;
+            n++;
+        }
+        cut[i] = '.'; cut[i + 1] = '.'; cut[i + 2] = '\0';
+        ui_text24(scr, x + 16, 552, cut, TKS_TX);
+        g_diag_stat[10] = (uint32_t)ui_text24_w(LONGS);   /* 原始宽度（>inner） */
+        g_diag_stat[11] = (uint32_t)ui_text24_w(cut);     /* 截断后宽度（应≤inner） */
+    }
 
     /* 错误码人话表（U-6） */
     int rx = 500, rw = 508;
@@ -183,20 +223,20 @@ void tui_diag_build(lv_obj_t * scr, int mode)
         case 1:
             tl18_check();
             g_diag_stat[9] = 24;
-            tl18_page(scr, TUI_CP24CORE, TUI_CP24CORE_N, &tcs_font_lv24, 20, 32, "24px 主体");
-            tl18_page(scr, TUI_CP24EXT, TUI_CP24EXT_N, &tcs_font_lv_ext, 20, 32, "24px 扩展");
+            tl18_page(scr, TUI_CP24CORE, TUI_CP24CORE_N, &tcs_font_lv24,
+                      TUI_CP24EXT, TUI_CP24EXT_N, &tcs_font_lv_ext, 40, 32, 32, "24px");
             break;
         case 2:
             tl18_check();
             g_diag_stat[9] = 32;
-            tl18_page(scr, TUI_CP32CORE, TUI_CP32CORE_N, &tcs_font_lv32, 20, 40, "32px 主体");
-            tl18_page(scr, TUI_CP32EXT, TUI_CP32EXT_N, &tcs_font_lv_ext32, 20, 40, "32px 扩展");
+            tl18_page(scr, TUI_CP32CORE, TUI_CP32CORE_N, &tcs_font_lv32,
+                      TUI_CP32EXT, TUI_CP32EXT_N, &tcs_font_lv_ext32, 31, 40, 40, "32px");
             break;
         case 3:
             tl18_check();
             g_diag_stat[9] = 48;
-            tl18_page(scr, TUI_CP48CORE, TUI_CP48CORE_N, &tcs_font_lv48, 12, 60, "48px");
-            tl18_page(scr, TUI_CP96CORE, TUI_CP96CORE_N, &tcs_font_lv96, 12, 110, "96px");
+            tl18_page(scr, TUI_CP48CORE, TUI_CP48CORE_N, &tcs_font_lv48,
+                      TUI_CP96CORE, TUI_CP96CORE_N, &tcs_font_lv96, 17, 60, 110, "48/96px");
             break;
         default: break;
     }

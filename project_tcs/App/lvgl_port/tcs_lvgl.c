@@ -35,6 +35,7 @@ volatile tcs_lvgl_guard_t g_lvgl_guard;
 #define DRAIN_MAX 96
 static void * s_drain_ptr[DRAIN_MAX];
 static uint32_t s_drain_n;
+static uint32_t s_blocked;   /* 水位守卫是否处于阻断态（统计恢复沿用） */
 
 #if defined(TCS_LVGL_SCENE_HELLO)
 static lv_obj_t * g_Lb, * g_Lc;
@@ -213,10 +214,13 @@ void tcs_lvgl_poll(void)
 
     if (g_lvgl_freeze || mm.free_size < TCS_LV_MEM_FLOOR_BYTES) {
         g_lvgl_guard.skip++;
+        s_blocked = 1;
         return;   /* 冻结/低水位：主循环继续（estop_watch 在其他调用点照常） */
     }
-    if (g_lvgl_guard.skip)
+    if (s_blocked) {          /* 只统计"恢复"这个沿，避免每拍自增 */
+        s_blocked = 0;
         g_lvgl_guard.recover++;
+    }
 
     uint32_t cy0 = DWT->CYCCNT;
     lv_timer_handler();

@@ -1,0 +1,26 @@
+{
+ "s00_home.png": {
+  "edge_px": 304,
+  "viol": 0,
+  "worst": 0.0,
+  "verdict": "PASS"
+ },
+ "s05_p1.png": {
+  "edge_px": 604,
+  "viol": 12,
+  "worst": 23.3,
+  "verdict": "FAIL"
+ },
+ "s09_p2.png": {
+  "edge_px": 246,
+  "viol": 0,
+  "worst": 0.0,
+  "verdict": "PASS"
+ },
+ "s01_dlg_estop.png": {
+  "edge_px": 2813,
+  "viol": 76,
+  "worst": 15.3,
+  "verdict": "FAIL"
+ }
+}

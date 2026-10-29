@@ -1,0 +1,38 @@
+# 真机 W 线固件（build/tcs_main.bin md5 75d070a8）首刷后完整 RTT 环（2026-10-29）
+# 探针: DAPLink CMSIS-DAP 0d28:0204；读取方式: mb_console 直读 _SEGGER_RTT.aUp[0]
+# [原始环内容，共 1023 字节]
+[SYSTEM] boot reset-src=SOFT (RSR=0x01460000)
+[SYSTEM] boot project_tcs fw=v1.2.0 HCLK=480 MHz
+RTT: mpu+d-cache write-through ok
+RTT: pll3 ltdc pclk=50M ok
+RTT: sdram selftest=1
+RTT: bl_diag AHB4ENR=000001FF GPIOB_MODER=FFAAF6B5 ODR=00000023
+RTT: bl_diag PB5: MODER[11:10]=1 ODR_bit5=1 (expect 1,1)
+RTT: ltdc init rv=0 g_lcd_ok=1 double_buf=1
+[SYSTEM] ltdc init rv=0 ready=1
+RTT: i2c4 up pclk4=120000000Hz target=400000Hz timing=0x20E21F33
+RTT: ft5446 ver=0001 fingers=FF ver_ok=1 (0=HW offline, skip touch)
+[SYSTEM] ft5446 init rv=0 ready=1
+RTT: eeprom online magic=0xA6
+RTT: eeprom selftest OK (0xF6 wr/rd/restore)
+[SYSTEM] eeprom params loaded
+[APP] ui init page=home lcd=1 touch=1
+[SYSTEM] init done, entering main loop
+[POST] arm UNARMED->ARMED (post pass + sources healthy)
+[POST] arm ARMED->LOST (source lost)
+[ERROR] TMP117 LOST -> ALM_BODY_SENSOR
+[ERROR] m207 OFFLINE (5 fails)
+[POST] done pass=0x34 (fail=0x0B)
+tcs v1.2.0 build=Oct 27 2026 17:32:36 params=v1(8+0x100resv) proto=v1
+[MB] done seq=2
+[MB] done seq=3
+
+# 判读（与任务书要求项对照）：
+#  ✅ W1a L3：i2c4 up timing=0x20E21F33 = 官方计算器现值在真机生效（与红队复算逐字一致）
+#  ✅ W1a L3：ft5446 HAL I2C4 通信成功 ver_ok=1（ver=0x0001 命中产出代码允收窗）
+#  ✅ W4.2 L3（部分）：官方 vendor RTT 控制块 + probe-rs 直读工作正常
+#  ✅ 参数读取（部分）：ver 返回 params=v1(8+0x100resv)
+#  ❌ TMP117：LOST → 体温传感器本次未读到（需查 I2C1 PB8/9 接线与传感器实装/上电）
+#  ❌ M207：OFFLINE(5 fails) → 未联动（需查 M207 电源/RS232 接线(交叉)/波特率/MAX3232）
+#  ⚠ POST fail=0x0B（3 项失败位）与 m207/tmp117 失联吻合
+#  ⚠ fingers=FF：空闲态 TD_STATUS=0xFF 而非位bang期 0x0F——W1b"空闲态行为一致"项待核（新现象）

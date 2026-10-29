@@ -105,6 +105,20 @@ void app_ota_trigger(int rollback)
     xTaskCreate(ota_copy_task, "ota_copy", 6144, NULL, 4, NULL);
 }
 
+/* R2 协议换向：屏（H743）0x12 → 本端权威注册表 → M207 verify → 回 ACK。
+ * 经 link_on_setparam 回调注入（tcs_core 依赖 tcs_link，反向直调会成组件环）。*/
+static void esp_on_setparam(uint16_t id, float v, uint8_t seq)
+{
+    int rv = param_set(id, v, PARAM_SRC_DEFAULT);
+    uint8_t st = TCS_ACK_OK;
+    if (rv == 1) st = TCS_ACK_CLAMP;
+    else if (rv == -1) st = TCS_ACK_BAD_ID;
+    else if (rv < 0) st = TCS_ACK_BUSY;
+    ESP_LOGI(TAG, "H743 SET id=0x%02x v=%.2f rv=%d -> ack st=%u val=%.2f",
+             id, v, rv, st, param_get(id));
+    link_send_ack(seq, MT_TCS_SET_PARAM, st, param_get(id));
+}
+
 void app_main(void)
 {
     esp_err_t err = nvs_flash_init();
@@ -140,6 +154,7 @@ void app_main(void)
     softap_start();
     link_loopback_run();          /* WP-F.1：真机自环自测（独占 UART1，~2.5s，证据=[LPBK]）*/
     link_start();
+    link_on_setparam(esp_on_setparam);   /* R2：屏写参数回调装配 */
     web_start();
     /* R1b：M207 服务（UART2 21/47@57600）。回环自测先行（独占 UART2 ~1s，
      * 含物理短接探测），随后常驻服务钉核 1（第八章预算）。 */

@@ -223,7 +223,7 @@ for line in io.open(sys.argv[1],encoding='utf-8'):
     if not line or line.startswith('#'): continue
     parts=line.split(';;')
     if len(parts)!=4: continue
-    name,dirs,pat,want=parts[0],parts[1].split(),parts[2],int(parts[3])
+    name,dirs,pat,want=parts[0],parts[1].split(),parts[2],int(parts[3].split()[0])
     n+=1
     out=subprocess.run([GREP,'-rnE',pat]+dirs+['--include=*.c'],
                        capture_output=True,text=True).stdout

@@ -114,6 +114,14 @@ void link_uart_error_recover(void)
 
 static void link_rx_drain(void)
 {
+    /* R2 真机自愈（2026-10-30，卡死根因坐实）：USART2 首次 ORE 后 HAL 会关闭
+     * RXNEIE（CR1.RXNEIE=0），而错误回调未启用 → 链路 RX 永久失聪。
+     * 与 console_poll 同款轮询自愈：ORE 置位或 RXNEIE 失能 → Abort+清+重挂。*/
+    if (__HAL_UART_GET_FLAG(&huart_link, UART_FLAG_ORE) ||
+        (huart_link.Instance->CR1 & USART_CR1_RXNEIE_RXFNEIE) == 0u) {
+        link_uart_error_recover();
+    }
+
     uint16_t guard = LINK_RX_SIZE + 2u;
     while (guard--) {
         if (s_lrx_head == s_lrx_tail) break;
@@ -187,8 +195,56 @@ static void hook_broadcast(param_desc_t *p, uint8_t src)
     if (fn) comm_txq_push(&g_link, frame, fn);
 }
 
-static void hook_m207_set(uint8_t ch, float v) { (void)m207_set_temp(ch, v); }
-static void hook_m207_map_set(uint16_t pid, float v) { (void)m207_map_set(pid, v); }
+/* ====== R2（v11.3 链路升级+协议换向）：快照接收状态 ======
+ * 屏=唯一操作载体：显示全部取自 ESP32 权威快照（0x20/0x21）；
+ * esp_link_ok=快照新鲜度（500ms 窗，v2.4 §13.4.6 销号）。*/
+static uint32_t s_snap_ms;      /* 最近 0x20 到达时刻（ms）*/
+static uint32_t s_snap_seq;     /* 最近快照 seq（单调性检查=F15 旧帧丢弃）*/
+static uint8_t  s_snap_have;
+
+/* 快照/增量应用：显示字段直写 g_tcs；设定值经 param_link_sync 静默回灌本地注册表
+ * （不触发广播/下发，防 0x11/0x12 成环）。*/
+static void snap_apply(const tcs_snap_pl_t *s)
+{
+    g_tcs.tc1_act = s->tc1_act;
+    g_tcs.tc2_act = s->tc2_act;
+    g_tcs.body_temp = s->body;
+    g_tcs.tec1_on = s->tec1; g_tcs.tec2_on = s->tec2; g_tcs.fan_on = s->fan;
+    g_tcs.mode = s->mode;
+    g_tcs.alarm_bits = s->alarm;
+    g_tcs.m207_online = (s->online & TCS_ONLINE_M207) ? 1u : 0u;
+    g_tcs.body_sensor_ok = (s->online & TCS_ONLINE_BODY_SENSOR) ? 1u : 0u;
+    param_link_sync(PARAM_ID_TC1_SET, s->tc1_set);
+    param_link_sync(PARAM_ID_TC2_SET, s->tc2_set);
+}
+
+/* R2：屏侧写 M207 温度参数 → 链路 0x12 发 ESP32（权威→M207 verify）；
+ * 链路未判活时退回本地旧路径（v2 接线后不可达，仅作降级痕迹）。*/
+static uint8_t m207_redirect_send(uint16_t id, float v)
+{
+    if (!g_tcs.esp_link_ok) return 0;
+    uint8_t pl[TCS_PARAM_PL_LEN];
+    tcs_param_pl_t pp = { .id = id, .type = PARAM_TYPE_F32, .value = tcs_f2b(v) };
+    size_t n = tcs_pl_param(pl, sizeof(pl), &pp);
+    if (!n) return 0;
+    uint8_t frame[MAX_FRAME];
+    size_t fn = proto_encode_frame_with_mt(MT_TCS_SET_PARAM, comm_next_seq(&g_link),
+                                           pl, n, frame, sizeof(frame));
+    if (!fn) return 0;
+    return (comm_send(&g_link, frame, fn, MT_TCS_SET_PARAM) != 0xFFu) ? 1u : 0u;
+}
+
+static void hook_m207_set(uint8_t ch, float v)
+{
+    /* R2：经链路（ESP32 注册表→M207 verify）；断链才走旧本地下发 */
+    if (m207_redirect_send(ch == 1 ? PARAM_ID_TC1_SET : PARAM_ID_TC2_SET, v)) return;
+    (void)m207_set_temp(ch, v);
+}
+static void hook_m207_map_set(uint16_t pid, float v)
+{
+    if (m207_redirect_send(pid, v)) return;
+    (void)m207_map_set(pid, v);
+}
 static void hook_mode_change(uint8_t m)        { control_on_mode_change(m); }
 static int  hook_eeprom_commit(const uint8_t *img) { return eeprom_commit_image(img); }
 static void ops_tec_sw(uint8_t ch, uint8_t on)   { (void)m207_tec(ch, on); }
@@ -225,6 +281,37 @@ void on_frame(const uint8_t *payload, size_t len)
         link_send_ack(seq, mt, TCS_ACK_OK, 0.0f);
         s_dump_idx = 0;
         s_dump_active = 1;
+        break;
+    }
+    case MT_TCS_SNAPSHOT: {          /* R2：200ms 全量快照 = 屏唯一读源 */
+        tcs_snap_pl_t s;
+        if (tcs_scan_snapshot(body, blen, &s) != 0) break;
+        if (s.ver != TCS_PROTO_VER) break;
+        if (s_snap_have && (int32_t)(s.seq - s_snap_seq) <= 0) break;  /* F15 旧帧丢弃 */
+        if (!s_snap_have) {
+            tcs_log("[NET]", "SNAP first seq=%u m207=%u tc1=%.1f tc2=%.1f",
+                    (unsigned)s.seq, (unsigned)((s.online & TCS_ONLINE_M207) ? 1u : 0u),
+                    (double)s.tc1_act, (double)s.tc2_act);
+        }
+        s_snap_seq = s.seq;
+        s_snap_ms = millis();
+        s_snap_have = 1;
+        snap_apply(&s);
+        break;
+    }
+    case MT_TCS_DELTA: {             /* R2：位图增量（设定值/teс/fan/mode/alarm/body/badge）*/
+        tcs_delta_src_t d = {0};
+        uint16_t mask = 0;
+        if (tcs_scan_delta(body, blen, &d, &mask) != 0) break;
+        if (mask & TCS_D_TC1_SET) param_link_sync(PARAM_ID_TC1_SET, d.tc1_set);
+        if (mask & TCS_D_TC2_SET) param_link_sync(PARAM_ID_TC2_SET, d.tc2_set);
+        if (mask & TCS_D_TEC) { g_tcs.tec1_on = (uint8_t)(d.tec & 1u);
+                                g_tcs.tec2_on = (uint8_t)((d.tec >> 1) & 1u); }
+        if (mask & TCS_D_FAN)     g_tcs.fan_on = d.fan;
+        if (mask & TCS_D_MODE)  { g_tcs.mode = d.mode;
+                                  param_link_sync(PARAM_ID_MODE, (float)d.mode); }
+        if (mask & TCS_D_ALARM)   g_tcs.alarm_bits = d.alarm;
+        if (mask & TCS_D_BODY)    g_tcs.body_temp = d.body;
         break;
     }
     case MT_TCS_CMD: {
@@ -627,7 +714,10 @@ int main(void)
             g_link_down_flag = 0;
             tcs_log("[NET]", "esp link down (3 retries)");
         }
-        g_tcs.esp_link_ok = (g_link.link_ok != 0) ? 1u : 0u;
+        /* R2（v2.4 §13.4.6）：判活口径=快照新鲜度 500ms 窗（0x20@200ms 连续到达）；
+         * comm 层 link_ok(ARQ 活性)保留内部使用，不再直接映射屏点 */
+        g_tcs.esp_link_ok = (s_snap_have &&
+                             (uint32_t)(now - s_snap_ms) <= 500u) ? 1u : 0u;
 
         if (now - last_led_ms >= 500u) {
             last_led_ms = now;

@@ -7,4 +7,5 @@
 研学卡_HAL_LTDC;;App Core/Src;;HAL_LTDC_;;6
 研学卡_HAL_DMA2D;;App Core/Src;;DMA2D_;;1
 研学卡_HAL_PWR_RCC;;App Core/Src;;HAL_RCC_|HAL_PWR_;;42
-研学卡_HAL_IWDG;;App Core/Src;;IWDG;;28
+# IWDG 28→29：G 合并后 App/lvgl_port/tcs_lvgl.c:203 注释引用 +1（2026-10-30 重锚）
+研学卡_HAL_IWDG;;App Core/Src;;IWDG;;29

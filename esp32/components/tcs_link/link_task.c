@@ -239,6 +239,25 @@ static size_t mt_frame(uint8_t mt, uint8_t seq, const uint8_t *body, size_t blen
     return proto_encode_frame(payload, blen + 2, out, cap);
 }
 
+static link_setparam_cb_t s_setparam_cb;
+
+void link_on_setparam(link_setparam_cb_t cb)
+{
+    s_setparam_cb = cb;
+}
+
+/* R2：回 ACK（H743 侧 comm 层按 (seq,mt) 匹配 pending；fire-and-forget 入队）*/
+void link_send_ack(uint8_t acked_seq, uint8_t acked_mt, uint8_t status, float ret)
+{
+    uint8_t pl[TCS_ACK_PL_LEN];
+    tcs_ack_pl_t a = { acked_seq, acked_mt, status, ret };
+    size_t n = tcs_pl_ack(pl, sizeof(pl), &a);
+    uint8_t frame[MAX_FRAME];
+    size_t fn = mt_frame(MT_TCS_ACK, comm_next_seq(&s_link), pl, n,
+                         frame, sizeof(frame));
+    if (fn) comm_txq_push(&s_link, frame, fn);
+}
+
 static void notify(void)
 {
     if (s_cb) s_cb();
@@ -305,8 +324,24 @@ static void on_frame(const uint8_t *payload, size_t len)
         }
         break;
     }
+    case MT_TCS_SET_PARAM: {         /* R2 协议换向：屏（H743）写参数 → 本端权威注册表 → M207 verify */
+        tcs_param_pl_t p;
+        uint8_t seq = payload[1];
+        if (tcs_scan_param(body, blen, &p) != 0) {
+            link_send_ack(seq, mt, TCS_ACK_BAD_ID, 0.0f);
+            break;
+        }
+        float v = (p.type == PARAM_TYPE_F32) ? tcs_b2f(p.value) : (float)p.value;
+        /* 破组件环（tcs_core→tcs_link）：应用层注册处理器落权威注册表并回 ACK */
+        if (s_setparam_cb) {
+            s_setparam_cb(p.id, v, seq);
+        } else {
+            link_send_ack(seq, mt, TCS_ACK_BUSY, 0.0f);
+        }
+        break;
+    }
     default:
-        break;   /* 0x90 已被 comm 层消费；0x12/0x13/0x15 不会从 H743 发来 */
+        break;   /* 0x90 已被 comm 层消费；0x13/0x15 不会从 H743 发来（R2 后 0x12 双向：本端作接收侧） */
     }
 }
 

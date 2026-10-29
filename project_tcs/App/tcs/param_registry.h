@@ -128,6 +128,9 @@ int   param_persist_now(void);
 /* 广播（param_set 内部已调；模式等非参数变更可手动调）*/
 void  param_broadcast(param_desc_t *p, uint8_t src);
 
+/* R2：链路快照回灌（ESP32 权威值 → 本地显示副本；无副作用无广播）*/
+void  param_link_sync(uint16_t id, float v);
+
 void  param_load_defaults(void);
 /* 上电恢复：img 由 eeprom.c 读出；magic/ver/CRC 任一不符 → 默认值 + 返回 -1 */
 int   param_deserialize(const uint8_t *img);

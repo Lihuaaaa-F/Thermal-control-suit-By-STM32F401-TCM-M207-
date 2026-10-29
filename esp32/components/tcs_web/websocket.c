@@ -86,6 +86,16 @@ static void ws_tx_work_fn(void *arg)
 static void fds_send(const char *json, size_t len)
 {
     if (!s_hd || !len || len > sizeof(((ws_tx_work_t *)0)->json)) return;
+    /* P0（2026-10-30 真机归因）：无客户端时不投递——空闲 500ms 推送不再每拍
+     * malloc+queue_work（新构建曾因此 3.6s 触发 lwip panic，旧构建无此路径）*/
+    {
+        bool any = false;
+        taskENTER_CRITICAL(&s_mux);
+        for (int i = 0; i < WS_MAX_CLIENTS; i++)
+            if (s_fds[i] > 0) { any = true; break; }
+        taskEXIT_CRITICAL(&s_mux);
+        if (!any) return;
+    }
     ws_tx_work_t *w = malloc(sizeof *w);   /* 定长小块，500ms 周期有界（§3.2 堆策略）*/
     if (!w) return;
     memcpy(w->json, json, len);

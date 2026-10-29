@@ -253,6 +253,23 @@ int param_set(uint16_t id, float v, uint8_t src)
     return clamped ? 1 : 0;
 }
 
+/* R2：链路快照回灌——把 ESP32 权威值静默写入本地注册表（屏显示源）。
+ * 不走 param_set：其副作用会回推 0x11/0x12 成环；不置 persist、不广播。
+ * 仅 clamp+量化后写 value（脏 UI 由 500ms UI 扫描自然发现）。*/
+void param_link_sync(uint16_t id, float v)
+{
+    param_desc_t *p = param_find(id);
+    if (!p) return;
+    float c = v;
+    if (c < p->min) c = p->min;
+    if (c > p->max) c = p->max;
+    c = type_quantize(p, c);
+    if (c != p->value) {
+        p->value = c;
+        p->dirty_ui = 1;
+    }
+}
+
 /* ====== EEPROM v2 序列化（纯函数，PC 单测 §5.1）====== */
 /* 物理布局：记录区 0x04..0xF7 共 244B = 30 条 8B 记录；CRC 在 0xF8。
  * 任务书 count 字段口径 ≤31；30 < 31，取更严者 → >30 条返回 -1（防记录覆盖 CRC 区）。 */

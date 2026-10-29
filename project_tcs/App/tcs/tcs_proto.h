@@ -275,4 +275,128 @@ static inline int tcs_scan_ack(const uint8_t *pl, size_t len, tcs_ack_pl_t *a)
     return 0;
 }
 
+/* ====== 0x20 TCS_SNAPSHOT / 0x21 TCS_DELTA（R2 架构 v2：ESP→H743 200ms 全量，
+ * fire-and-forget；本段与 esp32/components/tcs_link/tcs_proto.h 逐字同源——
+ * 字节格式=唯一真相，改动必须双端同步并经 proto_ref.py 字节对照）====== */
+#define MT_TCS_SNAPSHOT       0x20
+#define MT_TCS_DELTA          0x21
+
+typedef struct {
+    uint8_t  ver;        /* TCS_PROTO_VER */
+    uint32_t seq;        /* 帧序号（发送侧自增；收端做单调性检查 F15）*/
+    uint32_t ms;         /* ESP boot 毫秒戳 */
+    float    tc1_act, tc2_act, body;
+    float    tc1_set, tc2_set;
+    uint8_t  tec1, tec2, fan, mode;
+    uint16_t alarm;
+    uint8_t  online;     /* TCS_ONLINE_* 位或 */
+    uint16_t fresh_ms;   /* M207 温度缓存龄 ms（0xFFFF=未知/离线）*/
+    uint8_t  badge;      /* 布防角标 0/1/2（post_arm_t）*/
+    uint8_t  rfu;
+} tcs_snap_pl_t;
+
+#define TCS_SNAP_PL_LEN   40   /* 1+4+4+20+4+2+1+2+1+1 */
+
+#define TCS_D_TC1_SET  (1u << 0)
+#define TCS_D_TC2_SET  (1u << 1)
+#define TCS_D_TEC      (1u << 2)   /* 1B：bit0=tec1 bit1=tec2 */
+#define TCS_D_FAN      (1u << 3)
+#define TCS_D_MODE     (1u << 4)
+#define TCS_D_ALARM    (1u << 5)
+#define TCS_D_BODY     (1u << 6)
+#define TCS_D_BADGE    (1u << 7)
+
+typedef struct {             /* 全量源值；编码按 mask 摘取，解码只填 mask 内字段 */
+    float    tc1_set, tc2_set, body;
+    uint8_t  tec;        /* bit0=tec1 bit1=tec2 */
+    uint8_t  fan, mode, badge;
+    uint16_t alarm;
+} tcs_delta_src_t;
+
+static inline size_t tcs_pl_snapshot(uint8_t *out, size_t cap, const tcs_snap_pl_t *s)
+{
+    if (cap < TCS_SNAP_PL_LEN) return 0;
+    size_t o = 0;
+    out[o++] = s->ver;
+    tcs_put_u32(&out[o], s->seq); o += 4;
+    tcs_put_u32(&out[o], s->ms);  o += 4;
+    tcs_put_u32(&out[o], tcs_f2b(s->tc1_act)); o += 4;
+    tcs_put_u32(&out[o], tcs_f2b(s->tc2_act)); o += 4;
+    tcs_put_u32(&out[o], tcs_f2b(s->body));    o += 4;
+    tcs_put_u32(&out[o], tcs_f2b(s->tc1_set)); o += 4;
+    tcs_put_u32(&out[o], tcs_f2b(s->tc2_set)); o += 4;
+    out[o++] = s->tec1; out[o++] = s->tec2; out[o++] = s->fan; out[o++] = s->mode;
+    tcs_put_u16(&out[o], s->alarm); o += 2;
+    out[o++] = s->online;
+    tcs_put_u16(&out[o], s->fresh_ms); o += 2;
+    out[o++] = s->badge;
+    out[o++] = s->rfu;
+    return o;                              /* == TCS_SNAP_PL_LEN */
+}
+
+static inline int tcs_scan_snapshot(const uint8_t *pl, size_t len, tcs_snap_pl_t *s)
+{
+    if (len < TCS_SNAP_PL_LEN) return -1;
+    size_t o = 0;
+    s->ver = pl[o++];
+    s->seq = tcs_get_u32(&pl[o]); o += 4;
+    s->ms  = tcs_get_u32(&pl[o]); o += 4;
+    s->tc1_act = tcs_b2f(tcs_get_u32(&pl[o])); o += 4;
+    s->tc2_act = tcs_b2f(tcs_get_u32(&pl[o])); o += 4;
+    s->body    = tcs_b2f(tcs_get_u32(&pl[o])); o += 4;
+    s->tc1_set = tcs_b2f(tcs_get_u32(&pl[o])); o += 4;
+    s->tc2_set = tcs_b2f(tcs_get_u32(&pl[o])); o += 4;
+    s->tec1 = pl[o++]; s->tec2 = pl[o++]; s->fan = pl[o++]; s->mode = pl[o++];
+    s->alarm = tcs_get_u16(&pl[o]); o += 2;
+    s->online = pl[o++];
+    s->fresh_ms = tcs_get_u16(&pl[o]); o += 2;
+    s->badge = pl[o++];
+    s->rfu = pl[o++];
+    return 0;
+}
+
+static inline size_t tcs_pl_delta(uint8_t *out, size_t cap, uint16_t mask,
+                                  const tcs_delta_src_t *d)
+{
+    size_t need = 2;
+    if (mask & TCS_D_TC1_SET) need += 4;
+    if (mask & TCS_D_TC2_SET) need += 4;
+    if (mask & TCS_D_TEC)     need += 1;
+    if (mask & TCS_D_FAN)     need += 1;
+    if (mask & TCS_D_MODE)    need += 1;
+    if (mask & TCS_D_ALARM)   need += 2;
+    if (mask & TCS_D_BODY)    need += 4;
+    if (mask & TCS_D_BADGE)   need += 1;
+    if (cap < need) return 0;
+    size_t o = 0;
+    tcs_put_u16(&out[o], mask); o += 2;
+    if (mask & TCS_D_TC1_SET) { tcs_put_u32(&out[o], tcs_f2b(d->tc1_set)); o += 4; }
+    if (mask & TCS_D_TC2_SET) { tcs_put_u32(&out[o], tcs_f2b(d->tc2_set)); o += 4; }
+    if (mask & TCS_D_TEC)     { out[o++] = d->tec; }
+    if (mask & TCS_D_FAN)     { out[o++] = d->fan; }
+    if (mask & TCS_D_MODE)    { out[o++] = d->mode; }
+    if (mask & TCS_D_ALARM)   { tcs_put_u16(&out[o], d->alarm); o += 2; }
+    if (mask & TCS_D_BODY)    { tcs_put_u32(&out[o], tcs_f2b(d->body)); o += 4; }
+    if (mask & TCS_D_BADGE)   { out[o++] = d->badge; }
+    return o;
+}
+
+static inline int tcs_scan_delta(const uint8_t *pl, size_t len, tcs_delta_src_t *d,
+                                 uint16_t *mask_out)
+{
+    if (len < 2) return -1;
+    uint16_t mask = tcs_get_u16(&pl[0]);
+    size_t o = 2;
+    if (mask & TCS_D_TC1_SET) { if (len < o+4) return -1; d->tc1_set = tcs_b2f(tcs_get_u32(&pl[o])); o += 4; }
+    if (mask & TCS_D_TC2_SET) { if (len < o+4) return -1; d->tc2_set = tcs_b2f(tcs_get_u32(&pl[o])); o += 4; }
+    if (mask & TCS_D_TEC)     { if (len < o+1) return -1; d->tec = pl[o++]; }
+    if (mask & TCS_D_FAN)     { if (len < o+1) return -1; d->fan = pl[o++]; }
+    if (mask & TCS_D_MODE)    { if (len < o+1) return -1; d->mode = pl[o++]; }
+    if (mask & TCS_D_ALARM)   { if (len < o+2) return -1; d->alarm = tcs_get_u16(&pl[o]); o += 2; }
+    if (mask & TCS_D_BODY)    { if (len < o+4) return -1; d->body = tcs_b2f(tcs_get_u32(&pl[o])); o += 4; }
+    if (mask & TCS_D_BADGE)   { if (len < o+1) return -1; d->badge = pl[o++]; }
+    *mask_out = mask;
+    return 0;
+}
+
 #endif /* TCS_PROTO_H */

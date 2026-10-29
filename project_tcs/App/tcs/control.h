@@ -58,6 +58,12 @@ uint8_t tcs_alarm_active(uint16_t bit);
  * 仅当报警源已恢复（传感器 ok、M207 online、tc1_act≤硬阈值、非急停自持）才清位。 */
 void  tcs_alarm_ack(void);
 
+#if TCS_USE_LVGL
+/* G5：60 点×30s 温度环形（P2 数据源） */
+void tcs_hist_tick(uint32_t now_ms);
+void tcs_hist_snapshot(float out1[60], float out2[60], uint32_t * n);
+#endif
+
 /* 急停（屏弹窗确认 / 0x15 cmd=8 / KEY0 / console estop 同一入口）：
  * 双通道 TCSW=0 + 风扇开 + mode=手动 + ALM_ESTOP + 广播 */
 void  tcs_emergency_stop(void);

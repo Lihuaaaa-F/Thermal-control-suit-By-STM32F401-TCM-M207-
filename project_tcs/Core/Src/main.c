@@ -26,6 +26,9 @@
 #include "tmp117.h"
 #include "console.h"
 #include "tcs_ui.h"
+#if TCS_USE_LVGL
+#include "tcs_lvgl.h"
+#endif
 #include "fan.h"
 #include "eeprom.h"
 #include "iwdg.h"
@@ -569,7 +572,11 @@ int main(void)
     comm_init(&g_link, link_uart_send, now_ms_fn, on_link_down, crit_enter, crit_exit);
 
 #ifdef ENABLE_LCD
+  #if TCS_USE_LVGL
+    tcs_lvgl_init();     /* G4：LVGL 栈（benchmark=hello 层） */
+  #else
     tcs_ui_init();
+  #endif
 #endif
     post_init(ee_cfg_invalid);   /* H6：六项自检（M207 项宽限窗内异步裁决）*/
     tcs_log("[SYSTEM]", "init done, entering main loop");
@@ -601,7 +608,12 @@ int main(void)
         comm_tick(&g_link);              /* 重传检查（主循环上下文）*/
 
 #ifdef ENABLE_LCD
+  #if TCS_USE_LVGL
+        tcs_lvgl_estop_watch();   /* D-L7② 屏入口兜底：先于 LVGL 的原始坐标判定 */
+        tcs_lvgl_poll();
+  #else
         tcs_ui_poll(now);
+  #endif
 #endif
         control_poll(now);
         tmp117_poll(now);

@@ -7,3 +7,8 @@ esp32/tools/_web_audit_page.html
 
 # ESP32 组件管理器产物
 esp32/managed_components/
+
+# LVGL 线（2026-10-29）：多套构建目录不入库（每套 200MB+）
+project_tcs/build-*/
+project_tcs/tools/__pycache__/
+*.log

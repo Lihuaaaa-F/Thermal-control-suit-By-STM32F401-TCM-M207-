@@ -483,8 +483,8 @@ static void draw_banner_content(void)
         snprintf(cnt, sizeof(cnt), "还有%d条", extra);
         int cw = ui_text24_w(cnt) + 16;
         int cx0 = bx + bw - cw - 12;
-        gfx_draw_rect(cx0, by + 12, cx0 + cw - 1, by + 43, tx);
-        ui_text24(cx0 + 8, by + 16, cnt, tx, bg);
+        gfx_draw_rect(cx0, by + 4, cx0 + cw - 1, by + 28, tx);   /* G5清账②：仅主句行，避让 act 行 */
+        ui_text24(cx0 + 8, by + 6, cnt, tx, bg);
     }
 }
 
@@ -511,7 +511,7 @@ static void topbar_content(void)
     gfx_draw_vline(183, 22, 50, C_BORDER);
     int auto_m = (g_tcs.mode != 0);
     ui_dot8(UI_DOT_MODE_C, auto_m ? C_GREEN : C_GRAY);   /* D4：mock 锚定 */
-    ui_text24(68, 24, auto_m ? "自动" : "手动", C_TX, C_CARD);
+    ui_text24(88, 24, auto_m ? "自动" : "手动", C_TX, C_CARD);   /* G5清账①：68→88 消除与模式点重叠 */
 
     if (g_tcs.alarm_bits) {
         draw_banner_content();   /* 报警时链路点并入横幅（隐藏）*/
@@ -519,15 +519,22 @@ static void topbar_content(void)
         ui_dot8(UI_DOT_M207_C, g_tcs.m207_online ? C_GREEN : C_GRAY);   /* D4 */
         ui_aux20(796, 18, "M207", C_TX2, C_BG);
         ui_dot8(UI_DOT_ESP_C, g_tcs.esp_link_ok ? C_GREEN : C_GRAY);   /* D4 */
-        ui_aux20(868, 18, "ESP", C_TX2, C_BG);
+        ui_aux20(876, 18, "ESP", C_TX2, C_BG);   /* G5清账⑤：868→876 点字距对齐 mock */
     }
 
-    /* 急停小图标常驻 (940,20,24,24)：灰描边/急停红实心（非触摸）*/
+    /* 急停小图标常驻 (940,20,24,24)：圆环+方芯（G5清账⑥，对齐定稿 mock）；
+     * 急停态=红实心圆+白芯 */
     if (g_tcs.alarm_bits & ALM_ESTOP) {
-        gfx_fill_rect(942, 22, 963, 43, C_RED);
+        for (int yy = -11; yy <= 11; yy++)
+            for (int xx = -11; xx <= 11; xx++)
+                if (xx * xx + yy * yy <= 121) gfx_draw_pixel(952 + xx, 32 + yy, C_RED);
         gfx_fill_rect(948, 28, 957, 37, C_WHITE);
     } else {
-        gfx_draw_rect(942, 22, 963, 43, C_GRAY);
+        for (int yy = -12; yy < 12; yy++)
+            for (int xx = -12; xx < 12; xx++) {
+                int d2 = xx * xx + yy * yy;
+                if (d2 >= 72 && d2 <= 121) gfx_draw_pixel(952 + xx, 32 + yy, C_GRAY);
+            }
         gfx_fill_rect(948, 28, 957, 37, C_GRAY);
     }
 
@@ -642,7 +649,8 @@ static void draw_body_card(void)
     ui_dot8(UI_DOT_BODY_C, (lit && g_tcs.body_sensor_ok) ? C_GREEN : C_GRAY);   /* D4 */
     if (!g_tcs.body_sensor_ok) {
         ui_round_rect(380, 380, 88, 40, 20, C_WARNBG, C_CARD);
-        ui_text24(392, 388, "▲失联", C_WARNTX, C_WARNBG);
+        draw_banner_icon(392, 388, 0, C_WARNTX, C_WARNBG);   /* G5清账③：◤含叹号（K5 D3b 同源）*/
+        ui_text24(416, 388, "失联", C_WARNTX, C_WARNBG);
     }
     ui_patch_commit(32, 352, 492, 448);
     g_stat_patch_cnt++;
@@ -1100,8 +1108,8 @@ static hl_t press_hit_test(int x, int y)
     } else {
         int base = s_tune_page * UI_TUNE_ROW_N;
         int ry = tune_row_y(s_tune_sel - base);
-        if (ui_in(x, y, UI_TUNE_ROW_X + 792, ry + 8, 64, 64)) return HL_ROW_KEYM;
-        if (ui_in(x, y, UI_TUNE_ROW_X + 872, ry + 8, 64, 64)) return HL_ROW_KEYP;
+        if (ui_in(x, y, UI_TUNE_ROW_X + 792, ry + 12, 64, 64)) return HL_ROW_KEYM;   /* G5清账④ */
+        if (ui_in(x, y, UI_TUNE_ROW_X + 872, ry + 12, 64, 64)) return HL_ROW_KEYP;   /* G5清账④ */
         if (ui_in(x, y, R_TUNE_STEP)) return HL_STEP;
         if (s_tune_page == 0 && ui_in(x, y, R_TUNE_NEXT)) return HL_NEXT;
         if (s_tune_page == 1 && ui_in(x, y, R_TUNE_PREV))  return HL_PREV;

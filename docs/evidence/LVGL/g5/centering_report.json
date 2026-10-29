@@ -1,0 +1,594 @@
+{
+ "summary": {
+  "PASS": 23,
+  "FAIL": 11,
+  "NO-INK": 1,
+  "WARN": 3,
+  "REPORT": 4
+ },
+ "rows": [
+  {
+   "key": "p0_mode_dot",
+   "frame": "v_home.png",
+   "verdict": "PASS",
+   "dx": 0,
+   "dy": 0,
+   "bbox": [
+    73,
+    33,
+    79,
+    39
+   ],
+   "note": "模式点圆心"
+  },
+  {
+   "key": "p0_mode_text",
+   "frame": "v_home.png",
+   "verdict": "PASS",
+   "dx": 1,
+   "dy": 2,
+   "bbox": [
+    89,
+    27,
+    134,
+    47
+   ],
+   "note": "模式文字左上"
+  },
+  {
+   "key": "p0_estop_icon",
+   "frame": "v_home.png",
+   "verdict": "PASS",
+   "dx": 0,
+   "dy": 0,
+   "bbox": [
+    941,
+    21,
+    962,
+    42
+   ],
+   "note": "急停图标中心"
+  },
+  {
+   "key": "p0_c1_title",
+   "frame": "v_home.png",
+   "verdict": "PASS",
+   "dx": 0,
+   "dy": 1,
+   "bbox": [
+    56,
+    110,
+    182,
+    139
+   ],
+   "note": "TC1 标题"
+  },
+  {
+   "key": "p0_c1_tec",
+   "frame": "v_home.png",
+   "verdict": "PASS",
+   "dx": 1,
+   "dy": -1,
+   "bbox": [
+    384,
+    114,
+    483,
+    147
+   ],
+   "note": "TEC1 胶囊文字中心"
+  },
+  {
+   "key": "p0_c1_set_val",
+   "frame": "v_home.png",
+   "verdict": "FAIL",
+   "dx": 7,
+   "dy": 3,
+   "bbox": [
+    121,
+    272,
+    263,
+    295
+   ],
+   "note": "设定值 32px 左上"
+  },
+  {
+   "key": "p0_c2_tec",
+   "frame": "v_home.png",
+   "verdict": "NO-INK",
+   "dx": 0,
+   "dy": 0,
+   "bbox": null,
+   "note": "TEC2 胶囊文字中心（无墨迹）"
+  },
+  {
+   "key": "p0_body_title",
+   "frame": "v_home.png",
+   "verdict": "PASS",
+   "dx": 0,
+   "dy": 2,
+   "bbox": [
+    56,
+    367,
+    103,
+    387
+   ],
+   "note": "体温标题"
+  },
+  {
+   "key": "p0_lost_badge",
+   "frame": "v_home.png",
+   "verdict": "FAIL",
+   "dx": 17,
+   "dy": -5,
+   "bbox": [
+    416,
+    384,
+    491,
+    417
+   ],
+   "note": "失联徽整体中心"
+  },
+  {
+   "key": "p0_fan_title",
+   "frame": "v_home.png",
+   "verdict": "PASS",
+   "dx": 1,
+   "dy": 1,
+   "bbox": [
+    557,
+    366,
+    601,
+    387
+   ],
+   "note": "风扇标题"
+  },
+  {
+   "key": "p0_fan_state",
+   "frame": "v_home.png",
+   "verdict": "PASS",
+   "dx": 1,
+   "dy": 1,
+   "bbox": [
+    557,
+    404,
+    625,
+    425
+   ],
+   "note": "风扇状态文字"
+  },
+  {
+   "key": "p0_fan_word",
+   "frame": "v_home.png",
+   "verdict": "FAIL",
+   "dx": 0,
+   "dy": -6,
+   "bbox": [
+    908,
+    382,
+    967,
+    421
+   ],
+   "note": "风扇球文字（ON 态）"
+  },
+  {
+   "key": "p0_dock_tune",
+   "frame": "v_home.png",
+   "verdict": "PASS",
+   "dx": 0,
+   "dy": 1,
+   "bbox": [
+    113,
+    507,
+    174,
+    535
+   ],
+   "note": "调参钮文字中心"
+  },
+  {
+   "key": "p0_dock_mode",
+   "frame": "v_home.png",
+   "verdict": "PASS",
+   "dx": 0,
+   "dy": 0,
+   "bbox": [
+    329,
+    506,
+    422,
+    535
+   ],
+   "note": "切自动钮文字中心"
+  },
+  {
+   "key": "p0_dock_conn",
+   "frame": "v_home.png",
+   "verdict": "PASS",
+   "dx": -1,
+   "dy": 0,
+   "bbox": [
+    576,
+    505,
+    638,
+    535
+   ],
+   "note": "连接钮文字中心"
+  },
+  {
+   "key": "p0_dock_estop",
+   "frame": "v_home.png",
+   "verdict": "FAIL",
+   "dx": 0,
+   "dy": 10,
+   "bbox": [
+    845,
+    513,
+    906,
+    543
+   ],
+   "note": "急停钮文字中心（窗避开叠层）"
+  },
+  {
+   "key": "p1_back_text",
+   "frame": "v_tune.png",
+   "verdict": "FAIL",
+   "dx": 3,
+   "dy": 1,
+   "bbox": [
+    57,
+    19,
+    117,
+    39
+   ],
+   "note": "返回钮文字中心"
+  },
+  {
+   "key": "p1_ctx_text",
+   "frame": "v_tune.png",
+   "verdict": "PASS",
+   "dx": 1,
+   "dy": 1,
+   "bbox": [
+    177,
+    24,
+    669,
+    45
+   ],
+   "note": "ctx 行左上"
+  },
+  {
+   "key": "p1_r1_name",
+   "frame": "v_tune.png",
+   "verdict": "PASS",
+   "dx": 1,
+   "dy": 2,
+   "bbox": [
+    57,
+    70,
+    247,
+    91
+   ],
+   "note": "行1 名称"
+  },
+  {
+   "key": "p1_r1_val",
+   "frame": "v_tune.png",
+   "verdict": "FAIL",
+   "dx": 9,
+   "dy": -6,
+   "bbox": [
+    65,
+    106,
+    208,
+    129
+   ],
+   "note": "行1 值"
+  },
+  {
+   "key": "p1_r1_minus",
+   "frame": "v_tune.png",
+   "verdict": "FAIL",
+   "dx": -1,
+   "dy": -3,
+   "bbox": [
+    830,
+    130,
+    879,
+    143
+   ],
+   "note": "行1 − 键文字"
+  },
+  {
+   "key": "p1_r1_plus",
+   "frame": "v_tune.png",
+   "verdict": "FAIL",
+   "dx": -1,
+   "dy": -3,
+   "bbox": [
+    910,
+    130,
+    959,
+    143
+   ],
+   "note": "行1 + 键文字"
+  },
+  {
+   "key": "p1_r2_name",
+   "frame": "v_tune.png",
+   "verdict": "PASS",
+   "dx": 0,
+   "dy": 2,
+   "bbox": [
+    56,
+    174,
+    247,
+    195
+   ],
+   "note": "行2 名称"
+  },
+  {
+   "key": "p1_r3_name",
+   "frame": "v_tune.png",
+   "verdict": "PASS",
+   "dx": 0,
+   "dy": 1,
+   "bbox": [
+    56,
+    277,
+    199,
+    299
+   ],
+   "note": "行3 名称"
+  },
+  {
+   "key": "p1_r4_name",
+   "frame": "v_tune.png",
+   "verdict": "WARN",
+   "dx": 0,
+   "dy": 3,
+   "bbox": [
+    56,
+    383,
+    199,
+    403
+   ],
+   "note": "行4 名称"
+  },
+  {
+   "key": "p1_step_text",
+   "frame": "v_tune.png",
+   "verdict": "FAIL",
+   "dx": -5,
+   "dy": 0,
+   "bbox": [
+    191,
+    510,
+    299,
+    531
+   ],
+   "note": "步进钮文字中心"
+  },
+  {
+   "key": "p1_zone_minus",
+   "frame": "v_tune.png",
+   "verdict": "WARN",
+   "dx": 0,
+   "dy": 2,
+   "bbox": [
+    75,
+    522,
+    84,
+    523
+   ],
+   "note": "大−键文字"
+  },
+  {
+   "key": "p1_zone_plus",
+   "frame": "v_tune.png",
+   "verdict": "FAIL",
+   "dx": 0,
+   "dy": 4,
+   "bbox": [
+    936,
+    515,
+    951,
+    530
+   ],
+   "note": "大+键文字"
+  },
+  {
+   "key": "p2_title",
+   "frame": "v_chart.png",
+   "verdict": "PASS",
+   "dx": 0,
+   "dy": 1,
+   "bbox": [
+    176,
+    18,
+    509,
+    47
+   ],
+   "note": "曲线页标题"
+  },
+  {
+   "key": "p2_legend1",
+   "frame": "v_chart.png",
+   "verdict": "PASS",
+   "dx": 1,
+   "dy": 1,
+   "bbox": [
+    713,
+    24,
+    833,
+    45
+   ],
+   "note": "图例1 文字"
+  },
+  {
+   "key": "p2_axis_hi",
+   "frame": "v_chart.png",
+   "verdict": "REPORT",
+   "dx": 0,
+   "dy": 0,
+   "bbox": [
+    32,
+    78,
+    63,
+    107
+   ],
+   "note": "Y 轴上限（只报告）"
+  },
+  {
+   "key": "p2_axis_lo",
+   "frame": "v_chart.png",
+   "verdict": "REPORT",
+   "dx": 0,
+   "dy": 0,
+   "bbox": [
+    32,
+    462,
+    66,
+    495
+   ],
+   "note": "Y 轴下限（只报告）"
+  },
+  {
+   "key": "p2_axis_now",
+   "frame": "v_chart.png",
+   "verdict": "REPORT",
+   "dx": 0,
+   "dy": 0,
+   "bbox": [
+    890,
+    488,
+    991,
+    527
+   ],
+   "note": "X 轴现在（只报告）"
+  },
+  {
+   "key": "p3_title",
+   "frame": "v_conn.png",
+   "verdict": "PASS",
+   "dx": 0,
+   "dy": 0,
+   "bbox": [
+    32,
+    17,
+    94,
+    47
+   ],
+   "note": "连接标题"
+  },
+  {
+   "key": "p3_cred1",
+   "frame": "v_conn.png",
+   "verdict": "PASS",
+   "dx": 1,
+   "dy": 0,
+   "bbox": [
+    293,
+    353,
+    387,
+    375
+   ],
+   "note": "热点名称标签"
+  },
+  {
+   "key": "p3_cred2",
+   "frame": "v_conn.png",
+   "verdict": "PASS",
+   "dx": 1,
+   "dy": 0,
+   "bbox": [
+    293,
+    393,
+    387,
+    415
+   ],
+   "note": "热点密码标签"
+  },
+  {
+   "key": "p3_back_text",
+   "frame": "v_conn.png",
+   "verdict": "WARN",
+   "dx": -2,
+   "dy": 0,
+   "bbox": [
+    112,
+    506,
+    172,
+    535
+   ],
+   "note": "返回钮文字中心"
+  },
+  {
+   "key": "p3_fw",
+   "frame": "v_conn.png",
+   "verdict": "REPORT",
+   "dx": 0,
+   "dy": 0,
+   "bbox": [
+    898,
+    526,
+    981,
+    541
+   ],
+   "note": "fw 版本（只报告）"
+  },
+  {
+   "key": "dlg_title",
+   "frame": "w_dlg_estop2.png",
+   "verdict": "PASS",
+   "dx": 0,
+   "dy": 0,
+   "bbox": [
+    296,
+    169,
+    438,
+    199
+   ],
+   "note": "弹窗标题（左上 40,32 rel）"
+  },
+  {
+   "key": "dlg_body",
+   "frame": "w_dlg_estop2.png",
+   "verdict": "FAIL",
+   "dx": 6,
+   "dy": 1,
+   "bbox": [
+    302,
+    234,
+    639,
+    255
+   ],
+   "note": "弹窗正文（定宽首字偏移=固有）"
+  },
+  {
+   "key": "dlg_ok_text",
+   "frame": "w_dlg_estop2.png",
+   "verdict": "PASS",
+   "dx": 0,
+   "dy": 0,
+   "bbox": [
+    344,
+    378,
+    439,
+    399
+   ],
+   "note": "确认键文字中心"
+  },
+  {
+   "key": "dlg_cancel_text",
+   "frame": "w_dlg_estop2.png",
+   "verdict": "PASS",
+   "dx": -1,
+   "dy": 1,
+   "bbox": [
+    608,
+    379,
+    654,
+    399
+   ],
+   "note": "取消键文字中心"
+  }
+ ]
+}

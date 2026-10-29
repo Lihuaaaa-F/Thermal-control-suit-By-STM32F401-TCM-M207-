@@ -37,6 +37,23 @@ static uint16_t *s_back = LCD_BACK_BUF;
  * LTDC 寄存器经调试口读数不可靠——WP-C.5 实测恒 0）*/
 volatile uint32_t g_shown_fb = (uint32_t)LCD_BACK_BUF;
 
+#if TCS_USE_LVGL
+/* G4：LVGL DIRECT 双缓冲——渲染目标查询 + 指定缓冲上屏（CFBAR+VBR 重载，无撕裂） */
+uint16_t * ltdc_display_buffer(void) { return LCD_FRONT_BUF; }
+void ltdc_show_buffer(uint16_t * p)
+{
+    /* G4-Z21 闪频根因修复：VBR 重载在下一消隐期才生效，此前立即放行 LVGL 会把
+     * 下一帧渲染进「正在扫描的缓冲」（LVGL 16ms 与 LTDC 16.6ms 拍频使重叠周期性
+     * 出现）→ 撕裂带/闪频。修复=等 SRCR.VBR 硬件自清（RM0433：重载完成后清零）
+     * 作为会合点，保证放行时新缓冲必已上屏。有界等待防消隐期写入死等。 */
+    LTDC_Layer1->CFBAR = (uint32_t)p;
+    LTDC->SRCR = LTDC_SRCR_VBR;
+    uint32_t guard = 0;
+    while ((LTDC->SRCR & LTDC_SRCR_VBR) && ++guard < 2000000U) { }
+    g_shown_fb = (uint32_t)p;
+}
+#endif
+
 /* ====== 内置 8×16 ASCII 字库（ASCII 0x20-0x7E）======
  * 16 行 × 8 位，每字节一行（bit7=最左像素）。仅含可见 ASCII。*/
 static const uint8_t font8x16[][16] = {

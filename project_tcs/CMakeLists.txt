@@ -12,6 +12,8 @@ project(tcs_main C ASM)
 
 # Cortex-M7 + FPv5-D16 硬浮点
 set(MCU_FLAGS "-mcpu=cortex-m7 -mfpu=fpv5-d16 -mfloat-abi=hard -mthumb")
+# TL-17 可复现构建：源路径映射归一（跨目录/跨机 __FILE__ 等路径串不进产物）
+set(MCU_FLAGS "${MCU_FLAGS} -ffile-prefix-map=${CMAKE_CURRENT_SOURCE_DIR}=.")
 
 set(CMAKE_C_FLAGS   "${CMAKE_C_FLAGS} ${MCU_FLAGS} -Wall -Wextra -Os -ffunction-sections -fdata-sections -g3")
 set(CMAKE_ASM_FLAGS "${CMAKE_ASM_FLAGS} ${MCU_FLAGS} -x assembler-with-cpp")
@@ -99,6 +101,32 @@ if(TCS_SIM)
     target_compile_definitions(tcs_main.elf PRIVATE TCS_SIM)
     target_link_libraries(tcs_main.elf PRIVATE m)   # sim 应答器 sinf
     message(STATUS "TCS_SIM=ON: simulation build (M207 responder / TMP117 inject / touch inject)")
+endif()
+
+# ====== G4：LVGL 双栈（v12.5 D-L9；=0 零新增编译=产物与 pre-lvgl 逐字节一致 TL-17）======
+option(TCS_USE_LVGL "Enable LVGL UI stack (G4)" OFF)
+set(TCS_LV_CONF "App/lvgl_port/lv_conf.h" CACHE STRING "lv_conf.h 相对路径（变体构建覆盖，如 DMA2D ON）")
+if(TCS_USE_LVGL)
+    include(${CMAKE_CURRENT_SOURCE_DIR}/App/lvgl_port/lvgl_version_check.cmake)  # TL-16 版本锁
+    file(GLOB_RECURSE LVGL_SRC ${CMAKE_CURRENT_SOURCE_DIR}/third_party/lvgl/src/*.c)
+    file(GLOB_RECURSE LVGL_DEMO_SRC ${CMAKE_CURRENT_SOURCE_DIR}/third_party/lvgl/demos/*.c)
+    target_sources(tcs_main.elf PRIVATE ${LVGL_SRC} ${LVGL_DEMO_SRC}
+        ${CMAKE_CURRENT_SOURCE_DIR}/App/lvgl_port/lv_port_disp.c
+        ${CMAKE_CURRENT_SOURCE_DIR}/App/lvgl_port/lv_port_indev.c
+        ${CMAKE_CURRENT_SOURCE_DIR}/App/lvgl_port/tcs_lvgl.c)
+    file(GLOB TUI_SRC ${CMAKE_CURRENT_SOURCE_DIR}/App/lvgl_ui/*.c
+                      ${CMAKE_CURRENT_SOURCE_DIR}/App/lvgl_ui/fonts/*.c)
+    target_sources(tcs_main.elf PRIVATE ${TUI_SRC})
+    target_include_directories(tcs_main.elf PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/App/lvgl_ui
+        ${CMAKE_CURRENT_SOURCE_DIR}/App/tcs)
+    target_include_directories(tcs_main.elf PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/third_party/lvgl
+        ${CMAKE_CURRENT_SOURCE_DIR}/third_party/lvgl/demos
+        ${CMAKE_CURRENT_SOURCE_DIR}/App/lvgl_port)
+    target_compile_definitions(tcs_main.elf PRIVATE TCS_USE_LVGL=1
+        LV_CONF_PATH="${CMAKE_CURRENT_SOURCE_DIR}/${TCS_LV_CONF}")
+    message(STATUS "TCS_USE_LVGL=ON: LVGL ${LVGL_PINNED_VERSION} stack on")
 endif()
 
 # 转 hex/bin（ASCII 路径可直接 objcopy，仍走 python 统一后处理）

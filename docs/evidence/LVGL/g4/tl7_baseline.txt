@@ -2,3 +2,10 @@ WALL=1793023038  WALL_ISO=2026-10-26T21:57:18+08:00
 TICK_ADDR=0x2000338c
 TL7_BASE tick_ms=153275 wall=1793023039 addr=0x2000338c sym=g_tick_ms date=2026-10-26
 TL7_BASE(v2, PARTIAL 固件 afbb5d78) tick_ms=184215 wall=1793024775 addr=0x2000338c date=2026-10-26
+TL7_BASE(v3, 候选终版 7dbe4f0b) tick_ms=383831 wall=1793095900 addr=0x2000333c date=2026-10-26
+TL7_BASE(v4, 候选终版 7dbe4f0b 回刷) tick_ms=8360 wall=1793096752 addr=0x2000333c date=2026-10-26
+TL7_BASE(v5, G5前置B 修复版 tcs_ui 合入 =1) tick_ms=8352 wall=1793097378 addr=0x2000333c date=2026-10-26
+TL7_BASE(v6, G5阶段1 UI 固件) tick_ms=59177 wall=1793099180 addr=0x20002e3c date=2026-10-26
+TL7_BASE(v7 终版=阶段-2 A/B/C 合入, bin 491004 构建版) tick_ms=8373 wall=1793101690 addr=0x20002e3c date=2026-10-26
+TL7_BASE(v8, Z28 终版) tick_ms=148932 wall=1793107627 addr=0x20002e3c date=2026-10-26
+TL7_BASE(v9, Z30 白弹窗+走查钩子终版) tick_ms=8316 wall=1793112361 addr=0x20002e3c date=2026-10-26

@@ -91,3 +91,9 @@ void gfx_use_shown_buffer(void);
 void gfx_use_hidden_buffer(void);
 
 #endif /* LTDC_H */
+
+#if TCS_USE_LVGL
+/* G4：LVGL 渲染目标缓冲（LTDC 正扫描帧）+ 指定缓冲上屏 */
+uint16_t * ltdc_display_buffer(void);
+void ltdc_show_buffer(uint16_t * p);
+#endif

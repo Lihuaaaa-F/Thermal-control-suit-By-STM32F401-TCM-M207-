@@ -1,0 +1,147 @@
+{
+ "frame": "docs/evidence/LVGL/g5/walk3/s00_home.png",
+ "size": [
+  1024,
+  600
+ ],
+ "tokens": {
+  "BG": {
+   "hex": "#EEF1F5",
+   "want565": "0xEF9E",
+   "exact_px": 181715,
+   "region_mode565": "0xEF9E",
+   "region_dev": 0,
+   "region_px": 2800,
+   "verdict": "PASS"
+  },
+  "CARD": {
+   "hex": "#F2F3F5",
+   "want565": "0xF79E",
+   "exact_px": 335218,
+   "region_mode565": "0xF79E",
+   "region_dev": 0,
+   "region_px": 88000,
+   "verdict": "PASS"
+  },
+  "BORDER": {
+   "hex": "#D8DEE6",
+   "want565": "0xDEFC",
+   "exact_px": 7806,
+   "region_mode565": "0xDEFC",
+   "region_dev": 0,
+   "region_px": 200,
+   "verdict": "PASS"
+  },
+  "TX": {
+   "hex": "#1F2937",
+   "want565": "0x1946",
+   "exact_px": 4831,
+   "verdict": "PASS"
+  },
+  "TX2": {
+   "hex": "#44506B",
+   "want565": "0x428D",
+   "exact_px": 2009,
+   "verdict": "PASS"
+  },
+  "HERO": {
+   "hex": "#111827",
+   "want565": "0x10C4",
+   "exact_px": 0,
+   "verdict": "ABSENT"
+  },
+  "BLUE": {
+   "hex": "#2563EB",
+   "want565": "0x231D",
+   "exact_px": 3732,
+   "verdict": "PASS"
+  },
+  "GREEN": {
+   "hex": "#15803D",
+   "want565": "0x1407",
+   "exact_px": 4002,
+   "region_mode565": "0x1407",
+   "region_dev": 0,
+   "region_px": 7440,
+   "verdict": "PASS"
+  },
+  "GRAY": {
+   "hex": "#9CA3AF",
+   "want565": "0x9D15",
+   "exact_px": 8424,
+   "region_mode565": "0x9D15",
+   "region_dev": 0,
+   "region_px": 3024,
+   "verdict": "PASS"
+  },
+  "YELLOW": {
+   "hex": "#D97706",
+   "want565": "0xDBA0",
+   "exact_px": 1056,
+   "region_mode565": "0xDBA0",
+   "region_dev": 0,
+   "region_px": 88,
+   "verdict": "PASS"
+  },
+  "RED": {
+   "hex": "#DC2626",
+   "want565": "0xD924",
+   "exact_px": 21817,
+   "verdict": "PASS"
+  },
+  "ALMBG": {
+   "hex": "#FEE2E2",
+   "want565": "0xFF1C",
+   "exact_px": 0,
+   "verdict": "ABSENT"
+  },
+  "ALMTX": {
+   "hex": "#991B1B",
+   "want565": "0x98C3",
+   "exact_px": 0,
+   "verdict": "ABSENT"
+  },
+  "WARNBG": {
+   "hex": "#FEF3C7",
+   "want565": "0xFF98",
+   "exact_px": 28602,
+   "region_mode565": "0xFF98",
+   "region_dev": 0,
+   "region_px": 3024,
+   "verdict": "PASS"
+  },
+  "WARNTX": {
+   "hex": "#92400E",
+   "want565": "0x9201",
+   "exact_px": 5262,
+   "verdict": "PASS"
+  },
+  "WHITE": {
+   "hex": "#FFFFFF",
+   "want565": "0xFFFF",
+   "exact_px": 4481,
+   "verdict": "PASS"
+  },
+  "TRACK": {
+   "hex": "#D8DEE6",
+   "want565": "0xDEFC",
+   "exact_px": 7806,
+   "verdict": "PASS"
+  },
+  "TRACKFILL": {
+   "hex": "#BFDBFE",
+   "want565": "0xBEDF",
+   "exact_px": 0,
+   "verdict": "ABSENT"
+  },
+  "PRESS": {
+   "hex": "#DBEAFE",
+   "want565": "0xDF5F",
+   "exact_px": 0,
+   "verdict": "ABSENT"
+  }
+ },
+ "fails": [],
+ "dominant565": "0xF79E",
+ "dominant_is_BG": false
+}

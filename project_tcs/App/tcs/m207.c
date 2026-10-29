@@ -417,6 +417,14 @@ static void m207_handle_line(const char *line, uint32_t now_ms)
     if (!m207_parse_line(line, &r)) return;
     if (r.module == M207_MOD_NONE) return;
 
+#if TCS_USE_LVGL
+    /* U-6：把最近一次错误码暴露给 UI 层（人话呈现用；=0 构建不编入，保 TL-17 字节恒等） */
+    if (r.kind == M207_KIND_ERRCODE) {
+        extern volatile uint8_t g_m207_last_errcode;
+        g_m207_last_errcode = r.errcode;
+    }
+#endif
+
     if (r.kind == M207_KIND_REPLY && strcmp(r.param, "TCACTTEMP") == 0) {
         /* H6.7 合理性滤波：|Δ|>10°C/s 判不可信 → 按失联路径（计数+1，不采纳）*/
         if (s_have_temp[r.module]) {

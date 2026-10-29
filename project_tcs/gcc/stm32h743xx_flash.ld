@@ -21,13 +21,14 @@ ENTRY(Reset_Handler)
 
 _estack = ORIGIN(DTCMRAM) + LENGTH(DTCMRAM);   /* 栈顶 = DTCMRAM 末 */
 _Min_Heap_Size  = 0x400;   /* 1KB heap */
-_Min_Stack_Size = 0x1000;  /* 4KB stack */
+_Min_Stack_Size = 0x2000;  /* 8KB stack（G5：LVGL 页构建调用深度实测 >4KB → STKERR，扩容） */
 
 MEMORY
 {
   FLASH    (rx)  : ORIGIN = 0x08000000, LENGTH = 2048K
   ITCMRAM  (rx)  : ORIGIN = 0x00000000, LENGTH = 64K
   DTCMRAM  (xrw) : ORIGIN = 0x20000000, LENGTH = 128K
+  AXIRAM   (xrw) : ORIGIN = 0x24000000, LENGTH = 320K   /* D1 域 AXI SRAM（G4：渲染小块）*/
   SRAM1    (xrw) : ORIGIN = 0x30000000, LENGTH = 240K
   SRAM2    (xrw) : ORIGIN = 0x30040000, LENGTH = 64K
   /* 外部 SDRAM（FMC Bank1 Region 1，M2 阶段启用后用）*/
@@ -36,6 +37,14 @@ MEMORY
 
 SECTIONS
 {
+  /* G4：LVGL PARTIAL 渲染小块（AXI，不碰扫描中的帧缓冲） */
+  .axi_pool (NOLOAD) :
+  {
+    . = ALIGN(32);
+    KEEP(*(.axi_pool))
+    . = ALIGN(32);
+  } > AXIRAM
+
   .isr_vector :
   {
     . = ALIGN(4);

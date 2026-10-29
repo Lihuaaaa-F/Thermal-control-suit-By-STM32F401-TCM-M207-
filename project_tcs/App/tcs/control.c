@@ -22,6 +22,32 @@ static uint8_t       s_boot_ms_base_set;
 static uint32_t      s_boot_ms;
 static uint8_t       s_estop_latch;
 
+#if TCS_USE_LVGL
+/* G5：60 点×30s 温度环形（P2 曲线数据源；UI 只读） */
+#include <string.h>
+static float s_hist_tc1[60], s_hist_tc2[60];
+static uint32_t s_hist_head, s_hist_n, s_hist_last;
+void tcs_hist_tick(uint32_t now_ms)
+{
+    if (s_hist_last && now_ms - s_hist_last < 30000u) return;
+    s_hist_last = now_ms ? now_ms : 1u;
+    s_hist_tc1[s_hist_head] = g_tcs.tc1_act;
+    s_hist_tc2[s_hist_head] = g_tcs.tc2_act;
+    s_hist_head = (s_hist_head + 1u) % 60u;
+    if (s_hist_n < 60u) s_hist_n++;
+}
+void tcs_hist_snapshot(float out1[60], float out2[60], uint32_t * n)
+{
+    uint32_t cnt = s_hist_n > 60u ? 60u : s_hist_n;
+    for (uint32_t i = 0; i < cnt; i++) {
+        uint32_t idx = (s_hist_head - cnt + i + 60u) % 60u;
+        out1[i] = s_hist_tc1[idx];
+        out2[i] = s_hist_tc2[idx];
+    }
+    *n = cnt;
+}
+#endif
+
 /* ====== 内部输出封装（同步 g_tcs 快照 + 钩子）====== */
 static void out_fan(uint8_t on)
 {
@@ -101,6 +127,11 @@ void tcs_alarm_ack(void)
 
 void tcs_emergency_stop(void)
 {
+#if TCS_USE_LVGL
+    /* E-04/TL-9b 取证计数（=1 构建才有；=0 产物保持字节恒等，TL-17） */
+    extern volatile uint32_t g_estop_calls;
+    g_estop_calls++;
+#endif
     s_estop_latch = 1;
     tcs_alarm_raise(ALM_ESTOP);
     /* mode=手动（经 param_set 同一数据源路径，自动广播 0x11）*/
@@ -141,6 +172,9 @@ static uint8_t commissioned(void)
 /* ====== 500ms 评估 ====== */
 void control_poll(uint32_t now_ms)
 {
+#if TCS_USE_LVGL
+    tcs_hist_tick(now_ms);
+#endif
     if (!s_boot_ms_base_set) {
         s_boot_ms = now_ms;
         s_boot_ms_base_set = 1;

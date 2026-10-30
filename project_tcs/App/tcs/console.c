@@ -187,7 +187,7 @@ static void cmd_exec(char *line)
         extern volatile uint32_t g_dbg_snap;
         extern volatile uint32_t g_dbg_snap_gap_max;
         extern volatile uint32_t g_dbg_snap_gap_last;
-        printf("lrx=%lu snap=%lu gapmax=%lu\n",
+        printf("lrx=%lu snap=%lu gapmax=%lu gaplast=%lu\n",
                (unsigned long)g_dbg_lrx_total,
                (unsigned long)g_dbg_snap,
                (unsigned long)g_dbg_snap_gap_max,

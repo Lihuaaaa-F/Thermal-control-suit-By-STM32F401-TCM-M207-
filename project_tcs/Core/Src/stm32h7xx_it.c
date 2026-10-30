@@ -15,9 +15,7 @@ extern UART_HandleTypeDef huart_link;
 extern UART_HandleTypeDef huart_m207;
 
 /* 链路 RX 单字节落点；主循环经 link_rx_pop 取字节喂 comm（铁律：协议处理在主循环）*/
-static uint8_t s_link_rx_byte;
-void link_rx_isr_byte(uint8_t b);        /* main.c：入 256B 环形缓冲 */
-void link_rx_rearm(void);                /* main.c：重启单字节接收 */
+void link_rx_cplt(void);                 /* main.c：推 Receive_IT 落点 + 重启接收 */
 void link_uart_error_recover(void);      /* main.c：ORE 清标志+重置 */
 
 /* ====== §0B.2 全局 fault 信息（probe-rs 可读）====== */
@@ -82,8 +80,7 @@ void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart)
     if (huart->Instance == USART1) {
         console_rx_complete();
     } else if (huart->Instance == USART2) {
-        link_rx_isr_byte(s_link_rx_byte);
-        link_rx_rearm();
+        link_rx_cplt();          /* 推 Receive_IT 落点（原推未写入的静态字节=恒 0x00）*/
     } else if (huart->Instance == USART3) {
         m207_rx_complete();
     }

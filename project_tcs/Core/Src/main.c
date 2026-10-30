@@ -104,6 +104,59 @@ void link_rx_rearm(void)
     HAL_UART_Receive_IT(&huart_link, &s_link_it_byte, 1);
 }
 
+/* HAL 完成回调转发（it.c）：必须推 s_link_it_byte——即 Receive_IT 的落点。
+ * 2026-10-30 真机 bug：it.c 曾推另一个从未写入的静态字节，链路每字节恒 0x00。*/
+void link_rx_cplt(void)
+{
+    link_rx_isr_byte(s_link_it_byte);
+    link_rx_rearm();
+}
+
+/* TEMP-DIAG3（2026-10-30）：PA3 板载逻辑分析仪——临时切 GPIO 输入，
+ * 记录最多 512 个边沿的 DWT 周期时间戳（50ms 窗口），供探针直读波形。
+ * 结束后恢复 AF7+上拉并重启接收。*/
+volatile uint32_t g_wave_ts[512];
+volatile uint16_t g_wave_n;
+volatile uint8_t  g_wave_lvl0;
+volatile uint32_t g_wave_span;
+
+static void link_rx_pin_af(void)
+{
+    GPIO_InitTypeDef gi = {0};
+    gi.Pin = GPIO_PIN_3;
+    gi.Mode = GPIO_MODE_AF_PP;
+    gi.Pull = GPIO_PULLUP;
+    gi.Speed = GPIO_SPEED_FREQ_VERY_HIGH;
+    gi.Alternate = GPIO_AF7_USART2;
+    HAL_GPIO_Init(GPIOA, &gi);
+}
+
+void link_wave_capture(void)
+{
+    GPIO_InitTypeDef gi = {0};
+    gi.Pin = GPIO_PIN_3;
+    gi.Mode = GPIO_MODE_INPUT;
+    gi.Pull = GPIO_PULLUP;
+    gi.Speed = GPIO_SPEED_FREQ_VERY_HIGH;
+    HAL_GPIO_Init(GPIOA, &gi);
+    for (volatile int d = 0; d < 20000; d++) { }   /* 引脚切换稳定 */
+
+    g_wave_n = 0;
+    uint32_t last = (GPIOA->IDR >> 3) & 1u;
+    g_wave_lvl0 = (uint8_t)last;
+    uint32_t t0 = DWT->CYCCNT;
+    uint32_t limit = SystemCoreClock / 4u;         /* 250 ms */
+    while (g_wave_n < 512u) {
+        uint32_t lv = (GPIOA->IDR >> 3) & 1u;
+        if (lv != last) { g_wave_ts[g_wave_n++] = DWT->CYCCNT - t0; last = lv; }
+        if ((DWT->CYCCNT - t0) > limit) break;
+    }
+    g_wave_span = DWT->CYCCNT - t0;
+
+    link_rx_pin_af();
+    link_rx_rearm();
+}
+
 void link_uart_error_recover(void)
 {
     if (__HAL_UART_GET_FLAG(&huart_link, UART_FLAG_ORE))
@@ -112,20 +165,56 @@ void link_uart_error_recover(void)
     link_rx_rearm();
 }
 
+/* TEMP-DIAG4（2026-10-30）：PD5(TX) 波形自证——中断发送 64B 0x55，
+ * 同时以 GPIO 方式采样 PD5 边沿（须在起始后立即切输入，UART 仍会驱动
+ * 已排队的最后几字节不成立，故改为：先 IT 发送，再立刻采样 8ms）。*/
+volatile uint32_t g_txwave_n;
+void link_tx_wave_capture(void)
+{
+    static uint8_t burst[64];
+    for (int i = 0; i < 64; i++) burst[i] = 0x55;
+    g_txwave_n = 0;
+    HAL_UART_Transmit_IT(&huart_link, burst, sizeof(burst));
+    /* 采样 PD5（AF 输出仍可通过 IDR 读回电平）*/
+    uint32_t last = (GPIOD->IDR >> 5) & 1u;
+    uint32_t t0 = DWT->CYCCNT;
+    uint32_t limit = SystemCoreClock / 100u;   /* 10 ms */
+    while ((g_txwave_n < 512u) && ((DWT->CYCCNT - t0) < limit)) {
+        uint32_t lv = (GPIOD->IDR >> 5) & 1u;
+        if (lv != last) { g_wave_ts[g_txwave_n++] = DWT->CYCCNT - t0; last = lv; }
+    }
+    uint32_t guard = SystemCoreClock / 100u;
+    while (huart_link.gState != HAL_UART_STATE_READY && guard--) { }
+}
+
 /* TEMP-DIAG（2026-10-30）：屏链排障全局计数器（探针直读）*/
 volatile uint32_t g_dbg_lrx_total;
+volatile uint8_t  g_dbg_rx_ring[64];
+volatile uint32_t g_dbg_rx_pos;
+
 volatile uint32_t g_dbg_snap;
+volatile uint32_t g_dbg_snap_gap_max;   /* 相邻 0x20 应用点最大间隔 ms（实时性）*/
+volatile uint32_t g_dbg_snap_gap_last;  /* 最近一次 0x20 间隔 ms */
+volatile uint32_t g_dbg_getreg;   /* 收到 GET_REGISTRY 次数 */
+volatile uint32_t g_dbg_dumpdone; /* dump 完成次数 */
 
 
 
 static void link_rx_drain(void)
 {
-    /* R2 真机自愈（2026-10-30，卡死根因坐实）：USART2 首次 ORE 后 HAL 会关闭
-     * RXNEIE（CR1.RXNEIE=0），而错误回调未启用 → 链路 RX 永久失聪。
-     * 与 console_poll 同款轮询自愈：ORE 置位或 RXNEIE 失能 → Abort+清+重挂。*/
-    if (__HAL_UART_GET_FLAG(&huart_link, UART_FLAG_ORE) ||
-        (huart_link.Instance->CR1 & USART_CR1_RXNEIE_RXFNEIE) == 0u) {
-        link_uart_error_recover();
+    /* R2 真机自愈（2026-10-30）：USART2 首次 ORE 后 HAL 会关闭 RXNEIE
+     * （CR1.RXNEIE=0），而错误回调未启用 → 链路 RX 永久失聪。
+     * 与 console_poll 同款轮询自愈，但**限速 100ms**——持续 ORE 风暴
+     * （如 RX 接线悬空/悬低）时逐拍 AbortReceive 会拖死主循环（真机实证）。*/
+    {
+        static uint32_t s_last_heal;
+        uint32_t nowms = g_tick_ms;
+        if ((__HAL_UART_GET_FLAG(&huart_link, UART_FLAG_ORE) ||
+             (huart_link.Instance->CR1 & USART_CR1_RXNEIE_RXFNEIE) == 0u) &&
+            (uint32_t)(nowms - s_last_heal) >= 100u) {
+            s_last_heal = nowms;
+            link_uart_error_recover();
+        }
     }
 
     uint16_t guard = LINK_RX_SIZE + 2u;
@@ -134,6 +223,29 @@ static void link_rx_drain(void)
         uint8_t b = s_lrx[s_lrx_tail];
         s_lrx_tail = (uint16_t)((s_lrx_tail + 1u) & LINK_RX_MASK);
         g_dbg_lrx_total++;   /* 链路 RX 字节总量（屏链诊断/ltx 自检核对用）*/
+        g_dbg_rx_ring[g_dbg_rx_pos & 63u] = b;
+        g_dbg_rx_pos++;
+        /* TEMP-DIAG2（2026-10-30）：原始首 8 字节 + 首 0xAA 帧 32 字节取证 */
+        {
+            static uint8_t raw8[8]; static int rn; static int rdone;
+            static uint8_t win[32]; static int wl; static int wdone;
+            if (!rdone) {
+                raw8[rn++] = b;
+                if (rn == 8) { rdone = 1;
+                    tcs_log("[R8]", "%02x %02x %02x %02x %02x %02x %02x %02x",
+                            raw8[0],raw8[1],raw8[2],raw8[3],raw8[4],raw8[5],raw8[6],raw8[7]); }
+            }
+            if (!wdone) {
+                if (b == 0xAA && wl == 0) { win[wl++] = b; }
+                else if (wl > 0 && wl < 32) { win[wl++] = b; }
+                if (wl == 32) { wdone = 1;
+                    tcs_log("[A1]", "%02x %02x %02x %02x %02x %02x %02x %02x", win[0],win[1],win[2],win[3],win[4],win[5],win[6],win[7]);
+                    tcs_log("[A2]", "%02x %02x %02x %02x %02x %02x %02x %02x", win[8],win[9],win[10],win[11],win[12],win[13],win[14],win[15]);
+                    tcs_log("[A3]", "%02x %02x %02x %02x %02x %02x %02x %02x", win[16],win[17],win[18],win[19],win[20],win[21],win[22],win[23]);
+                    tcs_log("[A4]", "%02x %02x %02x %02x %02x %02x %02x %02x", win[24],win[25],win[26],win[27],win[28],win[29],win[30],win[31]);
+                }
+            }
+        }
 
         const uint8_t *pl; size_t plen; int dup;
         if (comm_rx_feed_byte(&g_link, b, &pl, &plen, &dup)) {
@@ -207,8 +319,9 @@ static void hook_broadcast(param_desc_t *p, uint8_t src)
  * 屏=唯一操作载体：显示全部取自 ESP32 权威快照（0x20/0x21）；
  * esp_link_ok=快照新鲜度（500ms 窗，v2.4 §13.4.6 销号）。*/
 static uint32_t s_snap_ms;      /* 最近 0x20 到达时刻（ms）*/
-static uint32_t s_snap_seq;     /* 最近快照 seq（单调性检查=F15 旧帧丢弃）*/
+static uint32_t s_snap_seq;     /* 最近快照 seq（去重键）*/
 static uint8_t  s_snap_have;
+static tcs_snap_pl_t s_last_snap;   /* v2：屏为纯显示终端，链路存活期内以它为准 */
 
 /* 快照/增量应用：显示字段直写 g_tcs；设定值经 param_link_sync 静默回灌本地注册表
  * （不触发广播/下发，防 0x11/0x12 成环）。*/
@@ -224,6 +337,18 @@ static void snap_apply(const tcs_snap_pl_t *s)
     g_tcs.body_sensor_ok = (s->online & TCS_ONLINE_BODY_SENSOR) ? 1u : 0u;
     param_link_sync(PARAM_ID_TC1_SET, s->tc1_set);
     param_link_sync(PARAM_ID_TC2_SET, s->tc2_set);
+    s_last_snap = *s;
+}
+
+/* v2（H743=纯显示终端）：本地 control_poll/tmp117_poll/post_poll 会写 g_tcs 的
+ * fan/alarm/body_sensor_ok 等字段，把链路快照值覆盖成 H743 本机（无外设）状态。
+ * 链路 1s 存活期内重放最后快照，保证屏显 = ESP32/M207 真值。
+ * 2026-10-30 真机实证：fan=1(ESP32 0%)、alarm=0x0001(ESP32 0x0000)、sensor=0。*/
+static void snap_reassert(void)
+{
+    if (!s_snap_have) return;
+    if ((uint32_t)(g_tick_ms - s_snap_ms) > 1000u) return;   /* 断链不重放旧值 */
+    snap_apply(&s_last_snap);
 }
 
 /* R2：屏侧写 M207 温度参数 → 链路 0x12 发 ESP32（权威→M207 verify）；
@@ -287,6 +412,7 @@ void on_frame(const uint8_t *payload, size_t len)
         /* 注册表全量 → 0x14 帧 ×N。v1.2 H10 全表 50 条 > txq 16 深 → 改节拍化
          * 下发（registry_dump_tick 每拍 2 帧，50 条≈250ms，前端零感知）。*/
         link_send_ack(seq, mt, TCS_ACK_OK, 0.0f);
+        g_dbg_getreg++;
         s_dump_idx = 0;
         s_dump_active = 1;
         break;
@@ -296,14 +422,24 @@ void on_frame(const uint8_t *payload, size_t len)
         tcs_snap_pl_t s;
         if (tcs_scan_snapshot(body, blen, &s) != 0) break;
         if (s.ver != TCS_PROTO_VER) break;
-        if (s_snap_have && (int32_t)(s.seq - s_snap_seq) <= 0) break;  /* F15 旧帧丢弃 */
+        /* 去重只认 seq 相等：UART 点对点链路保序，不存在乱序帧；
+         * 单调递增判据会在对端重启（seq 归 1）后把之后所有快照当旧帧丢弃
+         * ——2026-10-30 真机实证：s_snap_ms 冻结、esp_link_ok 恒 0、屏数据停更。*/
+        if (s_snap_have && s.seq == s_snap_seq) break;
         if (!s_snap_have) {
             tcs_log("[NET]", "SNAP first seq=%u m207=%u tc1=%.1f tc2=%.1f",
                     (unsigned)s.seq, (unsigned)((s.online & TCS_ONLINE_M207) ? 1u : 0u),
                     (double)s.tc1_act, (double)s.tc2_act);
         }
-        s_snap_seq = s.seq;
-        s_snap_ms = millis();
+        {
+            uint32_t nowm = millis();
+            if (s_snap_have) {
+                uint32_t gp = (uint32_t)(nowm - s_snap_ms);
+                g_dbg_snap_gap_last = gp;
+                if (gp > g_dbg_snap_gap_max) g_dbg_snap_gap_max = gp;
+            }
+            s_snap_ms = nowm;
+        }
         s_snap_have = 1;
         snap_apply(&s);
         break;
@@ -378,7 +514,7 @@ static void registry_dump_tick(void)
             if (fn) comm_txq_push(&g_link, frame, fn);
         }
     }
-    if (s_dump_idx >= n) s_dump_active = 0;
+    if (s_dump_idx >= n) { s_dump_active = 0; g_dbg_dumpdone++; }
 }
 
 /* ====== 500ms STATUS 帧 ====== */
@@ -477,12 +613,19 @@ static void MX_GPIO_Init(void)
 }
 
 /* ====== UART 通用初始化 ====== */
-static void uart_gpio_af(GPIO_TypeDef *port, uint32_t pins, uint32_t af)
+static void uart_gpio_af_pull(GPIO_TypeDef *port, uint32_t pins, uint32_t af, uint32_t pull);
+static void uart_gpio_af( GPIO_TypeDef *port, uint32_t pins, uint32_t af)
+{
+    uart_gpio_af_pull(port, pins, af, GPIO_NOPULL);
+}
+
+/* RX 侧须上拉（UART 空闲电平=高）：断线/浮空时不产生无休止 framing 错误流 */
+static void uart_gpio_af_pull(GPIO_TypeDef *port, uint32_t pins, uint32_t af, uint32_t pull)
 {
     GPIO_InitTypeDef gi = {0};
     gi.Pin = pins;
     gi.Mode = GPIO_MODE_AF_PP;
-    gi.Pull = GPIO_NOPULL;
+    gi.Pull = pull;
     gi.Speed = GPIO_SPEED_FREQ_VERY_HIGH;
     gi.Alternate = af;
     HAL_GPIO_Init(port, &gi);
@@ -515,7 +658,8 @@ static void MX_UART_Init(void)
     /* USART1 PA9/PA10 AF7 控制台 */
     __HAL_RCC_USART1_CLK_ENABLE();
     __HAL_RCC_GPIOA_CLK_ENABLE();
-    uart_gpio_af(GPIOA, GPIO_PIN_9 | GPIO_PIN_10, GPIO_AF7_USART1);
+    uart_gpio_af    (GPIOA, GPIO_PIN_9,  GPIO_AF7_USART1);
+    uart_gpio_af_pull(GPIOA, GPIO_PIN_10, GPIO_AF7_USART1, GPIO_PULLUP);
     uart_common_init(&huart_console, USART1, CONSOLE_BAUD, USART1_IRQn);
 
     /* USART2 PD5(TX) AF7 ESP32 链路（接线表 #3）；
@@ -525,16 +669,17 @@ static void MX_UART_Init(void)
     __HAL_RCC_GPIOD_CLK_ENABLE();
     uart_gpio_af(GPIOD, GPIO_PIN_5, GPIO_AF7_USART2);
 #ifdef LINK_RX_PD6
-    uart_gpio_af(GPIOD, GPIO_PIN_6, GPIO_AF7_USART2);
+    uart_gpio_af_pull(GPIOD, GPIO_PIN_6, GPIO_AF7_USART2, GPIO_PULLUP);
 #else
-    uart_gpio_af(GPIOA, GPIO_PIN_3, GPIO_AF7_USART2);
+    uart_gpio_af_pull(GPIOA, GPIO_PIN_3, GPIO_AF7_USART2, GPIO_PULLUP);
 #endif
     uart_common_init(&huart_link, USART2, LINK_BAUD, USART2_IRQn);
 
     /* USART3 PB10/PB11 AF7 M207（接线表 #1/#2）*/
     __HAL_RCC_USART3_CLK_ENABLE();
     __HAL_RCC_GPIOB_CLK_ENABLE();
-    uart_gpio_af(GPIOB, GPIO_PIN_10 | GPIO_PIN_11, GPIO_AF7_USART3);
+    uart_gpio_af    (GPIOB, GPIO_PIN_10, GPIO_AF7_USART3);
+    uart_gpio_af_pull(GPIOB, GPIO_PIN_11, GPIO_AF7_USART3, GPIO_PULLUP);
     uart_common_init(&huart_m207, USART3, M207_BAUD, USART3_IRQn);
 }
 
@@ -702,10 +847,9 @@ int main(void)
         console_poll();
         m207_poll(now);
         registry_dump_tick();    /* P3：注册表全量节拍化下发 */
-        /* M207 实际水温 → 全局快照（WP-G 仿真暴露的集成缺口：此前
-         * m207_last_temp 从未同步进 g_tcs，屏/网页水温恒 0、过热保护失效）*/
-        g_tcs.tc1_act = m207_last_temp(1);
-        g_tcs.tc2_act = m207_last_temp(2);
+        /* v2 架构：M207 挂在 ESP32 侧，H743 不再有本地 M207。
+         * 实际水温唯一来源 = 0x20 快照（snap_apply 已写入 g_tcs）。
+         * 2026-10-30 真机 bug：此处用本地 m207_last_temp 覆盖，屏上水温恒 0。*/
         link_rx_drain();
         comm_tick(&g_link);              /* 重传检查（主循环上下文）*/
 
@@ -723,6 +867,7 @@ int main(void)
         param_persist_flush(now);
         status_tx(now);
         kill_key_poll();
+        snap_reassert();         /* v2：本地轮询后回灌 ESP32 快照（屏显一致性）*/
 
         perf_sample_work(DWT->CYCCNT - cy0);
         if (g_link_down_flag) {

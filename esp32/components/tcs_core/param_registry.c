@@ -128,10 +128,12 @@ static param_desc_t s_params[PARAM_CAPACITY] = {
       PF_WEB|PF_M207,                                         0.0f, 1.0f, 1.0f, 0.0f,  0, 0 },
     { 0x133, "m207_t2_otp_st", "TC2 过温保护结果", "",  PARAM_TYPE_U8,
       PF_WEB|PF_M207,                                         0.0f, 1.0f, 1.0f, 0.0f,  0, 0 },
+    /* 只读身份量（U8 原始值）：区间 0..255——min=max=0 会触发 POST TABLE
+     * 的 min<max 断言而永久 FAIL（2026-10-30 真机实证）。*/
     { 0x134, "m207_sys_model", "M207 型号",        "",   PARAM_TYPE_U8,
-      PF_WEB|PF_M207,                                         0.0f, 0.0f, 1.0f, 0.0f,  0, 0 },
+      PF_WEB|PF_M207,                                         0.0f, 255.0f, 1.0f, 0.0f,  0, 0 },
     { 0x135, "m207_sys_ver",   "M207 固件版本",    "",   PARAM_TYPE_U8,
-      PF_WEB|PF_M207,                                         0.0f, 0.0f, 1.0f, 0.0f,  0, 0 },
+      PF_WEB|PF_M207,                                         0.0f, 255.0f, 1.0f, 0.0f,  0, 0 },
 };
 #define PARAM_N_REGISTERED  50
 

@@ -206,6 +206,16 @@ static int cmd_ledtest(int argc, char **argv)
 }
 
 /* 屏链物理自检（2026-10-30）：UART1 连发 100 个 0x55（H743 侧应收到 55 序列）*/
+static int cmd_linkstat(int argc, char **argv)
+{
+    (void)argc; (void)argv;
+    extern uint32_t link_rx_bytes(void);
+    extern uint32_t link_rx_frames(void);
+    printf("link rx_bytes=%lu rx_frames=%lu\n",
+           (unsigned long)link_rx_bytes(), (unsigned long)link_rx_frames());
+    return 0;
+}
+
 static int cmd_ltx(int argc, char **argv)
 {
     (void)argc; (void)argv;
@@ -269,7 +279,9 @@ int tcs_console_start(void)
           .func=cmd_ledtest, .argtable=NULL },
         { .command="perf", .help="服务统计+vTaskList", .hint=NULL,
           .func=cmd_perf, .argtable=NULL },
-        { .command="ltx", .help="屏链自检：UART1 连发 100B 0x55", .hint=NULL,
+        { .command="linkstat", .help="链路 RX 字节/帧计数（真机方向判定）", .hint=NULL,
+      .func=cmd_linkstat, .argtable=NULL },
+    { .command="ltx", .help="屏链自检：UART1 连发 100B 0x55", .hint=NULL,
           .func=cmd_ltx, .argtable=NULL },
         { .command="reset", .help="软复位", .hint=NULL,
           .func=cmd_reset, .argtable=NULL },

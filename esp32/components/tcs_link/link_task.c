@@ -38,6 +38,8 @@ static const char *TAG = "tcs_link";
 static comm_link_t s_link;
 static QueueHandle_t s_uart_queue;
 static link_status_t s_status;
+static volatile uint32_t s_rx_bytes;   /* UART1 收到的字节总数（真机取证）*/
+static volatile uint32_t s_rx_frames;  /* 解出的完整帧数 */
 static link_reg_t s_reg[LINK_REGISTRY_MAX];
 static link_ack_t s_ack;
 static link_param_change_t s_last_param;
@@ -407,6 +409,8 @@ bool link_alive(void)
 }
 
 const link_status_t *link_status(void) { return &s_status; }
+uint32_t link_rx_bytes(void) { return s_rx_bytes; }
+uint32_t link_rx_frames(void) { return s_rx_frames; }
 const link_param_change_t *link_last_param(void) { return &s_last_param; }
 
 float link_param_value(uint16_t id)
@@ -445,10 +449,13 @@ static void link_task(void *arg)
         if (xQueueReceive(s_uart_queue, &evt, pdMS_TO_TICKS(50))) {
             if (evt.type == UART_DATA) {
                 int n = uart_read_bytes(LINK_UART, buf, sizeof(buf), 0);
+                if (n > 0) s_rx_bytes += (uint32_t)n;
                 for (int i = 0; i < n; i++) {
                     const uint8_t *pl; size_t plen; int dup;
-                    if (comm_rx_feed_byte(&s_link, buf[i], &pl, &plen, &dup))
+                    if (comm_rx_feed_byte(&s_link, buf[i], &pl, &plen, &dup)) {
+                        s_rx_frames++;
                         on_frame(pl, plen);
+                    }
                 }
             } else if (evt.type == UART_FIFO_OVF || evt.type == UART_BUFFER_FULL) {
                 uart_flush_input(LINK_UART);

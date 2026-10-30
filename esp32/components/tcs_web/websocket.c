@@ -20,6 +20,7 @@
 #include "cJSON.h"
 #include <math.h>
 #include "link_task.h"
+#include "param_registry.h"
 
 static const char *TAG = "tcs_ws";
 
@@ -333,8 +334,14 @@ esp_err_t ws_on_recv(httpd_req_t *req)
             if (cJSON_IsNumber(id) && cJSON_IsNumber(v)) {
                 s_expect_id = (uint16_t)id->valueint;
                 s_expect_us = esp_timer_get_time();
-                link_set_param((uint16_t)id->valueint, (float)v->valuedouble);
-                ESP_LOGI(TAG, "ws set id=%u v=%.2f", (unsigned)id->valueint, v->valuedouble);
+                /* v2 权威在 ESP32：网页写必须落本端注册表（→M207 verify），
+                 * 再由 0x20/0x21 回传屏幕。此前误走 link_set_param（反向 0x12），
+                 * 会让网页值只到屏幕、不改 M207，两侧长期分叉。*/
+                int prv = param_set((uint16_t)id->valueint,
+                                    (float)v->valuedouble, PARAM_SRC_WEB);
+                ESP_LOGI(TAG, "ws set id=%u v=%.2f rv=%d -> %.2f",
+                         (unsigned)id->valueint, v->valuedouble, prv,
+                         (double)param_get((uint16_t)id->valueint));
             }
         } else if (strcmp(t->valuestring, "cmd") == 0) {
             cJSON *c = cJSON_GetObjectItem(root, "c");

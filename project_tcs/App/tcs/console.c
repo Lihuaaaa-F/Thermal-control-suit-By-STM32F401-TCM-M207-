@@ -185,9 +185,118 @@ static void cmd_exec(char *line)
         /* 屏链诊断（2026-10-30）：RX 字节总量+快照帧计数（ltx 自检核对；全 0=方向不通）*/
         extern volatile uint32_t g_dbg_lrx_total;
         extern volatile uint32_t g_dbg_snap;
-        printf("lrx=%lu snap=%lu\n",
+        extern volatile uint32_t g_dbg_snap_gap_max;
+        extern volatile uint32_t g_dbg_snap_gap_last;
+        printf("lrx=%lu snap=%lu gapmax=%lu\n",
                (unsigned long)g_dbg_lrx_total,
-               (unsigned long)g_dbg_snap);
+               (unsigned long)g_dbg_snap,
+               (unsigned long)g_dbg_snap_gap_max,
+               (unsigned long)g_dbg_snap_gap_last);
+        return;
+    }
+    /* --- txwave：PD5 发送波形自证（64B 0x55 + 边沿计数）--- */
+    if (strcmp(argv[0], "txwave") == 0) {
+        extern void link_tx_wave_capture(void);
+        extern volatile uint32_t g_txwave_n;
+        link_tx_wave_capture();
+        printf("txwave n=%lu\n", (unsigned long)g_txwave_n);
+        return;
+    }
+    /* --- tbl：注册表序列化自检明细（POST TABLE 项排障）--- */
+    if (strcmp(argv[0], "tbl") == 0) {
+        uint8_t img[EE_IMG_SIZE];
+        int rv = param_serialize(img);
+        extern uint8_t proto_crc8(const uint8_t *data, size_t len);
+        int npersist = 0;
+        for (int i = 0; i < param_count(); i++) {
+            const param_desc_t *p = param_at(i);
+            if (p && (p->flags & PF_PERSIST)) npersist++;
+        }
+        printf("tbl serialize rv=%d count=%d npersist=%d crc=%02x calc=%02x\n",
+               rv, (rv == 0) ? (int)img[2] : -1, npersist,
+               (rv == 0) ? img[EE_CRC_ADDR] : 0,
+               (rv == 0) ? (int)proto_crc8(img, EE_CRC_ADDR) : 0);
+        for (int i = 0; i < param_count(); i++) {
+            const param_desc_t *p = param_at(i);
+            if (!p) { printf("bad idx %d null\n", i); break; }
+            if (!(p->min < p->max))
+                printf("bad range 0x%04x %s min=%.2f max=%.2f\n",
+                       p->id, p->key, (double)p->min, (double)p->max);
+            if (!(p->value >= p->min && p->value <= p->max))
+                printf("bad value 0x%04x %s v=%.2f [%.2f,%.2f]\n",
+                       p->id, p->key, (double)p->value,
+                       (double)p->min, (double)p->max);
+        }
+        return;
+    }
+    /* --- tap：与真实触摸同路径注入（真机屏幕操作取证）--- */
+    if (strcmp(argv[0], "tap") == 0 && argc == 3) {
+        extern void tcs_ui_tap(int x, int y);
+        int tx = atoi(argv[1]), ty = atoi(argv[2]);
+        tcs_ui_tap(tx, ty);
+        printf("tap %d,%d\n", tx, ty);
+        return;
+    }
+    /* --- wave：PA3 板载逻辑分析仪（50ms 边沿时间戳进 RAM，探针直读）--- */
+    if (strcmp(argv[0], "wave") == 0) {
+        extern void link_wave_capture(void);
+        extern volatile uint16_t g_wave_n;
+        extern volatile uint8_t  g_wave_lvl0;
+        link_wave_capture();
+        printf("wave n=%u lvl0=%u\n", (unsigned)g_wave_n, (unsigned)g_wave_lvl0);
+        return;
+    }
+    /* --- rxraw：链路 RX 原始 64 字节环形快照（板间线取证）--- */
+    if (strcmp(argv[0], "rxraw") == 0) {
+        extern volatile uint8_t  g_dbg_rx_ring[64];
+        extern volatile uint32_t g_dbg_rx_pos;
+        extern volatile uint32_t g_dbg_lrx_total;
+        uint32_t pos = g_dbg_rx_pos;
+        printf("rxraw lrx=%lu pos=%lu\n", (unsigned long)g_dbg_lrx_total,
+               (unsigned long)pos);
+        for (uint32_t i = 0; i < 8u; i++) {
+            uint32_t o = i * 8u;
+            printf("  %02x %02x %02x %02x %02x %02x %02x %02x\n",
+                   g_dbg_rx_ring[(pos + o + 0u) & 63u], g_dbg_rx_ring[(pos + o + 1u) & 63u], g_dbg_rx_ring[(pos + o + 2u) & 63u], g_dbg_rx_ring[(pos + o + 3u) & 63u], g_dbg_rx_ring[(pos + o + 4u) & 63u], g_dbg_rx_ring[(pos + o + 5u) & 63u], g_dbg_rx_ring[(pos + o + 6u) & 63u], g_dbg_rx_ring[(pos + o + 7u) & 63u]);
+        }
+        return;
+    }
+    /* --- pinscan：全端口 GPIO 边沿普查（板间线缆落点定位；屏蔽 MHz 级显示总线）--- */
+    if (strcmp(argv[0], "pinscan") == 0) {
+        extern void iwdg_refresh(void);
+        int secs = (argc >= 2) ? atoi(argv[1]) : 1;
+        if (secs < 1) secs = 1;
+        if (secs > 3) secs = 3;
+        RCC->AHB4ENR |= 0xFFFFFFFFu;
+        GPIO_TypeDef *ports[11] = { GPIOA, GPIOB, GPIOC, GPIOD, GPIOE, GPIOF,
+                                    GPIOG, GPIOH, GPIOI, GPIOJ, GPIOK };
+        static uint16_t last[11];
+        static uint32_t edge[11][16];
+        for (int i = 0; i < 11; i++) {
+            last[i] = (uint16_t)ports[i]->IDR;
+            for (int b = 0; b < 16; b++) edge[i][b] = 0u;
+        }
+        uint32_t t0 = DWT->CYCCNT;
+        uint32_t dur = (uint32_t)secs * (SystemCoreClock / 1u);
+        uint32_t t_ref = 0u;
+        while ((DWT->CYCCNT - t0) < dur) {
+            for (int i = 0; i < 11; i++) {
+                uint16_t cur = (uint16_t)ports[i]->IDR;
+                uint16_t ch = (uint16_t)(cur ^ last[i]);
+                if (ch) {
+                    last[i] = cur;
+                    for (int b = 0; b < 16; b++)
+                        if (ch & (1u << b)) edge[i][b]++;
+                }
+            }
+            uint32_t el = DWT->CYCCNT - t0;
+            if (el - t_ref > (SystemCoreClock / 2u)) { t_ref = el; iwdg_refresh(); }
+        }
+        printf("pinscan %ds edges(2..400 shown):\n", secs);
+        for (int i = 0; i < 11; i++)
+            for (int b = 0; b < 16; b++)
+                if (edge[i][b] >= 2u && edge[i][b] <= 400u)
+                    printf("  P%c%d %lu\n", (char)('A' + i), b, (unsigned long)edge[i][b]);
         return;
     }
     /* --- ee：EEPROM 镜像现场重读+校验（诊断）--- */

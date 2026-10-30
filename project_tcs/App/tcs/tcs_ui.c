@@ -1664,6 +1664,12 @@ void tcs_ui_inject_tap(int x, int y)
 }
 #endif
 
+/* 真机取证口：与真实触摸完全同路径（console "tap x y"；不依赖 TCS_SIM）*/
+void tcs_ui_tap(int x, int y)
+{
+    touch_tap(x, y);
+}
+
 void tcs_ui_force_home(void)
 {
     if (!lcd_ready()) return;

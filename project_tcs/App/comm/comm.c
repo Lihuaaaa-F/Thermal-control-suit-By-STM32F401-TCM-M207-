@@ -11,6 +11,9 @@
 #include "comm.h"
 #include <string.h>
 
+/* 诊断：实际发出的帧数（主循环 comm_poll_tx 唯一计数点；真机取证用）*/
+volatile uint32_t g_comm_tx_frames;
+
 void comm_init(comm_link_t *L,
                void (*send_fn)(const uint8_t *data, size_t len),
                uint32_t (*now_ms_fn)(void),
@@ -99,6 +102,7 @@ void comm_poll_tx(comm_link_t *L)
      * 即使 ISR 在此刻 push，下次主循环会处理。主循环只读不改 tail。*/
     if (L->tx_count == 0) return;
     if (!L->send_fn) return;
+    g_comm_tx_frames++;
 
     /* 取队头：head 是主循环独占消费索引，ISR 只 push 改 tail 不碰 head
      * （push_front 已按 W3-A/终审 MF-8 删除）；故此处 head 无竞态。*/

@@ -51,11 +51,18 @@ def pr_write(addr: int, data: bytes):
 def rtt_buf_info():
     cb = nm_addr("_SEGGER_RTT")
     w = pr_read("b32", cb + 24, 5)      # sName pBuffer Size WrOff RdOff
-    return {"pbuf": w[1], "size": w[2], "wroff": w[3]}
+    return {"pbuf": w[1], "size": w[2], "wroff": w[3], "rd_off": w[4],
+            "cb": cb}
+
+
+def rtt_set_rd(new: int):
+    """回写 RdOff（RTT 协议要求主机读取后推进；否则固件写满即永久静默）"""
+    cb = nm_addr("_SEGGER_RTT")
+    pr_write(cb + 40, (new & 0xFFFFFFFF).to_bytes(4, 'little'))
 
 
 def rtt_fetch(old: int, new: int) -> bytes:
-    """取 (old,new] 区间字节（环形，处理回绕）"""
+    """取 (old,new] 区间字节（环形，处理回绕），读后推进 RdOff"""
     if old == new:
         return b""
     b = rtt_buf_info()
@@ -67,12 +74,20 @@ def rtt_fetch(old: int, new: int) -> bytes:
         out.extend(pr_read("b8", b["pbuf"] + pos, chunk))
         pos = (pos + chunk) % b["size"]
         n -= chunk
+    rtt_set_rd(new)          # 关键：推进 RdOff，否则缓冲满后固件永久静默
     return bytes(out)
 
 
 def send_cmd(cmdline: str, wait=3.0) -> bytes:
     line_a, magic_a, seq_a = (nm_addr("s_mb_line"), nm_addr("s_mb_magic"),
                               nm_addr("s_mb_seq"))
+    # 先清积压并推进 RdOff（避免历史日志混入、或缓冲假满导致输出丢失）
+    b0 = rtt_buf_info()
+    if b0["wroff"] != b0["rd_off"]:
+        try:
+            rtt_fetch(b0["rd_off"], b0["wroff"])
+        except Exception:
+            pass
     seq0 = pr_read("b32", seq_a, 1)[0]
     wr0 = rtt_buf_info()["wroff"]
     payload = cmdline.encode('utf-8')[:94] + b'\0'

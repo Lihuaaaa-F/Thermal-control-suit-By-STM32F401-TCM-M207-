@@ -1,10 +1,11 @@
 # 研学卡 ③ 调用面行数基线（MF-1 常驻门禁；分隔符=;;，模式内可用 ERE |）
 # 口径：在 project_tcs/ 目录下执行 grep -rnE <模式> <目录列表> --include=*.c | wc -l
 # （=run_all 的 cwd；目录=App Core/Src），HEAD 实测 2026-10-27 终审整改后
+# UART 37→38（R2 自愈+1）→40（2026-10-30 v2 迁移重锚）
 研学卡_HAL_I2C;;App Core/Src;;HAL_I2C_;;10
-# UART 37→38：R2 链路 RX 自愈新增 __HAL_UART_GET_FLAG（2026-10-30）
-研学卡_HAL_UART;;App Core/Src;;HAL_UART_;;38
-研学卡_HAL_GPIO_EXTI;;App Core/Src;;HAL_GPIO_|HAL_EXTI_;;54
+研学卡_HAL_UART;;App Core/Src;;HAL_UART_;;40
+研学卡_HAL_GPIO_EXTI;;App Core/Src;;HAL_GPIO_|HAL_EXTI_;;58
+# GPIO 54→58（2026-10-30 v2 迁移重锚：main/it/console 新增调用面）
 研学卡_HAL_LTDC;;App Core/Src;;HAL_LTDC_;;6
 研学卡_HAL_DMA2D;;App Core/Src;;DMA2D_;;1
 研学卡_HAL_PWR_RCC;;App Core/Src;;HAL_RCC_|HAL_PWR_;;42

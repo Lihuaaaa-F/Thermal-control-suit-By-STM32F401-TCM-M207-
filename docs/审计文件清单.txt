@@ -163,6 +163,7 @@ project_tcs/tools/nightly_frames.py
 project_tcs/tools/novice_tasks.py
 project_tcs/tools/proto_ref.py
 project_tcs/tools/qr_verify.py
+project_tcs/tools/reanchor_study_cards.py
 project_tcs/tools/regen_ext_fonts.py
 project_tcs/tools/rehearsal.py
 project_tcs/tools/tl8_read.py

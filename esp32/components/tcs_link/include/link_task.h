@@ -54,6 +54,10 @@ const link_ack_t *link_last_ack(void);
 
 void link_on_event(link_event_cb_t cb);   /* 注册 ws 推送回调（单播即可）*/
 
+/* v2：H743（屏幕）下发的 0x15 CMD（8=急停 9=报警确认）——执行端在 ESP32 */
+typedef void (*link_cmd_cb_t)(uint8_t cmd, uint8_t seq);
+void link_on_cmd(link_cmd_cb_t cb);       /* 注册屏幕命令回调（应用层执行+回 ACK）*/
+
 /* R2 协议换向：H743（屏）写参数帧到本端 → 应用层处理器落权威注册表+M207 verify，
  * 处理器须回调 link_send_ack 回执（破 tcs_core↔tcs_link 组件环的回调注入点）*/
 typedef void (*link_setparam_cb_t)(uint16_t id, float v, uint8_t seq);

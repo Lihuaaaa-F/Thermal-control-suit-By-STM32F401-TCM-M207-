@@ -216,6 +216,43 @@ static int cmd_linkstat(int argc, char **argv)
     return 0;
 }
 
+static int cmd_gedge(int argc, char **argv)
+{
+    if (argc < 2) { printf("gedge <gpio> [ms]\n"); return 1; }
+    int g = atoi(argv[1]);
+    int ms = (argc > 2) ? atoi(argv[2]) : 1000;
+    if (g < 0 || g > 48 || ms < 1 || ms > 5000) { printf("range: gpio0-48 ms1-5000\n"); return 1; }
+    int last = gpio_get_level(g);
+    int n = 0;
+    int64_t t0 = esp_timer_get_time();
+    while (esp_timer_get_time() - t0 < (int64_t)ms * 1000) {
+        int v = gpio_get_level(g);
+        if (v != last) { n++; last = v; }
+    }
+    printf("gedge gpio%d %dms edges=%d level=%d\n", g, ms, n, last);
+    return 0;
+}
+
+static int cmd_linkbuf(int argc, char **argv)
+{
+    (void)argc; (void)argv;
+    size_t n = 0;
+    esp_err_t r = uart_get_buffered_data_len(UART_NUM_1, &n);
+    uint32_t st = 0;
+    r |= uart_get_buffered_data_len(UART_NUM_1, &n);
+    printf("linkbuf buffered=%u err=%d\n", (unsigned)n, (int)r);
+    return 0;
+}
+
+static int cmd_linkrepin(int argc, char **argv)
+{
+    (void)argc; (void)argv;
+    esp_err_t r1 = uart_set_pin(UART_NUM_1, 17, 18, UART_PIN_NO_CHANGE, UART_PIN_NO_CHANGE);
+    uart_flush_input(UART_NUM_1);
+    printf("linkrepin set_pin=%d flushed\n", (int)r1);
+    return 0;
+}
+
 static int cmd_ltx(int argc, char **argv)
 {
     (void)argc; (void)argv;
@@ -281,6 +318,12 @@ int tcs_console_start(void)
           .func=cmd_perf, .argtable=NULL },
         { .command="linkstat", .help="链路 RX 字节/帧计数（真机方向判定）", .hint=NULL,
       .func=cmd_linkstat, .argtable=NULL },
+    { .command="linkbuf", .help="UART1 驱动缓冲字节数", .hint=NULL,
+      .func=cmd_linkbuf, .argtable=NULL },
+    { .command="linkrepin", .help="重下发 UART1 引脚映射并清 RX", .hint=NULL,
+      .func=cmd_linkrepin, .argtable=NULL },
+    { .command="gedge", .help="gedge <gpio> [ms]（引脚边沿探测，不重配）", .hint="<gpio> [ms]",
+      .func=cmd_gedge, .argtable=NULL },
     { .command="ltx", .help="屏链自检：UART1 连发 100B 0x55", .hint=NULL,
           .func=cmd_ltx, .argtable=NULL },
         { .command="reset", .help="软复位", .hint=NULL,

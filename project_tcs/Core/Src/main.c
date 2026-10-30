@@ -349,13 +349,20 @@ static void snap_reassert(void)
     if (!s_snap_have) return;
     if ((uint32_t)(g_tick_ms - s_snap_ms) > 1000u) return;   /* 断链不重放旧值 */
     snap_apply(&s_last_snap);
+    /* 本地急停自持位不得被远端快照抹掉（屏幕按下到 ESP32 回传 ALM_ESTOP 之间的窗口，
+     * 以及断链期间）。2026-10-30 真机：急停后 alarm 被快照清成 0x0000。*/
+    if (control_estop_latched()) g_tcs.alarm_bits |= ALM_ESTOP;
 }
 
 /* R2：屏侧写 M207 温度参数 → 链路 0x12 发 ESP32（权威→M207 verify）；
  * 链路未判活时退回本地旧路径（v2 接线后不可达，仅作降级痕迹）。*/
 static uint8_t m207_redirect_send(uint16_t id, float v)
 {
-    if (!g_tcs.esp_link_ok) return 0;
+    /* 写路径不得以"读新鲜度(esp_link_ok)"为门：该标志按 500ms 快照窗判定，
+     * 主循环被长时间占用（整页重绘/调试探针暂停）时会瞬时为 0，导致屏幕设参
+     * 被静默丢弃并退回本机（v2 下 H743 无 M207）。
+     * 2026-10-30 真机实证：p set 返回 ok 但 M207/ESP32 均为旧值。
+     * 现在无条件入队：comm 层自带 ARQ×3 + 500ms 超时，链路死时由 txq 自然丢弃。*/
     uint8_t pl[TCS_PARAM_PL_LEN];
     tcs_param_pl_t pp = { .id = id, .type = PARAM_TYPE_F32, .value = tcs_f2b(v) };
     size_t n = tcs_pl_param(pl, sizeof(pl), &pp);
@@ -365,6 +372,17 @@ static uint8_t m207_redirect_send(uint16_t id, float v)
                                            pl, n, frame, sizeof(frame));
     if (!fn) return 0;
     return (comm_send(&g_link, frame, fn, MT_TCS_SET_PARAM) != 0xFFu) ? 1u : 0u;
+}
+
+/* v2：本地急停/确认 → 链路 0x15（ESP32 执行 TEC/风扇），ARQ 保证送达 */
+static void link_send_cmd_upstream(uint8_t cmd)
+{
+    uint8_t pl[TCS_CMD_PL_LEN];
+    pl[0] = cmd;
+    uint8_t frame[MAX_FRAME];
+    size_t fn = proto_encode_frame_with_mt(MT_TCS_CMD, comm_next_seq(&g_link),
+                                           pl, TCS_CMD_PL_LEN, frame, sizeof(frame));
+    if (fn) (void)comm_send(&g_link, frame, fn, MT_TCS_CMD);
 }
 
 static void hook_m207_set(uint8_t ch, float v)
@@ -788,6 +806,8 @@ int main(void)
         .on_mode_change = hook_mode_change,
         .eeprom_commit  = hook_eeprom_commit,
     });
+    /* v2：急停/报警确认必须同步到 ESP32（TEC/风扇执行端）*/
+    control_set_cmd_hook(link_send_cmd_upstream);
     if (ee_rv == 0) {
         eeprom_selftest();
         uint8_t img[EE_IMAGE_SIZE];

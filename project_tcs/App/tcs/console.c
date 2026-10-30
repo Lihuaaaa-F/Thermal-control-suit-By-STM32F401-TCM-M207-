@@ -56,8 +56,16 @@ static void tx_drain(void)
     uint16_t n = (s_tx_head > s_tx_tail)
                ? (uint16_t)(s_tx_head - s_tx_tail)
                : (uint16_t)(CON_TX_SIZE - s_tx_tail);
-    HAL_UART_Transmit(s_uart, &s_tx_ring[s_tx_tail], n, 10u);
-    s_tx_tail = (uint16_t)((s_tx_tail + n) & CON_TX_MASK);
+    /* 分块发送：115200 下 10ms 只能发 ~115B，整段一次发会让 HAL 超时后
+     * 仍推进 tail → 批量输出（p list 等）被静默截断。
+     * 2026-10-30 真机实证：50 条参数表只出来 7~18 行。*/
+    while (n) {
+        uint16_t chunk = (n > 64u) ? 64u : n;
+        if (HAL_UART_Transmit(s_uart, &s_tx_ring[s_tx_tail], chunk, 50u) != HAL_OK)
+            break;                      /* 发送失败：保留 tail 下次重试 */
+        s_tx_tail = (uint16_t)((s_tx_tail + chunk) & CON_TX_MASK);
+        n = (uint16_t)(n - chunk);
+    }
 }
 
 /* ====== 日志 / printf 重定向 ====== */
@@ -202,6 +210,28 @@ static void cmd_exec(char *line)
         printf("txwave n=%lu\n", (unsigned long)g_txwave_n);
         return;
     }
+    /* --- pindrv/pinrel：任意引脚驱动探针（线缆落点定位；临时诊断）--- */
+    if ((strcmp(argv[0], "pindrv") == 0 && argc == 4) ||
+        (strcmp(argv[0], "pinrel") == 0 && argc == 3)) {
+        GPIO_TypeDef *ports[11] = { GPIOA, GPIOB, GPIOC, GPIOD, GPIOE, GPIOF,
+                                    GPIOG, GPIOH, GPIOI, GPIOJ, GPIOK };
+        char pc = argv[1][0];
+        int pi = (pc >= 'a' && pc <= 'k') ? (pc - 'a') : (pc - 'A');
+        int pn = atoi(argv[2]);
+        if (pi < 0 || pi > 10 || pn < 0 || pn > 15) { printf("bad port/pin\n"); return; }
+        RCC->AHB4ENR |= 0xFFFFFFFFu;
+        GPIO_InitTypeDef gi = {0};
+        gi.Pin = (uint32_t)1u << pn;
+        gi.Speed = GPIO_SPEED_FREQ_LOW;
+        gi.Pull = GPIO_NOPULL;
+        gi.Mode = (strcmp(argv[0], "pindrv") == 0) ? GPIO_MODE_OUTPUT_PP : GPIO_MODE_INPUT;
+        HAL_GPIO_Init(ports[pi], &gi);
+        if (strcmp(argv[0], "pindrv") == 0)
+            HAL_GPIO_WritePin(ports[pi], gi.Pin, atoi(argv[3]) ? GPIO_PIN_SET : GPIO_PIN_RESET);
+        printf("%s P%c%d%s\n", argv[0], (char)('A' + pi), pn,
+               (strcmp(argv[0], "pindrv") == 0) ? (atoi(argv[3]) ? "=1" : "=0") : "=in");
+        return;
+    }
     /* --- tbl：注册表序列化自检明细（POST TABLE 项排障）--- */
     if (strcmp(argv[0], "tbl") == 0) {
         uint8_t img[EE_IMG_SIZE];
@@ -227,6 +257,15 @@ static void cmd_exec(char *line)
                        p->id, p->key, (double)p->value,
                        (double)p->min, (double)p->max);
         }
+        return;
+    }
+    /* --- drag：滑条拖动（DOWN→MOVE×12→UP，与真实触摸同状态机）--- */
+    if (strcmp(argv[0], "drag") == 0 && argc == 5) {
+        extern void tcs_ui_drag(int x1, int y1, int x2, int y2);
+        int a = atoi(argv[1]), b = atoi(argv[2]);
+        int c = atoi(argv[3]), d = atoi(argv[4]);
+        tcs_ui_drag(a, b, c, d);
+        printf("drag %d,%d -> %d,%d\n", a, b, c, d);
         return;
     }
     /* --- tap：与真实触摸同路径注入（真机屏幕操作取证）--- */
@@ -363,12 +402,15 @@ static void cmd_exec(char *line)
     /* --- p ... --- */
     if (strcmp(argv[0], "p") == 0 && argc >= 2) {
         if (strcmp(argv[1], "list") == 0) {
+            /* 50 条 ≈2KB 输出 > TX 环 2KB → 边打印边排空（防尾部被丢弃）*/
             for (int i = 0; i < param_count(); i++) {
                 const param_desc_t *p = param_at(i);
                 printf("0x%02x %s %.2f [%.1f,%.1f] 0x%02x\n",
                        p->id, p->key, (double)p->value,
                        (double)p->min, (double)p->max, p->flags);
+                if ((i & 7) == 7) tx_drain();
             }
+            tx_drain();
             return;
         }
         if (strcmp(argv[1], "set") == 0 && argc == 4) {

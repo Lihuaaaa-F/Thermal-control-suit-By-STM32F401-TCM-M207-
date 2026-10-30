@@ -68,6 +68,13 @@ void tcs_hist_snapshot(float out1[60], float out2[60], uint32_t * n);
  * 双通道 TCSW=0 + 风扇开 + mode=手动 + ALM_ESTOP + 广播 */
 void  tcs_emergency_stop(void);
 
+/* v2 补充：TEC/风扇在 ESP32 侧执行，本地急停必须同时下发链路 CMD(0x15)。
+ * main.c 装配钩子（发帧）；未装=NULL 时仅本地语义（PC 单测/仿真）。
+ * cmd 语义同 0x15：8=急停 9=报警确认。*/
+typedef void (*control_cmd_hook_t)(uint8_t cmd);
+void    control_set_cmd_hook(control_cmd_hook_t cb);
+uint8_t control_estop_latched(void);   /* 本地急停自持位（屏显报警用）*/
+
 #ifdef __cplusplus
 }
 #endif

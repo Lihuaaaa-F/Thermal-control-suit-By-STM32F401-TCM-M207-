@@ -21,6 +21,10 @@ static uint32_t      s_last_eval;
 static uint8_t       s_boot_ms_base_set;
 static uint32_t      s_boot_ms;
 static uint8_t       s_estop_latch;
+static control_cmd_hook_t s_cmd_hook;   /* v2：急停/确认 → 链路 CMD（main 装配）*/
+
+void control_set_cmd_hook(control_cmd_hook_t cb) { s_cmd_hook = cb; }
+uint8_t control_estop_latched(void) { return s_estop_latch; }
 
 #if TCS_USE_LVGL
 /* G5：60 点×30s 温度环形（P2 曲线数据源；UI 只读） */
@@ -123,6 +127,7 @@ void tcs_alarm_ack(void)
         g_tcs.alarm_bits &= (uint16_t)~ALM_ESTOP;
     }
     g_tcs.alarm_bits &= (uint16_t)~ALM_EEPROM;   /* EEPROM 报警仅提示性 */
+    if (s_cmd_hook) s_cmd_hook(9);               /* v2：ESP32 侧同步清急停自持 */
 }
 
 void tcs_emergency_stop(void)
@@ -140,6 +145,8 @@ void tcs_emergency_stop(void)
     out_tec_sw(2, 0);
     out_fan(1);
     goto_state(CTRL_SAFE);
+    /* v2：TEC/风扇在 ESP32，本地动作无物理效果——必须下发 0x15 cmd=8 */
+    if (s_cmd_hook) s_cmd_hook(8);
 }
 
 /* ====== 手动直控 ====== */

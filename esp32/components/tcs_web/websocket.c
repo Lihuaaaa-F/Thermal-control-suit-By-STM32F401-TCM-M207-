@@ -21,6 +21,7 @@
 #include <math.h>
 #include "link_task.h"
 #include "param_registry.h"
+#include "control.h"
 
 static const char *TAG = "tcs_ws";
 
@@ -346,8 +347,13 @@ esp_err_t ws_on_recv(httpd_req_t *req)
         } else if (strcmp(t->valuestring, "cmd") == 0) {
             cJSON *c = cJSON_GetObjectItem(root, "c");
             if (cJSON_IsNumber(c)) {
-                link_send_cmd((uint8_t)c->valueint);
-                ESP_LOGI(TAG, "ws cmd=%d", c->valueint);
+                /* v2 权威在 ESP32：急停/确认在本端直接执行（TEC/风扇在这里）。
+                 * 原来转发 0x15 给屏幕只会在 H743 的本地控制里空转。*/
+                int cv = c->valueint;
+                if (cv == 8)      tcs_emergency_stop();
+                else if (cv == 9) tcs_alarm_ack();
+                ESP_LOGI(TAG, "ws cmd=%d -> state=%d alarm=0x%04X",
+                         cv, (int)control_state(), (unsigned)g_tcs.alarm_bits);
             }
         } else if (strcmp(t->valuestring, "ota") == 0) {
             /* WP-F.4：m=0 自拷贝+切换；m=1 回滚（boot 指回对槽）*/

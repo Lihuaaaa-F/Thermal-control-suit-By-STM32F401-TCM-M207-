@@ -372,6 +372,41 @@ static uint16_t s_pending_id;
 static uint8_t  s_step_granted;
 
 static int   s_touch_down;
+
+/* 非仿真注入队列（console "drag" 用）：touch_poll 每拍消费一个样本，
+ * 走与真实面板完全相同的 ts_feed 状态机。2026-10-30 补滑条拖动的真机取证。*/
+#define UI_INJ_QN 64
+static ts_sample_t s_inj_q[UI_INJ_QN];
+static volatile int s_inj_head, s_inj_tail;
+
+static void ui_inj_push(int touched, int x, int y, int contacts)
+{
+    int n = (s_inj_head + 1) % UI_INJ_QN;
+    if (n == s_inj_tail) return;
+    ts_sample_t e = {0};
+    e.touched = (uint8_t)(touched ? 1 : 0);
+    e.valid = 1;
+    e.injected = 1;
+    e.contacts = (uint8_t)(contacts > 0 ? contacts : (touched ? 1 : 0));
+    e.touch_id = 0;
+    e.area = 16;
+    e.x = x; e.y = y;
+    s_inj_q[s_inj_head] = e;
+    s_inj_head = n;
+}
+
+/* console: drag x1 y1 x2 y2 —— 按下→12 段移动→抬起（+2 拍释放）*/
+void tcs_ui_drag(int x1, int y1, int x2, int y2)
+{
+    ui_inj_push(1, x1, y1, 1);
+    for (int i = 1; i <= 12; i++) {
+        int x = x1 + (x2 - x1) * i / 12;
+        int y = y1 + (y2 - y1) * i / 12;
+        ui_inj_push(1, x, y, 1);
+    }
+    ui_inj_push(0, x2, y2, 0);
+    ui_inj_push(0, x2, y2, 0);
+}
 static int   s_last_x, s_last_y;
 static uint32_t s_press_t0;
 static uint8_t  s_press_lp_fired;
@@ -1406,6 +1441,14 @@ static void touch_poll(uint32_t now)
 #else
     int injected = 0;
 #endif
+    if (!injected && s_inj_head != s_inj_tail) {
+        ts_sample_t e = s_inj_q[s_inj_tail];
+        s_inj_tail = (s_inj_tail + 1) % UI_INJ_QN;
+        ev.touched = e.touched; ev.valid = e.valid; ev.injected = e.injected;
+        ev.contacts = e.contacts; ev.touch_id = e.touch_id; ev.area = e.area;
+        ev.x = e.x; ev.y = e.y;
+        injected = 1;
+    }
     if (!injected) {
         if (!touch_ready()) return;
         /* M1④/T-12：轮询间隔统计——整页重绘期触摸停摆多久，直接可见 */

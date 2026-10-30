@@ -40,6 +40,7 @@ static QueueHandle_t s_uart_queue;
 static link_status_t s_status;
 static volatile uint32_t s_rx_bytes;   /* UART1 收到的字节总数（真机取证）*/
 static volatile uint32_t s_rx_frames;  /* 解出的完整帧数 */
+static link_cmd_cb_t s_cmd_cb;         /* v2：屏幕 0x15 命令回调 */
 static link_reg_t s_reg[LINK_REGISTRY_MAX];
 static link_ack_t s_ack;
 static link_param_change_t s_last_param;
@@ -312,6 +313,10 @@ static void on_frame(const uint8_t *payload, size_t len)
             }
         }
         taskEXIT_CRITICAL(&s_mux);
+        /* v2 上行写路径：屏幕 0x11 广播（模式/阈值等非 PF_M207 参数）必须落入
+         * 本端权威注册表，否则屏幕改动丢失并被快照回灌成旧值。
+         * param_set 对等值短路 → 0x12 已写过的参数不会重复下发 M207。*/
+        if (s_setparam_cb) s_setparam_cb(p.id, v, payload[1]);
         notify();
         break;
     }
@@ -342,8 +347,16 @@ static void on_frame(const uint8_t *payload, size_t len)
         }
         break;
     }
+    case MT_TCS_CMD: {               /* v2 反向：屏幕急停/确认 → 本端执行 */
+        uint8_t seq = payload[1];
+        if (blen < 1) { link_send_ack(seq, mt, TCS_ACK_BAD_ID, 0.0f); break; }
+        uint8_t cmd = body[0];
+        if (s_cmd_cb) s_cmd_cb(cmd, seq);
+        else link_send_ack(seq, mt, TCS_ACK_BUSY, 0.0f);
+        break;
+    }
     default:
-        break;   /* 0x90 已被 comm 层消费；0x13/0x15 不会从 H743 发来（R2 后 0x12 双向：本端作接收侧） */
+        break;   /* 0x90 已被 comm 层消费；0x13 仅本端发起 */
     }
 }
 
@@ -409,6 +422,7 @@ bool link_alive(void)
 }
 
 const link_status_t *link_status(void) { return &s_status; }
+void link_on_cmd(link_cmd_cb_t cb) { s_cmd_cb = cb; }
 uint32_t link_rx_bytes(void) { return s_rx_bytes; }
 uint32_t link_rx_frames(void) { return s_rx_frames; }
 const link_param_change_t *link_last_param(void) { return &s_last_param; }

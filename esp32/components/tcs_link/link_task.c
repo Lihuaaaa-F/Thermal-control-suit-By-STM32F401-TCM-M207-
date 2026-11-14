@@ -482,6 +482,12 @@ static void link_task(void *arg)
                     if (comm_rx_feed_byte(&s_link, buf[i], &pl, &plen, &dup)) {
                         s_rx_frames++;
                         on_frame(pl, plen);
+                    } else if (dup) {
+                        /* R1 修复 M11-F-04：重复帧也回 ACK（幂等）。
+                         * 原来丢弃且不回 ACK，发送端 ARQ 3 次后误判链路失败。*/
+                        uint8_t ds, dm;
+                        if (comm_last_dup_info(&s_link, &ds, &dm))
+                            link_send_ack(ds, dm, TCS_ACK_OK, 0.0f);
                     }
                 }
             } else if (evt.type == UART_FIFO_OVF || evt.type == UART_BUFFER_FULL) {

@@ -54,7 +54,8 @@ typedef struct {
     void   (*exit_critical)(void);
     /* 状态 */
     comm_pending_t pending[COMM_MAX_PENDING];
-    int8_t  last_seen_seq[256];  /* 按 msg_type 索引上次 seq，-1=没见过（去重） */
+    uint8_t last_seen_seq[256];  /* 按 msg_type 索引上次 seq（配合 last_seen_ok 位图去重）*/
+    uint8_t last_seen_ok[32];    /* 位图：该 msg_type 是否已见过（R1 P1：原 int8_t 存 0..255 会溢出）*/
     int     link_ok;             /* 1=通 0=断 */
     /* 断链回调（上层实现：LED/蜂鸣/屏显 EMERGENCY）*/
     void   (*on_link_down)(void);

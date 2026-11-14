@@ -885,9 +885,11 @@ int main(void)
         tmp117_poll(now);
         post_poll(now);          /* H6：M207 宽限裁决 + 角标 + 布防三态机 100ms */
         param_persist_flush(now);
-        status_tx(now);
         kill_key_poll();
         snap_reassert();         /* v2：本地轮询后回灌 ESP32 快照（屏显一致性）*/
+        /* R1 修复 P1（M01-F-02）：status_tx 必须在 snap_reassert 之后——原来先打包 0x10，
+         * 会把 H743 本机 body_sensor_ok=0（v2 无 TMP117）发给 ESP32，网页误报传感器离线。*/
+        status_tx(now);
 
         /* R1 修复 P0-02：急停意图重发（对端确认前持续 200ms 重发）。
          * 背景：急停只有一跳 0x15（ARQ 500ms×3），断链时直接丢失且恢复后不重发。

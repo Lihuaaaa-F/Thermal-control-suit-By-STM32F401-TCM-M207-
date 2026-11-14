@@ -118,7 +118,9 @@ int tmp117_read_devid(uint16_t *id)
 /* 单样本接受：I2C 成功 + H6.7 合理性（25~45°C 且 |Δ|≤2°C/s）。不合理按通信错误计。*/
 static int sample_accept(float c, uint32_t now_ms)
 {
-    if (!s_have_valid) return 1;
+    /* R1 修复 M06-F-09：首样本也要过 25–45°C 范围检查（原实现直接放行，与 post.h 注释相反）。
+     * dt=0 → post_body_sanity_ok 只查范围、不查变化率。*/
+    if (!s_have_valid) return post_body_sanity_ok(c, c, 0.0f);
     float dt = (float)(now_ms - s_last_valid_ms) / 1000.0f;
     return post_body_sanity_ok(s_last_valid_c, c, dt);
 }

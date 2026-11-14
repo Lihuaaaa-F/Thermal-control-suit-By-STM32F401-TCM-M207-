@@ -274,7 +274,9 @@ void control_poll(uint32_t now_ms)
     }
 
     if (now_ms - s_last_eval < CTRL_EVAL_MS) return;
-    s_last_eval = now_ms;
+    /* R1 修复 M09-F-04：固定节拍累加（原来直接赋 now_ms，499ms 早醒会跳掉一整拍 → 实际 1000ms）*/
+    s_last_eval += CTRL_EVAL_MS;
+    if (now_ms - s_last_eval >= CTRL_EVAL_MS) s_last_eval = now_ms;   /* 长时间停摆后重新对齐 */
 
     float body  = g_tcs.body_temp;
     float hot   = param_get(PARAM_ID_BODY_HOT);

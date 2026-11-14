@@ -239,9 +239,8 @@ int param_set(uint16_t id, float v, uint8_t src)
     c = type_quantize(p, c);
     int clamped = (c != v);
 
-    /* 相等短路（仍回显，ACK ret 带当前值）*/
+    /* 相等短路：值没变就什么都不做（R1 修复 M05-F-19：原来仍广播，与"变更即推"不符）*/
     if (c == p->value) {
-        param_broadcast(p, src);
         return clamped ? 1 : 0;
     }
 

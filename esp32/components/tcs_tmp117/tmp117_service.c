@@ -63,12 +63,12 @@ static uint32_t s_lost_edges, s_recover_edges;
 /* ====== 掉线沿（H743 同语义：布防门=WP-A.5；未布防只记沿不报警）====== */
 static void on_sensor_lost(void)
 {
+    s_lost_edges++;                     /* R1 修复 M13-F-07：计数不受布防门控（原来 unarmed 时 lost=0 与事实相反）*/
     if (!post_armed()) {
         ESP_LOGW(TAG, "LOST (unarmed, log only)");
         return;
     }
     tcs_alarm_raise(ALM_BODY_SENSOR);
-    s_lost_edges++;
     ESP_LOGW(TAG, "LOST (%u err-run) -> ALM_BODY_SENSOR (sticky)",
              (unsigned)TMP117_ERR_TRIP);
 }
@@ -76,7 +76,8 @@ static void on_sensor_lost(void)
 /* ====== 单样本接受：H6.7 合理性（25~45°C 且 |Δ|≤2°C/s）====== */
 static int sample_accept(float c, uint32_t tick_now)
 {
-    if (!s_have_valid) return 1;
+    /* R1 修复 M13-F-03：首样本也过 25–45°C 范围检查（dt=0 → 只查范围，不查变化率）*/
+    if (!s_have_valid) return post_body_sanity_ok(c, c, 0.0f);
     float dt = (float)(tick_now - s_last_valid_ms) * (TMP117_SAMPLE_MS / 1000.0f);
     return post_body_sanity_ok(s_last_valid_c, c, dt);
 }

@@ -26,8 +26,9 @@ void comm_init(comm_link_t *L,
     L->enter_critical = enter_critical;
     L->exit_critical = exit_critical;
     L->link_ok = COMM_LINK_OK_TRUE;
-    /* last_seen_seq 全 -1（没见过） */
-    for (int i = 0; i < 256; i++) L->last_seen_seq[i] = -1;
+    /* R1：last_seen_seq 用 uint8_t + last_seen_ok 位图表示"是否见过"（全 0 = 都没见过）*/
+    for (int i = 0; i < 256; i++) L->last_seen_seq[i] = 0;
+    for (int i = 0; i < 32; i++)  L->last_seen_ok[i] = 0;
     proto_rx_init(&L->rx);
 }
 
@@ -200,10 +201,15 @@ int comm_rx_feed_byte(comm_link_t *L, uint8_t b,
         return 0;
     }
 
-    /* 去重：同 msg_type 同 seq = 重复 */
-    int8_t last = L->last_seen_seq[mt];
-    int is_dup = (last >= 0 && (uint8_t)last == seq);
-    if (!is_dup) L->last_seen_seq[mt] = (int8_t)seq;
+    /* 去重：同 msg_type 同 seq = 重复。
+     * R1 修复 P1（M04-F-02）：原 int8_t 存 0..255，seq≥128 变负数 → 去重失效。*/
+    int is_dup;
+    {
+        uint8_t bit = (uint8_t)(1u << (mt & 7u));
+        uint8_t *bm = &L->last_seen_ok[(mt >> 3) & 31u];
+        is_dup = ((*bm & bit) != 0) && (L->last_seen_seq[mt] == seq);
+        if (!is_dup) { *bm |= bit; L->last_seen_seq[mt] = seq; }
+    }
 
     if (is_dup) {
         /* 重复帧：记信息供上层回 ACK，但不交上层处理 */

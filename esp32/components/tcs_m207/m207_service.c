@@ -665,9 +665,11 @@ float m207_last_temp(uint8_t ch) { return (ch == 1 || ch == 2) ? s_temp[ch] : 0.
 uint32_t m207_temp_age_ms(void)
 {
     if (!s_ever_online) return 0xFFFFu;
+    /* R1 修复 M12-F-11：任一通道从未更新 → 年龄未知，直接 0xFFFF。
+     * 原实现跳过该通道，单通道无数据时仍显示"新鲜"。*/
+    if (!s_have_temp[1] || !s_have_temp[2]) return 0xFFFFu;
     uint32_t worst = 0;                                /* 取较旧通道=显示新鲜度下界 */
     for (int ch = 1; ch <= 2; ch++) {
-        if (!s_have_temp[ch]) continue;
         uint32_t age = (s_tick - s_temp_tick[ch]) * M207_TICK_MS;
         if (age > worst) worst = age;
     }

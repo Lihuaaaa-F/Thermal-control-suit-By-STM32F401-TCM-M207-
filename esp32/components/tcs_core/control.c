@@ -19,6 +19,7 @@
  * PC 单测是单线程，锁退化为空——保持 control.c 零 HAL/零 FreeRTOS 依赖（既有测试架构）。*/
 #ifdef ESP_PLATFORM
 #include "freertos/FreeRTOS.h"
+#include "freertos/semphr.h"      /* N-04：落盘串行化用 mutex */
 static portMUX_TYPE s_safety_mux = portMUX_INITIALIZER_UNLOCKED;
 #define SAFETY_LOCK()   taskENTER_CRITICAL(&s_safety_mux)
 #define SAFETY_UNLOCK() taskEXIT_CRITICAL(&s_safety_mux)
@@ -32,7 +33,7 @@ static ctrl_state_t  s_state = CTRL_IDLE;
 static uint32_t      s_last_eval;
 static uint8_t       s_boot_ms_base_set;
 static uint32_t      s_boot_ms;
-static uint8_t       s_estop_latch;      /* 仅作急停显示/语义；硬门控见 s_safety_latch */
+static volatile uint8_t s_estop_latch;   /* 仅作急停显示/语义；硬门控见 s_safety_latch（N-05：跨任务写，加 volatile）*/
 
 /* 安全锁存：位含义见 control.h。上电默认"源全恢复"，由 control_poll 每拍刷新。
  * volatile：写侧在临界区，读侧（执行器门控/ack/读 API）裸读，必须每次重取（R1 复核 R-09）。*/
@@ -42,16 +43,44 @@ static uint8_t s_safety_ok = 0xFF;
 /* 传感器类源（除急停外）的集合：ack 清急停要求这三者全部恢复 */
 #define SAFETY_SENSOR_MASK (SAFETY_BIT_OVERTEMP | SAFETY_BIT_BODY_LOST | SAFETY_BIT_M207_LOST)
 
+/* N-04：落盘串行化。trip 与 ack 可能在不同任务并发，直接各自写 NVS 会用旧值覆盖新值。
+ * 这里用一把 mutex 串行化"读最新 latch + 写盘"，且**每次写当前值**，所以最后一次写入
+ * 必然是最新状态。临界区内不做 NVS（阻塞），只在读 latch 时短暂进临界区。 */
+#ifdef ESP_PLATFORM
+static SemaphoreHandle_t s_persist_mtx;
+
+static void safety_persist_now(void)
+{
+    uint8_t v;
+    if (!s_ops.safety_persist) return;
+    if (s_persist_mtx && xSemaphoreTake(s_persist_mtx, portMAX_DELAY) != pdTRUE) return;
+    SAFETY_LOCK();
+    v = s_safety_latch;
+    SAFETY_UNLOCK();
+    s_ops.safety_persist(v);
+    if (s_persist_mtx) xSemaphoreGive(s_persist_mtx);
+}
+#else
+static void safety_persist_now(void)
+{
+    uint8_t v;
+    if (!s_ops.safety_persist) return;
+    SAFETY_LOCK();
+    v = s_safety_latch;
+    SAFETY_UNLOCK();
+    s_ops.safety_persist(v);
+}
+#endif
+
 /* ====== 安全锁存原语（R1：P0-01/P0-04/P0-08）====== */
 static void safety_trip(uint8_t bit)
 {
-    uint8_t changed, snap;
+    uint8_t changed;
     SAFETY_LOCK();
     changed = (uint8_t)((s_safety_latch & bit) == 0);
     s_safety_latch |= bit;
-    snap = s_safety_latch;          /* R-08：锁内取值再落盘，避免锁外读到旧值覆盖新值 */
     SAFETY_UNLOCK();
-    if (changed && s_ops.safety_persist) s_ops.safety_persist(snap);
+    if (changed) safety_persist_now();   /* 锁外取最新值落盘（N-04） */
 }
 
 static void safety_set_ok(uint8_t bit, uint8_t ok)
@@ -76,9 +105,8 @@ static void safety_ack_latched(void)
         drop |= (uint8_t)(after & SAFETY_BIT_ESTOP);
     }
     s_safety_latch = (uint8_t)(lat & (uint8_t)~drop);
-    after = s_safety_latch;
     SAFETY_UNLOCK();
-    if (drop && s_ops.safety_persist) s_ops.safety_persist(after);
+    if (drop) safety_persist_now();      /* N-04：写当前值，不会用旧快照覆盖并发 trip */
 }
 
 /* ====== 内部输出封装（同步 g_tcs 快照 + 钩子）====== */
@@ -118,6 +146,10 @@ void control_init(const control_ops_t *ops)
     s_boot_ms_base_set = 0;
     s_estop_latch = 0;
     g_tcs.alarm_bits = 0;
+    /* N-04：落盘串行化用 mutex（只在首次 init 时创建；失败则退化为不加锁）*/
+#ifdef ESP_PLATFORM
+    if (!s_persist_mtx) s_persist_mtx = xSemaphoreCreateMutex();
+#endif
     /* P0-08：先读回持久化锁存，再据此同步 ALM 显示位——复位不得解除安全态。
      * R-05：0xFF = 读回失败/坏记录（"未知"），保守处理为急停锁存 + SAFE，等人工确认；
      *       只有 NVS 明确 NOT_FOUND（首次上电）才返回 0。*/
@@ -165,21 +197,28 @@ static uint8_t safe_sources_recovered(void)
 
 void tcs_alarm_ack(void)
 {
+    uint8_t lat;
     /* 先按"当前"源状态刷新（不依赖上一拍缓存）：操作员降温后立即 ack 也应生效。*/
     safety_set_ok(SAFETY_BIT_OVERTEMP, (uint8_t)(g_tcs.tc1_act <= ALM_OVERTEMP_HARD_C));
     safety_set_ok(SAFETY_BIT_BODY_LOST, g_tcs.body_sensor_ok);
     safety_set_ok(SAFETY_BIT_M207_LOST, g_tcs.m207_online);
     /* P0：再按"源已恢复"清安全锁存；ALM 显示位跟随锁存，不能比锁存更早消失。*/
     safety_ack_latched();
-    if (!(s_safety_latch & SAFETY_BIT_BODY_LOST) && g_tcs.body_sensor_ok)
+    /* N-05：一次性取锁存快照，后续显示位判断都用它——避免"锁外读-判-清"与并发 trip 交错，
+     * 把刚置上的 ALM 位清掉。*/
+    SAFETY_LOCK();
+    lat = s_safety_latch;
+    SAFETY_UNLOCK();
+    if (!(lat & SAFETY_BIT_BODY_LOST) && g_tcs.body_sensor_ok)
         g_tcs.alarm_bits &= (uint16_t)~ALM_BODY_SENSOR;
-    if (!(s_safety_latch & SAFETY_BIT_M207_LOST) && g_tcs.m207_online)
+    if (!(lat & SAFETY_BIT_M207_LOST) && g_tcs.m207_online)
         g_tcs.alarm_bits &= (uint16_t)~ALM_M207;
-    if (!(s_safety_latch & SAFETY_BIT_OVERTEMP) && g_tcs.tc1_act <= ALM_OVERTEMP_HARD_C)
+    if (!(lat & SAFETY_BIT_OVERTEMP) && g_tcs.tc1_act <= ALM_OVERTEMP_HARD_C)
         g_tcs.alarm_bits &= (uint16_t)~ALM_OVERTEMP;
-    if (!(s_safety_latch & SAFETY_BIT_ESTOP))
+    if (!(lat & SAFETY_BIT_ESTOP)) {
         g_tcs.alarm_bits &= (uint16_t)~ALM_ESTOP;
-    if (!(s_safety_latch & SAFETY_BIT_ESTOP)) s_estop_latch = 0;
+        s_estop_latch = 0;
+    }
     g_tcs.alarm_bits &= (uint16_t)~ALM_EEPROM;   /* EEPROM 报警仅提示性 */
 }
 
@@ -337,6 +376,7 @@ ctrl_state_t control_state(void) { return s_state; }
 
 /* ====== 安全锁存/急停投递读侧（console/网页/诊断）====== */
 uint8_t control_safety_latched(void) { return s_safety_latch; }
+void    control_safety_trip(uint8_t bit) { safety_trip(bit); }
 
 #ifdef TCS_UNIT_TEST
 void control_test_trip(uint8_t bit) { safety_trip(bit); }

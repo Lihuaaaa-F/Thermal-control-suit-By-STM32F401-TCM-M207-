@@ -199,7 +199,7 @@ int main(void)
         enter_auto_healthy();
         hook_calls = 0;
         tcs_emergency_stop();
-        CHECK(hook_calls == 1, "P0-02 estop sends one intent frame");
+        CHECK(hook_calls == 1, "P0-02 estop sends first intent frame (smoke)");
         CHECK(control_estop_tx_pending() == 1, "P0-02 estop intent pending");
         reset_stubs();
         tcs_emergency_stop();
@@ -217,7 +217,7 @@ int main(void)
         CHECK(control_estop_tx_pending() == 1, "R-04 ack does not cancel pending delivery");
         control_estop_tx_confirm();               /* 模拟快照出现 ALM_ESTOP */
         CHECK(control_estop_tx_pending() == 0, "R-04 peer confirm clears pending");
-        CHECK(hook_calls == 1, "P0-02 ack notifies peer (cmd 9)");
+        CHECK(hook_calls == 1, "P0-02 ack notifies peer (smoke)");
         control_set_cmd_hook(0);
     }
 

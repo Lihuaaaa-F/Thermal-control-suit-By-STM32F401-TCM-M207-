@@ -207,9 +207,14 @@ void app_main(void)
         .safety_persist = safety_persist_cb,   /* P0-08：锁存跨复位存活 */
         .safety_load    = safety_state_load,
     });
-    /* R1 修复 M09-F-10：任务创建失败必须可见（原来静默失去控制与看门狗订阅）*/
+    /* R1 修复 M09-F-10 / N-01：任务创建失败必须可见，且必须 fail-safe——
+     * 没有控制任务就没有闭环与执行器门控，继续跑等于"加热无人监管"。*/
     if (control_service_start() != 0) {
-        ESP_LOGE(TAG, "control_service_start FAILED: no closed loop / no safety gate");
+        ESP_LOGE(TAG, "control_service_start FAILED -> fail-safe (estop + TEC off + fan on)");
+        tcs_emergency_stop();
+        (void)m207_tec(1, 0);
+        (void)m207_tec(2, 0);
+        fan_set_on(1);
     }
     tcs_console_start();
     /* R2：0x20 快照（200ms 全量，核 0）+0x21 位图增量。旧屏固件对未知消息号

@@ -188,7 +188,7 @@ static int cmd_ledblk(int argc, char **argv)
 {
     if (argc < 2) { printf("ledblk <gpio>（对白名单脚发 WS2812 全黑帧）\n"); return 1; }
     int g = atoi(argv[1]);
-    if (!gpio_allowed(g)) { printf("gpio not allowed (38/42/48)\n"); return 1; }
+    if (!gpio_allowed(g)) { printf("gpio not allowed (38/48)\n"); return 1; }
     fan_ws2812_black_frame(g);
     printf("ledblk %d sent (WS2812 black frame)\n", g);
     return 0;
@@ -198,7 +198,7 @@ static int cmd_ledblink(int argc, char **argv)
 {
     if (argc < 2) { printf("ledblink <gpio>（低/高各 300ms 闪 3 次，用眼睛定位灯脚）\n"); return 1; }
     int g = atoi(argv[1]);
-    if (!gpio_allowed(g)) { printf("gpio not allowed (38/42/48)\n"); return 1; }
+    if (!gpio_allowed(g)) { printf("gpio not allowed (38/48)\n"); return 1; }
     gpio_config_t io = { .pin_bit_mask = 1ULL << g, .mode = GPIO_MODE_INPUT_OUTPUT,
                          .pull_up_en = 0, .pull_down_en = 0, .intr_type = GPIO_INTR_DISABLE };
     gpio_config(&io);
@@ -214,7 +214,7 @@ static int cmd_ledtest(int argc, char **argv)
 {
     if (argc < 2) { printf("ledtest <gpio>（红闪 700ms 再灭，验证帧时序+引脚）\n"); return 1; }
     int g = atoi(argv[1]);
-    if (!gpio_allowed(g)) { printf("gpio not allowed (38/42/48)\n"); return 1; }
+    if (!gpio_allowed(g)) { printf("gpio not allowed (38/48)\n"); return 1; }
     fan_ws2812_ledtest(g);
     printf("ledtest %d done\n", g);
     return 0;

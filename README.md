@@ -29,6 +29,12 @@
 | 出厂复位 | `bash tools/factory_reset.sh` |
 | ESP32 | `source ~/.claude/skills/embedded-dev-loop/platforms/esp32/scripts/activate_idf.sh && cd esp32 && bash .../esp_loop.sh all` |
 
+> **构建档位（2026-11-15 起）**：H743 用 `-DTCS_PROFILE=PROD|BENCH|SIM`（默认 **PROD**）。
+> 交付/日常 = PROD：不含 `pindrv/pinrel/pinscan/wdttest/wave/txwave/rxraw`、`mode/tec/fan`、`m207 send`；
+> 台架/诊断 = BENCH（`cmake ... -DTCS_PROFILE=BENCH`）。ESP32 的 `m207 raw` 需 `CONFIG_TCS_DIAG=y`，
+> 注入 `body` 需 `CONFIG_TCS_SIM=y`，演示模式需 `CONFIG_TCS_DEMO=y`（三者默认 n，menuconfig 里开）。
+> **照本文档的台架命令操作前先确认档位，否则会得到 `unknown command`。**
+
 ## 硬性纪律
 
 - **pyocd 禁用**（退出留核 HALT）；halt 类调试禁用于温控回路（加热安全）。

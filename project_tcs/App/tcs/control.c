@@ -97,6 +97,9 @@ void control_init(const control_ops_t *ops)
     s_last_eval = 0;
     s_boot_ms_base_set = 0;
     s_estop_latch = 0;
+    /* N-06：新增的两个静态量也要复位——否则软重初始化/测试复用会带着旧锁存与旧投递意图 */
+    s_overtemp_latch = 0;
+    s_estop_tx_pending = 0;
     g_tcs.alarm_bits = 0;
 }
 
@@ -137,10 +140,12 @@ void tcs_alarm_ack(void)
         s_overtemp_latch = 0;            /* R-03：只有 ack 且温度已回落才清本地超温自持 */
     }
     if (s_state != CTRL_SAFE || safe_sources_recovered()) {
-        uint8_t was = s_estop_latch;
         control_estop_clear();
-        /* R-17：只有"确实清了本地自持"才通知对端；否则对端会被无条件清掉。*/
-        if (was && !s_estop_latch && s_cmd_hook) s_cmd_hook(9);
+        /* N-03：非急停报警（BODY/M207/OVERTEMP）的屏 ack 也必须通知对端，
+         * 否则 ESP32 侧锁存永远清不掉（屏是主操作载体）。
+         * 只在"本地已无急停自持"时发：避免本地急停未清却把对端急停清掉。
+         * 对端 tcs_alarm_ack 仍会检查自己的源是否恢复。*/
+        if (!s_estop_latch && s_cmd_hook) s_cmd_hook(9);
     }
     g_tcs.alarm_bits &= (uint16_t)~ALM_EEPROM;   /* EEPROM 报警仅提示性 */
 }
@@ -209,8 +214,9 @@ void control_poll(uint32_t now_ms)
 
     /* 过热硬切断（R1 修复 P0-01）：任意模式、任意布防态。
      * R-03：置本地自持位（不被 snap_reassert 覆盖），只有 ack 且温度回落才清。
-     * R-16：这里**不再**发 cmd 8——`tc1_act` 本来就来自 ESP32 快照，对端必然先看到
-     * 同一个超温并自行锁存；H743 重复下发只会造成双权威语义（详见 AD-1）。*/
+     * N-01：仍然下发一次 cmd 8 —— 这是"停止请求"（不是驱动执行器），是跨端兜底：
+     * 若 ESP32 的 control 任务创建失败/卡死，H743 的这条请求仍能让对端执行急停。
+     * 只在首次进入 SAFE 时发，重发由主循环的 pending 块负责。*/
     if (g_tcs.tc1_act > ALM_OVERTEMP_HARD_C) {
         tcs_alarm_raise(ALM_OVERTEMP);
         s_overtemp_latch = 1;
@@ -219,6 +225,8 @@ void control_poll(uint32_t now_ms)
             out_tec_sw(2, 0);
             out_fan(1);
             goto_state(CTRL_SAFE);
+            s_estop_tx_pending = 1;       /* N-01/R-04：纳入投递重发（对端确认前 200ms 重发）*/
+            if (s_cmd_hook) s_cmd_hook(8);
         }
         return;
     }

@@ -904,34 +904,41 @@ int main(void)
          * 对端随后 ack 会让该位消失，本端据此清自持（control_estop_clear），避免两端拉锯。*/
         {
             static uint32_t s_estop_tx_ms;
-            static uint8_t  s_estop_seen_remote;
+            static uint8_t  s_estop_seen_remote;   /* 曾在对端快照看到 ESTOP（含确认后）*/
             static uint8_t  s_estop_warned;
             static uint32_t s_estop_retry;
             uint8_t link_fresh = (s_snap_have && (uint32_t)(now - s_snap_ms) <= 500u) ? 1u : 0u;
-            if (!control_estop_tx_pending()) {
+            /* N-02：seen_remote 的生命周期不能跟 pending 绑——确认 pending 后仍要能观察
+             * "对端随后 ack（ESTOP 消失）"，否则那条分支永远不可达、两端状态分叉。
+             * 只有"本地不再自持"时才整体复位。*/
+            if (!control_estop_latched()) {
                 s_estop_seen_remote = 0;
-                s_estop_warned = 0;
-                s_estop_retry = 0;
-            } else if (!link_fresh) {
-                if (!s_estop_warned) {
+            }
+            if (!link_fresh) {
+                if (control_estop_tx_pending() && !s_estop_warned) {
                     s_estop_warned = 1;
                     tcs_log("[SAFE]", "estop pending: esp link down, delivery unconfirmed (report only)");
                 }
             } else if (s_last_snap.alarm & ALM_ESTOP) {
                 s_estop_seen_remote = 1;      /* 对端已执行（本轮急停的确认证据）*/
                 s_estop_warned = 0;
-                control_estop_tx_confirm();   /* R-04：确认投递，停止重发 */
+                if (control_estop_tx_pending()) control_estop_tx_confirm();   /* R-04 */
             } else if (s_estop_seen_remote) {
                 control_estop_clear();        /* 对端已 ack（曾现又消失）→ 本端同步解除自持 */
                 s_estop_seen_remote = 0;
-            } else if ((uint32_t)(now - s_estop_tx_ms) >= 200u) {
-                s_estop_tx_ms = now;
-                s_estop_retry++;
-                /* R-19：对端在、但一直没上报 ESTOP 时不能静默 5Hz 重发。每 25 次（≈5s）报一次 */
-                if ((s_estop_retry % 25u) == 1u)
-                    tcs_log("[SAFE]", "estop unconfirmed: retry=%lu (link up, peer silent)",
-                            (unsigned long)s_estop_retry);
-                link_send_cmd_upstream(8);    /* 重发意图（幂等）*/
+            } else if (control_estop_tx_pending()) {
+                if ((uint32_t)(now - s_estop_tx_ms) >= 200u) {
+                    s_estop_tx_ms = now;
+                    s_estop_retry++;
+                    /* R-19：对端在、但一直没上报 ESTOP 时不能静默 5Hz 重发。每 25 次（≈5s）报一次 */
+                    if ((s_estop_retry % 25u) == 1u)
+                        tcs_log("[SAFE]", "estop unconfirmed: retry=%lu (link up, peer silent)",
+                                (unsigned long)s_estop_retry);
+                    link_send_cmd_upstream(8);    /* 重发意图（幂等）*/
+                }
+            } else {
+                s_estop_warned = 0;
+                s_estop_retry = 0;
             }
         }
 

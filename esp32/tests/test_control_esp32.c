@@ -239,7 +239,7 @@ int main(void)
     tcs_alarm_ack();
     tick();
     CHECK(control_state() == CTRL_IDLE && control_safety_latched() == 0,
-          "P0-01 overtemp ack -> IDLE");
+          "P0-01 ack path returns IDLE (smoke)");
 
     /* P0-04（门控本身，与状态机无关）：锁存置位而 state 仍 IDLE 时，手动"开"必须被压成 0。
      * R-14：旧实现没有锁存，这条永远通过不了（manual 会直接写 1）——真正的判别性用例。*/
@@ -256,11 +256,11 @@ int main(void)
     reset_stubs();
     control_manual_tec(1, 1);                  /* 模拟控制台/网页的在途写 */
     /* SAFE 短路 + 锁存双保险：manual 直接返回，连 out_tec_sw 都不进 */
-    CHECK(tec_calls == 0 && last_tec_on == 0, "P0-04 manual on blocked after estop");
+    CHECK(tec_calls == 0 && last_tec_on == 0, "P0-04 manual blocked after estop (smoke: SAFE short-circuit)");
     g_tcs.body_temp = 30.0f;                   /* 自动模式想制热 */
     tick();
     CHECK(last_tec_on == 0, "P0-04 poll cannot re-enable TEC while latched");
-    CHECK(control_state() == CTRL_SAFE, "P0-04 still SAFE while latched");
+    CHECK(control_state() == CTRL_SAFE, "P0-04 still SAFE while latched (smoke)");
 
     /* P0-08：持久化锁存在启动时恢复 → 复位不能解除安全态*/
     {

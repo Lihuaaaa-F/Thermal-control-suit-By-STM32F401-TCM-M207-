@@ -76,6 +76,8 @@ void  tcs_emergency_stop(void);
 
 /* ====== 安全锁存读侧（R1 修复；console/网页/诊断用）====== */
 uint8_t control_safety_latched(void);           /* 非 0 = 仍在安全锁存 */
+/* N-01：设备服务层（M207 解析等）可直接置安全锁存——超温切断不得只依赖 control 任务存活。*/
+void    control_safety_trip(uint8_t bit);
 
 #ifdef TCS_UNIT_TEST
 /* 测试专用：不经过 poll 直接置锁存，用于验证"锁存门控"独立于状态机（R1 复核 R-14）。

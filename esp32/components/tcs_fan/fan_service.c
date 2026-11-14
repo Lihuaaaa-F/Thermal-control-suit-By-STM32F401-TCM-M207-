@@ -21,6 +21,7 @@
 
 static uint8_t  s_pct;          /* 当前设定 0-100 */
 static uint32_t s_set_cnt;      /* 设定次数（变更路径统计）*/
+static uint32_t s_err_cnt;      /* LEDC 写失败次数（R1 M13-F-05：失败必须可见）*/
 static uint8_t  s_ledc_ready;   /* LEDC 通道已配置（WS2812 借脚前停/还逻辑的门）*/
 
 /* 低=开：低电平占空比 = pct% → LEDC duty（高电平计数）= (100-pct)/100 × 满 */
@@ -135,10 +136,20 @@ int fan_service_start(void)
 void fan_set_duty(uint8_t pct)
 {
     if (pct > FAN_DUTY_MAX) pct = FAN_DUTY_MAX;
+    /* R1 修复 M13-F-05：判 LEDC 返回值。失败时 fan_on 记 0（显示与实际一致）并留日志，
+     * 不再"命令回声 = 输出状态"。*/
+    esp_err_t e1 = ledc_set_duty(FAN_LEDC_SPEED_MODE, FAN_LEDC_CHANNEL, pct_to_duty(pct));
+    esp_err_t e2 = ledc_update_duty(FAN_LEDC_SPEED_MODE, FAN_LEDC_CHANNEL);
+    if (e1 != ESP_OK || e2 != ESP_OK) {
+        s_err_cnt++;
+        ESP_LOGE(TAG, "ledc set/update fail %s/%s (pct=%u)",
+                 esp_err_to_name(e1), esp_err_to_name(e2), (unsigned)pct);
+        s_pct = 0;
+        g_tcs.fan_on = 0;
+        return;
+    }
     s_pct = pct;
     s_set_cnt++;
-    ledc_set_duty(FAN_LEDC_SPEED_MODE, FAN_LEDC_CHANNEL, pct_to_duty(pct));
-    ledc_update_duty(FAN_LEDC_SPEED_MODE, FAN_LEDC_CHANNEL);
     g_tcs.fan_on = (pct > 0) ? 1u : 0u;
 }
 

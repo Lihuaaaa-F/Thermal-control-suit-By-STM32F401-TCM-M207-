@@ -247,9 +247,8 @@ static int cmd_linkbuf(int argc, char **argv)
 {
     (void)argc; (void)argv;
     size_t n = 0;
+    /* R1 修复 M08-F-14：删未用变量 st 与重复的第二次调用（ESP32 唯一构建告警）*/
     esp_err_t r = uart_get_buffered_data_len(UART_NUM_1, &n);
-    uint32_t st = 0;
-    r |= uart_get_buffered_data_len(UART_NUM_1, &n);
     printf("linkbuf buffered=%u err=%d\n", (unsigned)n, (int)r);
     return 0;
 }
@@ -276,7 +275,9 @@ static int cmd_ltx(int argc, char **argv)
 static int cmd_reset(int argc, char **argv)
 {
     (void)argc; (void)argv;
-    printf("soft reset in 1s\n");
+    /* R1 修复 M08-F-13：复位前强制落盘，2s 防抖窗口内的参数变更不再丢 */
+    int rv = param_persist_now();
+    printf("persist rv=%d; soft reset in 1s\n", rv);
     vTaskDelay(pdMS_TO_TICKS(1000));
     esp_restart();
     return 0;

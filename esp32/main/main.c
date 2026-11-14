@@ -98,7 +98,12 @@ void app_ota_trigger(int rollback)
         if (!next) { ESP_LOGE(TAG, "rollback FAIL: no next slot"); return; }
         ESP_LOGI(TAG, "ota ROLLBACK: boot %s -> %s, restart in 1s",
                  run->label, next->label);
-        ESP_ERROR_CHECK(esp_ota_set_boot_partition(next));
+        /* R1 修复 M08-F-09：不用 ESP_ERROR_CHECK（失败会 abort），改为记录并放弃回滚 */
+        esp_err_t rb = esp_ota_set_boot_partition(next);
+        if (rb != ESP_OK) {
+            ESP_LOGE(TAG, "ota ROLLBACK set_boot fail=%s", esp_err_to_name(rb));
+            return;
+        }
         vTaskDelay(pdMS_TO_TICKS(1000));
         esp_restart();
     }
@@ -202,7 +207,10 @@ void app_main(void)
         .safety_persist = safety_persist_cb,   /* P0-08：锁存跨复位存活 */
         .safety_load    = safety_state_load,
     });
-    control_service_start();
+    /* R1 修复 M09-F-10：任务创建失败必须可见（原来静默失去控制与看门狗订阅）*/
+    if (control_service_start() != 0) {
+        ESP_LOGE(TAG, "control_service_start FAILED: no closed loop / no safety gate");
+    }
     tcs_console_start();
     /* R2：0x20 快照（200ms 全量，核 0）+0x21 位图增量。旧屏固件对未知消息号
      * 静默丢弃（switch 无 default）→ 前向兼容；屏端读快照缓存在 R2-H743 侧接。 */

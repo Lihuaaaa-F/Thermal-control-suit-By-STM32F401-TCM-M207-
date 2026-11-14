@@ -76,7 +76,15 @@ void  tcs_emergency_stop(void);
 
 /* ====== 安全锁存读侧（R1 修复；console/网页/诊断用）====== */
 uint8_t control_safety_latched(void);           /* 非 0 = 仍在安全锁存 */
-uint8_t control_safety_mask(void);              /* SAFETY_BIT_* 组合 */
+/* 急停投递（R1 复核 R-04）：pending=1 表示意图未确认；只有对端快照出现 ALM_ESTOP 才 confirm */
+uint8_t control_estop_tx_pending(void);
+void    control_estop_tx_confirm(void);
+
+#ifdef TCS_UNIT_TEST
+/* 测试专用：不经过 poll 直接置锁存，用于验证"锁存门控"独立于状态机（R1 复核 R-14）。
+ * 只在单测构建可见，生产固件不编入。*/
+void control_test_trip(uint8_t bit);
+#endif
 
 #ifdef __cplusplus
 }

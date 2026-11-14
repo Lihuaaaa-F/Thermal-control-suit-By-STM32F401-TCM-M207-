@@ -222,13 +222,15 @@ int main(void)
 
     /* ====== R1 修复的判别性用例（旧实现必然失败）====== */
 
-    /* P0-01：超温必须"切断"，不是只报警（旧代码 state 仍在 IDLE/HEAT 且 tec_on=1）*/
+    /* P0-01：超温必须"切断"，不是只报警。
+     * R-14：先 reset_stubs，断言用调用计数（旧实现的 last_tec_on/last_fan 是上一段残留 → 假阳性）。*/
     enter_auto_healthy();
+    reset_stubs();
     g_tcs.tc1_act = 49.0f;
     tick();
     CHECK(control_state() == CTRL_SAFE, "P0-01 overtemp -> SAFE");
-    CHECK(last_tec_on == 0, "P0-01 overtemp -> TEC off");
-    CHECK(last_fan == 1, "P0-01 overtemp -> fan on");
+    CHECK(tec_calls >= 2 && last_tec_on == 0, "P0-01 overtemp -> both TEC off");
+    CHECK(fan_calls >= 1 && last_fan == 1, "P0-01 overtemp -> fan on");
     CHECK(control_safety_latched() != 0, "P0-01 overtemp -> latch set");
     /* 温度回落但未 ack：不得自动退出 SAFE（旧实现 alarm 会自己消失）*/
     g_tcs.tc1_act = 40.0f;
@@ -239,12 +241,22 @@ int main(void)
     CHECK(control_state() == CTRL_IDLE && control_safety_latched() == 0,
           "P0-01 overtemp ack -> IDLE");
 
-    /* P0-04：急停后，在途手动/状态机不能把 TEC 重新打开（锁存门控）*/
+    /* P0-04（门控本身，与状态机无关）：锁存置位而 state 仍 IDLE 时，手动"开"必须被压成 0。
+     * R-14：旧实现没有锁存，这条永远通过不了（manual 会直接写 1）——真正的判别性用例。*/
+    enter_auto_healthy();
+    reset_stubs();
+    control_test_trip(SAFETY_BIT_ESTOP);       /* 只置锁存，不走 FSM */
+    control_manual_tec(1, 1);
+    CHECK(tec_calls == 1 && last_tec_on == 0, "P0-04 gate blocks manual on while IDLE+latched");
+    CHECK(control_state() == CTRL_IDLE, "P0-04 gate does not change state");
+
+    /* P0-04（整链路）：急停后在途手动/状态机都不能把 TEC 重新打开 */
     enter_auto_healthy();
     tcs_emergency_stop();
     reset_stubs();
     control_manual_tec(1, 1);                  /* 模拟控制台/网页的在途写 */
-    CHECK(last_tec_on == 0, "P0-04 manual on blocked while latched");
+    /* SAFE 短路 + 锁存双保险：manual 直接返回，连 out_tec_sw 都不进 */
+    CHECK(tec_calls == 0 && last_tec_on == 0, "P0-04 manual on blocked after estop");
     g_tcs.body_temp = 30.0f;                   /* 自动模式想制热 */
     tick();
     CHECK(last_tec_on == 0, "P0-04 poll cannot re-enable TEC while latched");

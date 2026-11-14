@@ -14,6 +14,7 @@
 #include "tmp117_service.h"
 #include "fan_service.h"
 #include "driver/gpio.h"
+#include "esp_timer.h"      /* R1 复核 R-13：cmd_gedge 用 esp_timer_get_time，必须显式包含 */
 
 #include <string.h>
 #include <stdio.h>
@@ -130,12 +131,14 @@ static int cmd_status(int argc, char **argv)
 {
     (void)argc; (void)argv;
     printf("tc1=%.2f tc2=%.2f body=%.2f(ok=%u) fan=%u%% mode=%u m207=%u "
-           "alarm=0x%04X armed=%u state=%d sim=%u heap=%u\n",
+           "alarm=0x%04X armed=%u state=%d sim=%u latch=0x%02X txpend=%u heap=%u\n",
            (double)g_tcs.tc1_act, (double)g_tcs.tc2_act, (double)g_tcs.body_temp,
            (unsigned)g_tcs.body_sensor_ok, (unsigned)fan_get_duty(),
            (unsigned)g_tcs.mode, (unsigned)g_tcs.m207_online,
            (unsigned)g_tcs.alarm_bits, (unsigned)control_service_armed(),
            (int)control_state(), (unsigned)tmp117_sim_active(),
+           (unsigned)control_safety_latched(),      /* R-10：现场能看出"为什么还锁着" */
+           (unsigned)control_estop_tx_pending(),    /* R-04/R-19：急停是否已投递 */
            (unsigned)esp_get_minimum_free_heap_size());
     return 0;
 }
@@ -159,6 +162,7 @@ static int cmd_perf(int argc, char **argv)
     return 0;
 }
 
+#if CONFIG_TCS_DIAG
 static int cmd_m207(int argc, char **argv)
 {
     if (argc < 3 || strcmp(argv[1], "raw") != 0) {
@@ -170,13 +174,15 @@ static int cmd_m207(int argc, char **argv)
            argv[2], rc);
     return 0;
 }
+#endif /* CONFIG_TCS_DIAG：R1 复核 R-01，PROD 不得保留可直写 TCSW 的通道 */
 
 /* 引脚白名单（R1 修复 M08-F-02）：原实现放开 GPIO0–48，`ledblink 26` 会对
- * Flash(26–32)/Octal PSRAM(33–37) 做 gpio_config。这里只允许板载可用脚：
- * 38/48=板载 RGB，42=风扇 PWM（这三处是文档化引脚）。其余一律拒绝。*/
+ * Flash(26–32)/Octal PSRAM(33–37) 做 gpio_config。
+ * R1 复核 R-02：42 是风扇 PWM（LEDC 通道），gpio_config 会把 pad 从 LEDC 摘下且不复原，
+ * 之后风扇恒 OFF（含 SAFE 态）——所以白名单只留 38/48 两个板载 RGB 脚。*/
 static int gpio_allowed(int g)
 {
-    return (g == 38 || g == 42 || g == 48);
+    return (g == 38 || g == 48);
 }
 
 static int cmd_ledblk(int argc, char **argv)
@@ -319,8 +325,10 @@ int tcs_console_start(void)
           .func=cmd_ack, .argtable=NULL },
         { .command="status", .help="状态一行", .hint=NULL,
           .func=cmd_status, .argtable=NULL },
-        { .command="m207", .help="m207 raw <帧>（直查/注入；自动补 \r）", .hint="raw <frame>",
+#if CONFIG_TCS_DIAG
+        { .command="m207", .help="m207 raw <帧>（台架直查/注入；自动补 \r）", .hint="raw <frame>",
           .func=cmd_m207, .argtable=NULL },
+#endif
         { .command="ledblk", .help="ledblk <gpio>（WS2812 全黑帧）", .hint="<gpio>",
           .func=cmd_ledblk, .argtable=NULL },
         { .command="ledblink", .help="ledblink <gpio>（闪 3 次定位灯脚）", .hint="<gpio>",

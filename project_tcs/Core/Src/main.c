@@ -350,8 +350,11 @@ static void snap_reassert(void)
     if ((uint32_t)(g_tick_ms - s_snap_ms) > 1000u) return;   /* 断链不重放旧值 */
     snap_apply(&s_last_snap);
     /* 本地急停自持位不得被远端快照抹掉（屏幕按下到 ESP32 回传 ALM_ESTOP 之间的窗口，
-     * 以及断链期间）。2026-10-30 真机：急停后 alarm 被快照清成 0x0000。*/
-    if (control_estop_latched()) g_tcs.alarm_bits |= ALM_ESTOP;
+     * 以及断链期间）。2026-10-30 真机：急停后 alarm 被快照清成 0x0000。
+     * R1 复核 R-03：超温同理——本地自持位也要在快照覆盖后补回来，否则
+     * ESP32 还没跑到超温那一拍时，H743 的 SAFE 会在无 ack 的情况下自动退出。*/
+    if (control_estop_latched())    g_tcs.alarm_bits |= ALM_ESTOP;
+    if (control_overtemp_latched()) g_tcs.alarm_bits |= ALM_OVERTEMP;
 }
 
 /* R2：屏侧写 M207 温度参数 → 链路 0x12 发 ESP32（权威→M207 verify）；
@@ -894,16 +897,21 @@ int main(void)
         /* R1 修复 P0-02：急停意图重发（对端确认前持续 200ms 重发）。
          * 背景：急停只有一跳 0x15（ARQ 500ms×3），断链时直接丢失且恢复后不重发。
          * 策略（用户裁决 2026-11-15）：链路丢失只报告、不进 SAFE——所以这里做"意图重发"
-         * 而不做"断链即停机"。确认口径：0x20 快照 alarm 含 ALM_ESTOP（对端已执行）；
+         * 而不做"断链即停机"。
+         * R-04：重发条件用 control_estop_tx_pending()（意图未确认），**不是**本地自持位——
+         * 否则断链期间按屏上"确认"会清自持，意图就永久丢了。
+         * 确认口径：0x20 快照 alarm 含 ALM_ESTOP（对端已执行）→ confirm；
          * 对端随后 ack 会让该位消失，本端据此清自持（control_estop_clear），避免两端拉锯。*/
         {
             static uint32_t s_estop_tx_ms;
             static uint8_t  s_estop_seen_remote;
             static uint8_t  s_estop_warned;
+            static uint32_t s_estop_retry;
             uint8_t link_fresh = (s_snap_have && (uint32_t)(now - s_snap_ms) <= 500u) ? 1u : 0u;
-            if (!control_estop_latched()) {
+            if (!control_estop_tx_pending()) {
                 s_estop_seen_remote = 0;
                 s_estop_warned = 0;
+                s_estop_retry = 0;
             } else if (!link_fresh) {
                 if (!s_estop_warned) {
                     s_estop_warned = 1;
@@ -912,11 +920,17 @@ int main(void)
             } else if (s_last_snap.alarm & ALM_ESTOP) {
                 s_estop_seen_remote = 1;      /* 对端已执行（本轮急停的确认证据）*/
                 s_estop_warned = 0;
+                control_estop_tx_confirm();   /* R-04：确认投递，停止重发 */
             } else if (s_estop_seen_remote) {
                 control_estop_clear();        /* 对端已 ack（曾现又消失）→ 本端同步解除自持 */
                 s_estop_seen_remote = 0;
             } else if ((uint32_t)(now - s_estop_tx_ms) >= 200u) {
                 s_estop_tx_ms = now;
+                s_estop_retry++;
+                /* R-19：对端在、但一直没上报 ESTOP 时不能静默 5Hz 重发。每 25 次（≈5s）报一次 */
+                if ((s_estop_retry % 25u) == 1u)
+                    tcs_log("[SAFE]", "estop unconfirmed: retry=%lu (link up, peer silent)",
+                            (unsigned long)s_estop_retry);
                 link_send_cmd_upstream(8);    /* 重发意图（幂等）*/
             }
         }

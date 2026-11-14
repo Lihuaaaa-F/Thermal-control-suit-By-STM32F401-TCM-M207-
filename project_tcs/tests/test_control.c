@@ -171,31 +171,41 @@ int main(void)
     tick();
     CHECK(control_state() == CTRL_IDLE, "estop cleared -> IDLE");
 
-    /* 过热硬阈值（R1 修复 P0-01：必须切断，不是只报警）*/
+    /* 过热硬阈值（R1 修复 P0-01：必须切断，不是只报警）
+     * R-14：断言前清零桩计数，避免"上一段残留值"造成假阳性。*/
     enter_auto_healthy();
+    reset_stubs();
     g_tcs.tc1_act = 48.5f;
     tick();
     CHECK(tcs_alarm_active(ALM_OVERTEMP) == 1, "overtemp alarm at >48");
     CHECK(control_state() == CTRL_SAFE, "P0-01 overtemp -> SAFE");
-    CHECK(last_tec_on == 0 && last_fan == 1, "P0-01 overtemp tec off fan on");
-    /* 温度回落但未 ack：仍停在 SAFE（锁存）*/
+    CHECK(tec_calls >= 2 && last_tec_on == 0, "P0-01 overtemp both tec off");
+    CHECK(fan_calls >= 1 && last_fan == 1, "P0-01 overtemp fan on");
+    /* 温度回落但未 ack：仍停在 SAFE（本地超温自持，R-03）*/
     g_tcs.tc1_act = 40.0f;
     tick();
     CHECK(control_state() == CTRL_SAFE, "P0-01 overtemp holds without ack");
+    CHECK(control_overtemp_latched() == 1, "P0-01 overtemp local latch set");
     tcs_alarm_ack();
     CHECK(tcs_alarm_active(ALM_OVERTEMP) == 0, "overtemp cleared under 48");
+    CHECK(control_overtemp_latched() == 0, "P0-01 overtemp latch cleared by ack");
     tick();
     CHECK(control_state() == CTRL_IDLE, "P0-01 overtemp ack -> IDLE");
 
-    /* R1 修复 P0-02：急停意图幂等（自持后不重复广播；由主循环按 200ms 重发负责）*/
+    /* R1 修复 P0-02：急停意图幂等（自持后不重复广播；由主循环按 200ms 重发负责）
+     * R-15：第二次按键仍要执行本地安全动作，只是不再发第二帧 cmd 8。*/
     {
         control_set_cmd_hook(hook_cb);
         enter_auto_healthy();
         hook_calls = 0;
         tcs_emergency_stop();
         CHECK(hook_calls == 1, "P0-02 estop sends one intent frame");
+        CHECK(control_estop_tx_pending() == 1, "P0-02 estop intent pending");
+        reset_stubs();
         tcs_emergency_stop();
         CHECK(hook_calls == 1, "P0-02 second estop is idempotent");
+        CHECK(tec_calls >= 2 && last_tec_on == 0 && last_fan == 1,
+              "P0-02 second estop still forces safe outputs");
         CHECK(control_estop_latched() == 1, "P0-02 estop latch set");
         hook_calls = 0;
         g_tcs.tc1_act = 30.0f;

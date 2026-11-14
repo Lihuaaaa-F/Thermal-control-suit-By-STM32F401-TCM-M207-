@@ -237,8 +237,11 @@ static void cmd_exec(char *line)
         if (pi < 0 || pi > 10 || pn < 0 || pn > 15) { printf("bad port/pin\n"); return; }
         static const struct { char port; uint8_t pin; const char *why; } deny[] = {
             { 'A',  1, "KEY0 estop" }, { 'A',  3, "esp link RX" },
-            { 'D',  5, "esp link TX" }, { 'B', 10, "i2c scl" },
-            { 'B', 11, "i2c sda" },     { 'B', 14, "fan" },
+            { 'D',  5, "esp link TX" },
+            /* R1 复核 R-11：PB10/PB11 是 USART3(M207)，PB8/PB9 才是 I2C1(TMP117)。*/
+            { 'B', 10, "m207 uart TX" }, { 'B', 11, "m207 uart RX" },
+            { 'B',  8, "tmp117 i2c scl" }, { 'B', 9, "tmp117 i2c sda" },
+            { 'B', 14, "fan" },
         };
         for (unsigned k = 0; k < sizeof(deny) / sizeof(deny[0]); k++) {
             if (up == deny[k].port && pn == deny[k].pin) {
@@ -517,13 +520,15 @@ static void cmd_exec(char *line)
         printf("ack alarm=0x%04x\n", g_tcs.alarm_bits);
         return;
     }
-    /* --- m207 send <raw> --- */
+#if TCS_PROFILE >= 1
+    /* --- m207 send <raw>（BENCH：可直写 TCSW 等执行器参数，PROD 必须不存在）--- */
     if (strcmp(argv[0], "m207") == 0 && argc >= 3 && strcmp(argv[1], "send") == 0) {
         char cmd[64];
         snprintf(cmd, sizeof(cmd), "%s\r", argv[2]);
         printf("m207 rv=%d\n", m207_send_raw(cmd));
         return;
     }
+#endif /* TCS_PROFILE >= 1: m207 send */
     /* --- touch cal a b c d（R4 现场重校接口）--- */
     if (strcmp(argv[0], "touch") == 0 && argc == 6 && strcmp(argv[1], "cal") == 0) {
         extern void ft5446_set_calibration(float a, float b, float c, float d);

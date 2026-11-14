@@ -21,10 +21,17 @@ static uint32_t      s_last_eval;
 static uint8_t       s_boot_ms_base_set;
 static uint32_t      s_boot_ms;
 static uint8_t       s_estop_latch;
+static uint8_t       s_overtemp_latch;  /* R1 复核 R-03：本地超温自持（不被快照覆盖）*/
+static uint8_t       s_estop_tx_pending;/* R1 复核 R-04：急停意图待对端确认（ack 不清）*/
 static control_cmd_hook_t s_cmd_hook;   /* v2：急停/确认 → 链路 CMD（main 装配）*/
 
 void control_set_cmd_hook(control_cmd_hook_t cb) { s_cmd_hook = cb; }
 uint8_t control_estop_latched(void) { return s_estop_latch; }
+uint8_t control_overtemp_latched(void) { return s_overtemp_latch; }
+uint8_t control_estop_tx_pending(void) { return s_estop_tx_pending; }
+void    control_estop_tx_confirm(void) { s_estop_tx_pending = 0; }
+
+/* 清急停自持（本地 ack 或对端 ack 生效时调用）。不清"待投递"标志——投递确认只看对端。*/
 void control_estop_clear(void)
 {
     s_estop_latch = 0;
@@ -125,13 +132,17 @@ void tcs_alarm_ack(void)
     /* 报警源恢复 + 人工确认才清位（§6.2）*/
     if (g_tcs.body_sensor_ok) g_tcs.alarm_bits &= (uint16_t)~ALM_BODY_SENSOR;
     if (g_tcs.m207_online)    g_tcs.alarm_bits &= (uint16_t)~ALM_M207;
-    if (g_tcs.tc1_act <= ALM_OVERTEMP_HARD_C)
+    if (g_tcs.tc1_act <= ALM_OVERTEMP_HARD_C) {
         g_tcs.alarm_bits &= (uint16_t)~ALM_OVERTEMP;
+        s_overtemp_latch = 0;            /* R-03：只有 ack 且温度已回落才清本地超温自持 */
+    }
     if (s_state != CTRL_SAFE || safe_sources_recovered()) {
+        uint8_t was = s_estop_latch;
         control_estop_clear();
+        /* R-17：只有"确实清了本地自持"才通知对端；否则对端会被无条件清掉。*/
+        if (was && !s_estop_latch && s_cmd_hook) s_cmd_hook(9);
     }
     g_tcs.alarm_bits &= (uint16_t)~ALM_EEPROM;   /* EEPROM 报警仅提示性 */
-    if (s_cmd_hook) s_cmd_hook(9);               /* v2：ESP32 侧同步清急停自持 */
 }
 
 void tcs_emergency_stop(void)
@@ -141,8 +152,11 @@ void tcs_emergency_stop(void)
     extern volatile uint32_t g_estop_calls;
     g_estop_calls++;
 #endif
-    if (s_estop_latch) return;   /* R1：已自持则不再重复广播（重发由主循环意图块按 200ms 负责）*/
+    /* R1 复核 R-15：本地动作每次都做（第二/第三次按键仍要复位输出与模式），
+     * 只有"给对端发 cmd 8"做幂等——重发由主循环按 200ms 负责。*/
+    uint8_t already = s_estop_latch;
     s_estop_latch = 1;
+    s_estop_tx_pending = 1;   /* R-04：意图待投递；ack 不清，只有对端确认才清 */
     tcs_alarm_raise(ALM_ESTOP);
     /* mode=手动（经 param_set 同一数据源路径，自动广播 0x11）*/
     (void)param_set(PARAM_ID_MODE, 0.0f, PARAM_SRC_CONSOLE);
@@ -150,8 +164,9 @@ void tcs_emergency_stop(void)
     out_tec_sw(2, 0);
     out_fan(1);
     goto_state(CTRL_SAFE);
-    /* v2：TEC/风扇在 ESP32，本地动作无物理效果——必须下发 0x15 cmd=8 */
-    if (s_cmd_hook) s_cmd_hook(8);
+    /* v2：TEC/风扇在 ESP32，本地动作无物理效果——必须下发 0x15 cmd=8。
+     * R-15：只有"首次"发帧；重发由主循环按 200ms 负责（本地动作上面每次都做了）。*/
+    if (!already && s_cmd_hook) s_cmd_hook(8);
 }
 
 /* ====== 手动直控 ====== */
@@ -193,16 +208,17 @@ void control_poll(uint32_t now_ms)
     }
 
     /* 过热硬切断（R1 修复 P0-01）：任意模式、任意布防态。
-     * v2 下执行器在 ESP32，本地 out_tec_sw 无物理效果，所以同时下发 cmd=8 让对端也停；
-     * 仅在"首次进入 SAFE"时下发，避免每拍灌帧（重发由主循环的急停意图块负责）。 */
+     * R-03：置本地自持位（不被 snap_reassert 覆盖），只有 ack 且温度回落才清。
+     * R-16：这里**不再**发 cmd 8——`tc1_act` 本来就来自 ESP32 快照，对端必然先看到
+     * 同一个超温并自行锁存；H743 重复下发只会造成双权威语义（详见 AD-1）。*/
     if (g_tcs.tc1_act > ALM_OVERTEMP_HARD_C) {
         tcs_alarm_raise(ALM_OVERTEMP);
+        s_overtemp_latch = 1;
         if (s_state != CTRL_SAFE) {
             out_tec_sw(1, 0);
             out_tec_sw(2, 0);
             out_fan(1);
             goto_state(CTRL_SAFE);
-            if (s_cmd_hook) s_cmd_hook(8);
         }
         return;
     }
@@ -229,10 +245,10 @@ void control_poll(uint32_t now_ms)
 
     if (s_state == CTRL_SAFE) {
         /* SAFE 退出：双恢复 + 人工确认（急停自持需 ack）。
-         * R1：补 ALM_OVERTEMP 判据——超温未 ack 前不得自动退出（P0-01 的锁存语义）。*/
-        if (safe_sources_recovered() && !s_estop_latch && tcs_alarm_active(ALM_BODY_SENSOR) == 0
-            && tcs_alarm_active(ALM_M207) == 0 && tcs_alarm_active(ALM_ESTOP) == 0
-            && tcs_alarm_active(ALM_OVERTEMP) == 0) {
+         * R1：补超温判据——用**本地自持位**而不是显示位（R-03：显示位每 10ms 被快照覆盖）。*/
+        if (safe_sources_recovered() && !s_estop_latch && !s_overtemp_latch
+            && tcs_alarm_active(ALM_BODY_SENSOR) == 0
+            && tcs_alarm_active(ALM_M207) == 0 && tcs_alarm_active(ALM_ESTOP) == 0) {
             out_fan(0);
             goto_state(CTRL_IDLE);
         }

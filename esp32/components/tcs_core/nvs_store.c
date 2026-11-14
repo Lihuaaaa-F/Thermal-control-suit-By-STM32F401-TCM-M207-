@@ -68,13 +68,24 @@ uint8_t safety_state_load(void)
     uint8_t b[4] = { 0 };
     size_t len = sizeof(b);
     nvs_handle_t h;
-    if (nvs_open(NS_TCS, NVS_READONLY, &h) != ESP_OK) return 0;   /* 首次上电 */
+    /* R-05：区分"首次上电"与"读回失败/坏记录"。
+     * 首次上电（NOT_FOUND）→ 0（无锁存）；其它任何异常 → 0xFF（未知，上层按最坏情况进 SAFE）。*/
+    esp_err_t ro = nvs_open(NS_TCS, NVS_READONLY, &h);
+    if (ro == ESP_ERR_NVS_NOT_FOUND) return 0;          /* 命名空间都还没建 = 首次上电 */
+    if (ro != ESP_OK) {
+        ESP_LOGE(TAG, "safety load open fail=%s", esp_err_to_name(ro));
+        return 0xFF;
+    }
     esp_err_t r = nvs_get_blob(h, KEY_SAFETY, b, &len);
     nvs_close(h);
-    if (r != ESP_OK || len != sizeof(b)) return 0;
+    if (r == ESP_ERR_NVS_NOT_FOUND) return 0;           /* 有命名空间但没这个键 = 首次上电 */
+    if (r != ESP_OK || len != sizeof(b)) {
+        ESP_LOGE(TAG, "safety load read fail=%s len=%u", esp_err_to_name(r), (unsigned)len);
+        return 0xFF;
+    }
     if (b[0] != SAFETY_MAGIC || b[1] != SAFETY_VER || (uint8_t)~b[2] != b[3]) {
-        ESP_LOGW(TAG, "safety blob invalid, treat as cleared");
-        return 0;
+        ESP_LOGE(TAG, "safety blob invalid -> unknown (enter SAFE)");
+        return 0xFF;
     }
     if (b[2]) ESP_LOGW(TAG, "safety latch restored=0x%02x (prev reset)", b[2]);
     return b[2];

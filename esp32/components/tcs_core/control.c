@@ -34,22 +34,29 @@ static uint8_t       s_boot_ms_base_set;
 static uint32_t      s_boot_ms;
 static uint8_t       s_estop_latch;      /* 仅作急停显示/语义；硬门控见 s_safety_latch */
 
-/* 安全锁存：位含义见 control.h。上电默认"源全恢复"，由 control_poll 每拍刷新。 */
-static uint8_t s_safety_latch;
+/* 安全锁存：位含义见 control.h。上电默认"源全恢复"，由 control_poll 每拍刷新。
+ * volatile：写侧在临界区，读侧（执行器门控/ack/读 API）裸读，必须每次重取（R1 复核 R-09）。*/
+static volatile uint8_t s_safety_latch;
 static uint8_t s_safety_ok = 0xFF;
 
 /* 传感器类源（除急停外）的集合：ack 清急停要求这三者全部恢复 */
 #define SAFETY_SENSOR_MASK (SAFETY_BIT_OVERTEMP | SAFETY_BIT_BODY_LOST | SAFETY_BIT_M207_LOST)
 
+/* 急停投递状态（R1 复核 R-04）：与本地自持解耦。
+ * pending=1 表示"已产生急停意图但对端尚未确认"；ack 不清它，只有快照出现 ALM_ESTOP 才清。
+ * 这样"断链时按急停 → 本地 ack → 链路恢复"仍会把意图送达。 */
+static volatile uint8_t s_estop_tx_pending;
+
 /* ====== 安全锁存原语（R1：P0-01/P0-04/P0-08）====== */
 static void safety_trip(uint8_t bit)
 {
-    uint8_t changed;
+    uint8_t changed, snap;
     SAFETY_LOCK();
     changed = (uint8_t)((s_safety_latch & bit) == 0);
     s_safety_latch |= bit;
+    snap = s_safety_latch;          /* R-08：锁内取值再落盘，避免锁外读到旧值覆盖新值 */
     SAFETY_UNLOCK();
-    if (changed && s_ops.safety_persist) s_ops.safety_persist(s_safety_latch);
+    if (changed && s_ops.safety_persist) s_ops.safety_persist(snap);
 }
 
 static void safety_set_ok(uint8_t bit, uint8_t ok)
@@ -63,16 +70,20 @@ static void safety_set_ok(uint8_t bit, uint8_t ok)
 /* 人工确认：只清"源已恢复"的位；急停额外要求其余源全部恢复且无其它锁存。*/
 static void safety_ack_latched(void)
 {
-    uint8_t drop;
+    uint8_t lat, ok, drop, after;
     SAFETY_LOCK();
-    drop = (uint8_t)(s_safety_latch & s_safety_ok & (uint8_t)~SAFETY_BIT_ESTOP);
-    if ((s_safety_latch & (uint8_t)~SAFETY_BIT_ESTOP) == 0
-        && (s_safety_ok & SAFETY_SENSOR_MASK) == SAFETY_SENSOR_MASK) {
-        drop |= (uint8_t)(s_safety_latch & SAFETY_BIT_ESTOP);
+    lat = s_safety_latch;
+    ok  = s_safety_ok;
+    drop = (uint8_t)(lat & ok & (uint8_t)~SAFETY_BIT_ESTOP);
+    after = (uint8_t)(lat & (uint8_t)~drop);   /* R-07：用"清位后"判断急停，避免两次 ack */
+    if ((after & (uint8_t)~SAFETY_BIT_ESTOP) == 0
+        && (ok & SAFETY_SENSOR_MASK) == SAFETY_SENSOR_MASK) {
+        drop |= (uint8_t)(after & SAFETY_BIT_ESTOP);
     }
-    s_safety_latch &= (uint8_t)~drop;
+    s_safety_latch = (uint8_t)(lat & (uint8_t)~drop);
+    after = s_safety_latch;
     SAFETY_UNLOCK();
-    if (drop && s_ops.safety_persist) s_ops.safety_persist(s_safety_latch);
+    if (drop && s_ops.safety_persist) s_ops.safety_persist(after);
 }
 
 /* ====== 内部输出封装（同步 g_tcs 快照 + 钩子）====== */
@@ -112,8 +123,17 @@ void control_init(const control_ops_t *ops)
     s_boot_ms_base_set = 0;
     s_estop_latch = 0;
     g_tcs.alarm_bits = 0;
-    /* P0-08：先读回持久化锁存，再据此同步 ALM 显示位——复位不得解除安全态。*/
-    s_safety_latch = s_ops.safety_load ? s_ops.safety_load() : 0;
+    /* P0-08：先读回持久化锁存，再据此同步 ALM 显示位——复位不得解除安全态。
+     * R-05：0xFF = 读回失败/坏记录（"未知"），保守处理为急停锁存 + SAFE，等人工确认；
+     *       只有 NVS 明确 NOT_FOUND（首次上电）才返回 0。*/
+    {
+        uint8_t lat = s_ops.safety_load ? s_ops.safety_load() : 0;
+        if (lat == 0xFF) {
+            lat = SAFETY_BIT_ESTOP;    /* 未知即按最坏情况处理 */
+        }
+        s_safety_latch = lat;
+    }
+    s_estop_tx_pending = 0;
     s_safety_ok = 0xFF;
     if (s_safety_latch & SAFETY_BIT_ESTOP)      { s_estop_latch = 1; g_tcs.alarm_bits |= ALM_ESTOP; }
     if (s_safety_latch & SAFETY_BIT_OVERTEMP)   g_tcs.alarm_bits |= ALM_OVERTEMP;
@@ -172,6 +192,7 @@ void tcs_alarm_ack(void)
 void tcs_emergency_stop(void)
 {
     s_estop_latch = 1;
+    s_estop_tx_pending = 1;     /* R-04：意图待投递；ack 不清，只有对端确认才清 */
     safety_trip(SAFETY_BIT_ESTOP);          /* P0-04：置锁存后，在途状态机的"开"被 out_tec_sw 压成 0 */
     tcs_alarm_raise(ALM_ESTOP);
     /* mode=手动（经 param_set 同一数据源路径，自动广播 0x11）*/
@@ -227,8 +248,10 @@ void control_poll(uint32_t now_ms)
         safety_set_ok(SAFETY_BIT_OVERTEMP, 1);
     }
 
-    /* 锁存期间：任何模式都不再评估，直接停在 SAFE。每拍重申 TCSW=0，
-     * 等价于"SAFE 期 500ms 重发"，覆盖 M207 离线时拒收导致命令到不了执行器（P1-09）。*/
+    /* 锁存期间：任何模式都不再评估，直接停在 SAFE，并每拍重申 TCSW=0（在线时 500ms 一次）。
+     * R-18：M207 离线时 m207_tec 直接返回 -2（不入队），本处重发并不产生帧；
+     * 离线期的兜底是复联重同步（m207_go_online 里补发 TCSW=0）。P1-09 的彻底修法
+     * （m207_tec_force 强制归零通道）仍在待办，勿据本注释认为离线已被覆盖。*/
     if (s_safety_latch) {
         enter_safe();
         return;
@@ -319,6 +342,11 @@ void control_poll(uint32_t now_ms)
 
 ctrl_state_t control_state(void) { return s_state; }
 
-/* ====== 安全锁存读侧（console/网页/诊断）====== */
+/* ====== 安全锁存/急停投递读侧（console/网页/诊断）====== */
 uint8_t control_safety_latched(void) { return s_safety_latch; }
-uint8_t control_safety_mask(void)    { return s_safety_latch; }
+uint8_t control_estop_tx_pending(void) { return s_estop_tx_pending; }
+void    control_estop_tx_confirm(void) { s_estop_tx_pending = 0; }
+
+#ifdef TCS_UNIT_TEST
+void control_test_trip(uint8_t bit) { safety_trip(bit); }
+#endif

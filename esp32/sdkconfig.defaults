@@ -27,3 +27,8 @@ CONFIG_BT_ENABLED=n
 
 # --- HTTP Server WebSocket（/ws 推送）---
 CONFIG_HTTPD_WS_SUPPORT=y
+
+# --- FreeRTOS 运行时可观测（console ps/task 列表必需）---
+# R1 复核 R-13：此前靠开发者本机未入库的 sdkconfig，第三方从零构建会 undefined vTaskList。
+CONFIG_FREERTOS_USE_TRACE_FACILITY=y
+CONFIG_FREERTOS_GENERATE_RUN_TIME_STATS=y

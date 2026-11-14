@@ -13,7 +13,7 @@ mkdir -p "$OUT"
 
 cl_run() {  # cl_run <out.exe> <src...> — bat 内 cd 到 OUT，产物/对象全落 OUT
     local exe="$1"; shift
-    local cmd_line='cl /nologo /W4 /std:c11 /utf-8 /D_CRT_SECURE_NO_WARNINGS /I..\..\components\tcs_m207\include /I..\..\components\tcs_tmp117\include /I..\..\components\tcs_core /I..\..\components\tcs_link\include /I..\..\components\tcs_link'
+    local cmd_line='cl /nologo /W4 /std:c11 /utf-8 /D_CRT_SECURE_NO_WARNINGS /DTCS_UNIT_TEST /I..\..\components\tcs_m207\include /I..\..\components\tcs_tmp117\include /I..\..\components\tcs_core /I..\..\components\tcs_link\include /I..\..\components\tcs_link'
     for s in "$@"; do
         cmd_line="$cmd_line \"$(cygpath -w "$PWD/$s")\""
     done

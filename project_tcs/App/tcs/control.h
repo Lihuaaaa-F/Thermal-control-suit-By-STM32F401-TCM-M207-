@@ -74,6 +74,9 @@ void  tcs_emergency_stop(void);
 typedef void (*control_cmd_hook_t)(uint8_t cmd);
 void    control_set_cmd_hook(control_cmd_hook_t cb);
 uint8_t control_estop_latched(void);   /* 本地急停自持位（屏显报警用）*/
+uint8_t control_overtemp_latched(void);/* R1 复核 R-03：本地超温自持（不被 snap_reassert 覆盖）*/
+uint8_t control_estop_tx_pending(void);/* R1 复核 R-04：急停意图待对端确认（ack 不清）*/
+void    control_estop_tx_confirm(void);/* 对端快照出现 ALM_ESTOP 时调用 */
 /* R1 修复 P0-02：对端已执行并随后 ack（快照曾出现 ALM_ESTOP 又消失）时清本地自持，
  * 避免"网页/对端确认后本端仍每拍重发"的两端拉锯。不改变其他报警位。*/
 void    control_estop_clear(void);

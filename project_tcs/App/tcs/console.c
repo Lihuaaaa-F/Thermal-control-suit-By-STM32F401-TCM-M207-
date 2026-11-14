@@ -44,6 +44,7 @@ static volatile uint32_t s_tx_drop_cnt;
 
 static char s_line[CON_LINE_MAX];
 static uint16_t s_line_len;
+static uint8_t  s_line_discard;   /* R1 修复 M07-F-06：超长行丢弃至行尾，不执行残片 */
 
 /* ====== TX 环（主循环消费；_write/tcs_log 生产，可在任意上下文）====== */
 static void tx_push(const uint8_t *d, size_t n)
@@ -81,8 +82,11 @@ void tcs_log(const char *prefix, const char *fmt, ...)
     char buf[160];
     va_list ap;
     int n = snprintf(buf, sizeof(buf), "%s ", prefix);
+    /* R1 修复 M07-F-09：snprintf 截断/失败时 n 可能 ≥sizeof(buf) 或 <0，buf+n 会越界。
+     * 截断就从头覆写，宁可丢 prefix 也不能越界。*/
+    if (n < 0 || (size_t)n >= sizeof(buf)) n = 0;
     va_start(ap, fmt);
-    vsnprintf(buf + n, sizeof(buf) - (size_t)n - 1, fmt, ap);
+    vsnprintf(buf + n, sizeof(buf) - (size_t)n, fmt, ap);
     va_end(ap);
     size_t len = strlen(buf);
     if (len < sizeof(buf) - 2) { buf[len++] = '\n'; buf[len] = '\0'; }
@@ -720,15 +724,21 @@ void console_poll(void)
         b = s_rx_ring[s_rx_tail];
         s_rx_tail = (uint16_t)((s_rx_tail + 1u) & CON_RX_MASK);
         if (b == '\r' || b == '\n') {
-            if (s_line_len) {
+            if (s_line_discard) {
+                s_line_discard = 0;   /* R1：超长行的残片在这里丢弃，不执行 */
+                s_line_len = 0;
+            } else if (s_line_len) {
                 s_line[s_line_len] = '\0';
                 cmd_exec(s_line);
                 s_line_len = 0;
             }
+        } else if (s_line_discard) {
+            /* 丢弃至行尾（原实现清零后继续累积 → 执行尾部残片）*/
         } else if (s_line_len < CON_LINE_MAX - 1) {
             s_line[s_line_len++] = (char)b;
         } else {
-            s_line_len = 0;   /* 超长丢弃 */
+            s_line_discard = 1;       /* 超长：整行作废 */
+            s_line_len = 0;
         }
     }
 }
@@ -740,6 +750,7 @@ void console_init(UART_HandleTypeDef *huart)
     s_tx_head = s_tx_tail = 0;
     s_tx_drop_cnt = 0;
     s_line_len = 0;
+    s_line_discard = 0;
     HAL_UART_Receive_IT(s_uart, &s_rx_byte, 1);
 }
 

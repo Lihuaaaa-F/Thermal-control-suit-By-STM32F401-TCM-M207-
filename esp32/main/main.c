@@ -110,6 +110,7 @@ void app_ota_trigger(int rollback)
 /* v2：屏幕（H743）急停/报警确认 → 在本端执行（TEC/风扇在这里）*/
 static void esp_on_cmd(uint8_t cmd, uint8_t seq)
 {
+    uint8_t st = TCS_ACK_OK;
     if (cmd == 8) {
         tcs_emergency_stop();
         ESP_LOGW(TAG, "H743 CMD 8 estop -> state=%d alarm=0x%04X",
@@ -118,9 +119,10 @@ static void esp_on_cmd(uint8_t cmd, uint8_t seq)
         tcs_alarm_ack();
         ESP_LOGI(TAG, "H743 CMD 9 alarm_ack -> alarm=0x%04X", (unsigned)g_tcs.alarm_bits);
     } else {
-        ESP_LOGW(TAG, "H743 CMD %u unknown", (unsigned)cmd);
+        st = TCS_ACK_BAD_ID;            /* R1 修复 M08-F-10：未定义命令不再回 OK */
+        ESP_LOGW(TAG, "H743 CMD %u unknown -> BAD_ID", (unsigned)cmd);
     }
-    link_send_ack(seq, MT_TCS_CMD, TCS_ACK_OK, (float)g_tcs.alarm_bits);
+    link_send_ack(seq, MT_TCS_CMD, st, (float)g_tcs.alarm_bits);
 }
 
 static void esp_on_setparam(uint16_t id, float v, uint8_t seq)

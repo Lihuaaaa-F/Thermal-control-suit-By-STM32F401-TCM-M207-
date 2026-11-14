@@ -431,8 +431,16 @@ static void m207_task(void *arg)
     (void)arg;
     TickType_t last_wake = xTaskGetTickCount();
     uart_event_t ev;
+    int64_t last_proc_us = 0;
     for (;;) {
         vTaskDelayUntil(&last_wake, pdMS_TO_TICKS(M207_TICK_MS));
+        /* R1 修复 M12-F-07：vTaskDelayUntil 的追赶语义会在"上一拍被饿"后连跑两拍，
+         * 使下行间隔 <50ms，违反正典 §4 铁律。这里吞掉过早的追赶拍（不消费队列、不发帧）。*/
+        {
+            int64_t now_us = esp_timer_get_time();
+            if (last_proc_us && (now_us - last_proc_us) < 50000) continue;
+            last_proc_us = now_us;
+        }
         s_tick++;
 #if CONFIG_TCS_M207_SELFLOOP
         m207_rsp_flush();                /* 延迟应答：上一拍拦截的应答本拍写出 */

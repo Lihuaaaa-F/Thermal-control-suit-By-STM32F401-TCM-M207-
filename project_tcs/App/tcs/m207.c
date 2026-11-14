@@ -482,8 +482,12 @@ static void m207_handle_line(const char *line, uint32_t now_ms)
 
 void m207_poll(uint32_t now_ms)
 {
-    /* 1) TX 队列消费（一拍最多 1 帧，防挤占节拍；57600 下 15B≈2.6ms）*/
-    if (s_txq_tail != s_txq_head) {
+    /* 1) TX 队列消费（一拍最多 1 帧，防挤占节拍；57600 下 15B≈2.6ms）。
+     * R1 修复 M06-F-07：加 50ms 节流——正典 §4 铁律要求两次下行 ≥50ms，
+     * 原实现主循环 10ms 一拍，上电两条 TCSW=0 只隔 10ms。*/
+    static uint32_t s_last_tx_ms;
+    if (s_txq_tail != s_txq_head && (uint32_t)(now_ms - s_last_tx_ms) >= 50u) {
+        s_last_tx_ms = now_ms;
         m207_tx_raw(s_txq[s_txq_tail]);
         s_txq_tail = (uint8_t)((s_txq_tail + 1u) % M207_TXQ_DEPTH);
     }

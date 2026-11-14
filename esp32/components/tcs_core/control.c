@@ -42,11 +42,6 @@ static uint8_t s_safety_ok = 0xFF;
 /* 传感器类源（除急停外）的集合：ack 清急停要求这三者全部恢复 */
 #define SAFETY_SENSOR_MASK (SAFETY_BIT_OVERTEMP | SAFETY_BIT_BODY_LOST | SAFETY_BIT_M207_LOST)
 
-/* 急停投递状态（R1 复核 R-04）：与本地自持解耦。
- * pending=1 表示"已产生急停意图但对端尚未确认"；ack 不清它，只有快照出现 ALM_ESTOP 才清。
- * 这样"断链时按急停 → 本地 ack → 链路恢复"仍会把意图送达。 */
-static volatile uint8_t s_estop_tx_pending;
-
 /* ====== 安全锁存原语（R1：P0-01/P0-04/P0-08）====== */
 static void safety_trip(uint8_t bit)
 {
@@ -133,7 +128,6 @@ void control_init(const control_ops_t *ops)
         }
         s_safety_latch = lat;
     }
-    s_estop_tx_pending = 0;
     s_safety_ok = 0xFF;
     if (s_safety_latch & SAFETY_BIT_ESTOP)      { s_estop_latch = 1; g_tcs.alarm_bits |= ALM_ESTOP; }
     if (s_safety_latch & SAFETY_BIT_OVERTEMP)   g_tcs.alarm_bits |= ALM_OVERTEMP;
@@ -192,7 +186,6 @@ void tcs_alarm_ack(void)
 void tcs_emergency_stop(void)
 {
     s_estop_latch = 1;
-    s_estop_tx_pending = 1;     /* R-04：意图待投递；ack 不清，只有对端确认才清 */
     safety_trip(SAFETY_BIT_ESTOP);          /* P0-04：置锁存后，在途状态机的"开"被 out_tec_sw 压成 0 */
     tcs_alarm_raise(ALM_ESTOP);
     /* mode=手动（经 param_set 同一数据源路径，自动广播 0x11）*/
@@ -344,8 +337,6 @@ ctrl_state_t control_state(void) { return s_state; }
 
 /* ====== 安全锁存/急停投递读侧（console/网页/诊断）====== */
 uint8_t control_safety_latched(void) { return s_safety_latch; }
-uint8_t control_estop_tx_pending(void) { return s_estop_tx_pending; }
-void    control_estop_tx_confirm(void) { s_estop_tx_pending = 0; }
 
 #ifdef TCS_UNIT_TEST
 void control_test_trip(uint8_t bit) { safety_trip(bit); }

@@ -131,14 +131,13 @@ static int cmd_status(int argc, char **argv)
 {
     (void)argc; (void)argv;
     printf("tc1=%.2f tc2=%.2f body=%.2f(ok=%u) fan=%u%% mode=%u m207=%u "
-           "alarm=0x%04X armed=%u state=%d sim=%u latch=0x%02X txpend=%u heap=%u\n",
+           "alarm=0x%04X armed=%u state=%d sim=%u latch=0x%02X heap=%u\n",
            (double)g_tcs.tc1_act, (double)g_tcs.tc2_act, (double)g_tcs.body_temp,
            (unsigned)g_tcs.body_sensor_ok, (unsigned)fan_get_duty(),
            (unsigned)g_tcs.mode, (unsigned)g_tcs.m207_online,
            (unsigned)g_tcs.alarm_bits, (unsigned)control_service_armed(),
            (int)control_state(), (unsigned)tmp117_sim_active(),
            (unsigned)control_safety_latched(),      /* R-10：现场能看出"为什么还锁着" */
-           (unsigned)control_estop_tx_pending(),    /* R-04/R-19：急停是否已投递 */
            (unsigned)esp_get_minimum_free_heap_size());
     return 0;
 }

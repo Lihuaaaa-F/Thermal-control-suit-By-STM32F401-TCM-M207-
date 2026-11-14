@@ -324,7 +324,18 @@ esp_err_t ws_on_recv(httpd_req_t *req)
         fds_del(httpd_req_to_sockfd(req));
         return rv;
     }
-    if (pkt.len >= sizeof(tmp)) return ESP_OK;   /* 过长丢弃 */
+    if (pkt.len >= sizeof(tmp)) {
+        /* R1 修复 M14-F-02：超长帧不能只 return——载荷还在 socket 里，
+         * 下一轮会把载荷首字节当帧头解析（流错位 + 越界读）。
+         * 直接关掉这条连接最安全（写通道不做流式丢弃）。*/
+        int fd = httpd_req_to_sockfd(req);
+        fds_del(fd);
+        if (s_hd) httpd_sess_trigger_close(s_hd, fd);
+        ESP_LOGW(TAG, "ws frame too long (%u >= %u), session closed",
+                 (unsigned)pkt.len, (unsigned)sizeof(tmp));
+        return ESP_FAIL;
+    }
+    if (pkt.len == 0) return ESP_OK;   /* 空帧：不二次调用 recv（否则 IDF 会吞掉下一帧头）*/
     pkt.payload = tmp;
     rv = httpd_ws_recv_frame(req, &pkt, pkt.len);
     if (rv != ESP_OK) return rv;

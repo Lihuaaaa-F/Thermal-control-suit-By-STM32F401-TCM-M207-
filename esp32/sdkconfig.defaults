@@ -1,3 +1,6 @@
+# --- 目标芯片（R1 复核 R-13 同类：不钉会在无本地 sdkconfig 时默认 esp32，编错芯片）---
+CONFIG_IDF_TARGET="esp32s3"
+
 # ===== S3-N16R8 模板(16MB Flash + 8MB Octal PSRAM + WiFi/BLE)=====
 # 复制为工程根 sdkconfig.defaults;改配置只改这里,不手改 sdkconfig 生成物
 

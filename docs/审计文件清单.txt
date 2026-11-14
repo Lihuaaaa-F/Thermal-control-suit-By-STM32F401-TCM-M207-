@@ -172,3 +172,6 @@ project_tcs/tools/touch_inject_test.py
 project_tcs/tools/vision_audit.py
 project_tcs/tools/vl2_token_audit.py
 project_tcs/tools/vl4_aa_check.py
+protocol/proto_layout.h
+protocol/tcs_proto.h
+tools/proto_sync.py

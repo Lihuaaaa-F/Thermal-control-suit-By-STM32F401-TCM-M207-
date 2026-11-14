@@ -11,6 +11,12 @@
 
 int nvs_registry_commit(const uint8_t img[EE_IMG_SIZE]);  /* hooks.eeprom_commit 落点 */
 
+/* ====== 安全锁存持久化（R1 修复 P0-08）======
+ * 独立小 blob（4B），与参数镜像分开：参数被擦除不应连带解除安全态。
+ * 返回 0 成功；-1 失败（调用方决定是否重试/告警）。 */
+int     safety_state_save(uint8_t latch);
+uint8_t safety_state_load(void);      /* 无记录/校验失败 → 0（视为无锁存），并留日志 */
+
 /* param_registry.c 的 param_load_eeprom() 外部引用（NVS 实现）*/
 int eeprom_ready(void);
 int eeprom_read_image(uint8_t img[EE_IMG_SIZE]);

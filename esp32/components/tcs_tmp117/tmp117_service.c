@@ -20,6 +20,16 @@
 
 #define TAG "TMP117"
 
+/* 注入能力开关（R1 修复 P0-06 / AD-5）：只有 SIM 或 R1e 取证构建才编译注入实现。
+ * 生产固件里 `body` 命令与 s_sim_on 分支都不存在——一条命令注入假体温的通道被移除。*/
+#if CONFIG_TCS_SIM || CONFIG_TCS_R1E_PROBE
+#define TCS_SIM_ENABLED 1
+#define SIM_ACTIVE()    (s_sim_on)
+#else
+#define TCS_SIM_ENABLED 0
+#define SIM_ACTIVE()    (0u)          /* 编译期常 0：分支与注入实现一起消失 */
+#endif
+
 #define TMP117_ADDR7        0x48
 #define TMP117_REG_TEMP     0x00
 #define TMP117_REG_DEVID    0x0F
@@ -39,8 +49,10 @@ static float    s_last_valid_c;
 static uint32_t s_last_valid_ms;
 static uint8_t  s_have_valid;
 
+#if TCS_SIM_ENABLED
 static volatile float   s_sim_val;
 static volatile uint8_t s_sim_on;
+#endif
 
 static uint32_t s_tick;                 /* 100ms 拍计数（dt 计算）*/
 static uint32_t s_stat_err;             /* 累计通信/合理性错误 */
@@ -78,13 +90,14 @@ static void tmp117_task(void *arg)
     uint32_t p_win = 0;
     for (;;) {
         /* 失联降频：错满 TRIP 且非 sim → 1s 试联（F4 恢复检测 ≤1s 首样，3 成 ≤1.3s）*/
-        uint32_t period = (s_health.err_run >= TMP117_ERR_TRIP && !s_sim_on)
+        uint32_t period = (s_health.err_run >= TMP117_ERR_TRIP && !SIM_ACTIVE())
                           ? TMP117_LOST_PERIOD_MS : TMP117_SAMPLE_MS;
         vTaskDelay(pdMS_TO_TICKS(period));
         s_tick++;
         int32_t t0 = (int32_t)esp_timer_get_time();
         int ok = 0;
 
+#if TCS_SIM_ENABLED
         if (s_sim_on) {
             tmp117_avg_push(&s_avg, s_sim_val);
             g_tcs.body_temp = tmp117_avg_mean(&s_avg);
@@ -93,7 +106,9 @@ static void tmp117_task(void *arg)
             s_have_valid = 1;
             s_stat_samples++;
             ok = 1;
-        } else if (s_started && s_dev) {
+        } else
+#endif
+        if (s_started && s_dev) {
             if (i2c_master_transmit_receive(s_dev, &reg, 1, buf, 2,
                                             TMP117_I2C_TIMEOUT_MS) == ESP_OK) {
                 int16_t raw = (int16_t)(((uint16_t)buf[0] << 8) | buf[1]);
@@ -133,7 +148,7 @@ static void tmp117_task(void *arg)
                      "lost=%lu rec=%lu sim=%u",
                      (unsigned long)s_tick_max_us, (unsigned long)s_stat_err,
                      (unsigned long)s_stat_samples, (unsigned long)s_lost_edges,
-                     (unsigned long)s_recover_edges, (unsigned)s_sim_on);
+                     (unsigned long)s_recover_edges, (unsigned)SIM_ACTIVE());
         }
     }
 }
@@ -188,7 +203,9 @@ int tmp117_service_start(void)
 uint8_t tmp117_body_ok(void) { return s_health.ok; }
 float   tmp117_body_temp(void) { return g_tcs.body_temp; }
 
-/* ====== 注入（E-21/E-22；R1e console 挂接）====== */
+/* ====== 注入（E-21/E-22；仅 SIM / R1e 取证构建）====== */
+uint8_t tmp117_sim_active(void) { return (uint8_t)SIM_ACTIVE(); }   /* 状态行永远可用 */
+#if TCS_SIM_ENABLED
 void tmp117_sim_set(float v)
 {
     s_sim_val = v;
@@ -201,8 +218,7 @@ void tmp117_sim_disable(void)
     s_sim_on = 0;
     ESP_LOGW(TAG, "[SIM] body temp OFF (real I2C path; absent=loss path)");
 }
-
-uint8_t tmp117_sim_active(void) { return s_sim_on; }
+#endif /* TCS_SIM_ENABLED */
 
 /* ====== 上电自测：纯逻辑+健康机全路径板上取证（服务启动前独占）====== */
 static int s_lb_fail;

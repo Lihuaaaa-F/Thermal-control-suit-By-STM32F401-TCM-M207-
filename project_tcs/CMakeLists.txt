@@ -87,10 +87,27 @@ add_executable(tcs_main.elf
     ${APP_SRC}
 )
 
+# ====== 构建档位（R1 修复 P0-03 / X05-F-03；AD-5）======
+# PROD=0（默认，正式交付）、BENCH=1（台架：引脚探针/波形/普查/手动直控/看门狗试验）、
+# SIM=2（+板内仿真应答器）。诊断能力的"声明/实现/调用点"三者同时进 #if（S10）。
+set(TCS_PROFILE "PROD" CACHE STRING "build profile: PROD | BENCH | SIM")
+string(TOUPPER "${TCS_PROFILE}" TCS_PROFILE_U)
+if(TCS_PROFILE_U STREQUAL "PROD")
+    set(TCS_PROFILE_NUM 0)
+elseif(TCS_PROFILE_U STREQUAL "BENCH")
+    set(TCS_PROFILE_NUM 1)
+elseif(TCS_PROFILE_U STREQUAL "SIM")
+    set(TCS_PROFILE_NUM 2)
+else()
+    message(FATAL_ERROR "TCS_PROFILE must be PROD | BENCH | SIM (got '${TCS_PROFILE}')")
+endif()
+message(STATUS "TCS_PROFILE=${TCS_PROFILE_U} (=${TCS_PROFILE_NUM})")
+
 target_compile_definitions(tcs_main.elf PRIVATE
     STM32H743xx
     USE_HAL_DRIVER
     ENABLE_LCD
+    TCS_PROFILE=${TCS_PROFILE_NUM}
     # 无 SCREEN_TEST：TCS 直接出正式版（任务书 §3.1）
 )
 

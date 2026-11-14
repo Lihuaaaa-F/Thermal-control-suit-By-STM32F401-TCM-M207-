@@ -889,6 +889,36 @@ int main(void)
         kill_key_poll();
         snap_reassert();         /* v2：本地轮询后回灌 ESP32 快照（屏显一致性）*/
 
+        /* R1 修复 P0-02：急停意图重发（对端确认前持续 200ms 重发）。
+         * 背景：急停只有一跳 0x15（ARQ 500ms×3），断链时直接丢失且恢复后不重发。
+         * 策略（用户裁决 2026-11-15）：链路丢失只报告、不进 SAFE——所以这里做"意图重发"
+         * 而不做"断链即停机"。确认口径：0x20 快照 alarm 含 ALM_ESTOP（对端已执行）；
+         * 对端随后 ack 会让该位消失，本端据此清自持（control_estop_clear），避免两端拉锯。*/
+        {
+            static uint32_t s_estop_tx_ms;
+            static uint8_t  s_estop_seen_remote;
+            static uint8_t  s_estop_warned;
+            uint8_t link_fresh = (s_snap_have && (uint32_t)(now - s_snap_ms) <= 500u) ? 1u : 0u;
+            if (!control_estop_latched()) {
+                s_estop_seen_remote = 0;
+                s_estop_warned = 0;
+            } else if (!link_fresh) {
+                if (!s_estop_warned) {
+                    s_estop_warned = 1;
+                    tcs_log("[SAFE]", "estop pending: esp link down, delivery unconfirmed (report only)");
+                }
+            } else if (s_last_snap.alarm & ALM_ESTOP) {
+                s_estop_seen_remote = 1;      /* 对端已执行（本轮急停的确认证据）*/
+                s_estop_warned = 0;
+            } else if (s_estop_seen_remote) {
+                control_estop_clear();        /* 对端已 ack（曾现又消失）→ 本端同步解除自持 */
+                s_estop_seen_remote = 0;
+            } else if ((uint32_t)(now - s_estop_tx_ms) >= 200u) {
+                s_estop_tx_ms = now;
+                link_send_cmd_upstream(8);    /* 重发意图（幂等）*/
+            }
+        }
+
         perf_sample_work(DWT->CYCCNT - cy0);
         if (g_link_down_flag) {
             g_link_down_flag = 0;

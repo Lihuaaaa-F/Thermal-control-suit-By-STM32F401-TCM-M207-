@@ -74,6 +74,9 @@ void  tcs_emergency_stop(void);
 typedef void (*control_cmd_hook_t)(uint8_t cmd);
 void    control_set_cmd_hook(control_cmd_hook_t cb);
 uint8_t control_estop_latched(void);   /* 本地急停自持位（屏显报警用）*/
+/* R1 修复 P0-02：对端已执行并随后 ack（快照曾出现 ALM_ESTOP 又消失）时清本地自持，
+ * 避免"网页/对端确认后本端仍每拍重发"的两端拉锯。不改变其他报警位。*/
+void    control_estop_clear(void);
 
 #ifdef __cplusplus
 }

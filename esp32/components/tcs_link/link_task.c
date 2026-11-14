@@ -99,6 +99,9 @@ static void registry_seed(void)
 /* WP-F.2 演示模式：H743 离线时模拟状态源，网页全功能独立演示               */
 /* 真链路 STATUS 一到即自动退出（link_alive 判定），无需任何配置。           */
 /* ===================================================================== */
+/* R1 修复 P0-05 / AD-5：演示模式改为编译期可选（CONFIG_TCS_DEMO，默认 n）。
+ * 生产固件不含演示状态机——断链只报"离线"，不再用合成温度冒充真值。      */
+#if CONFIG_TCS_DEMO
 static int64_t s_boot_us;
 static volatile uint8_t s_demo_on;
 
@@ -214,6 +217,10 @@ static int demo_active(void)
     }
     return 0;
 }
+#else  /* !CONFIG_TCS_DEMO：生产档没有演示状态机 */
+#define s_demo_on 0                      /* 编译期常 0：所有演示分支被优化掉 */
+static int demo_active(void) { return 0; }
+#endif /* CONFIG_TCS_DEMO */
 
 /* —— UART 发送钩子（comm 注入；comm_poll_tx 任务内串行调用）—— */
 static void link_uart_send(const uint8_t *d, size_t n)
@@ -363,7 +370,9 @@ static void on_frame(const uint8_t *payload, size_t len)
 /* —— 上行 API —— */
 int link_set_param(uint16_t id, float v)
 {
+#if CONFIG_TCS_DEMO
     if (s_demo_on) return demo_set_param(id, v);   /* WP-F.2：演示模式本地闭环 */
+#endif
     uint8_t pl[TCS_PARAM_PL_LEN];
     tcs_param_pl_t p = { .id = id, .type = PARAM_TYPE_F32, .value = tcs_f2b(v) };
     size_t n = tcs_pl_param(pl, sizeof(pl), &p);
@@ -377,7 +386,9 @@ int link_set_param(uint16_t id, float v)
 
 int link_send_frame_mt(uint8_t mt, const uint8_t *pl, size_t n)
 {
+#if CONFIG_TCS_DEMO
     if (s_demo_on) return 0;                       /* 演示模式不发（本地闭环）*/
+#endif
     uint8_t frame[MAX_FRAME];
     size_t fn = mt_frame(mt, comm_next_seq(&s_link), pl, n, frame, sizeof(frame));
     if (!fn) return -1;
@@ -387,7 +398,9 @@ int link_send_frame_mt(uint8_t mt, const uint8_t *pl, size_t n)
 
 int link_send_cmd(uint8_t cmd)
 {
+#if CONFIG_TCS_DEMO
     if (s_demo_on) return demo_cmd(cmd);           /* WP-F.2：演示模式本地闭环 */
+#endif
     uint8_t frame[MAX_FRAME];
     size_t fn = mt_frame(MT_TCS_CMD, comm_next_seq(&s_link), &cmd, 1,
                          frame, sizeof(frame));
@@ -486,12 +499,18 @@ static void link_task(void *arg)
             last_reg_req = now;
             link_request_registry();
         }
+#if CONFIG_TCS_DEMO
         /* WP-F.2 演示模式：真链路离线时 500ms 模拟步进（0x10 快照同构）*/
         static uint32_t last_demo = 0;
         if (demo_active() && now - last_demo >= 500) {
             last_demo = now;
             demo_step();
         }
+#else
+        /* 生产档：不做演示接管；断链由 link_alive()/快照 valid 位表达为"离线"。
+         * 保留 s_demo_on 语义为 0（见上方宏），下游分支自然失效。 */
+        (void)demo_active;
+#endif
     }
 }
 
@@ -500,7 +519,9 @@ void link_start(void)
     memset(&s_status, 0, sizeof(s_status));
     memset(s_reg, 0, sizeof(s_reg));
     registry_seed();                        /* WP-F.2/F3：内置快照先行 */
-    s_boot_us = esp_timer_get_time();
+#if CONFIG_TCS_DEMO
+    s_boot_us = esp_timer_get_time();       /* 演示宽限起点；生产档无此变量 */
+#endif
     comm_init(&s_link, link_uart_send, link_now_ms, NULL, link_crit_enter, link_crit_exit);
 
     uart_config_t cfg = {

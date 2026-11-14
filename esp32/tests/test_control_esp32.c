@@ -35,6 +35,11 @@ static void stub_fan(uint8_t on)        { fan_calls++; last_fan = on; }
 static void stub_tec(uint8_t ch, uint8_t on)  { tec_calls++; last_tec_ch = ch; last_tec_on = on; }
 static void stub_temp(uint8_t ch, float v)    { temp_calls++; last_temp_ch = ch; last_temp_v = v; }
 
+/* P0-08 持久化钩子桩（文件作用域：MSVC 不支持嵌套函数定义）*/
+static uint8_t s_persisted;
+static void    persist_cb(uint8_t latch) { s_persisted = latch; }
+static uint8_t load_cb(void)             { return SAFETY_BIT_ESTOP; }
+
 static void reset_stubs(void)
 {
     fan_calls = tec_calls = temp_calls = 0;
@@ -214,6 +219,62 @@ int main(void)
     g_tcs.tc1_act = 48.5f;
     tick();
     CHECK(tcs_alarm_active(ALM_OVERTEMP) == 1, "unarmed: overtemp still raises");
+
+    /* ====== R1 修复的判别性用例（旧实现必然失败）====== */
+
+    /* P0-01：超温必须"切断"，不是只报警（旧代码 state 仍在 IDLE/HEAT 且 tec_on=1）*/
+    enter_auto_healthy();
+    g_tcs.tc1_act = 49.0f;
+    tick();
+    CHECK(control_state() == CTRL_SAFE, "P0-01 overtemp -> SAFE");
+    CHECK(last_tec_on == 0, "P0-01 overtemp -> TEC off");
+    CHECK(last_fan == 1, "P0-01 overtemp -> fan on");
+    CHECK(control_safety_latched() != 0, "P0-01 overtemp -> latch set");
+    /* 温度回落但未 ack：不得自动退出 SAFE（旧实现 alarm 会自己消失）*/
+    g_tcs.tc1_act = 40.0f;
+    tick();
+    CHECK(control_state() == CTRL_SAFE, "P0-01 overtemp latch holds without ack");
+    tcs_alarm_ack();
+    tick();
+    CHECK(control_state() == CTRL_IDLE && control_safety_latched() == 0,
+          "P0-01 overtemp ack -> IDLE");
+
+    /* P0-04：急停后，在途手动/状态机不能把 TEC 重新打开（锁存门控）*/
+    enter_auto_healthy();
+    tcs_emergency_stop();
+    reset_stubs();
+    control_manual_tec(1, 1);                  /* 模拟控制台/网页的在途写 */
+    CHECK(last_tec_on == 0, "P0-04 manual on blocked while latched");
+    g_tcs.body_temp = 30.0f;                   /* 自动模式想制热 */
+    tick();
+    CHECK(last_tec_on == 0, "P0-04 poll cannot re-enable TEC while latched");
+    CHECK(control_state() == CTRL_SAFE, "P0-04 still SAFE while latched");
+
+    /* P0-08：持久化锁存在启动时恢复 → 复位不能解除安全态*/
+    {
+        control_init(&(control_ops_t){
+            .fan_set = stub_fan, .tec_sw = stub_tec, .tec_temp = stub_temp,
+            .on_state = 0, .safety_persist = persist_cb, .safety_load = load_cb,
+        });
+        param_registry_init(&(param_hooks_t){0});
+        CHECK(control_safety_latched() == SAFETY_BIT_ESTOP, "P0-08 latch restored at init");
+        CHECK(control_state() == CTRL_SAFE, "P0-08 restored latch -> SAFE at boot");
+        CHECK(tcs_alarm_active(ALM_ESTOP) == 1, "P0-08 restored latch -> ALM_ESTOP");
+        s_persisted = 0;
+        g_tcs.tc1_act = 49.0f;
+        tick();
+        CHECK((s_persisted & SAFETY_BIT_OVERTEMP) != 0, "P0-08 trip persists latch");
+    }
+
+    /* ack 条件：源未恢复时 ack 不得清锁存*/
+    enter_auto_healthy();
+    tcs_emergency_stop();
+    g_tcs.body_sensor_ok = 0;
+    tcs_alarm_ack();
+    CHECK(control_safety_latched() != 0, "ack blocked while source not recovered");
+    g_tcs.body_sensor_ok = 1;
+    tcs_alarm_ack();
+    CHECK(control_safety_latched() == 0, "ack clears after source recovered");
 
     printf("test_control: PASS=%d FAIL=%d\n", g_pass, g_fail);
     return g_fail ? 1 : 0;

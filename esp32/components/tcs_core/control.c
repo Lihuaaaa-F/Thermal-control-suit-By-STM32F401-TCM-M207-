@@ -15,12 +15,65 @@
 #include "param_registry.h"
 #include "post.h"
 
+/* 安全锁存并发：ESP32 上是跨任务（control/link/httpd/console）读改写，需临界区；
+ * PC 单测是单线程，锁退化为空——保持 control.c 零 HAL/零 FreeRTOS 依赖（既有测试架构）。*/
+#ifdef ESP_PLATFORM
+#include "freertos/FreeRTOS.h"
+static portMUX_TYPE s_safety_mux = portMUX_INITIALIZER_UNLOCKED;
+#define SAFETY_LOCK()   taskENTER_CRITICAL(&s_safety_mux)
+#define SAFETY_UNLOCK() taskEXIT_CRITICAL(&s_safety_mux)
+#else
+#define SAFETY_LOCK()   ((void)0)
+#define SAFETY_UNLOCK() ((void)0)
+#endif
+
 static control_ops_t s_ops;
 static ctrl_state_t  s_state = CTRL_IDLE;
 static uint32_t      s_last_eval;
 static uint8_t       s_boot_ms_base_set;
 static uint32_t      s_boot_ms;
-static uint8_t       s_estop_latch;
+static uint8_t       s_estop_latch;      /* 仅作急停显示/语义；硬门控见 s_safety_latch */
+
+/* 安全锁存：位含义见 control.h。上电默认"源全恢复"，由 control_poll 每拍刷新。 */
+static uint8_t s_safety_latch;
+static uint8_t s_safety_ok = 0xFF;
+
+/* 传感器类源（除急停外）的集合：ack 清急停要求这三者全部恢复 */
+#define SAFETY_SENSOR_MASK (SAFETY_BIT_OVERTEMP | SAFETY_BIT_BODY_LOST | SAFETY_BIT_M207_LOST)
+
+/* ====== 安全锁存原语（R1：P0-01/P0-04/P0-08）====== */
+static void safety_trip(uint8_t bit)
+{
+    uint8_t changed;
+    SAFETY_LOCK();
+    changed = (uint8_t)((s_safety_latch & bit) == 0);
+    s_safety_latch |= bit;
+    SAFETY_UNLOCK();
+    if (changed && s_ops.safety_persist) s_ops.safety_persist(s_safety_latch);
+}
+
+static void safety_set_ok(uint8_t bit, uint8_t ok)
+{
+    SAFETY_LOCK();
+    if (ok) s_safety_ok |= bit;
+    else    s_safety_ok &= (uint8_t)~bit;
+    SAFETY_UNLOCK();
+}
+
+/* 人工确认：只清"源已恢复"的位；急停额外要求其余源全部恢复且无其它锁存。*/
+static void safety_ack_latched(void)
+{
+    uint8_t drop;
+    SAFETY_LOCK();
+    drop = (uint8_t)(s_safety_latch & s_safety_ok & (uint8_t)~SAFETY_BIT_ESTOP);
+    if ((s_safety_latch & (uint8_t)~SAFETY_BIT_ESTOP) == 0
+        && (s_safety_ok & SAFETY_SENSOR_MASK) == SAFETY_SENSOR_MASK) {
+        drop |= (uint8_t)(s_safety_latch & SAFETY_BIT_ESTOP);
+    }
+    s_safety_latch &= (uint8_t)~drop;
+    SAFETY_UNLOCK();
+    if (drop && s_ops.safety_persist) s_ops.safety_persist(s_safety_latch);
+}
 
 /* ====== 内部输出封装（同步 g_tcs 快照 + 钩子）====== */
 static void out_fan(uint8_t on)
@@ -31,6 +84,9 @@ static void out_fan(uint8_t on)
 
 static void out_tec_sw(uint8_t ch, uint8_t on)
 {
+    /* 安全门控的唯一收敛点：锁存期间任何"开"都压成 0（P0-04 的在途状态机覆写在此失效）。
+     * 单字节读在 32 位 MCU 上原子；最坏情况是晚一拍看到 trip，而 trip 由 poll 同拍处理。 */
+    if (on && s_safety_latch) on = 0;
     if (ch == 1) g_tcs.tec1_on = on ? 1u : 0u;
     else         g_tcs.tec2_on = on ? 1u : 0u;
     if (s_ops.tec_sw) s_ops.tec_sw(ch, on);
@@ -56,6 +112,14 @@ void control_init(const control_ops_t *ops)
     s_boot_ms_base_set = 0;
     s_estop_latch = 0;
     g_tcs.alarm_bits = 0;
+    /* P0-08：先读回持久化锁存，再据此同步 ALM 显示位——复位不得解除安全态。*/
+    s_safety_latch = s_ops.safety_load ? s_ops.safety_load() : 0;
+    s_safety_ok = 0xFF;
+    if (s_safety_latch & SAFETY_BIT_ESTOP)      { s_estop_latch = 1; g_tcs.alarm_bits |= ALM_ESTOP; }
+    if (s_safety_latch & SAFETY_BIT_OVERTEMP)   g_tcs.alarm_bits |= ALM_OVERTEMP;
+    if (s_safety_latch & SAFETY_BIT_BODY_LOST)  g_tcs.alarm_bits |= ALM_BODY_SENSOR;
+    if (s_safety_latch & SAFETY_BIT_M207_LOST)  g_tcs.alarm_bits |= ALM_M207;
+    if (s_safety_latch) s_state = CTRL_SAFE;   /* 绕过 on_state：ops 可能尚未装配回调 */
 }
 
 void tcs_alarm_raise(uint16_t bit)
@@ -87,21 +151,28 @@ static uint8_t safe_sources_recovered(void)
 
 void tcs_alarm_ack(void)
 {
-    /* 报警源恢复 + 人工确认才清位（§6.2）*/
-    if (g_tcs.body_sensor_ok) g_tcs.alarm_bits &= (uint16_t)~ALM_BODY_SENSOR;
-    if (g_tcs.m207_online)    g_tcs.alarm_bits &= (uint16_t)~ALM_M207;
-    if (g_tcs.tc1_act <= ALM_OVERTEMP_HARD_C)
+    /* 先按"当前"源状态刷新（不依赖上一拍缓存）：操作员降温后立即 ack 也应生效。*/
+    safety_set_ok(SAFETY_BIT_OVERTEMP, (uint8_t)(g_tcs.tc1_act <= ALM_OVERTEMP_HARD_C));
+    safety_set_ok(SAFETY_BIT_BODY_LOST, g_tcs.body_sensor_ok);
+    safety_set_ok(SAFETY_BIT_M207_LOST, g_tcs.m207_online);
+    /* P0：再按"源已恢复"清安全锁存；ALM 显示位跟随锁存，不能比锁存更早消失。*/
+    safety_ack_latched();
+    if (!(s_safety_latch & SAFETY_BIT_BODY_LOST) && g_tcs.body_sensor_ok)
+        g_tcs.alarm_bits &= (uint16_t)~ALM_BODY_SENSOR;
+    if (!(s_safety_latch & SAFETY_BIT_M207_LOST) && g_tcs.m207_online)
+        g_tcs.alarm_bits &= (uint16_t)~ALM_M207;
+    if (!(s_safety_latch & SAFETY_BIT_OVERTEMP) && g_tcs.tc1_act <= ALM_OVERTEMP_HARD_C)
         g_tcs.alarm_bits &= (uint16_t)~ALM_OVERTEMP;
-    if (s_state != CTRL_SAFE || safe_sources_recovered()) {
-        s_estop_latch = 0;
+    if (!(s_safety_latch & SAFETY_BIT_ESTOP))
         g_tcs.alarm_bits &= (uint16_t)~ALM_ESTOP;
-    }
+    if (!(s_safety_latch & SAFETY_BIT_ESTOP)) s_estop_latch = 0;
     g_tcs.alarm_bits &= (uint16_t)~ALM_EEPROM;   /* EEPROM 报警仅提示性 */
 }
 
 void tcs_emergency_stop(void)
 {
     s_estop_latch = 1;
+    safety_trip(SAFETY_BIT_ESTOP);          /* P0-04：置锁存后，在途状态机的"开"被 out_tec_sw 压成 0 */
     tcs_alarm_raise(ALM_ESTOP);
     /* mode=手动（经 param_set 同一数据源路径，自动广播 0x11）*/
     (void)param_set(PARAM_ID_MODE, 0.0f, PARAM_SRC_CONSOLE);
@@ -146,8 +217,22 @@ void control_poll(uint32_t now_ms)
         s_boot_ms_base_set = 1;
     }
 
-    /* 过热硬阈值报警（任意模式，自动置位；不受布防影响——安全边界）*/
-    if (g_tcs.tc1_act > ALM_OVERTEMP_HARD_C) tcs_alarm_raise(ALM_OVERTEMP);
+    /* 过热硬切断（任意模式、任意布防态）：先锁存，再由锁存统一门控执行器。
+     * 修复 P0-01：原实现只 tcs_alarm_raise，TEC 继续按状态机输出（UI 却写"已停止加热"）。*/
+    if (g_tcs.tc1_act > ALM_OVERTEMP_HARD_C) {
+        tcs_alarm_raise(ALM_OVERTEMP);
+        safety_trip(SAFETY_BIT_OVERTEMP);
+        safety_set_ok(SAFETY_BIT_OVERTEMP, 0);
+    } else {
+        safety_set_ok(SAFETY_BIT_OVERTEMP, 1);
+    }
+
+    /* 锁存期间：任何模式都不再评估，直接停在 SAFE。每拍重申 TCSW=0，
+     * 等价于"SAFE 期 500ms 重发"，覆盖 M207 离线时拒收导致命令到不了执行器（P1-09）。*/
+    if (s_safety_latch) {
+        enter_safe();
+        return;
+    }
 
     /* F1/F2：传感器丢失 / M207 失联 → SAFE（含手动模式；M207 有 5s 上电宽限）
      * WP-A.5 commissioned：未布防（默认）→ 只记状态沿（上位机可查询），不置报警位
@@ -163,11 +248,14 @@ void control_poll(uint32_t now_ms)
         s_unarmed_fault_prev = 0;
     }
     if (sensor_fault && commissioned()) {
-        if (!g_tcs.body_sensor_ok) tcs_alarm_raise(ALM_BODY_SENSOR);
-        if (m207_fault)            tcs_alarm_raise(ALM_M207);
+        if (!g_tcs.body_sensor_ok) { tcs_alarm_raise(ALM_BODY_SENSOR); safety_trip(SAFETY_BIT_BODY_LOST); }
+        if (m207_fault)            { tcs_alarm_raise(ALM_M207);        safety_trip(SAFETY_BIT_M207_LOST); }
         enter_safe();
         return;
     }
+    /* 源恢复位：供 ack 判定"能否清锁存"（未布防时也维护，避免急停 ack 被误阻）*/
+    safety_set_ok(SAFETY_BIT_BODY_LOST, g_tcs.body_sensor_ok);
+    safety_set_ok(SAFETY_BIT_M207_LOST, g_tcs.m207_online);
 
     if (s_state == CTRL_SAFE) {
         /* SAFE 退出：双恢复 + 人工确认（急停自持需 ack）*/
@@ -228,3 +316,7 @@ void control_poll(uint32_t now_ms)
 }
 
 ctrl_state_t control_state(void) { return s_state; }
+
+/* ====== 安全锁存读侧（console/网页/诊断）====== */
+uint8_t control_safety_latched(void) { return s_safety_latch; }
+uint8_t control_safety_mask(void)    { return s_safety_latch; }

@@ -135,6 +135,12 @@ static void esp_on_setparam(uint16_t id, float v, uint8_t seq)
     link_send_ack(seq, MT_TCS_SET_PARAM, st, param_get(id));
 }
 
+/* R1 修复 P0-08：安全锁存落 NVS（失败只记日志，不阻断控制；下次 latch 变化会重试）*/
+static void safety_persist_cb(uint8_t latch)
+{
+    if (safety_state_save(latch) != 0) ESP_LOGE(TAG, "safety latch persist failed");
+}
+
 void app_main(void)
 {
     esp_err_t err = nvs_flash_init();
@@ -191,6 +197,8 @@ void app_main(void)
         .tec_sw = op_tec_sw,
         .tec_temp = op_tec_temp,
         .on_state = NULL,             /* 迁移沿由 post 步进日志承载 */
+        .safety_persist = safety_persist_cb,   /* P0-08：锁存跨复位存活 */
+        .safety_load    = safety_state_load,
     });
     control_service_start();
     tcs_console_start();

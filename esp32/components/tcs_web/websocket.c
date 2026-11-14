@@ -272,14 +272,18 @@ static void on_link_event(void)
     push_pv(p->id, p->v, src, clamped);
 }
 
-/* 500ms 推送任务 */
+/* 500ms 推送任务
+ * P0-07：原为 `char buf[4096]` 开在 4096B 任务栈上（反汇编入口帧 4128B，每 500ms 写穿栈块）。
+ * 该任务单实例，缓冲移为 static；容量按 fds_send 上限 576B 取（状态 JSON 实测 233B）。
+ * 栈保持 4096 不动——靠编译期 -Wstack-usage 防同类回归，而不是把栈调大掩盖问题。 */
+static char s_push_buf[576];
+
 static void ws_push_task(void *arg)
 {
-    char buf[4096];
     while (1) {
         vTaskDelay(pdMS_TO_TICKS(WS_PUSH_MS));
-        size_t n = ws_status_json(buf, sizeof(buf));
-        if (n) fds_send(buf, n);
+        size_t n = ws_status_json(s_push_buf, sizeof(s_push_buf));
+        if (n) fds_send(s_push_buf, n);
     }
 }
 

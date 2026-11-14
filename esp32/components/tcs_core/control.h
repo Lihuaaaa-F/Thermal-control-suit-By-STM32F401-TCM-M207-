@@ -34,11 +34,23 @@ typedef enum {
     CTRL_SAFE,
 } ctrl_state_t;
 
+/* ====== 安全锁存位（R1 修复 P0-01/P0-04/P0-08）======
+ * 语义：危险源置位后，out_tec_sw 的"开"被无条件压成 0，直到人工 ack 且源已恢复。
+ * 与 ALM_* 的区别：ALM 是显示位；latch 是执行器硬门控。同一事件同时置两者，
+ * 但清位条件不同（ALM 可被显示层覆盖，latch 只有 ack 能清）。
+ * 持久化：main 注入 safety_persist/safety_load；PC 单测传 NULL，退化为纯 RAM。 */
+#define SAFETY_BIT_OVERTEMP   (1u << 0)
+#define SAFETY_BIT_BODY_LOST  (1u << 1)
+#define SAFETY_BIT_M207_LOST  (1u << 2)
+#define SAFETY_BIT_ESTOP      (1u << 3)
+
 typedef struct {
     void (*fan_set)(uint8_t on);
     void (*tec_sw)(uint8_t ch, uint8_t on);     /* TCx:TCSW */
     void (*tec_temp)(uint8_t ch, float v);      /* TCx:TCADJTEMP（自动模式切目标）*/
     void (*on_state)(ctrl_state_t st);          /* 迁移日志钩子，可 NULL */
+    void    (*safety_persist)(uint8_t latch);   /* latch 变化时落盘，可 NULL */
+    uint8_t (*safety_load)(void);               /* 启动读回 latch，可 NULL */
 } control_ops_t;
 
 void  control_init(const control_ops_t *ops);
@@ -61,6 +73,10 @@ void  tcs_alarm_ack(void);
 /* 急停（屏弹窗确认 / 0x15 cmd=8 / KEY0 / console estop 同一入口）：
  * 双通道 TCSW=0 + 风扇开 + mode=手动 + ALM_ESTOP + 广播 */
 void  tcs_emergency_stop(void);
+
+/* ====== 安全锁存读侧（R1 修复；console/网页/诊断用）====== */
+uint8_t control_safety_latched(void);           /* 非 0 = 仍在安全锁存 */
+uint8_t control_safety_mask(void);              /* SAFETY_BIT_* 组合 */
 
 #ifdef __cplusplus
 }

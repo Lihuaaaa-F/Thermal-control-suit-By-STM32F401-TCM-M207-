@@ -33,6 +33,10 @@ static void stub_fan(uint8_t on)        { fan_calls++; last_fan = on; }
 static void stub_tec(uint8_t ch, uint8_t on)  { tec_calls++; last_tec_ch = ch; last_tec_on = on; }
 static void stub_temp(uint8_t ch, float v)    { temp_calls++; last_temp_ch = ch; last_temp_v = v; }
 
+/* P0-02：链路 CMD 钩子桩（文件作用域：MSVC 不支持嵌套函数定义）*/
+static int hook_calls;
+static void hook_cb(uint8_t cmd) { (void)cmd; hook_calls++; }
+
 static void reset_stubs(void)
 {
     fan_calls = tec_calls = temp_calls = 0;
@@ -167,14 +171,41 @@ int main(void)
     tick();
     CHECK(control_state() == CTRL_IDLE, "estop cleared -> IDLE");
 
-    /* 过热硬阈值 */
+    /* 过热硬阈值（R1 修复 P0-01：必须切断，不是只报警）*/
     enter_auto_healthy();
     g_tcs.tc1_act = 48.5f;
     tick();
     CHECK(tcs_alarm_active(ALM_OVERTEMP) == 1, "overtemp alarm at >48");
+    CHECK(control_state() == CTRL_SAFE, "P0-01 overtemp -> SAFE");
+    CHECK(last_tec_on == 0 && last_fan == 1, "P0-01 overtemp tec off fan on");
+    /* 温度回落但未 ack：仍停在 SAFE（锁存）*/
     g_tcs.tc1_act = 40.0f;
+    tick();
+    CHECK(control_state() == CTRL_SAFE, "P0-01 overtemp holds without ack");
     tcs_alarm_ack();
     CHECK(tcs_alarm_active(ALM_OVERTEMP) == 0, "overtemp cleared under 48");
+    tick();
+    CHECK(control_state() == CTRL_IDLE, "P0-01 overtemp ack -> IDLE");
+
+    /* R1 修复 P0-02：急停意图幂等（自持后不重复广播；由主循环按 200ms 重发负责）*/
+    {
+        control_set_cmd_hook(hook_cb);
+        enter_auto_healthy();
+        hook_calls = 0;
+        tcs_emergency_stop();
+        CHECK(hook_calls == 1, "P0-02 estop sends one intent frame");
+        tcs_emergency_stop();
+        CHECK(hook_calls == 1, "P0-02 second estop is idempotent");
+        CHECK(control_estop_latched() == 1, "P0-02 estop latch set");
+        hook_calls = 0;
+        g_tcs.tc1_act = 30.0f;
+        g_tcs.body_sensor_ok = 1;
+        g_tcs.m207_online = 1;
+        tcs_alarm_ack();
+        CHECK(control_estop_latched() == 0, "P0-02 ack clears latch");
+        CHECK(hook_calls == 1, "P0-02 ack notifies peer (cmd 9)");
+        control_set_cmd_hook(0);
+    }
 
     /* ====== WP-A.5 未布防（默认 0）：传感器类异常只记状态沿，不上横幅不进 SAFE ====== */
     enter_auto_healthy();

@@ -92,6 +92,7 @@ static int cmd_fan(int argc, char **argv)
     return 0;
 }
 
+#if CONFIG_TCS_SIM
 static int cmd_body(int argc, char **argv)
 {
     if (argc < 2) { printf("body <°C|off> (sim=%u)\n", (unsigned)tmp117_sim_active()); return 1; }
@@ -105,6 +106,7 @@ static int cmd_body(int argc, char **argv)
     }
     return 0;
 }
+#endif /* CONFIG_TCS_SIM：R1 修复 P0-06，PROD 不编译注入命令 */
 
 static int cmd_estop(int argc, char **argv)
 {
@@ -169,11 +171,19 @@ static int cmd_m207(int argc, char **argv)
     return 0;
 }
 
+/* 引脚白名单（R1 修复 M08-F-02）：原实现放开 GPIO0–48，`ledblink 26` 会对
+ * Flash(26–32)/Octal PSRAM(33–37) 做 gpio_config。这里只允许板载可用脚：
+ * 38/48=板载 RGB，42=风扇 PWM（这三处是文档化引脚）。其余一律拒绝。*/
+static int gpio_allowed(int g)
+{
+    return (g == 38 || g == 42 || g == 48);
+}
+
 static int cmd_ledblk(int argc, char **argv)
 {
-    if (argc < 2) { printf("ledblk <gpio>（对任意脚发 WS2812 全黑帧）\n"); return 1; }
+    if (argc < 2) { printf("ledblk <gpio>（对白名单脚发 WS2812 全黑帧）\n"); return 1; }
     int g = atoi(argv[1]);
-    if (g < 0 || g > 48) { printf("gpio 0-48\n"); return 1; }
+    if (!gpio_allowed(g)) { printf("gpio not allowed (38/42/48)\n"); return 1; }
     fan_ws2812_black_frame(g);
     printf("ledblk %d sent (WS2812 black frame)\n", g);
     return 0;
@@ -183,7 +193,7 @@ static int cmd_ledblink(int argc, char **argv)
 {
     if (argc < 2) { printf("ledblink <gpio>（低/高各 300ms 闪 3 次，用眼睛定位灯脚）\n"); return 1; }
     int g = atoi(argv[1]);
-    if (g < 0 || g > 48) { printf("gpio 0-48\n"); return 1; }
+    if (!gpio_allowed(g)) { printf("gpio not allowed (38/42/48)\n"); return 1; }
     gpio_config_t io = { .pin_bit_mask = 1ULL << g, .mode = GPIO_MODE_INPUT_OUTPUT,
                          .pull_up_en = 0, .pull_down_en = 0, .intr_type = GPIO_INTR_DISABLE };
     gpio_config(&io);
@@ -199,7 +209,7 @@ static int cmd_ledtest(int argc, char **argv)
 {
     if (argc < 2) { printf("ledtest <gpio>（红闪 700ms 再灭，验证帧时序+引脚）\n"); return 1; }
     int g = atoi(argv[1]);
-    if (g < 0 || g > 48) { printf("gpio 0-48\n"); return 1; }
+    if (!gpio_allowed(g)) { printf("gpio not allowed (38/42/48)\n"); return 1; }
     fan_ws2812_ledtest(g);
     printf("ledtest %d done\n", g);
     return 0;
@@ -298,8 +308,10 @@ int tcs_console_start(void)
           .func=cmd_tec, .argtable=NULL },
         { .command="fan", .help="fan <0-100>（占空比%，低=开）", .hint="<pct>",
           .func=cmd_fan, .argtable=NULL },
-        { .command="body", .help="body <°C|off>（体温注入，E-21/22）", .hint="<v|off>",
+#if CONFIG_TCS_SIM
+        { .command="body", .help="body <°C|off>（体温注入，E-21/22；仅 SIM 构建）", .hint="<v|off>",
           .func=cmd_body, .argtable=NULL },
+#endif
         { .command="estop", .help="急停", .hint=NULL,
           .func=cmd_estop, .argtable=NULL },
         { .command="ack", .help="报警人工确认清除", .hint=NULL,

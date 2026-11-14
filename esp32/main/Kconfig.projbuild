@@ -1,3 +1,23 @@
+menu "TCS 构建档位（R1 修复 P0-05/P0-06）"
+
+config TCS_SIM
+    bool "仿真注入（body 命令 / TMP117 假值 / M207 应答器）"
+    default n
+    help
+        仅用于台架取证（E-21/E-22）。开启后 console 出现 `body` 命令，
+        TMP117 服务接受假体温并绕过 25–45°C/2°C·s⁻¹ 合理性滤波。
+        生产/交付固件必须关闭：关断时注入实现整段不编译（nm 无 tmp117_sim_set/cmd_body）。
+
+config TCS_DEMO
+    bool "演示模式（无 H743 链路时用合成遥测驱动网页）"
+    default n
+    help
+        开启后，上电 8s 或运行中断链 3s 无真链路时，网页会收到合成的温度/状态。
+        该合成数据只用于网页独立演示，不得进入现场排查与验收。
+        生产/交付固件必须关闭：关断时演示状态机整段不编译。
+
+endmenu
+
 menu "TCS R1e 取证"
 
 config TCS_R1E_PROBE

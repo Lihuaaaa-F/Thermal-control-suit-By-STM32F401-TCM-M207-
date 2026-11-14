@@ -26,6 +26,13 @@
 #define CON_TX_MASK   (CON_TX_SIZE - 1u)
 #define CON_LINE_MAX  96
 
+/* 构建档位（R1 修复 P0-03 / X05-F-03）：0=PROD 1=BENCH 2=SIM。
+ * 驱动/波形/普查类命令只存在于 BENCH 及以上；PROD 产物不编译其实现体（S10）。
+ * 由 CMake 的 TCS_PROFILE 注入；未定义时按 PROD 处理（最严）。 */
+#ifndef TCS_PROFILE
+#define TCS_PROFILE 0
+#endif
+
 static UART_HandleTypeDef *s_uart;
 static uint8_t s_rx_byte;
 static volatile uint16_t s_rx_head, s_rx_tail;
@@ -202,6 +209,7 @@ static void cmd_exec(char *line)
                (unsigned long)g_dbg_snap_gap_last);
         return;
     }
+#if TCS_PROFILE >= 1
     /* --- txwave：PD5 发送波形自证（64B 0x55 + 边沿计数）--- */
     if (strcmp(argv[0], "txwave") == 0) {
         extern void link_tx_wave_capture(void);
@@ -210,16 +218,44 @@ static void cmd_exec(char *line)
         printf("txwave n=%lu\n", (unsigned long)g_txwave_n);
         return;
     }
-    /* --- pindrv/pinrel：任意引脚驱动探针（线缆落点定位；临时诊断）--- */
+    /* --- pindrv/pinrel：引脚探针（BENCH 档；安全引脚黑名单）---
+     * P0-03：原实现无白名单，`pindrv A 1 0` 可把 PA1(KEY0 急停键) 改推挽拉低，
+     * 使 kill_key_poll 恒读 0、急停键失效。此处拒绝一切安全相关引脚，
+     * 并按 S1 改用 HAL 时钟宏（原 RCC->AHB4ENR 裸写）。*/
     if ((strcmp(argv[0], "pindrv") == 0 && argc == 4) ||
         (strcmp(argv[0], "pinrel") == 0 && argc == 3)) {
         GPIO_TypeDef *ports[11] = { GPIOA, GPIOB, GPIOC, GPIOD, GPIOE, GPIOF,
                                     GPIOG, GPIOH, GPIOI, GPIOJ, GPIOK };
         char pc = argv[1][0];
+        char up = (pc >= 'a' && pc <= 'z') ? (char)(pc - 32) : pc;
         int pi = (pc >= 'a' && pc <= 'k') ? (pc - 'a') : (pc - 'A');
         int pn = atoi(argv[2]);
         if (pi < 0 || pi > 10 || pn < 0 || pn > 15) { printf("bad port/pin\n"); return; }
-        RCC->AHB4ENR |= 0xFFFFFFFFu;
+        static const struct { char port; uint8_t pin; const char *why; } deny[] = {
+            { 'A',  1, "KEY0 estop" }, { 'A',  3, "esp link RX" },
+            { 'D',  5, "esp link TX" }, { 'B', 10, "i2c scl" },
+            { 'B', 11, "i2c sda" },     { 'B', 14, "fan" },
+        };
+        for (unsigned k = 0; k < sizeof(deny) / sizeof(deny[0]); k++) {
+            if (up == deny[k].port && pn == deny[k].pin) {
+                printf("pindrv: P%c%d safety-critical (%s), refused\n",
+                       deny[k].port, pn, deny[k].why);
+                return;
+            }
+        }
+        switch (pi) {
+        case 0: __HAL_RCC_GPIOA_CLK_ENABLE(); break;
+        case 1: __HAL_RCC_GPIOB_CLK_ENABLE(); break;
+        case 2: __HAL_RCC_GPIOC_CLK_ENABLE(); break;
+        case 3: __HAL_RCC_GPIOD_CLK_ENABLE(); break;
+        case 4: __HAL_RCC_GPIOE_CLK_ENABLE(); break;
+        case 5: __HAL_RCC_GPIOF_CLK_ENABLE(); break;
+        case 6: __HAL_RCC_GPIOG_CLK_ENABLE(); break;
+        case 7: __HAL_RCC_GPIOH_CLK_ENABLE(); break;
+        case 8: __HAL_RCC_GPIOI_CLK_ENABLE(); break;
+        case 9: __HAL_RCC_GPIOJ_CLK_ENABLE(); break;
+        default: __HAL_RCC_GPIOK_CLK_ENABLE(); break;
+        }
         GPIO_InitTypeDef gi = {0};
         gi.Pin = (uint32_t)1u << pn;
         gi.Speed = GPIO_SPEED_FREQ_LOW;
@@ -232,6 +268,7 @@ static void cmd_exec(char *line)
                (strcmp(argv[0], "pindrv") == 0) ? (atoi(argv[3]) ? "=1" : "=0") : "=in");
         return;
     }
+#endif /* TCS_PROFILE >= 1: txwave / pindrv / pinrel */
     /* --- tbl：注册表序列化自检明细（POST TABLE 项排障）--- */
     if (strcmp(argv[0], "tbl") == 0) {
         uint8_t img[EE_IMG_SIZE];
@@ -276,6 +313,7 @@ static void cmd_exec(char *line)
         printf("tap %d,%d\n", tx, ty);
         return;
     }
+#if TCS_PROFILE >= 1
     /* --- wave：PA3 板载逻辑分析仪（50ms 边沿时间戳进 RAM，探针直读）--- */
     if (strcmp(argv[0], "wave") == 0) {
         extern void link_wave_capture(void);
@@ -300,13 +338,19 @@ static void cmd_exec(char *line)
         }
         return;
     }
-    /* --- pinscan：全端口 GPIO 边沿普查（板间线缆落点定位；屏蔽 MHz 级显示总线）--- */
+    /* --- pinscan：全端口 GPIO 边沿普查（BENCH 档；屏蔽 MHz 级显示总线）---
+     * R1：原实现 3s 忙等且循环内 iwdg_refresh()——既阻塞急停键轮询，又让看门狗假活。
+     * 现改为：上限 1s（< IWDG 2s，不再需要喂狗）、去掉 iwdg_refresh、时钟走 HAL 宏。*/
     if (strcmp(argv[0], "pinscan") == 0) {
-        extern void iwdg_refresh(void);
         int secs = (argc >= 2) ? atoi(argv[1]) : 1;
         if (secs < 1) secs = 1;
-        if (secs > 3) secs = 3;
-        RCC->AHB4ENR |= 0xFFFFFFFFu;
+        if (secs > 1) secs = 1;          /* 硬上限 1s：不跨 IWDG 窗口 */
+        __HAL_RCC_GPIOA_CLK_ENABLE(); __HAL_RCC_GPIOB_CLK_ENABLE();
+        __HAL_RCC_GPIOC_CLK_ENABLE(); __HAL_RCC_GPIOD_CLK_ENABLE();
+        __HAL_RCC_GPIOE_CLK_ENABLE(); __HAL_RCC_GPIOF_CLK_ENABLE();
+        __HAL_RCC_GPIOG_CLK_ENABLE(); __HAL_RCC_GPIOH_CLK_ENABLE();
+        __HAL_RCC_GPIOI_CLK_ENABLE(); __HAL_RCC_GPIOJ_CLK_ENABLE();
+        __HAL_RCC_GPIOK_CLK_ENABLE();
         GPIO_TypeDef *ports[11] = { GPIOA, GPIOB, GPIOC, GPIOD, GPIOE, GPIOF,
                                     GPIOG, GPIOH, GPIOI, GPIOJ, GPIOK };
         static uint16_t last[11];
@@ -317,7 +361,6 @@ static void cmd_exec(char *line)
         }
         uint32_t t0 = DWT->CYCCNT;
         uint32_t dur = (uint32_t)secs * (SystemCoreClock / 1u);
-        uint32_t t_ref = 0u;
         while ((DWT->CYCCNT - t0) < dur) {
             for (int i = 0; i < 11; i++) {
                 uint16_t cur = (uint16_t)ports[i]->IDR;
@@ -328,8 +371,6 @@ static void cmd_exec(char *line)
                         if (ch & (1u << b)) edge[i][b]++;
                 }
             }
-            uint32_t el = DWT->CYCCNT - t0;
-            if (el - t_ref > (SystemCoreClock / 2u)) { t_ref = el; iwdg_refresh(); }
         }
         printf("pinscan %ds edges(2..400 shown):\n", secs);
         for (int i = 0; i < 11; i++)
@@ -338,6 +379,7 @@ static void cmd_exec(char *line)
                     printf("  P%c%d %lu\n", (char)('A' + i), b, (unsigned long)edge[i][b]);
         return;
     }
+#endif /* TCS_PROFILE >= 1: wave / rxraw / pinscan */
     /* --- ee：EEPROM 镜像现场重读+校验（诊断）--- */
     if (strcmp(argv[0], "ee") == 0) {
         extern int eeprom_ready(void);
@@ -439,7 +481,8 @@ static void cmd_exec(char *line)
             return;
         }
     }
-    /* --- 控制命令（与 UI 同路径）--- */
+#if TCS_PROFILE >= 1
+    /* --- 控制命令（与 UI 同路径；BENCH 档：手动直控会绕过网页/屏的权威链）--- */
     if (strcmp(argv[0], "mode") == 0 && argc == 2) {
         int rv = param_set(PARAM_ID_MODE, strtof(argv[1], NULL), PARAM_SRC_CONSOLE);
         printf("mode rv=%d m=%u\n", rv, g_tcs.mode);
@@ -458,6 +501,8 @@ static void cmd_exec(char *line)
         printf("fan=%u\n", g_tcs.fan_on);
         return;
     }
+#endif /* TCS_PROFILE >= 1: mode / tec / fan */
+    /* estop 在 PROD 也保留：它是安全动作入口，不是调试能力 */
     if (strcmp(argv[0], "estop") == 0) {
         tcs_emergency_stop();
         printf("ESTOP done alarm=0x%04x\n", g_tcs.alarm_bits);
@@ -542,13 +587,15 @@ static void cmd_exec(char *line)
         ft5446_diag_readback();
         return;
     }
-    /* --- wdttest：死循环不喂狗 → IWDG 2s 复位（WP-C.1 实验命令）--- */
+#if TCS_PROFILE >= 1
+    /* --- wdttest：死循环不喂狗 → IWDG 2s 复位（WP-C.1 实验命令；仅 BENCH）--- */
     if (strcmp(argv[0], "wdttest") == 0) {
         tcs_log("[SYSTEM]", "IWDG test: busy-loop 5s (timeout=2s)");
         uint32_t t0 = HAL_GetTick();
         while (HAL_GetTick() - t0 < 5000u) { }
         return;
     }
+#endif /* TCS_PROFILE >= 1: wdttest */
     /* --- scrtest：屏诊断（WP-A.2d 噪声二分：纯 DMA2D 清屏/标定文本/触摸计数）--- */
     if (strcmp(argv[0], "scrtest") == 0 && argc >= 2) {
         if (strcmp(argv[1], "clear") == 0) {

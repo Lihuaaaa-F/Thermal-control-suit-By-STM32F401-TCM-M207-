@@ -39,3 +39,43 @@ int nvs_registry_commit(const uint8_t img[EE_IMG_SIZE])
     }
     return 0;
 }
+
+/* ====== 安全锁存（R1 修复 P0-08）======
+ * 布局 {magic, ver, latch, ~latch}：4 字节，只在 trip/ack 时写，写放大可忽略。
+ * 校验失败按"无锁存"处理并告警——读不出不能静默认为安全，但也不能因坏记录拒绝启动
+ * （启动后 control_poll 会用实时源重新判 OVERTEMP/BODY/M207）。 */
+#define KEY_SAFETY   "safety"
+#define SAFETY_MAGIC 0x53u
+#define SAFETY_VER   0x01u
+
+int safety_state_save(uint8_t latch)
+{
+    uint8_t b[4] = { SAFETY_MAGIC, SAFETY_VER, latch, (uint8_t)~latch };
+    nvs_handle_t h;
+    if (nvs_open(NS_TCS, NVS_READWRITE, &h) != ESP_OK) return -1;
+    esp_err_t r = nvs_set_blob(h, KEY_SAFETY, b, sizeof(b));
+    if (r == ESP_OK) r = nvs_commit(h);
+    nvs_close(h);
+    if (r != ESP_OK) {
+        ESP_LOGE(TAG, "safety save fail=%s", esp_err_to_name(r));
+        return -1;
+    }
+    return 0;
+}
+
+uint8_t safety_state_load(void)
+{
+    uint8_t b[4] = { 0 };
+    size_t len = sizeof(b);
+    nvs_handle_t h;
+    if (nvs_open(NS_TCS, NVS_READONLY, &h) != ESP_OK) return 0;   /* 首次上电 */
+    esp_err_t r = nvs_get_blob(h, KEY_SAFETY, b, &len);
+    nvs_close(h);
+    if (r != ESP_OK || len != sizeof(b)) return 0;
+    if (b[0] != SAFETY_MAGIC || b[1] != SAFETY_VER || (uint8_t)~b[2] != b[3]) {
+        ESP_LOGW(TAG, "safety blob invalid, treat as cleared");
+        return 0;
+    }
+    if (b[2]) ESP_LOGW(TAG, "safety latch restored=0x%02x (prev reset)", b[2]);
+    return b[2];
+}

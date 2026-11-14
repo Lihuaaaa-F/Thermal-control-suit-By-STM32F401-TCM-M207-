@@ -25,6 +25,11 @@ static control_cmd_hook_t s_cmd_hook;   /* v2：急停/确认 → 链路 CMD（m
 
 void control_set_cmd_hook(control_cmd_hook_t cb) { s_cmd_hook = cb; }
 uint8_t control_estop_latched(void) { return s_estop_latch; }
+void control_estop_clear(void)
+{
+    s_estop_latch = 0;
+    g_tcs.alarm_bits &= (uint16_t)~ALM_ESTOP;
+}
 
 #if TCS_USE_LVGL
 /* G5：60 点×30s 温度环形（P2 曲线数据源；UI 只读） */
@@ -123,8 +128,7 @@ void tcs_alarm_ack(void)
     if (g_tcs.tc1_act <= ALM_OVERTEMP_HARD_C)
         g_tcs.alarm_bits &= (uint16_t)~ALM_OVERTEMP;
     if (s_state != CTRL_SAFE || safe_sources_recovered()) {
-        s_estop_latch = 0;
-        g_tcs.alarm_bits &= (uint16_t)~ALM_ESTOP;
+        control_estop_clear();
     }
     g_tcs.alarm_bits &= (uint16_t)~ALM_EEPROM;   /* EEPROM 报警仅提示性 */
     if (s_cmd_hook) s_cmd_hook(9);               /* v2：ESP32 侧同步清急停自持 */
@@ -137,6 +141,7 @@ void tcs_emergency_stop(void)
     extern volatile uint32_t g_estop_calls;
     g_estop_calls++;
 #endif
+    if (s_estop_latch) return;   /* R1：已自持则不再重复广播（重发由主循环意图块按 200ms 负责）*/
     s_estop_latch = 1;
     tcs_alarm_raise(ALM_ESTOP);
     /* mode=手动（经 param_set 同一数据源路径，自动广播 0x11）*/
@@ -187,8 +192,20 @@ void control_poll(uint32_t now_ms)
         s_boot_ms_base_set = 1;
     }
 
-    /* 过热硬阈值报警（任意模式，自动置位；不受布防影响——安全边界）*/
-    if (g_tcs.tc1_act > ALM_OVERTEMP_HARD_C) tcs_alarm_raise(ALM_OVERTEMP);
+    /* 过热硬切断（R1 修复 P0-01）：任意模式、任意布防态。
+     * v2 下执行器在 ESP32，本地 out_tec_sw 无物理效果，所以同时下发 cmd=8 让对端也停；
+     * 仅在"首次进入 SAFE"时下发，避免每拍灌帧（重发由主循环的急停意图块负责）。 */
+    if (g_tcs.tc1_act > ALM_OVERTEMP_HARD_C) {
+        tcs_alarm_raise(ALM_OVERTEMP);
+        if (s_state != CTRL_SAFE) {
+            out_tec_sw(1, 0);
+            out_tec_sw(2, 0);
+            out_fan(1);
+            goto_state(CTRL_SAFE);
+            if (s_cmd_hook) s_cmd_hook(8);
+        }
+        return;
+    }
 
     /* F1/F2：传感器丢失 / M207 失联 → SAFE（含手动模式；M207 有 5s 上电宽限）
      * WP-A.5 commissioned：未布防（默认）→ 只记状态沿（上位机可查询），不置报警位
@@ -211,9 +228,11 @@ void control_poll(uint32_t now_ms)
     }
 
     if (s_state == CTRL_SAFE) {
-        /* SAFE 退出：双恢复 + 人工确认（急停自持需 ack）*/
+        /* SAFE 退出：双恢复 + 人工确认（急停自持需 ack）。
+         * R1：补 ALM_OVERTEMP 判据——超温未 ack 前不得自动退出（P0-01 的锁存语义）。*/
         if (safe_sources_recovered() && !s_estop_latch && tcs_alarm_active(ALM_BODY_SENSOR) == 0
-            && tcs_alarm_active(ALM_M207) == 0 && tcs_alarm_active(ALM_ESTOP) == 0) {
+            && tcs_alarm_active(ALM_M207) == 0 && tcs_alarm_active(ALM_ESTOP) == 0
+            && tcs_alarm_active(ALM_OVERTEMP) == 0) {
             out_fan(0);
             goto_state(CTRL_IDLE);
         }

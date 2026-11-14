@@ -213,6 +213,10 @@ int main(void)
         g_tcs.m207_online = 1;
         tcs_alarm_ack();
         CHECK(control_estop_latched() == 0, "P0-02 ack clears latch");
+        /* R-04 判别性：ack 只清"自持"，不清"投递"——断链期间确认后仍要补发 */
+        CHECK(control_estop_tx_pending() == 1, "R-04 ack does not cancel pending delivery");
+        control_estop_tx_confirm();               /* 模拟快照出现 ALM_ESTOP */
+        CHECK(control_estop_tx_pending() == 0, "R-04 peer confirm clears pending");
         CHECK(hook_calls == 1, "P0-02 ack notifies peer (cmd 9)");
         control_set_cmd_hook(0);
     }

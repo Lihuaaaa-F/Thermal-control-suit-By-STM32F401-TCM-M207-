@@ -379,6 +379,8 @@ int param_persist_now(void)
     return 0;
 }
 
+static uint32_t s_persist_fail;
+
 void param_persist_flush(uint32_t now_ms)
 {
     if (!s_flush_armed) return;
@@ -387,5 +389,15 @@ void param_persist_flush(uint32_t now_ms)
         return;
     }
     if (now_ms - s_armed_at_ms < PARAM_PERSIST_DEBOUNCE_MS) return;
-    param_persist_now();
+    int rv = param_persist_now();
+    if (rv < 0) {
+        /* R1 P1-04：失败不再每拍重试（原实现 10ms 一次），改为退避到下一个窗口；
+         * 连续失败由 control_poll 置 ALM_EEPROM，屏/网页可见。*/
+        s_persist_fail++;
+        s_armed_at_ms = now_ms ? now_ms : 1u;
+        return;
+    }
+    s_persist_fail = 0;
 }
+
+uint32_t param_persist_fail_count(void) { return s_persist_fail; }

@@ -124,6 +124,7 @@ float param_get(uint16_t id);
 void  param_persist_flush(uint32_t now_ms);
 /* 立即固化（p save / 调参页保存按钮）。返回 0=已提交，1=无脏参，-1=commit 失败。 */
 int   param_persist_now(void);
+uint32_t param_persist_fail_count(void);   /* R1 P1-04：连续落盘失败次数 */
 
 /* 广播（param_set 内部已调；模式等非参数变更可手动调）*/
 void  param_broadcast(param_desc_t *p, uint8_t src);

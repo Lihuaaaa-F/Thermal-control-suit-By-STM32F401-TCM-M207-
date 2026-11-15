@@ -34,6 +34,7 @@
 #include "driver/uart.h"
 #include "esp_timer.h"
 #include "esp_log.h"
+#include "esp_task_wdt.h"
 
 static const char *TAG = "M207";
 
@@ -132,7 +133,17 @@ void m207_rsp_wrong(int mode) { s_rsp.wrong_echo = (uint8_t)mode; }
 
 static void m207_tx_now(const char *cmd, size_t len)
 {
-    uart_write_bytes(M207_UART, cmd, len);
+    /* R1 P1-07：改为非阻塞写。uart_write_bytes 在 TX 环满时会阻塞（模块离线时
+     * 可达 10s），会把 m207 任务拖死并触发 TWDT 重启；这里空间不足就丢帧计数。*/
+    size_t free_sz = 0;
+    if (uart_get_tx_buffer_free_size(M207_UART, &free_sz) == ESP_OK && free_sz >= len) {
+        uart_write_bytes(M207_UART, cmd, len);
+    } else {
+        static uint32_t s_txdrop;
+        s_txdrop++;
+        if ((s_txdrop % 50u) == 1u) ESP_LOGW(TAG, "tx ring full, dropped %lu frames", (unsigned long)s_txdrop);
+        return;
+    }
     s_stat.tx++;
 #if CONFIG_TCS_M207_SELFLOOP
     m207_rsp_on_tx(cmd);
@@ -438,11 +449,13 @@ static const char *m207_fsm_poll_timed(void)
 /* ====== 服务任务（钉核 1；50ms 节拍；事件驱动 RX）====== */
 static void m207_task(void *arg)
 {
+    esp_task_wdt_add(NULL);   /* R1 P1-07：关键任务纳入 TWDT（原来只有 ctrl_svc）*/
     (void)arg;
     TickType_t last_wake = xTaskGetTickCount();
     uart_event_t ev;
     int64_t last_proc_us = 0;
     for (;;) {
+        esp_task_wdt_reset();
         vTaskDelayUntil(&last_wake, pdMS_TO_TICKS(M207_TICK_MS));
         /* R1 修复 M12-F-07：vTaskDelayUntil 的追赶语义会在"上一拍被饿"后连跑两拍，
          * 使下行间隔 <50ms，违反正典 §4 铁律。这里吞掉过早的追赶拍（不消费队列、不发帧）。*/

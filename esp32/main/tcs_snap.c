@@ -16,6 +16,7 @@
 #include "freertos/task.h"
 #include "esp_timer.h"
 #include "esp_log.h"
+#include "esp_task_wdt.h"
 
 #define TAG "SNAP"
 
@@ -42,10 +43,12 @@ static void build_delta_src(tcs_delta_src_t *d)
 
 static void snap_task(void *arg)
 {
+    esp_task_wdt_add(NULL);   /* R1 P1-07：关键任务纳入 TWDT（原来只有 ctrl_svc）*/
     (void)arg;
     TickType_t last_wake = xTaskGetTickCount();
     uint32_t p_win = 0;
     for (;;) {
+        esp_task_wdt_reset();
         vTaskDelayUntil(&last_wake, pdMS_TO_TICKS(SNAP_PERIOD_MS));
         int32_t t0 = (int32_t)esp_timer_get_time();
 

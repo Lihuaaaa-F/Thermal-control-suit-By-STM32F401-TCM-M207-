@@ -217,6 +217,9 @@ void control_poll(uint32_t now_ms)
         s_boot_ms_base_set = 1;
     }
 
+    /* R1 P1-04：参数落盘连续失败 → 可见报警（提示性，ack 可清）*/
+    if (param_persist_fail_count() > 0) tcs_alarm_raise(ALM_EEPROM);
+
     /* 过热硬切断（R1 修复 P0-01）：任意模式、任意布防态。
      * R-03：置本地自持位（不被 snap_reassert 覆盖），只有 ack 且温度回落才清。
      * N-01：仍然下发一次 cmd 8 —— 这是"停止请求"（不是驱动执行器），是跨端兜底：

@@ -270,6 +270,9 @@ void control_poll(uint32_t now_ms)
         s_boot_ms_base_set = 1;
     }
 
+    /* R1 P1-04：参数落盘连续失败 → 可见报警（提示性，ack 可清）*/
+    if (param_persist_fail_count() > 0) tcs_alarm_raise(ALM_EEPROM);
+
     /* 过热硬切断（任意模式、任意布防态）：先锁存，再由锁存统一门控执行器。
      * 修复 P0-01：原实现只 tcs_alarm_raise，TEC 继续按状态机输出（UI 却写"已停止加热"）。*/
     if (g_tcs.tc1_act > ALM_OVERTEMP_HARD_C) {

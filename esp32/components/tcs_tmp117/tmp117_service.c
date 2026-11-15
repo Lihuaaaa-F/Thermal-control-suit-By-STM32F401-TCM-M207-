@@ -13,6 +13,7 @@
 #include "driver/gpio.h"
 #include "esp_timer.h"
 #include "esp_log.h"
+#include "esp_task_wdt.h"
 
 #include "param_registry.h"     /* g_tcs */
 #include "control.h"            /* tcs_alarm_raise / ALM_BODY_SENSOR */
@@ -85,11 +86,13 @@ static int sample_accept(float c, uint32_t tick_now)
 /* ====== 采样任务（核 1；100ms 节拍）====== */
 static void tmp117_task(void *arg)
 {
+    esp_task_wdt_add(NULL);   /* R1 P1-07：关键任务纳入 TWDT（原来只有 ctrl_svc）*/
     (void)arg;
     uint8_t reg = TMP117_REG_TEMP;
     uint8_t buf[2];
     uint32_t p_win = 0;
     for (;;) {
+        esp_task_wdt_reset();
         /* 失联降频：错满 TRIP 且非 sim → 1s 试联（F4 恢复检测 ≤1s 首样，3 成 ≤1.3s）*/
         uint32_t period = (s_health.err_run >= TMP117_ERR_TRIP && !SIM_ACTIVE())
                           ? TMP117_LOST_PERIOD_MS : TMP117_SAMPLE_MS;

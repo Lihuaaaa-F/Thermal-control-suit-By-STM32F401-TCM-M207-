@@ -16,6 +16,7 @@
 #include <string.h>
 #include <stdio.h>
 #include "esp_log.h"
+#include "esp_task_wdt.h"
 #include "esp_timer.h"
 #include "cJSON.h"
 #include <math.h>
@@ -280,7 +281,9 @@ static char s_push_buf[576];
 
 static void ws_push_task(void *arg)
 {
+    esp_task_wdt_add(NULL);   /* R1 P1-07：关键任务纳入 TWDT（原来只有 ctrl_svc）*/
     while (1) {
+        esp_task_wdt_reset();
         vTaskDelay(pdMS_TO_TICKS(WS_PUSH_MS));
         size_t n = ws_status_json(s_push_buf, sizeof(s_push_buf));
         if (n) fds_send(s_push_buf, n);

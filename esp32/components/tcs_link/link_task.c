@@ -18,6 +18,7 @@
 #include "esp_timer.h"
 #include <math.h>
 #include "esp_log.h"
+#include "esp_task_wdt.h"
 
 static const char *TAG = "tcs_link";
 
@@ -229,7 +230,16 @@ static int demo_active(void) { return 0; }
 /* —— UART 发送钩子（comm 注入；comm_poll_tx 任务内串行调用）—— */
 static void link_uart_send(const uint8_t *d, size_t n)
 {
-    uart_write_bytes(LINK_UART, d, n);
+    /* R1 P1-07：非阻塞写——TX 环满时丢弃该帧（comm 层 ARQ 会重传），
+     * 不让 uart_write_bytes 阻塞把 link 任务拖死触发 TWDT。*/
+    size_t free_sz = 0;
+    if (uart_get_tx_buffer_free_size(LINK_UART, &free_sz) == ESP_OK && free_sz >= n) {
+        uart_write_bytes(LINK_UART, d, n);
+    } else {
+        static uint32_t s_txdrop;
+        s_txdrop++;
+        if ((s_txdrop % 50u) == 1u) ESP_LOGW(TAG, "link tx ring full, dropped %lu frames", (unsigned long)s_txdrop);
+    }
 }
 
 static uint32_t link_now_ms(void)
@@ -477,6 +487,7 @@ void link_on_event(link_event_cb_t cb) { s_cb = cb; }
 /* —— 任务 —— */
 static void link_task(void *arg)
 {
+    esp_task_wdt_add(NULL);   /* R1 P1-07：关键任务纳入 TWDT（原来只有 ctrl_svc）*/
     uart_event_t evt;
     uint8_t buf[256];
     uint32_t last_tick = 0;
@@ -485,10 +496,12 @@ static void link_task(void *arg)
     ESP_LOGI(TAG, "link task up");
     /* 握手：要注册表全量（无 STATUS 前每 2s 重试一次）*/
     for (int i = 0; i < 5 && !s_status.valid; i++) {
+        esp_task_wdt_reset();   /* 握手最长 2.5s，必须喂狗（TWDT 3s）*/
         link_request_registry();
         vTaskDelay(pdMS_TO_TICKS(500));
     }
     while (1) {
+        esp_task_wdt_reset();
         if (xQueueReceive(s_uart_queue, &evt, pdMS_TO_TICKS(50))) {
             if (evt.type == UART_DATA) {
                 int n = uart_read_bytes(LINK_UART, buf, sizeof(buf), 0);

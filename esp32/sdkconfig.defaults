@@ -35,3 +35,7 @@ CONFIG_HTTPD_WS_SUPPORT=y
 # R1 复核 R-13：此前靠开发者本机未入库的 sdkconfig，第三方从零构建会 undefined vTaskList。
 CONFIG_FREERTOS_USE_TRACE_FACILITY=y
 CONFIG_FREERTOS_GENERATE_RUN_TIME_STATS=y
+
+# --- 任务看门狗：任一下述订阅任务饿死即 panic 重启（P1-07；R-13 教训：必须入库）---
+CONFIG_ESP_TASK_WDT_PANIC=y
+CONFIG_ESP_TASK_WDT_TIMEOUT_S=3

@@ -38,7 +38,21 @@ function wsConnect() {
     if (m.t === "st") onStatus(m);
     else if (m.t === "pv") onPv(m);
     else if (m.t === "reg") { registry = m.list || []; buildParams(); }
+    else if (m.t === "ack") onCmdAck(m);
   };
+}
+
+/* R1 P1-03：命令回执。服务端对 cmd 1–7/10 返回 {t:"ack",c,rv}，
+ * rv<0 表示被拒/未实现——前端必须显示失败，不能像以前那样静默当成功。*/
+function onCmdAck(m) {
+  const names = { 1: "TC1 开", 2: "TC1 关", 3: "TC2 开", 4: "TC2 关",
+                  5: "风扇切换", 6: "自动", 7: "手动", 8: "急停", 9: "确认",
+                  10: "保存到模块" };
+  const name = names[m.c] || ("cmd " + m.c);
+  const ok = (m.rv === undefined) || (m.rv >= 0);
+  let msg = name + (ok ? "：成功" : "：失败(rv=" + m.rv + ")");
+  if (m.c === 10 && ok) msg = "保存到模块：已下发 " + m.rv + " 条（无逐条确认）";
+  toast(msg);
 }
 /* H2 重连加固：指数退避 1,2,4,8,10,10…s（上限 10s）；
  * 连败 RELOAD_AFTER 次(~95s)自动整页刷新——清前端 JS 态（F-1 待决清账：

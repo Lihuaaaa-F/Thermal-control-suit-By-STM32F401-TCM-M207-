@@ -23,6 +23,7 @@
 #include "link_task.h"
 #include "param_registry.h"
 #include "control.h"
+#include "m207_service.h"
 
 static const char *TAG = "tcs_ws";
 
@@ -368,10 +369,32 @@ esp_err_t ws_on_recv(httpd_req_t *req)
                 /* v2 权威在 ESP32：急停/确认在本端直接执行（TEC/风扇在这里）。
                  * 原来转发 0x15 给屏幕只会在 H743 的本地控制里空转。*/
                 int cv = c->valueint;
-                if (cv == 8)      tcs_emergency_stop();
-                else if (cv == 9) tcs_alarm_ack();
-                ESP_LOGI(TAG, "ws cmd=%d -> state=%d alarm=0x%04X",
-                         cv, (int)control_state(), (unsigned)g_tcs.alarm_bits);
+                int rv = 0;
+                /* R1 P1-03：补齐网页 cmd 1–7/10 的执行端（原来只实现 8/9，其余静默丢弃、
+                 * 前端却弹"成功"）。1-4=TEC1/2 开/关，5=风扇切换，6/7=自动/手动，
+                 * 10=保存到模块（逐参数 `!`）。安全门控仍在 out_tec_sw（锁存期禁开）。*/
+                switch (cv) {
+                case 1: control_manual_tec(1, 1); break;
+                case 2: control_manual_tec(1, 0); break;
+                case 3: control_manual_tec(2, 1); break;
+                case 4: control_manual_tec(2, 0); break;
+                case 5: control_manual_fan(g_tcs.fan_on ? 0 : 1); break;
+                case 6: rv = param_set(PARAM_ID_MODE, 1.0f, PARAM_SRC_WEB); break;
+                case 7: rv = param_set(PARAM_ID_MODE, 0.0f, PARAM_SRC_WEB); break;
+                case 8: tcs_emergency_stop(); break;
+                case 9: tcs_alarm_ack(); break;
+                case 10: rv = m207_save_all(); break;
+                default: rv = -1; break;
+                }
+                ESP_LOGI(TAG, "ws cmd=%d rv=%d -> state=%d alarm=0x%04X",
+                         cv, rv, (int)control_state(), (unsigned)g_tcs.alarm_bits);
+                /* 回执：前端据此显示成功/失败（rv<0=拒绝/未实现）*/
+                {
+                    char ack[64];
+                    int n = snprintf(ack, sizeof(ack),
+                                     "{\"t\":\"ack\",\"c\":%d,\"rv\":%d}", cv, rv);
+                    if (n > 0 && (size_t)n < sizeof(ack)) fds_send(ack, (size_t)n);
+                }
             }
         } else if (strcmp(t->valuestring, "ota") == 0) {
             /* WP-F.4：m=0 自拷贝+切换；m=1 回滚（boot 指回对槽）*/

@@ -170,3 +170,4 @@ project_tcs/tools/vl4_aa_check.py
 protocol/proto_layout.h
 protocol/tcs_proto.h
 tools/proto_sync.py
+project_tcs/tools/web_gz_check.py

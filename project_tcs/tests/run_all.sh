@@ -113,6 +113,13 @@ else
     echo "[font_audit] SKIP: python not found"; FAIL=1
 fi
 
+# R1 M14-F-05：网页静态资源与 .gz 同步门禁（改源未重压 → 浏览器拿旧版）
+if [ -n "$PYBIN" ]; then
+    if "$PYBIN" tools/web_gz_check.py; then :; else FAIL=1; fi
+else
+    echo "[web_gz] SKIP: python not found"; FAIL=1
+fi
+
 # RTT printf 调用点总数对账（W5 立；W4.2 vendor 口径 13→；W1a +3 日志点后=16）
 # （App/rtt/ 为 vendor+薄壳域不计；16=业务面 13+W1a i2c4 三行；ltdc.c 4 处为
 # HEAD 既有 G 线文件；增删调用点须同步本数并说明）

@@ -664,6 +664,12 @@ int m207_map_set(uint16_t pid, float v)
     for (size_t i = 0; i < M207_MAP_N; i++) {
         const m207_map_entry_t *e = &s_map[i];
         if (e->pid != pid) continue;
+        /* R1 M12-F-05：0x120-0x126 属 PCB/PCRS232 模块，映射表暂无 module 字段；
+         * 按 TC1 下发会生成非法帧（模块必拒），这里显式拒绝而不是发垃圾。*/
+        if (e->pid >= 0x120) {
+            ESP_LOGW(TAG, "map_set 0x%02x: PCB/PCRS232 语法未确认，拒绝下发", (unsigned)pid);
+            return -1;
+        }
         m207_msg_t m;
         memset(&m, 0, sizeof(m));
         m.verify = 1; m.ch = e->ch; m.decimals = e->decimals; m.value = v;
@@ -673,6 +679,22 @@ int m207_map_set(uint16_t pid, float v)
         return m207_enqueue(&m);
     }
     return -1;                           /* 未映射参数 */
+}
+
+int m207_save_all(void)
+{
+    if (!s_started || !s_online) { s_stat.wdrop++; return -2; }
+    int n = 0;
+    for (size_t i = 0; i < M207_MAP_N; i++) {
+        const m207_map_entry_t *e = &s_map[i];
+        if (e->pid >= 0x120) continue;      /* PCB/PCRS232 语法未确认（M12-F-05）*/
+        m207_msg_t m;
+        memset(&m, 0, sizeof(m));
+                snprintf(m.cmd, sizeof(m.cmd), "TC%u:%s!\r", (unsigned)e->ch, e->cmd);
+        if (m207_enqueue(&m) == 0) n++;
+    }
+    ESP_LOGI(TAG, "save_all: %d frames queued", n);
+    return n;
 }
 
 int m207_send_raw(const char *cmd)

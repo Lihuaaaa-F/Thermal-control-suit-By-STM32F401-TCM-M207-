@@ -29,6 +29,9 @@ int  m207_set_temp(uint8_t ch, float v);             /* TCx:TCADJTEMP=%.1f（域
 int  m207_tec(uint8_t ch, uint8_t on);               /* TCx:TCSW=0/1 */
 int  m207_map_set(uint16_t pid, float v);            /* H10 映射表 0x100+ */
 int  m207_send_raw(const char *cmd);                 /* console 调试/COMPUSHLIST 试跑 */
+/* R1 M12-F-04：逐参数下发 `!` 保存到模块（网页"保存到模块"按钮）。返回入队条数；-1/-2=失败。
+ * PCB/PCRS232 组（0x120+）语法未确认，跳过不下发（M12-F-05）。*/
+int  m207_save_all(void);
 
 /* ====== 状态读侧 ====== */
 uint8_t m207_online(void);                           /* 0/1（g_tcs.m207_online 同步）*/

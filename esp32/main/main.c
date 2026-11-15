@@ -123,6 +123,16 @@ static void esp_on_cmd(uint8_t cmd, uint8_t seq)
     } else if (cmd == 9) {
         tcs_alarm_ack();
         ESP_LOGI(TAG, "H743 CMD 9 alarm_ack -> alarm=0x%04X", (unsigned)g_tcs.alarm_bits);
+    } else if (cmd == TCS_CMD_OVERTEMP_STOP) {
+        /* R2-N-01：超温停机请求——只锁 OVERTEMP + 停 TCSW，不置急停锁存、不改手动模式。
+         * 与急停（cmd 8）语义分离，避免一次超温把设备留在"急停/手动"。*/
+        control_safety_trip(SAFETY_BIT_OVERTEMP);
+        tcs_alarm_raise(ALM_OVERTEMP);
+        (void)m207_tec(1, 0);
+        (void)m207_tec(2, 0);
+        ESP_LOGW(TAG, "H743 CMD %u overtemp-stop -> latch=0x%02X alarm=0x%04X",
+                 (unsigned)cmd, (unsigned)control_safety_latched(),
+                 (unsigned)g_tcs.alarm_bits);
     } else {
         st = TCS_ACK_BAD_ID;            /* R1 修复 M08-F-10：未定义命令不再回 OK */
         ESP_LOGW(TAG, "H743 CMD %u unknown -> BAD_ID", (unsigned)cmd);

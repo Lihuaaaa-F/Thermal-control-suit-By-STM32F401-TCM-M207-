@@ -942,6 +942,21 @@ int main(void)
             }
         }
 
+        /* N-01：超温停机请求的投递重发（与急停同一 200ms 节拍，但确认口径独立：
+         * 对端快照出现 ALM_OVERTEMP 即认为已锁存；本地 ack 清隐患时该请求作废）。*/
+        {
+            static uint32_t s_ot_tx_ms;
+            uint8_t link_fresh = (s_snap_have && (uint32_t)(now - s_snap_ms) <= 500u) ? 1u : 0u;
+            if (control_overtemp_tx_pending() && link_fresh) {
+                if (s_last_snap.alarm & ALM_OVERTEMP) {
+                    control_overtemp_tx_confirm();
+                } else if ((uint32_t)(now - s_ot_tx_ms) >= 200u) {
+                    s_ot_tx_ms = now;
+                    link_send_cmd_upstream(TCS_CMD_OVERTEMP_STOP);
+                }
+            }
+        }
+
         perf_sample_work(DWT->CYCCNT - cy0);
         if (g_link_down_flag) {
             g_link_down_flag = 0;

@@ -59,6 +59,7 @@ static int cmd_p(int argc, char **argv)
     return 0;
 }
 
+#if CONFIG_TCS_DIAG
 static int cmd_mode(int argc, char **argv)
 {
     if (argc < 2) { printf("mode 0|1 (now %u)\n", (unsigned)g_tcs.mode); return 1; }
@@ -92,6 +93,7 @@ static int cmd_fan(int argc, char **argv)
     printf("fan duty=%u%%\n", (unsigned)fan_get_duty());
     return 0;
 }
+#endif /* CONFIG_TCS_DIAG：直接手动控制仅台架（PROD 由屏/网页经权威链）*/
 
 #if CONFIG_TCS_SIM
 static int cmd_body(int argc, char **argv)
@@ -308,12 +310,15 @@ int tcs_console_start(void)
     const esp_console_cmd_t cmds[] = {
         { .command="p", .help="参数：p list(默认) | p set <id|key> <v> | p save",
           .hint="<list|set|save>", .func=cmd_p, .argtable=NULL },
-        { .command="mode", .help="mode 0|1（手动/自动）", .hint="<0|1>",
+#if CONFIG_TCS_DIAG
+        /* 直接手动控制只在台架存在（与 H743 BENCH 档一致；PROD 由屏/网页经权威链操作）*/
+        { .command="mode", .help="mode 0|1（手动/自动；台架）", .hint="<0|1>",
           .func=cmd_mode, .argtable=NULL },
-        { .command="tec", .help="tec <ch 1|2> <on 0|1>", .hint="<ch> <on>",
+        { .command="tec", .help="tec <ch 1|2> <on 0|1>（台架）", .hint="<ch> <on>",
           .func=cmd_tec, .argtable=NULL },
-        { .command="fan", .help="fan <0-100>（占空比%，低=开）", .hint="<pct>",
+        { .command="fan", .help="fan <0-100>（占空比%，低=开；台架）", .hint="<pct>",
           .func=cmd_fan, .argtable=NULL },
+#endif /* CONFIG_TCS_DIAG */
 #if CONFIG_TCS_SIM
         { .command="body", .help="body <°C|off>（体温注入，E-21/22；仅 SIM 构建）", .hint="<v|off>",
           .func=cmd_body, .argtable=NULL },

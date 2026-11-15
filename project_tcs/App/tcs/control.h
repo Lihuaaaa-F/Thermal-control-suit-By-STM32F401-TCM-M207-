@@ -77,6 +77,9 @@ uint8_t control_estop_latched(void);   /* 本地急停自持位（屏显报警�
 uint8_t control_overtemp_latched(void);/* R1 复核 R-03：本地超温自持（不被 snap_reassert 覆盖）*/
 uint8_t control_estop_tx_pending(void);/* R1 复核 R-04：急停意图待对端确认（ack 不清）*/
 void    control_estop_tx_confirm(void);/* 对端快照出现 ALM_ESTOP 时调用 */
+/* N-01：超温停机请求的投递状态（与急停分离；本地 ack 清隐患时作废）*/
+uint8_t control_overtemp_tx_pending(void);
+void    control_overtemp_tx_confirm(void);
 /* R1 修复 P0-02：对端已执行并随后 ack（快照曾出现 ALM_ESTOP 又消失）时清本地自持，
  * 避免"网页/对端确认后本端仍每拍重发"的两端拉锯。不改变其他报警位。*/
 void    control_estop_clear(void);

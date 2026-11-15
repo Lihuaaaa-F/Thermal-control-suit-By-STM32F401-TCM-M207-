@@ -22,7 +22,8 @@ static uint8_t       s_boot_ms_base_set;
 static uint32_t      s_boot_ms;
 static uint8_t       s_estop_latch;
 static uint8_t       s_overtemp_latch;  /* R1 复核 R-03：本地超温自持（不被快照覆盖）*/
-static uint8_t       s_estop_tx_pending;/* R1 复核 R-04：急停意图待对端确认（ack 不清）*/
+static uint8_t       s_estop_tx_pending;   /* R-04：急停意图待对端确认（ack 不清）*/
+static uint8_t       s_overtemp_tx_pending;/* N-01：超温停机请求待对端确认（与急停分离）*/
 static control_cmd_hook_t s_cmd_hook;   /* v2：急停/确认 → 链路 CMD（main 装配）*/
 
 void control_set_cmd_hook(control_cmd_hook_t cb) { s_cmd_hook = cb; }
@@ -30,6 +31,8 @@ uint8_t control_estop_latched(void) { return s_estop_latch; }
 uint8_t control_overtemp_latched(void) { return s_overtemp_latch; }
 uint8_t control_estop_tx_pending(void) { return s_estop_tx_pending; }
 void    control_estop_tx_confirm(void) { s_estop_tx_pending = 0; }
+uint8_t control_overtemp_tx_pending(void) { return s_overtemp_tx_pending; }
+void    control_overtemp_tx_confirm(void) { s_overtemp_tx_pending = 0; }
 
 /* 清急停自持（本地 ack 或对端 ack 生效时调用）。不清"待投递"标志——投递确认只看对端。*/
 void control_estop_clear(void)
@@ -100,6 +103,7 @@ void control_init(const control_ops_t *ops)
     /* N-06：新增的两个静态量也要复位——否则软重初始化/测试复用会带着旧锁存与旧投递意图 */
     s_overtemp_latch = 0;
     s_estop_tx_pending = 0;
+    s_overtemp_tx_pending = 0;
     g_tcs.alarm_bits = 0;
 }
 
@@ -138,6 +142,7 @@ void tcs_alarm_ack(void)
     if (g_tcs.tc1_act <= ALM_OVERTEMP_HARD_C) {
         g_tcs.alarm_bits &= (uint16_t)~ALM_OVERTEMP;
         s_overtemp_latch = 0;            /* R-03：只有 ack 且温度已回落才清本地超温自持 */
+        s_overtemp_tx_pending = 0;       /* N-01：隐患已被确认，未送达的停机请求作废 */
     }
     if (s_state != CTRL_SAFE || safe_sources_recovered()) {
         control_estop_clear();
@@ -225,8 +230,8 @@ void control_poll(uint32_t now_ms)
             out_tec_sw(2, 0);
             out_fan(1);
             goto_state(CTRL_SAFE);
-            s_estop_tx_pending = 1;       /* N-01/R-04：纳入投递重发（对端确认前 200ms 重发）*/
-            if (s_cmd_hook) s_cmd_hook(8);
+            s_overtemp_tx_pending = 1;    /* N-01：独立于急停的停机请求，纳入 200ms 重发 */
+            if (s_cmd_hook) s_cmd_hook(TCS_CMD_OVERTEMP_STOP);
         }
         return;
     }

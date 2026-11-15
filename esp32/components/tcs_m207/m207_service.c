@@ -348,6 +348,7 @@ static void m207_handle_line(const char *line)
          * 这样即使 control 任务创建失败/卡死，TEC 仍会被关。*/
         if (r.value > ALM_OVERTEMP_HARD_C) {
             control_safety_trip(SAFETY_BIT_OVERTEMP);
+            tcs_alarm_raise(ALM_OVERTEMP);   /* 锁存必须伴随可见报警，否则屏/网页只看到"停机"不知原因 */
             m207_enqueue_simple("TC1:TCSW=0\r");
         }
     }

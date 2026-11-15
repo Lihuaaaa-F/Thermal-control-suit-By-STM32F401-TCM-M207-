@@ -35,7 +35,8 @@ static void stub_temp(uint8_t ch, float v)    { temp_calls++; last_temp_ch = ch;
 
 /* P0-02：链路 CMD 钩子桩（文件作用域：MSVC 不支持嵌套函数定义）*/
 static int hook_calls;
-static void hook_cb(uint8_t cmd) { (void)cmd; hook_calls++; }
+static uint8_t hook_last;
+static void hook_cb(uint8_t cmd) { hook_calls++; hook_last = cmd; }
 
 static void reset_stubs(void)
 {
@@ -218,6 +219,19 @@ int main(void)
         control_estop_tx_confirm();               /* 模拟快照出现 ALM_ESTOP */
         CHECK(control_estop_tx_pending() == 0, "R-04 peer confirm clears pending");
         CHECK(hook_calls == 1, "P0-02 ack notifies peer (smoke)");
+
+        /* N-01 判别性：超温走独立停机请求（cmd 11），不借用急停语义 */
+        enter_auto_healthy();
+        hook_calls = 0; hook_last = 0;
+        g_tcs.tc1_act = 49.0f;
+        tick();
+        CHECK(hook_calls == 1 && hook_last == TCS_CMD_OVERTEMP_STOP,
+              "N-01 overtemp sends OVERTEMP_STOP (not ESTOP)");
+        CHECK(control_estop_latched() == 0, "N-01 overtemp does not latch estop");
+        CHECK(control_overtemp_tx_pending() == 1, "N-01 overtemp pending set");
+        g_tcs.tc1_act = 40.0f;
+        tcs_alarm_ack();
+        CHECK(control_overtemp_tx_pending() == 0, "N-01 ack clears overtemp pending");
         control_set_cmd_hook(0);
     }
 

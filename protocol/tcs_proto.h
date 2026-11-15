@@ -50,6 +50,8 @@
 #define TCS_CMD_ESTOP          8
 #define TCS_CMD_ALARM_ACK      9
 #define TCS_CMD_M207_SAVE     10   /* P3：保存到模块（R5 接 M207 `!` 传输）*/
+#define TCS_CMD_OVERTEMP_STOP 11   /* R2-N-01：屏侧观测到超温 → 请求对端停机（**不是**急停：
+                                    * 不置 ESTOP 锁存、不改手动模式，只锁 OVERTEMP 并关 TCSW）*/
 
 /* TCS_ACK status */
 #define TCS_ACK_OK             0

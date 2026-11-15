@@ -23,120 +23,129 @@ tcs_state_t g_tcs = {
 };
 
 /* ====== 参数表 v1（初值/[min,max]/step/flags 严格按任务书 §3.3 表）====== */
-static param_desc_t s_params[PARAM_CAPACITY] = {
+static param_desc_t s_params[] = {
     /* id    key            name             unit   type            flags                                              min   max   step  value */
     { 0x01, "tc1_set",      "贴身水箱设定温度", "°C", PARAM_TYPE_F32,
-      PF_RW|PF_SCREEN|PF_WEB|PF_PERSIST|PF_M207,              5.0f, 45.0f, 0.1f, 25.0f, 0, 0 },
+      PF_RW|PF_SCREEN|PF_WEB|PF_PERSIST|PF_M207,              5.0f, 45.0f, 0.1f, 25.0f, 0 },
     { 0x02, "tc2_set",      "环境水箱设定温度", "°C", PARAM_TYPE_F32,
-      PF_RW|PF_SCREEN|PF_WEB|PF_PERSIST|PF_M207,              5.0f, 45.0f, 0.1f, 25.0f, 0, 0 },
+      PF_RW|PF_SCREEN|PF_WEB|PF_PERSIST|PF_M207,              5.0f, 45.0f, 0.1f, 25.0f, 0 },
     { 0x03, "body_hot",     "体温过热阈值",     "°C", PARAM_TYPE_F32,
-      PF_RW|PF_SCREEN|PF_WEB|PF_PERSIST,                      36.0f, 40.0f, 0.1f, 37.5f, 0, 0 },
+      PF_RW|PF_SCREEN|PF_WEB|PF_PERSIST,                      36.0f, 40.0f, 0.1f, 37.5f, 0 },
     { 0x04, "body_cold",    "体温过冷阈值",     "°C", PARAM_TYPE_F32,
-      PF_RW|PF_SCREEN|PF_WEB|PF_PERSIST,                      35.0f, 39.0f, 0.1f, 36.5f, 0, 0 },
+      PF_RW|PF_SCREEN|PF_WEB|PF_PERSIST,                      35.0f, 39.0f, 0.1f, 36.5f, 0 },
     { 0x05, "hyst",         "滞回回差",         "°C", PARAM_TYPE_F32,
-      PF_RW|PF_SCREEN|PF_WEB|PF_PERSIST,                      0.1f,  1.0f,  0.1f, 0.2f,  0, 0 },
+      PF_RW|PF_SCREEN|PF_WEB|PF_PERSIST,                      0.1f,  1.0f,  0.1f, 0.2f, 0 },
     { 0x06, "mode",         "控制模式",         "",   PARAM_TYPE_U8,
-      PF_RW|PF_SCREEN|PF_WEB|PF_PERSIST,                      0.0f,  1.0f,  1.0f, 0.0f,  0, 0 },
+      PF_RW|PF_SCREEN|PF_WEB|PF_PERSIST,                      0.0f,  1.0f,  1.0f, 0.0f, 0 },
     { 0x07, "tc_set_confirm", "高温二次确认阈值", "°C", PARAM_TYPE_F32,
-      PF_RW|PF_WEB|PF_PERSIST,                                38.0f, 45.0f, 0.5f, 40.0f, 0, 0 },
+      PF_RW|PF_WEB|PF_PERSIST,                                38.0f, 45.0f, 0.5f, 40.0f, 0 },
     { 0x08, "commissioned", "布防模式",     "",   PARAM_TYPE_U8,
-      PF_RW|PF_SCREEN|PF_WEB|PF_PERSIST,                      0.0f,  2.0f,  1.0f, 0.0f,  0, 0 },
+      PF_RW|PF_SCREEN|PF_WEB|PF_PERSIST,                      0.0f,  2.0f,  1.0f, 0.0f, 0 },
     /* ====== H10 映射全表（v1.2 §2.5；所有权矩阵=模块 EEPROM 唯一真值，本地不持久）======
      * flags：PF_RW|PF_WEB|PF_M207（无 PF_SCREEN=屏不显红线；无 PF_PERSIST=不落本地 EEPROM）。
      * 值域/默认按《现行M207协议_v1.md》字典；危险参数加 PF_DANGER（网页二次确认）。
      * R5（ESP32）接真实传输：写=透传+50ms 读回校验，上电=模块读回镜像。 */
     /* --- TC1（0x100-0x10F）--- */
     { 0x100, "m207_kp",        "TC1 PID 比例",     "",  PARAM_TYPE_F32,
-      PF_RW|PF_WEB|PF_M207,                                   0.0f, 100.0f, 0.1f, 0.4f,  0, 0 },
-    { 0x101, "m207_ki",        "TC1 PID 积分",     "",  PARAM_TYPE_F32,
-      PF_RW|PF_WEB|PF_M207,                                   0.0f, 9999.0f, 1.0f, 40.0f, 0, 0 },
-    { 0x102, "m207_kd",        "TC1 PID 微分",     "",  PARAM_TYPE_F32,
-      PF_RW|PF_WEB|PF_M207,                                   0.0f, 9999.0f, 0.01f, 0.1f, 0, 0 },
+      PF_RW|PF_WEB|PF_M207,                                   0.0f, 100.0f, 0.1f, 0.4f, 0 },
+    { 0x101, "m207_ki",        "TC1 PID 积分",     "s", PARAM_TYPE_F32,
+      PF_RW|PF_WEB|PF_M207,                                   0.0f, 9999.0f, 1.0f, 40.0f, 0 },
+    { 0x102, "m207_kd",        "TC1 PID 微分",     "s", PARAM_TYPE_F32,
+      PF_RW|PF_WEB|PF_M207,                                   0.0f, 9999.0f, 0.01f, 0.1f, 0 },
     { 0x103, "m207_t1_otp_ht", "TC1 过温高阈值",   "°C", PARAM_TYPE_F32,
-      PF_RW|PF_WEB|PF_M207|PF_DANGER,                         -50.0f, 150.0f, 1.0f, 30.0f, 0, 0 },
+      PF_RW|PF_WEB|PF_M207|PF_DANGER,                         -50.0f, 150.0f, 1.0f, 30.0f, 0 },
     { 0x104, "m207_t1_otp_lt", "TC1 过温低阈值",   "°C", PARAM_TYPE_F32,
-      PF_RW|PF_WEB|PF_M207|PF_DANGER,                         -50.0f, 150.0f, 1.0f, 15.0f, 0, 0 },
+      PF_RW|PF_WEB|PF_M207|PF_DANGER,                         -50.0f, 150.0f, 1.0f, 15.0f, 0 },
     { 0x105, "m207_t1_otp_hy", "TC1 过温滞回",     "°C", PARAM_TYPE_F32,
-      PF_RW|PF_WEB|PF_M207|PF_DANGER,                         0.0f, 50.0f, 1.0f, 1.0f,  0, 0 },
+      PF_RW|PF_WEB|PF_M207|PF_DANGER,                         0.0f, 50.0f, 1.0f, 1.0f, 0 },
     { 0x106, "m207_t1_otpm",   "TC1 过温保护模式", "",  PARAM_TYPE_U8,
-      PF_RW|PF_WEB|PF_M207|PF_DANGER,                         0.0f, 2.0f, 1.0f, 0.0f,  0, 0 },
+      PF_RW|PF_WEB|PF_M207|PF_DANGER,                         0.0f, 2.0f, 1.0f, 0.0f, 0 },
     { 0x107, "m207_t1_ocp",    "TC1 过流保护阈值", "A",  PARAM_TYPE_F32,
-      PF_RW|PF_WEB|PF_M207|PF_DANGER,                         0.0f, 10.0f, 0.1f, 5.0f,  0, 0 },
+      PF_RW|PF_WEB|PF_M207|PF_DANGER,                         0.0f, 10.0f, 0.1f, 5.0f, 0 },
     { 0x108, "m207_t1_ovp",    "TC1 过压保护阈值", "V",  PARAM_TYPE_F32,
-      PF_RW|PF_WEB|PF_M207|PF_DANGER,                         0.0f, 24.0f, 0.1f, 9.0f,  0, 0 },
+      PF_RW|PF_WEB|PF_M207|PF_DANGER,                         0.0f, 24.0f, 0.1f, 9.0f, 0 },
     { 0x109, "m207_t1_rtoch",  "TC1 开路保护高",   "°C", PARAM_TYPE_F32,
-      PF_RW|PF_WEB|PF_M207|PF_DANGER,                         -50.0f, 200.0f, 1.0f, 100.0f, 0, 0 },
+      PF_RW|PF_WEB|PF_M207|PF_DANGER,                         -50.0f, 200.0f, 1.0f, 100.0f, 0 },
     { 0x10A, "m207_t1_rtocl",  "TC1 开路保护低",   "°C", PARAM_TYPE_F32,
-      PF_RW|PF_WEB|PF_M207|PF_DANGER,                         -50.0f, 200.0f, 1.0f, -20.0f, 0, 0 },
+      PF_RW|PF_WEB|PF_M207|PF_DANGER,                         -50.0f, 200.0f, 1.0f, -20.0f, 0 },
     { 0x10B, "m207_t1_mint",   "TC1 最低设定温度", "°C", PARAM_TYPE_F32,
-      PF_RW|PF_WEB|PF_M207,                                   -50.0f, 150.0f, 1.0f, -10.0f, 0, 0 },
+      PF_RW|PF_WEB|PF_M207,                                   -50.0f, 150.0f, 1.0f, -10.0f, 0 },
     { 0x10C, "m207_t1_maxt",   "TC1 最高设定温度", "°C", PARAM_TYPE_F32,
-      PF_RW|PF_WEB|PF_M207,                                   -50.0f, 200.0f, 1.0f, 120.0f, 0, 0 },
+      PF_RW|PF_WEB|PF_M207,                                   -50.0f, 200.0f, 1.0f, 120.0f, 0 },
     { 0x10D, "m207_t1_maxv",   "TC1 最大输出电压", "V",  PARAM_TYPE_F32,
-      PF_RW|PF_WEB|PF_M207|PF_DANGER,                         0.0f, 12.0f, 0.1f, 8.0f,  0, 0 },
+      PF_RW|PF_WEB|PF_M207|PF_DANGER,                         0.0f, 12.0f, 0.1f, 8.0f, 0 },
     { 0x10E, "m207_t1_vratio", "TC1 冷热电压比",   "",   PARAM_TYPE_F32,
-      PF_RW|PF_WEB|PF_M207,                                   0.1f, 10.0f, 0.1f, 1.0f,  0, 0 },
+      PF_RW|PF_WEB|PF_M207,                                   0.1f, 10.0f, 0.1f, 1.0f, 0 },
     { 0x10F, "m207_t1_step",   "TC1 温度步进",     "°C", PARAM_TYPE_F32,
-      PF_RW|PF_WEB|PF_M207,                                   0.001f, 10.0f, 0.001f, 0.01f, 0, 0 },
+      PF_RW|PF_WEB|PF_M207,                                   0.001f, 10.0f, 0.001f, 0.01f, 0 },
     /* --- TC2（0x110-0x11F，与 TC1 逐项镜像）--- */
     { 0x110, "m207_t2_kp",     "TC2 PID 比例",     "",  PARAM_TYPE_F32,
-      PF_RW|PF_WEB|PF_M207,                                   0.0f, 100.0f, 0.1f, 0.4f,  0, 0 },
+      PF_RW|PF_WEB|PF_M207,                                   0.0f, 100.0f, 0.1f, 0.4f, 0 },
     { 0x111, "m207_t2_ki",     "TC2 PID 积分",     "",  PARAM_TYPE_F32,
-      PF_RW|PF_WEB|PF_M207,                                   0.0f, 9999.0f, 1.0f, 40.0f, 0, 0 },
+      PF_RW|PF_WEB|PF_M207,                                   0.0f, 9999.0f, 1.0f, 40.0f, 0 },
     { 0x112, "m207_t2_kd",     "TC2 PID 微分",     "",  PARAM_TYPE_F32,
-      PF_RW|PF_WEB|PF_M207,                                   0.0f, 9999.0f, 0.01f, 0.1f, 0, 0 },
+      PF_RW|PF_WEB|PF_M207,                                   0.0f, 9999.0f, 0.01f, 0.1f, 0 },
     { 0x113, "m207_t2_otp_ht", "TC2 过温高阈值",   "°C", PARAM_TYPE_F32,
-      PF_RW|PF_WEB|PF_M207|PF_DANGER,                         -50.0f, 150.0f, 1.0f, 30.0f, 0, 0 },
+      PF_RW|PF_WEB|PF_M207|PF_DANGER,                         -50.0f, 150.0f, 1.0f, 30.0f, 0 },
     { 0x114, "m207_t2_otp_lt", "TC2 过温低阈值",   "°C", PARAM_TYPE_F32,
-      PF_RW|PF_WEB|PF_M207|PF_DANGER,                         -50.0f, 150.0f, 1.0f, 15.0f, 0, 0 },
+      PF_RW|PF_WEB|PF_M207|PF_DANGER,                         -50.0f, 150.0f, 1.0f, 15.0f, 0 },
     { 0x115, "m207_t2_otp_hy", "TC2 过温滞回",     "°C", PARAM_TYPE_F32,
-      PF_RW|PF_WEB|PF_M207|PF_DANGER,                         0.0f, 50.0f, 1.0f, 1.0f,  0, 0 },
+      PF_RW|PF_WEB|PF_M207|PF_DANGER,                         0.0f, 50.0f, 1.0f, 1.0f, 0 },
     { 0x116, "m207_t2_otpm",   "TC2 过温保护模式", "",  PARAM_TYPE_U8,
-      PF_RW|PF_WEB|PF_M207|PF_DANGER,                         0.0f, 2.0f, 1.0f, 0.0f,  0, 0 },
+      PF_RW|PF_WEB|PF_M207|PF_DANGER,                         0.0f, 2.0f, 1.0f, 0.0f, 0 },
     { 0x117, "m207_t2_ocp",    "TC2 过流保护阈值", "A",  PARAM_TYPE_F32,
-      PF_RW|PF_WEB|PF_M207|PF_DANGER,                         0.0f, 10.0f, 0.1f, 5.0f,  0, 0 },
+      PF_RW|PF_WEB|PF_M207|PF_DANGER,                         0.0f, 10.0f, 0.1f, 5.0f, 0 },
     { 0x118, "m207_t2_ovp",    "TC2 过压保护阈值", "V",  PARAM_TYPE_F32,
-      PF_RW|PF_WEB|PF_M207|PF_DANGER,                         0.0f, 24.0f, 0.1f, 9.0f,  0, 0 },
+      PF_RW|PF_WEB|PF_M207|PF_DANGER,                         0.0f, 24.0f, 0.1f, 9.0f, 0 },
     { 0x119, "m207_t2_rtoch",  "TC2 开路保护高",   "°C", PARAM_TYPE_F32,
-      PF_RW|PF_WEB|PF_M207|PF_DANGER,                         -50.0f, 200.0f, 1.0f, 100.0f, 0, 0 },
+      PF_RW|PF_WEB|PF_M207|PF_DANGER,                         -50.0f, 200.0f, 1.0f, 100.0f, 0 },
     { 0x11A, "m207_t2_rtocl",  "TC2 开路保护低",   "°C", PARAM_TYPE_F32,
-      PF_RW|PF_WEB|PF_M207|PF_DANGER,                         -50.0f, 200.0f, 1.0f, -20.0f, 0, 0 },
+      PF_RW|PF_WEB|PF_M207|PF_DANGER,                         -50.0f, 200.0f, 1.0f, -20.0f, 0 },
     { 0x11B, "m207_t2_mint",   "TC2 最低设定温度", "°C", PARAM_TYPE_F32,
-      PF_RW|PF_WEB|PF_M207,                                   -50.0f, 150.0f, 1.0f, -10.0f, 0, 0 },
+      PF_RW|PF_WEB|PF_M207,                                   -50.0f, 150.0f, 1.0f, -10.0f, 0 },
     { 0x11C, "m207_t2_maxt",   "TC2 最高设定温度", "°C", PARAM_TYPE_F32,
-      PF_RW|PF_WEB|PF_M207,                                   -50.0f, 200.0f, 1.0f, 120.0f, 0, 0 },
+      PF_RW|PF_WEB|PF_M207,                                   -50.0f, 200.0f, 1.0f, 120.0f, 0 },
     { 0x11D, "m207_t2_maxv",   "TC2 最大输出电压", "V",  PARAM_TYPE_F32,
-      PF_RW|PF_WEB|PF_M207|PF_DANGER,                         0.0f, 12.0f, 0.1f, 8.0f,  0, 0 },
+      PF_RW|PF_WEB|PF_M207|PF_DANGER,                         0.0f, 12.0f, 0.1f, 8.0f, 0 },
     { 0x11E, "m207_t2_vratio", "TC2 冷热电压比",   "",   PARAM_TYPE_F32,
-      PF_RW|PF_WEB|PF_M207,                                   0.1f, 10.0f, 0.1f, 1.0f,  0, 0 },
+      PF_RW|PF_WEB|PF_M207,                                   0.1f, 10.0f, 0.1f, 1.0f, 0 },
     { 0x11F, "m207_t2_step",   "TC2 温度步进",     "°C", PARAM_TYPE_F32,
-      PF_RW|PF_WEB|PF_M207,                                   0.001f, 10.0f, 0.001f, 0.01f, 0, 0 },
-    /* --- 系统/PCB（0x120-0x126）--- */
+      PF_RW|PF_WEB|PF_M207,                                   0.001f, 10.0f, 0.001f, 0.01f, 0 },
+    /* --- 系统/PCB（0x120-0x127）--- */
     { 0x120, "m207_pcb_otph",  "PCB 过温高阈值",   "°C", PARAM_TYPE_F32,
-      PF_RW|PF_WEB|PF_M207|PF_DANGER,                         -50.0f, 150.0f, 1.0f, 60.0f, 0, 0 },
+      PF_RW|PF_WEB|PF_M207|PF_DANGER,                         -50.0f, 150.0f, 1.0f, 60.0f, 0 },
     { 0x121, "m207_pcb_otpl",  "PCB 过温低阈值",   "°C", PARAM_TYPE_F32,
-      PF_RW|PF_WEB|PF_M207|PF_DANGER,                         -50.0f, 150.0f, 1.0f, -10.0f, 0, 0 },
+      PF_RW|PF_WEB|PF_M207|PF_DANGER,                         -50.0f, 150.0f, 1.0f, -10.0f, 0 },
     { 0x122, "m207_pcb_otph2", "PCB 过温滞回",     "°C", PARAM_TYPE_F32,
-      PF_RW|PF_WEB|PF_M207|PF_DANGER,                         0.0f, 50.0f, 1.0f, 10.0f, 0, 0 },
+      PF_RW|PF_WEB|PF_M207|PF_DANGER,                         0.0f, 50.0f, 1.0f, 10.0f, 0 },
     { 0x126, "m207_com_addr",  "M207 串口地址",    "",   PARAM_TYPE_U8,
-      PF_RW|PF_WEB|PF_M207|PF_DANGER,                         0.0f, 254.0f, 1.0f, 0.0f, 0, 0 },
+      PF_RW|PF_WEB|PF_M207|PF_DANGER,                         0.0f, 254.0f, 1.0f, 0.0f, 0 },
+    /* 0x127 BTN（P1-13，正典 §2.5）：动作项，不是可写寄存器——实际执行走 CMD 0x15
+     * TCS_CMD_M207_SAVE（网页"保存到模块"按钮 / CLI `m207 save`）。值域取 0..1 而非
+     * 正典 1/1：POST 参数表自检要求 min<max（同 0x134/0x135 的既有处理）。不带
+     * PF_RW/PF_WEB/PF_M207——网页已有唯一按钮，也避免被 0x12 当成可写数值下发。*/
+    { 0x127, "m207_pushlist",  "保存到模块",       "",   PARAM_TYPE_BTN,
+      0,                                                      0.0f, 1.0f, 1.0f, 1.0f, 0 },
     /* --- 只读遥测段（0x130+，无 PF_RW；网页只显不出控件）--- */
     { 0x130, "m207_t1_otp_st", "TC1 过温保护结果", "",  PARAM_TYPE_U8,
-      PF_WEB|PF_M207,                                         0.0f, 1.0f, 1.0f, 0.0f,  0, 0 },
+      PF_WEB|PF_M207,                                         0.0f, 1.0f, 1.0f, 0.0f, 0 },
     { 0x131, "m207_t1_ocp_st", "TC1 过流保护结果", "",  PARAM_TYPE_U8,
-      PF_WEB|PF_M207,                                         0.0f, 1.0f, 1.0f, 0.0f,  0, 0 },
+      PF_WEB|PF_M207,                                         0.0f, 1.0f, 1.0f, 0.0f, 0 },
     { 0x132, "m207_t1_ovp_st", "TC1 过压保护结果", "",  PARAM_TYPE_U8,
-      PF_WEB|PF_M207,                                         0.0f, 1.0f, 1.0f, 0.0f,  0, 0 },
+      PF_WEB|PF_M207,                                         0.0f, 1.0f, 1.0f, 0.0f, 0 },
     { 0x133, "m207_t2_otp_st", "TC2 过温保护结果", "",  PARAM_TYPE_U8,
-      PF_WEB|PF_M207,                                         0.0f, 1.0f, 1.0f, 0.0f,  0, 0 },
+      PF_WEB|PF_M207,                                         0.0f, 1.0f, 1.0f, 0.0f, 0 },
     /* 只读身份量（U8 原始值）：区间 0..255——min=max=0 会触发 POST TABLE
      * 的 min<max 断言而永久 FAIL（2026-10-30 真机实证）。*/
     { 0x134, "m207_sys_model", "M207 型号",        "",   PARAM_TYPE_U8,
-      PF_WEB|PF_M207,                                         0.0f, 255.0f, 1.0f, 0.0f,  0, 0 },
+      PF_WEB|PF_M207,                                         0.0f, 255.0f, 1.0f, 0.0f, 0 },
     { 0x135, "m207_sys_ver",   "M207 固件版本",    "",   PARAM_TYPE_U8,
-      PF_WEB|PF_M207,                                         0.0f, 255.0f, 1.0f, 0.0f,  0, 0 },
+      PF_WEB|PF_M207,                                         0.0f, 255.0f, 1.0f, 0.0f, 0 },
 };
-#define PARAM_N_REGISTERED  50
+#define PARAM_N_REGISTERED  ((int)(sizeof(s_params) / sizeof(s_params[0])))
+/* X01-F-06：条数由初始化器决定，手写 50/51 的漂移从此不可能发生 */
+_Static_assert(sizeof(s_params) / sizeof(s_params[0]) <= PARAM_CAPACITY,
+               "registry table exceeds PARAM_CAPACITY");
 
 /* 默认初值（与表 value 列同序；param_load_defaults 用）*/
 static const float s_defaults[PARAM_N_REGISTERED] = {
@@ -195,7 +204,6 @@ void param_broadcast(param_desc_t *p, uint8_t src)
     (void)src;
     if (!p) return;
     if (s_hooks.on_broadcast) s_hooks.on_broadcast(p, src);
-    p->dirty_ui = 0;
 }
 
 /* 类型写回：u8/u16 整数量化 */
@@ -277,7 +285,9 @@ void param_link_sync(uint16_t id, float v)
     float c = param_clamp_quantize(p, v);
     if (c != p->value) {
         p->value = c;
-        p->dirty_ui = 1;
+        /* M05-F-10：原 `dirty_ui = 1` 是死状态——LVGL 单栈后的 UI 是"拉"模型
+         * （tui_p1_refresh 每 500ms 用 param_find 重读当前页各行并重绘），
+         * 没有 dirty 标志的消费者。字段已删，这里只写权威值。*/
     }
 }
 
@@ -351,7 +361,6 @@ void param_load_defaults(void)
     for (int i = 0; i < PARAM_N_REGISTERED; i++) {
         s_params[i].value = s_defaults[i];
         s_params[i].dirty_persist = 0;
-        s_params[i].dirty_ui = 0;
     }
     g_tcs.mode = 0;                       /* F9：上电默认手动 */
 }

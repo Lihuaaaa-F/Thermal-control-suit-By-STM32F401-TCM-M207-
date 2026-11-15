@@ -29,7 +29,20 @@ int main(void)
     CHECK(param_get(PARAM_ID_TC1_SET) == 25.0f, "default tc1");
     CHECK(param_get(PARAM_ID_BODY_HOT) == 37.5f, "default body_hot");
     CHECK(param_get(PARAM_ID_MODE) == 0.0f, "default mode manual (F9)");
-    CHECK(param_count() == 50, "registry count (H6 0x08三态 + H10 假参数 0x100/0x101)");
+    /* P1-13：0x127（BTN 动作项）入表后 51 条；条数由初始化器决定（X01-F-06）*/
+    CHECK(param_count() == 51, "registry count=51 (incl. 0x127 BTN)");
+    {
+        const param_desc_t *bt = param_find(0x127);
+        CHECK(bt && bt->type == PARAM_TYPE_BTN && bt->flags == 0,
+              "0x127 is BTN, not writable");
+        CHECK(param_set(0x127, 0.0f, PARAM_SRC_CONSOLE) == -1,
+              "0x127 rejected by param_set (action, no value write)");
+        CHECK(bt && strcmp(bt->key, "m207_pushlist") == 0, "0x127 key canon");
+        const param_desc_t *ki = param_find(0x101);
+        const param_desc_t *kd = param_find(0x102);
+        CHECK(ki && strcmp(ki->unit, "s") == 0 && kd && strcmp(kd->unit, "s") == 0,
+              "0x101/0x102 unit=s (canon 2.5)");
+    }
 
     /* commissioned 0x08（WP-A.5）：u8 默认 0=未布防 */
     CHECK(param_get(PARAM_ID_COMMISSIONED) == 0.0f, "default unarmed");

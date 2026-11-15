@@ -300,7 +300,8 @@ static size_t proto_encode_frame_with_mt(uint8_t mt, uint8_t seq,
 static void hook_broadcast(param_desc_t *p, uint8_t src)
 {
     (void)src;
-    /* 屏：ui_sync_state 500ms 扫描 g_tcs（M4 ≤1s 同步预算内）；
+    /* 屏：LVGL 单栈 UI 是"拉"模型——tui_p0/p1_refresh 每 500ms 用 param_get/find 重读
+     * （M4 ≤1s 同步预算内），不经过 dirty 标志（M05-F-10 已删该死字段）；
      * 链路：0x11 TCS_PARAM 帧（变更即推）*/
     uint8_t pl[TCS_PARAM_PL_LEN];
     tcs_param_pl_t pp = {

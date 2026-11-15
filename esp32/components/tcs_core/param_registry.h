@@ -35,6 +35,7 @@ typedef enum {
 #define PARAM_TYPE_F32   0
 #define PARAM_TYPE_U8    1
 #define PARAM_TYPE_U16   2
+#define PARAM_TYPE_BTN   3   /* 动作项（P1-13：0x127）：只占注册表位置，写值由 CMD 承载 */
 
 /* ====== 参数 id（永久分配，永不复用永不改义）====== */
 #define PARAM_ID_TC1_SET        0x01
@@ -47,7 +48,7 @@ typedef enum {
 #define PARAM_ID_COMMISSIONED   0x08   /* 布防（WP-A.5）：0=未布防传感器报警只记日志，1=完整 FMEA */
 #define PARAM_ID_M207_BASE      0x100  /* M207 底层参数段（文档到后启用，WP9）*/
 
-#define PARAM_CAPACITY      64    /* 注册表数组容量（v1.2 H10 全表 0x100~0x135 入表后 53 条）*/
+#define PARAM_CAPACITY      64    /* 注册表数组容量（条数不再手写：见 param_registry.c 的 PARAM_N_REGISTERED 与 _Static_assert）*/
 #define PARAM_EEPROM_MAX    31    /* EEPROM count 字段上限（u8 纪录数；物理布局另限 30，见 param_serialize）*/
 #define PARAM_PERSIST_DEBOUNCE_MS  2000u
 
@@ -70,7 +71,6 @@ typedef struct {
     float       min, max, step;
     float       value;          /* RAM 当前值 */
     uint8_t     dirty_persist;  /* 待写 EEPROM */
-    uint8_t     dirty_ui;       /* 待广播(屏+链路) */
 } param_desc_t;
 
 /* ====== 只读状态快照（§3.3，不入写表）====== */

@@ -9,7 +9,7 @@
 #include <stdbool.h>
 #include "tcs_proto.h"
 
-#define LINK_REGISTRY_MAX   32
+#define LINK_REGISTRY_MAX   64   /* R1 P1-01：权威表 50 条 + 余量（原 32 截 18 条）*/
 #define LINK_MAX_KEY        24
 #define LINK_MAX_NAME       48
 #define LINK_MAX_UNIT       8

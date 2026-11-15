@@ -61,7 +61,7 @@ static void fds_del(int fd)
 typedef struct {
     size_t len;
     char json[576];          /* st 最坏 239B（红队 R4 实测：float→double 长尾）/pv≈90B；
-                              * 超 576 即丢该帧——50 参形态 reg 不走此通道（走 8192 路径）*/
+                              * 超 576 即丢该帧——50 参形态 reg 不走此通道（走 16384 路径）*/
 } ws_tx_work_t;
 
 static void ws_tx_work_fn(void *arg)
@@ -202,7 +202,7 @@ size_t ws_registry_json(char *buf, size_t cap)
         cJSON_AddStringToObject(it, "unit", e->unit);
         cJSON_AddItemToArray(arr, it);
     }
-    char *j = cJSON_PrintBuffered(root, 8192, 0);
+    char *j = cJSON_PrintBuffered(root, 16384, 0);   /* R1 P1-01：64 槽注册表 JSON 约 10KB */
     cJSON_Delete(root);
     if (!j) return 0;
     size_t len = strlen(j);
@@ -301,9 +301,9 @@ esp_err_t ws_on_open(httpd_req_t *req)
     fds_add(fd);
     ESP_LOGI(TAG, "ws client fd=%d", fd);
     /* 连上即推注册表（握手全量兜底：H743 侧 0x14 缓存）*/
-    char *buf = malloc(8192);
+    char *buf = malloc(16384);   /* 与 ws_registry_json 的 cap 同宽（64 槽）*/
     if (buf) {
-        size_t n = ws_registry_json(buf, 8192);
+        size_t n = ws_registry_json(buf, 16384);
         httpd_ws_frame_t pkt = {
             .final = true, .type = HTTPD_WS_TYPE_TEXT,
             .payload = (uint8_t *)buf, .len = n,

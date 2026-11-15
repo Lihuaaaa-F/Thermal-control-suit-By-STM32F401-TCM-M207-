@@ -142,6 +142,13 @@ uint8_t comm_send(comm_link_t *L, const uint8_t *frame_bytes, size_t len, uint8_
     return seq;
 }
 
+uint8_t comm_send_noarq(comm_link_t *L, const uint8_t *frame_bytes, size_t len)
+{
+    if (len < 5 || len > MAX_FRAME) return 0xFF;
+    comm_txq_push(L, frame_bytes, len);
+    return frame_bytes[4];
+}
+
 void comm_tick(comm_link_t *L)
 {
     uint32_t now = L->now_ms_fn();

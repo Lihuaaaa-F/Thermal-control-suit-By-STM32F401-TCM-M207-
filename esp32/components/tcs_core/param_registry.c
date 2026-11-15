@@ -12,6 +12,7 @@
 #include "param_registry.h"
 #include "proto.h"        /* proto_crc8 复用（EE CRC8）*/
 #include <string.h>
+#include <math.h>
 
 /* ====== 状态快照实例 ====== */
 tcs_state_t g_tcs = {
@@ -231,6 +232,10 @@ int param_set(uint16_t id, float v, uint8_t src)
     param_desc_t *p = param_find(id);
     if (!p) return -1;
     if (!(p->flags & PF_RW)) return -1;
+
+    /* R1 P1-05：NaN/Inf 必须在钳制之前拒绝——NaN 与任何数比较都为假，
+     * 会穿过 clamp 写入注册表并持久化，之后 POST 参数表检查恒失败。*/
+    if (!isfinite(v)) return -2;
 
     /* clamp（任务书：越界返回 clamp 后值经 src 通道回显 → 返回 1 由调用方回显）*/
     float c = v;

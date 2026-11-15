@@ -4,6 +4,7 @@
  */
 #include <stdio.h>
 #include <string.h>
+#include <math.h>
 #include "param_registry.h"
 #include "proto.h"          /* proto_crc8 */
 
@@ -140,6 +141,16 @@ int main(void)
 
     /* PARAM_EEPROM_MAX 口径常量在位 */
     CHECK(PARAM_EEPROM_MAX == 31, "spec count cap 31");
+
+    /* R1 P1-05 判别性：NaN 必须在入口被拒（旧实现会穿过 clamp 写入并持久化）*/
+    {
+        float before = param_get(PARAM_ID_BODY_HOT);
+        int rv = param_set(PARAM_ID_BODY_HOT, NAN, 4);
+        CHECK(rv == -2, "NAN rejected at param_set");
+        CHECK(param_get(PARAM_ID_BODY_HOT) == before, "NAN does not change value");
+        param_link_sync(PARAM_ID_BODY_HOT, NAN);
+        CHECK(param_get(PARAM_ID_BODY_HOT) == before, "NAN ignored by link_sync");
+    }
 
     printf("test_param_registry: PASS=%d FAIL=%d\n", g_pass, g_fail);
     return g_fail ? 1 : 0;

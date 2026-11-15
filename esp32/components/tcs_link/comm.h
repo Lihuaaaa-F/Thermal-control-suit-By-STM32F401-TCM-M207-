@@ -30,7 +30,7 @@
 #define COMM_ACK_TIMEOUT_MS   500    /* 等 ACK 超时（ms） */
 #define COMM_MAX_RETRIES      3      /* 最大重传次数（不含首传） */
 #define COMM_MAX_PENDING      8      /* 同时等 ACK 的帧上限（下行少，8 够） */
-#define MAX_TXQ               8      /* 待发队列深度（禁飞3+命令+急停够用） */
+#define MAX_TXQ               16     /* 待发队列深度（协议契约：与 H743 一致；注册表突发 50 帧）*/
 #define COMM_LINK_OK_TRUE     1
 #define COMM_LINK_OK_FALSE    0
 
@@ -98,6 +98,8 @@ uint8_t comm_next_seq(comm_link_t *L);
  * §0E：首传经 txq 入队（不直接 send_fn），主循环 comm_poll_tx 串行消费。
  */
 uint8_t comm_send(comm_link_t *L, const uint8_t *frame_bytes, size_t len, uint8_t msg_type);
+/* R1 P1-02：免 ARQ 发送（只入 txq，不登记 pending）——用于 0x20/0x21 快照 */
+uint8_t comm_send_noarq(comm_link_t *L, const uint8_t *frame_bytes, size_t len);
 
 /**
  * §0E：帧入待发队列尾部（不登记 pending）。主循环 STATUS/命令首发、ISR 回 ACK 用。

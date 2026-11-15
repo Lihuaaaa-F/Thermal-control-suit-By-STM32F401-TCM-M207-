@@ -513,7 +513,7 @@ static void registry_dump_tick(void)
 {
     if (!s_dump_active) return;
     int n = param_count();
-    for (int k = 0; k < 2 && s_dump_idx < n; k++, s_dump_idx++) {
+    for (int k = 0; k < 1 && s_dump_idx < n; k++, s_dump_idx++) {   /* R1 P1-01：1 帧/拍，与 comm 消费速率相等 */
         const param_desc_t *p = param_at(s_dump_idx);
         tcs_reg_entry_t e;
         memset(&e, 0, sizeof(e));

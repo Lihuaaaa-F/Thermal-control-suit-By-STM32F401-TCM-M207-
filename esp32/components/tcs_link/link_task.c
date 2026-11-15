@@ -42,6 +42,10 @@ static volatile uint32_t s_rx_bytes;   /* UART1 收到的字节总数（真机�
 static volatile uint32_t s_rx_frames;  /* 解出的完整帧数 */
 static link_cmd_cb_t s_cmd_cb;         /* v2：屏幕 0x15 命令回调 */
 static link_reg_t s_reg[LINK_REGISTRY_MAX];
+/* R1 P1-01：注册表接收进度（替代"种子 used 恒真"导致永不重发 0x13 的短路）*/
+static uint16_t s_reg_expect;
+static uint16_t s_reg_got;
+static volatile uint8_t s_reg_done;
 static link_ack_t s_ack;
 static link_param_change_t s_last_param;
 static float s_param_val[LINK_REGISTRY_MAX];   /* 与 s_reg 同下标缓存 */
@@ -333,6 +337,12 @@ static void on_frame(const uint8_t *payload, size_t len)
         if (e.idx < LINK_REGISTRY_MAX) {
             s_reg[e.idx].used = 1;
             s_reg[e.idx].e = e;
+            if (e.idx == 0) { s_reg_expect = e.count; s_reg_got = 0; }
+            if ((uint16_t)(e.idx + 1u) > s_reg_got) s_reg_got = (uint16_t)(e.idx + 1u);
+            if (!s_reg_done && s_reg_expect && s_reg_got >= s_reg_expect) {
+                s_reg_done = 1;
+                ESP_LOGI(TAG, "registry complete %u/%u", (unsigned)s_reg_got, (unsigned)s_reg_expect);
+            }
             ESP_LOGI(TAG, "REG[%u/%u] 0x%02x %s", e.idx + 1, e.count, e.id, e.key);
             notify();
         }
@@ -392,7 +402,13 @@ int link_send_frame_mt(uint8_t mt, const uint8_t *pl, size_t n)
     uint8_t frame[MAX_FRAME];
     size_t fn = mt_frame(mt, comm_next_seq(&s_link), pl, n, frame, sizeof(frame));
     if (!fn) return -1;
-    comm_send(&s_link, frame, fn, mt);
+    /* R1 P1-02：0x20/0x21 免 ARQ。屏端本来就不回 ACK，走 ARQ 会让 8 槽 pending
+     * 被快照长期占满、每帧重传 4 次，并把参数写/命令帧挤掉。*/
+    if (mt == MT_TCS_SNAPSHOT || mt == MT_TCS_DELTA) {
+        comm_send_noarq(&s_link, frame, fn);
+    } else {
+        comm_send(&s_link, frame, fn, mt);
+    }
     return 0;
 }
 
@@ -501,7 +517,8 @@ static void link_task(void *arg)
             comm_tick(&s_link);
             comm_poll_tx(&s_link);   /* 队列串行消费 */
         }
-        if (now - last_reg_req >= 5000 && !s_reg[0].used) {
+        if (!link_alive()) s_reg_done = 0;      /* 对端重启/断链 → 重新要全量 */
+        if (now - last_reg_req >= 5000 && !s_reg_done) {
             last_reg_req = now;
             link_request_registry();
         }

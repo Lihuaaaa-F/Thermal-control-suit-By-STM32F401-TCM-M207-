@@ -17,7 +17,7 @@ extern volatile uint32_t g_shown_fb;          /* ltdc.c：当前显示帧地址�
 /* G5-Z27（终极正解）：chunk 放 SDRAM 空闲区并扩为整屏高——任何刷新 area 永不
  * 被 chunk 行数截断（此前 60 行 chunk 遇大 area 时，超出行把 chunk 后的 AXIRAM
  * 数据当像素拷进 fb=滑动/角标闪烁残影家族的最后一个根因）。SDRAM 与 LTDC/FMC
- * 共享带宽与 tcs_ui 直绘同量级；Z18 防御性 cache 清理对 SDRAM 同样保留。 */
+ * 共享带宽与已删除的旧 tcs_ui 直绘同量级；Z18 防御性 cache 清理对 SDRAM 同样保留。 */
 #define CHUNK_BUF ((uint16_t *)0xC0258000)       /* 两块 fb(2×1.2MB) 之后的 1.2MB 空闲 */
 #define CHUNK_LINES 600
 static uint16_t * s_hidden = LCD_BACK_BUF;       /* 隐藏帧（=非显示缓冲） */

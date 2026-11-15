@@ -105,10 +105,10 @@ else
     echo "[m207_adv] SKIP: python not found"; FAIL=1
 fi
 
-# H3 字库缺字门禁（WP-A.2a，永久）：UI 字符串 × 字库码表，缺字退出非零
+# H3 字库缺字门禁（2026-11-15 UI 单栈：改为 LVGL 字库审计；旧 font_audit.py 已随栈删除）
 PYBIN=$(command -v python3 || command -v python)
 if [ -n "$PYBIN" ]; then
-    if "$PYBIN" tools/font_audit.py; then :; else FAIL=1; fi
+    if "$PYBIN" tools/font_audit_lvgl.py; then :; else FAIL=1; fi
 else
     echo "[font_audit] SKIP: python not found"; FAIL=1
 fi

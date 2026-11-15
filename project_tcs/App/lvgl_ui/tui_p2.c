@@ -8,8 +8,9 @@
 
 #define HIST_N 60
 static float s_h1[HIST_N], s_h2[HIST_N];
-static int s_head, s_fill_n;
-static lv_obj_t * s_chart, * s_ser1, * s_ser2, * s_over_txt;
+static uint32_t s_head, s_fill_n;                 /* M03-F-01：快照接口要 uint32_t* */
+static lv_obj_t * s_chart, * s_over_txt;
+static lv_chart_series_t * s_ser1, * s_ser2;      /* M03-F-07：series 不是 lv_obj_t */
 static uint32_t s_last_sample;
 static int s_started;
 
@@ -25,11 +26,12 @@ static void push_sample(void)
 static void redraw_series(void)
 {
     if (!s_chart) return;
-    /* 环形 → 线序（旧→新） */
+    /* 环形 → 线序（旧→新）：tcs_hist_snapshot 已返回线性序，索引就是 i。
+     * M03-F-01：原式用 s_head（恒 0）参与取模，前段会把未填充点当 0 值画出。*/
     for (int i = 0; i < HIST_N; i++) {
-        int idx = (s_head - s_fill_n + i + HIST_N) % HIST_N;
-        int v1 = (i >= HIST_N - s_fill_n) ? (int)(s_h1[idx] + 0.5f) : LV_CHART_POINT_NONE;
-        int v2 = (i >= HIST_N - s_fill_n) ? (int)(s_h2[idx] + 0.5f) : LV_CHART_POINT_NONE;
+        uint32_t valid = (HIST_N - s_fill_n <= (uint32_t)i) ? 1u : 0u;
+        int v1 = valid ? (int)(s_h1[i] + 0.5f) : LV_CHART_POINT_NONE;
+        int v2 = valid ? (int)(s_h2[i] + 0.5f) : LV_CHART_POINT_NONE;
         lv_chart_set_value_by_id(s_chart, s_ser1, (uint16_t)i, v1);
         lv_chart_set_value_by_id(s_chart, s_ser2, (uint16_t)i, v2);
     }
@@ -37,8 +39,8 @@ static void redraw_series(void)
     /* 越界红字（UI 规范 v1.2 §A：值 >45 顶格+红字标注） */
     int over = (g_tcs.m207_online && (g_tcs.tc1_act > 45.0f || g_tcs.tc2_act > 45.0f));
     if (s_over_txt) {
-        if (over) lv_obj_clear_flag(s_over_txt, LV_OBJ_FLAG_HIDDEN);
-        else      lv_obj_add_flag(s_over_txt, LV_OBJ_FLAG_HIDDEN);
+        if (over) lv_obj_set_hidden(s_over_txt, false);
+        else      lv_obj_set_hidden(s_over_txt, true);
     }
 }
 
@@ -49,7 +51,7 @@ void tui_p2_build(lv_obj_t * scr)
     lv_obj_remove_style_all(z);
     lv_obj_set_pos(z, 24, 0);
     lv_obj_set_size(z, 120, 56);
-    lv_obj_add_flag(z, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_set_clickable(z, true);
     lv_obj_add_event_cb(z, clk_back, LV_EVENT_CLICKED, NULL);
 
     ui_text32(scr, 176, 16, "温控曲线 · 近30min", TKS_TX);
@@ -98,7 +100,7 @@ void tui_p2_build(lv_obj_t * scr)
     lv_obj_set_style_text_color(s_over_txt, TKS_RED, 0);
     ui_lab_set(s_over_txt, "越界");
     lv_obj_set_pos(s_over_txt, 64, 96);
-    lv_obj_add_flag(s_over_txt, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_set_hidden(s_over_txt, true);
 
     if (!s_started) { s_started = 1; push_sample(); }
     redraw_series();

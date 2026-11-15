@@ -18,16 +18,9 @@ extern volatile uint32_t g_stat_loop_passes;
 /* WP-C.5 DWT 性能计数（main.c 定义；ui_ms_x10 = ms×10 保 1 位小数）*/
 extern volatile uint32_t g_stat_work_us_max;
 extern volatile uint32_t g_stat_work_us_avg;
-extern volatile uint32_t g_stat_ui_ms_x10;
 extern volatile uint32_t g_stat_touch_us_max;
-/* v9.5 K3 渲染计数（tcs_ui.c 定义）*/
-extern volatile uint32_t g_stat_hero_us_max;
-extern volatile uint32_t g_stat_full_us_last;
-extern volatile uint32_t g_stat_flip_cnt;
-extern volatile uint32_t g_stat_patch_cnt;
-extern volatile uint32_t g_stat_touch_hz;
+/* 渲染计数已随旧 UI 栈删除（LVGL 用 TL-8 直方图 g_tl8）*/
 extern volatile uint32_t g_stat_tick_ovf;
-extern volatile uint32_t g_stat_touch_gap_ms_max;   /* M1④/T-12：触摸轮询最大间隔 ms */
 
 void console_init(UART_HandleTypeDef *huart);
 void console_isr_push(uint8_t b);       /* ISR：RX 单字节入环形缓冲 */

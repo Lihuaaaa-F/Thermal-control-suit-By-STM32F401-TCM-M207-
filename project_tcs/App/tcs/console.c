@@ -14,7 +14,7 @@
 #include "post.h"
 #include "segger_rtt.h"
 #include "ltdc.h"
-#include "tcs_ui.h"
+#include "tcs_lvgl.h"   /* g_tap_inject：UI 单栈后的触摸注入钩子 */
 #include <string.h>
 #include <stdio.h>
 #include <stdarg.h>
@@ -303,23 +303,6 @@ static void cmd_exec(char *line)
         }
         return;
     }
-    /* --- drag：滑条拖动（DOWN→MOVE×12→UP，与真实触摸同状态机）--- */
-    if (strcmp(argv[0], "drag") == 0 && argc == 5) {
-        extern void tcs_ui_drag(int x1, int y1, int x2, int y2);
-        int a = atoi(argv[1]), b = atoi(argv[2]);
-        int c = atoi(argv[3]), d = atoi(argv[4]);
-        tcs_ui_drag(a, b, c, d);
-        printf("drag %d,%d -> %d,%d\n", a, b, c, d);
-        return;
-    }
-    /* --- tap：与真实触摸同路径注入（真机屏幕操作取证）--- */
-    if (strcmp(argv[0], "tap") == 0 && argc == 3) {
-        extern void tcs_ui_tap(int x, int y);
-        int tx = atoi(argv[1]), ty = atoi(argv[2]);
-        tcs_ui_tap(tx, ty);
-        printf("tap %d,%d\n", tx, ty);
-        return;
-    }
 #if TCS_PROFILE >= 1
     /* --- wave：PA3 板载逻辑分析仪（50ms 边沿时间戳进 RAM，探针直读）--- */
     if (strcmp(argv[0], "wave") == 0) {
@@ -431,21 +414,15 @@ static void cmd_exec(char *line)
     if (strcmp(argv[0], "perf") == 0) {
         uint32_t up_s = HAL_GetTick() / 1000u;
         uint32_t rate = up_s ? (g_stat_loop_passes / up_s) : 0;
-        /* v9.5 K3：hero/page/flips/patches 四计数入 perf（预算表回填口）*/
-        printf("work avg=%luus max=%luus ovf=%lu | ui_full=%lu.%lu ms | "
-               "touch max=%luus gap=%lums | loop=%lu rate=%lu/s | "
-               "hero_max=%luus page=%luus flips=%lu patches=%lu "
-               "touch_hz=%lu | up=%lus\n",
+        /* 2026-11-15 UI 单栈：旧 tcs_ui 的 hero/page/flips/patches/touch_hz 计数随栈删除；
+         * LVGL 渲染耗时看 TL-8 直方图（g_tl8，probe-rs 直读）。此处只保留主循环/触摸/工作耗时。*/
+        printf("work avg=%luus max=%luus ovf=%lu | "
+               "touch max=%luus | loop=%lu rate=%lu/s | up=%lus\n",
                (unsigned long)g_stat_work_us_avg, (unsigned long)g_stat_work_us_max,
                (unsigned long)g_stat_tick_ovf,
-               (unsigned long)(g_stat_ui_ms_x10 / 10u),
-               (unsigned long)(g_stat_ui_ms_x10 % 10u),
                (unsigned long)g_stat_touch_us_max,
-               (unsigned long)g_stat_touch_gap_ms_max,
                (unsigned long)g_stat_loop_passes, (unsigned long)rate,
-               (unsigned long)g_stat_hero_us_max, (unsigned long)g_stat_full_us_last,
-               (unsigned long)g_stat_flip_cnt, (unsigned long)g_stat_patch_cnt,
-               (unsigned long)g_stat_touch_hz, (unsigned long)up_s);
+               (unsigned long)up_s);
         return;
     }
     /* --- p ... --- */
@@ -571,12 +548,6 @@ static void cmd_exec(char *line)
                    (unsigned long)g_ft5446_read_cnt,
                    (unsigned long)(g_ft5446_read_cnt
                                    ? (g_ft5446_nak_cnt * 100u / g_ft5446_read_cnt) : 0u));
-            {
-                char dbg[128];
-                extern void tcs_ui_touch_debug(char *out, int cap);
-                tcs_ui_touch_debug(dbg, (int)sizeof(dbg));
-                printf("%s\n", dbg);
-            }
             printf("sess ghost=%lu multipoint=%lu badsample=%lu jump=%lu glitch_resume=%lu\n",
                    (unsigned long)g_ts_ghost_sessions,
                    (unsigned long)g_ts_multipoint_drops,
@@ -605,34 +576,6 @@ static void cmd_exec(char *line)
         return;
     }
 #endif /* TCS_PROFILE >= 1: wdttest */
-    /* --- scrtest：屏诊断（WP-A.2d 噪声二分：纯 DMA2D 清屏/标定文本/触摸计数）--- */
-    if (strcmp(argv[0], "scrtest") == 0 && argc >= 2) {
-        if (strcmp(argv[1], "clear") == 0) {
-            tcs_ui_screen_clear(RGB565(0x10, 0x14, 0x18));
-            printf("scrtest clear done taps=%lu\n", (unsigned long)tcs_ui_tap_count());
-        } else if (strcmp(argv[1], "fill") == 0 && argc == 3) {
-            uint16_t c = (uint16_t)strtoul(argv[2], NULL, 16);
-            tcs_ui_screen_clear(c);
-            printf("scrtest fill 0x%04x done taps=%lu\n", c, (unsigned long)tcs_ui_tap_count());
-        } else if (strcmp(argv[1], "text") == 0) {
-            tcs_ui_screen_text();
-            printf("scrtest text done taps=%lu\n", (unsigned long)tcs_ui_tap_count());
-        } else if (strcmp(argv[1], "home") == 0) {
-            tcs_ui_force_home();
-            printf("scrtest home done taps=%lu\n", (unsigned long)tcs_ui_tap_count());
-        } else if (strcmp(argv[1], "tune") == 0) {
-            tcs_ui_force_tune();
-            printf("scrtest tune done taps=%lu\n", (unsigned long)tcs_ui_tap_count());
-        } else if (strcmp(argv[1], "stress") == 0 && argc == 4) {
-            int mode = atoi(argv[2]);
-            int n = atoi(argv[3]);
-            tcs_ui_screen_stress(mode, n);
-            printf("scrtest stress mode=%d n=%d done\n", mode, n);
-        } else {
-            printf("usage: scrtest clear|fill <565hex>|text|home|stress <mode> <n>\n");
-        }
-        return;
-    }
 
 #ifdef TCS_SIM
     /* --- sim：板内仿真注入（WP-G；仅 TCS_SIM 构建）--- */
@@ -659,16 +602,22 @@ static void cmd_exec(char *line)
             }
             printf("sim m207 %s\n", argv[2]);
         } else if (strcmp(argv[1], "touch") == 0 && argc == 4) {
-            extern void tcs_ui_inject_tap(int x, int y);
-            tcs_ui_inject_tap(atoi(argv[2]), atoi(argv[3]));
+            /* 2026-11-15 UI 单栈：改走 LVGL 注入钩子 g_tap_inject（150ms 合成按压）*/
+            g_tap_inject[2] = (uint32_t)atoi(argv[2]);
+            g_tap_inject[3] = (uint32_t)atoi(argv[3]);
+            g_tap_inject[1] = 1;
+            g_tap_inject[0]++;
             printf("sim touch %s %s\n", argv[2], argv[3]);
         } else if (strcmp(argv[1], "touchh") == 0 && argc == 4) {
-            extern void tcs_ui_inject_touch(int down, int x, int y);
-            tcs_ui_inject_touch(1, atoi(argv[2]), atoi(argv[3]));
+            /* 按住：mode=2 持续 PRESSED，直到 touchr */
+            g_tap_inject[2] = (uint32_t)atoi(argv[2]);
+            g_tap_inject[3] = (uint32_t)atoi(argv[3]);
+            g_tap_inject[1] = 2;
+            g_tap_inject[0]++;
             printf("sim touchh %s %s (hold)\n", argv[2], argv[3]);
         } else if (strcmp(argv[1], "touchr") == 0) {
-            extern void tcs_ui_inject_touch(int down, int x, int y);
-            tcs_ui_inject_touch(0, 0, 0);
+            g_tap_inject[1] = 0;
+            g_tap_inject[0]++;
             printf("sim touchr (release)\n");
         } else if (strcmp(argv[1], "touchraw") == 0 && argc == 4) {
             /* T-13：raw 级注入——携带 raw 坐标走完整变换链（映射→会话机→UI）*/

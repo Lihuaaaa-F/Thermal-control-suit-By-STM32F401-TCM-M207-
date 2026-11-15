@@ -263,7 +263,7 @@ void post_poll(uint32_t now_ms)
                           (unsigned)(~post_result_mask() & ((1u << POST_ITEM_N) - 1u)));
     }
 
-    /* 角标 3s 淡出（RGB565 无 alpha：tcs_ui_poll 检测状态沿后重绘顶栏即消失）*/
+    /* 角标 3s 淡出（RGB565 无 alpha：顶栏重绘后即消失（旧 tcs_ui 已删，LVGL 横幅由 tui 重建））*/
     if (s_badge_rearm) {
         s_badge_rearm = 0;
         s_badge_t0 = now_ms;

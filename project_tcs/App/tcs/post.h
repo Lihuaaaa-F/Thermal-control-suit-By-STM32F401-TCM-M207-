@@ -88,7 +88,7 @@ void post_poll(uint32_t now_ms);          /* 主循环节拍：M207 宽限 + 100
 uint8_t    post_done(void);               /* 六项全部已裁决 */
 uint32_t   post_result_mask(void);        /* bit i = item i pass（console/sim 取证）*/
 uint32_t   post_done_mask(void);          /* bit i = item i 已裁决 */
-/* 角标显示控制（tcs_ui 读）：0=未开始 1=显示中 2=已淡出 */
+/* 角标显示控制（UI 读）：0=未开始 1=显示中 2=已淡出 */
 uint8_t    post_badge_state(void);
 void       post_badge_reshow(uint32_t ms);     /* 重显 ms 毫秒（console post badge [ms]，默认/0=3s；取证/彩排用）*/
 void       post_sim_fail_item(uint8_t item);   /* TCS_SIM：强制单项 FAIL（演示/取证）*/

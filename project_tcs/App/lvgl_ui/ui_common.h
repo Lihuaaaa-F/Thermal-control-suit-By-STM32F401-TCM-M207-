@@ -1,5 +1,5 @@
 /**
- * ui_common.h — G1 复刻页公共图元（镜像固件 tcs_ui.c 的绘制原语；坐标语义=固件）
+ * ui_common.h — G1 复刻页公共图元（镜像已删除的旧 tcs_ui.c 绘制原语；坐标语义=固件）
  *
  * 复刻判定口径（G1 正典）：坐标/尺寸/颜色逐项照抄 project_tcs/App/tcs/tcs_ui.c 对应
  * 函数（draw_tc_card/draw_body_card/draw_fan_card_hl/topbar_content/draw_prow/...），

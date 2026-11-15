@@ -1,4 +1,4 @@
-/* tui_p3.c — G5 连接页（镜像 tcs_ui draw_qr：同 qrcodegen 同参 → QR 矩阵一致） */
+/* tui_p3.c — G5 连接页（镜像旧 tcs_ui draw_qr：同 qrcodegen 同参 → QR 矩阵一致） */
 #include "tui.h"
 #include "ui_common.h"
 #include "qr/qrcodegen.h"

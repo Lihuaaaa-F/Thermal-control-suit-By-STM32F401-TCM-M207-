@@ -77,7 +77,6 @@ set(APP_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/App/tcs/qr/qrcodegen.c
     ${CMAKE_CURRENT_SOURCE_DIR}/App/tcs/console.c
     ${CMAKE_CURRENT_SOURCE_DIR}/App/tcs/touch_session.c
-    ${CMAKE_CURRENT_SOURCE_DIR}/App/tcs/tcs_ui.c
 )
 
 add_executable(tcs_main.elf
@@ -120,44 +119,40 @@ if(TCS_SIM)
     message(STATUS "TCS_SIM=ON: simulation build (M207 responder / TMP117 inject / touch inject)")
 endif()
 
-# ====== G4：LVGL 双栈（v12.5 D-L9；=0 零新增编译=产物与 pre-lvgl 逐字节一致 TL-17）======
-option(TCS_USE_LVGL "Enable LVGL UI stack (G4)" OFF)
+# ====== UI 栈：LVGL 为唯一交付栈（2026-11-15 R1：旧 tcs_ui 栈已删除）======
+# 历史：v12.5 曾用 TCS_USE_LVGL=OFF/ON 双栈共存；审查 M03/X05 证明 ON 产物仍链接旧栈
+# 63KB（"一套半活"）。现改为单一栈：不再提供 OFF 构建，回滚走 tag `pre-ui-switch`。
 set(TCS_LV_CONF "App/lvgl_port/lv_conf.h" CACHE STRING "lv_conf.h 相对路径（变体构建覆盖，如 DMA2D ON）")
-if(TCS_USE_LVGL)
-    include(${CMAKE_CURRENT_SOURCE_DIR}/App/lvgl_port/lvgl_version_check.cmake)  # TL-16 版本锁
-    file(GLOB_RECURSE LVGL_SRC ${CMAKE_CURRENT_SOURCE_DIR}/third_party/lvgl/src/*.c)
-    file(GLOB_RECURSE LVGL_DEMO_SRC ${CMAKE_CURRENT_SOURCE_DIR}/third_party/lvgl/demos/*.c)
-    target_sources(tcs_main.elf PRIVATE ${LVGL_SRC} ${LVGL_DEMO_SRC}
-        ${CMAKE_CURRENT_SOURCE_DIR}/App/lvgl_port/lv_port_disp.c
-        ${CMAKE_CURRENT_SOURCE_DIR}/App/lvgl_port/lv_port_indev.c
-        ${CMAKE_CURRENT_SOURCE_DIR}/App/lvgl_port/tcs_lvgl.c)
-    file(GLOB TUI_SRC ${CMAKE_CURRENT_SOURCE_DIR}/App/lvgl_ui/*.c
-                      ${CMAKE_CURRENT_SOURCE_DIR}/App/lvgl_ui/fonts/*.c)
-    target_sources(tcs_main.elf PRIVATE ${TUI_SRC})
-    target_include_directories(tcs_main.elf PRIVATE
-        ${CMAKE_CURRENT_SOURCE_DIR}/App/lvgl_ui
-        ${CMAKE_CURRENT_SOURCE_DIR}/App/tcs)
-    target_include_directories(tcs_main.elf PRIVATE
-        ${CMAKE_CURRENT_SOURCE_DIR}/third_party/lvgl
-        ${CMAKE_CURRENT_SOURCE_DIR}/third_party/lvgl/demos
-        ${CMAKE_CURRENT_SOURCE_DIR}/App/lvgl_port)
-    target_compile_definitions(tcs_main.elf PRIVATE TCS_USE_LVGL=1
-        LV_CONF_PATH="${CMAKE_CURRENT_SOURCE_DIR}/${TCS_LV_CONF}")
-    message(STATUS "TCS_USE_LVGL=ON: LVGL ${LVGL_PINNED_VERSION} stack on")
-endif()
+include(${CMAKE_CURRENT_SOURCE_DIR}/App/lvgl_port/lvgl_version_check.cmake)  # TL-16 版本锁
+file(GLOB_RECURSE LVGL_SRC ${CMAKE_CURRENT_SOURCE_DIR}/third_party/lvgl/src/*.c)
+file(GLOB_RECURSE LVGL_DEMO_SRC ${CMAKE_CURRENT_SOURCE_DIR}/third_party/lvgl/demos/*.c)
+target_sources(tcs_main.elf PRIVATE ${LVGL_SRC} ${LVGL_DEMO_SRC}
+    ${CMAKE_CURRENT_SOURCE_DIR}/App/lvgl_port/lv_port_disp.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/App/lvgl_port/lv_port_indev.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/App/lvgl_port/tcs_lvgl.c)
+file(GLOB TUI_SRC ${CMAKE_CURRENT_SOURCE_DIR}/App/lvgl_ui/*.c
+                  ${CMAKE_CURRENT_SOURCE_DIR}/App/lvgl_ui/fonts/*.c)
+target_sources(tcs_main.elf PRIVATE ${TUI_SRC})
+target_include_directories(tcs_main.elf PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/App/lvgl_ui
+    ${CMAKE_CURRENT_SOURCE_DIR}/App/tcs
+    ${CMAKE_CURRENT_SOURCE_DIR}/third_party/lvgl
+    ${CMAKE_CURRENT_SOURCE_DIR}/third_party/lvgl/demos
+    ${CMAKE_CURRENT_SOURCE_DIR}/App/lvgl_port)
+target_compile_definitions(tcs_main.elf PRIVATE TCS_USE_LVGL=1
+    LV_CONF_PATH="${CMAKE_CURRENT_SOURCE_DIR}/${TCS_LV_CONF}")
+message(STATUS "UI stack: LVGL ${LVGL_PINNED_VERSION} (single stack, tcs_ui removed)")
 
 # 转 hex/bin（ASCII 路径可直接 objcopy，仍走 python 统一后处理）
 find_package(Python3 REQUIRED COMPONENTS Interpreter)
 
-# 字体门禁（=1 构建）：新增上屏文案未进字库 → 构建直接失败。
+# 字体门禁：新增上屏文案未进字库 → 构建直接失败。
 # 2026-10-29 教训：字体补齐靠手工流程时，改完文案忘重跑 → 上屏豆腐块。
-if(TCS_USE_LVGL)
-    add_custom_target(lvgl_font_gate ALL
-        COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tools/font_audit_lvgl.py
-        WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
-        COMMENT "LVGL 字体门禁（font_audit_lvgl.py）")
-    add_dependencies(tcs_main.elf lvgl_font_gate)
-endif()
+add_custom_target(lvgl_font_gate ALL
+    COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tools/font_audit_lvgl.py
+    WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+    COMMENT "LVGL 字体门禁（font_audit_lvgl.py）")
+add_dependencies(tcs_main.elf lvgl_font_gate)
 add_custom_command(TARGET tcs_main.elf POST_BUILD
     COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/post_build_objcopy.py $<TARGET_FILE_NAME:tcs_main.elf>
     WORKING_DIRECTORY ${CMAKE_BINARY_DIR}

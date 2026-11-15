@@ -1,6 +1,8 @@
 /* lv_port_indev.c — G4：FT5446 原始采样 → LVGL 指针 indev
  * 2026-10-29 增测试钩子（源内固化）：
- *   g_tap_inject[4] = {seq, touched, x, y} 合成一次 150ms 按压（触摸走查/热区边界点）
+ *   g_tap_inject[4] = {seq, mode, x, y}
+ *     mode 1 = 合成一次 150ms 按压（触摸走查/热区边界点）
+ *     mode 2 = 持续按住（PRESSED 直到 mode 改 0；2026-11-15 UI 单栈后用于 sim touchh/r）
  *   g_tap_drop      = 1 时 read_cb 恒返回 RELEASED（TL-13 indev 丢帧注入）
  * 正常运行时 g_tap_inject[0] 恒 0、g_tap_drop 恒 0，路径与原来一致。 */
 #include "lv_port_indev.h"
@@ -21,11 +23,20 @@ static void touch_read_cb(lv_indev_t * indev, lv_indev_data_t * data)
     uint32_t seq = g_tap_inject[0];
     if (seq != s_seq) {
         s_seq = seq;
-        if (g_tap_inject[1]) {
-            s_x = (int32_t)g_tap_inject[2];
-            s_y = (int32_t)g_tap_inject[3];
-            s_end_ms = lv_tick_get() + 150u;
+        s_x = (int32_t)g_tap_inject[2];
+        s_y = (int32_t)g_tap_inject[3];
+        if (g_tap_inject[1] == 1) {
+            s_end_ms = lv_tick_get() + 150u;   /* 单次合成按压 */
+        } else {
+            s_end_ms = 0;
         }
+    }
+    if (g_tap_inject[1] == 2) {
+        /* 持续按住：直到外部把 mode 改回 0（sim touchr）*/
+        data->state = LV_INDEV_STATE_PRESSED;
+        data->point.x = s_x;
+        data->point.y = s_y;
+        return;
     }
     if (s_end_ms && (int32_t)(s_end_ms - lv_tick_get()) > 0) {
         data->state = LV_INDEV_STATE_PRESSED;

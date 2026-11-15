@@ -32,10 +32,17 @@ void comm_init(comm_link_t *L,
     proto_rx_init(&L->rx);
 }
 
+/* —— 统一临界区（M11-F-07）：pending[] 与 next_seq 被多个任务写（网页/控制台/链路），
+ * 读改写必须串行。enter_critical 由移植层注入（ESP32 = spinlock，双核安全）。*/
+static inline void comm_lock(comm_link_t *L)   { if (L->enter_critical) L->enter_critical(); }
+static inline void comm_unlock(comm_link_t *L) { if (L->exit_critical)  L->exit_critical();  }
+
 uint8_t comm_next_seq(comm_link_t *L)
 {
+    comm_lock(L);
     uint8_t s = L->next_seq;
     L->next_seq = (uint8_t)((L->next_seq + 1) & 0xFF);
+    comm_unlock(L);
     return s;
 }
 
@@ -90,9 +97,9 @@ static void txq_push_unlocked(comm_link_t *L, const uint8_t *frame, size_t len)
 
 void comm_txq_push(comm_link_t *L, const uint8_t *frame, size_t len)
 {
-    if (L->enter_critical) L->enter_critical();
+    comm_lock(L);
     txq_push_unlocked(L, frame, len);
-    if (L->exit_critical) L->exit_critical();
+    comm_unlock(L);
 }
 
 void comm_poll_tx(comm_link_t *L)
@@ -121,6 +128,10 @@ uint8_t comm_send(comm_link_t *L, const uint8_t *frame_bytes, size_t len, uint8_
     if (len < 5 || len > MAX_FRAME) return 0xFF;
     uint8_t seq = frame_bytes[4];  /* 起始符2+Length1+MsgType1+SeqNo1 */
 
+    /* M11-F-07 / M08-F-08：找槽+登记+"首传入队"必须整体原子。
+     * 原实现分三次进临界区（find/slot 填充/入队），两个任务同时 send 会抢同一空槽，
+     * 后写者覆盖前者的待确认帧 → 对端重传、本端丢 ACK，表现为随机重发。*/
+    comm_lock(L);
     /* 已有同 (seq,mt) pending → 覆盖重置（理论上递增不重复） */
     int idx = find_pending(L, seq, msg_type);
     if (idx < 0) idx = find_free_slot(L);
@@ -134,11 +145,12 @@ uint8_t comm_send(comm_link_t *L, const uint8_t *frame_bytes, size_t len, uint8_
     e->seq = seq;
     e->msg_type = msg_type;
     e->retries = 0;
-    e->in_use = 1;
     e->deadline_ms = L->now_ms_fn() + COMM_ACK_TIMEOUT_MS;
+    e->in_use = 1;                    /* 最后写：别的任务只认 in_use=1 的完整条目 */
 
     /* §0E：首传入队（不直接 send_fn），主循环 comm_poll_tx 串行消费 */
-    comm_txq_push(L, frame_bytes, len);
+    txq_push_unlocked(L, frame_bytes, len);
+    comm_unlock(L);
     return seq;
 }
 
@@ -152,34 +164,43 @@ uint8_t comm_send_noarq(comm_link_t *L, const uint8_t *frame_bytes, size_t len)
 void comm_tick(comm_link_t *L)
 {
     uint32_t now = L->now_ms_fn();
+    int link_down = 0;
+    /* M11-F-07：pending[] 的扫描/改写与 comm_send 的登记互斥；回调放在锁外，
+     * 避免上层 notify/落盘在临界区内再调 comm_* 造成自锁。*/
+    comm_lock(L);
     for (int i = 0; i < COMM_MAX_PENDING; i++) {
         comm_pending_t *e = &L->pending[i];
         if (!e->in_use) continue;
-        if (now < e->deadline_ms) continue;  /* 未超时 */
+        if (now - e->deadline_ms < 0x80000000u) continue;  /* 未超时（模 2^32 比较）*/
         if (e->retries >= COMM_MAX_RETRIES) {
             /* 超重传上限：清该 pending，判链路断 */
             e->in_use = 0;
             if (comm_pending_count(L) == 0) {
                 /* 所有 pending 都失败 → link_ok=False */
                 L->link_ok = COMM_LINK_OK_FALSE;
-                if (L->on_link_down) L->on_link_down();
+                link_down = 1;
             }
             continue;
         }
         /* 超时未达上限 → 重传入队（§0E，不 send_fn） */
         e->retries++;
         e->deadline_ms = now + COMM_ACK_TIMEOUT_MS;
-        comm_txq_push(L, e->frame, e->frame_len);
+        txq_push_unlocked(L, e->frame, e->frame_len);
     }
+    comm_unlock(L);
+    if (link_down && L->on_link_down) L->on_link_down();
 }
 
 int comm_on_ack(comm_link_t *L, uint8_t acked_seq, uint8_t acked_mt)
 {
+    comm_lock(L);                       /* M11-F-07：与 comm_send 的登记互斥 */
     int idx = find_pending(L, acked_seq, acked_mt);
-    if (idx < 0) return 0;
-    L->pending[idx].in_use = 0;
-    L->link_ok = COMM_LINK_OK_TRUE;  /* 任一 ACK 到即链路恢复 */
-    return 1;
+    if (idx >= 0) {
+        L->pending[idx].in_use = 0;
+        L->link_ok = COMM_LINK_OK_TRUE;  /* 任一 ACK 到即链路恢复 */
+    }
+    comm_unlock(L);
+    return idx >= 0 ? 1 : 0;
 }
 
 /* 记最近重复帧信息（去重命中时上层回 ACK 用） */
@@ -191,6 +212,22 @@ int comm_rx_feed_byte(comm_link_t *L, uint8_t b,
                       const uint8_t **out_payload, size_t *out_len, int *out_is_dup)
 {
     if (out_is_dup) *out_is_dup = 0;
+
+    /* M04-F-03：半帧 + 线路静默 → 丢弃半帧回"找帧头"。
+     * 阈值取 50ms 而非 3.5 字符时间（230400 下 ≈152µs）：本层只能测"处理时间"，
+     * 任务调度抖动会把正常突发误判成帧结束；50ms 远大于一帧线时（最满帧 250B≈11ms），
+     * 又远小于快照周期（200ms），只用于从"帧头后噪声/截断 + 静默"中恢复——
+     * 否则后续有效帧会被当成这半帧的 payload 吞掉（Len 被噪声放大时最多吞 250B）。*/
+    if (L->now_ms_fn) {
+        uint32_t now = L->now_ms_fn();
+        if (L->rx_gap_seen && (uint32_t)(now - L->rx_last_ms) > COMM_RX_GAP_MS) {
+            proto_rx_reset(&L->rx);
+            L->rx_gap_resets++;
+        }
+        L->rx_last_ms = now;
+        L->rx_gap_seen = 1;
+    }
+
     const uint8_t *payload; size_t plen;
     if (!proto_rx_feed(&L->rx, b, &payload, &plen)) {
         /* 还在收/CRC 错/杂字节，不交付 */

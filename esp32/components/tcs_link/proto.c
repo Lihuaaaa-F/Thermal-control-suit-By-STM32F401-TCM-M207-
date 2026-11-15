@@ -113,11 +113,16 @@ size_t proto_encode_frame(const uint8_t *payload, size_t payload_len,
 /* ===================================================================== */
 /*                            接收状态机                                  */
 /* ===================================================================== */
-void proto_rx_init(proto_rx_t *rx)
+void proto_rx_reset(proto_rx_t *rx)
 {
     rx->state = RX_WAIT_START0;
     rx->len = 0;
     rx->idx = 0;
+}
+
+void proto_rx_init(proto_rx_t *rx)
+{
+    proto_rx_reset(rx);
 }
 
 int proto_rx_feed(proto_rx_t *rx, uint8_t b,

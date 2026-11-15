@@ -35,11 +35,13 @@ typedef void (*link_event_cb_t)(void);   /* 参数/注册表/状态变更通知�
 void link_start(void);                    /* 建 UART + 任务 */
 void link_loopback_run(void);             /* WP-F.1 真机自环自测（link_start 前独占 UART1，证据=[LPBK] 日志）*/
 bool link_alive(void);                    /* 0x10 3s 内有新鲜帧 */
-const link_status_t *link_status(void);   /* 快照指针（内部加锁，读后尽快用）*/
+/* M11-F-12：整块快照拷贝（临界区内一次结构体赋值）。取代原 link_status() 指针——
+ * 指针让调用方在锁外逐字段读，与链路任务写 0x10 交错会拼出"新温度+旧报警"混合态。*/
+void link_status_copy(link_status_t *out);
 
 int  link_set_param(uint16_t id, float v);          /* → 0x12，异步等 ACK */
 int  link_send_cmd(uint8_t cmd);                    /* → 0x15，异步等 ACK */
-int  link_send_frame_mt(uint8_t mt, const uint8_t *pl, size_t n);  /* R2：0x20/0x21 载荷发送（fire-and-forget，ARQ 同 0x10 惯例=4 拷贝+收端去重）*/
+int  link_send_frame_mt(uint8_t mt, const uint8_t *pl, size_t n);  /* R2：0x20/0x21 载荷发送（fire-and-forget，ARQ 同 0x10 惯例=4 拷贝+收端去重）；返回 0=入队 1=演示抑制 -1=组帧失败 */
 int  link_get_registry(link_reg_t *out, int max);   /* 拷贝注册表缓存 */
 void link_request_registry(void);                   /* 发 0x13（握手全量）*/
 

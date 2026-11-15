@@ -166,6 +166,13 @@ void proto_rx_init(proto_rx_t *rx);
 int proto_rx_feed(proto_rx_t *rx, uint8_t b,
                   const uint8_t **out_payload, size_t *out_len);
 
+/**
+ * M04-F-03：丢弃当前半帧，回到"找起始符"。
+ * 上层检测到帧内长时间静默（噪声/截断后线路恢复）时调用——否则状态机会把
+ * 后续有效帧当作本帧 payload 吞掉（Len 被噪声放大时最多吞 250 字节）。
+ */
+void proto_rx_reset(proto_rx_t *rx);
+
 
 /* ===================================================================== */
 /*                         int16 定点 0.01m 编解码                        */

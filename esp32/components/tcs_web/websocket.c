@@ -115,7 +115,9 @@ static void fds_send(const char *json, size_t len)
  * 前端 Number()/Chart.js 解析无行为差异（等价性 diff 语义口径，非逐字节）。*/
 size_t ws_status_json(char *buf, size_t cap)
 {
-    const link_status_t *s = link_status();
+    link_status_t snap;                 /* M11-F-12：整块拷贝，避免锁外逐字段读撕裂 */
+    link_status_copy(&snap);
+    const link_status_t *s = &snap;
     size_t r = 0;
     cJSON *root = cJSON_CreateObject();
     if (!root) return 0;

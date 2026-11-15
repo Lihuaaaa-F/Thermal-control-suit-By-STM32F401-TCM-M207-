@@ -53,7 +53,7 @@ static float s_param_val[LINK_REGISTRY_MAX];   /* 与 s_reg 同下标缓存 */
 static uint8_t s_param_valid[LINK_REGISTRY_MAX];
 static link_event_cb_t s_cb;
 static portMUX_TYPE s_mux = portMUX_INITIALIZER_UNLOCKED;
-static volatile int64_t s_real_status_us;   /* 仅真链路 0x10 更新（演示模式不碰，防自锁）*/
+static volatile uint32_t s_real_status_ms;  /* M11-F-12：int64 拆两半读会撕裂，改 32 位毫秒（单写者+32 位对齐=原子）*/
 static void notify(void);                   /* 前向声明（demo 层早于定义使用）*/   /* 仅真链路 0x10 更新（演示模式不碰，防自锁）*/
 
 /* ===================================================================== */
@@ -312,7 +312,7 @@ static void on_frame(const uint8_t *payload, size_t len)
         s_status.alarm = s.alarm;
         s_status.online = s.online;
         s_status.last_status_us = esp_timer_get_time();
-        s_real_status_us = esp_timer_get_time();
+        s_real_status_ms = (uint32_t)(esp_timer_get_time() / 1000LL);
         taskEXIT_CRITICAL(&s_mux);
         notify();
         break;
@@ -345,14 +345,22 @@ static void on_frame(const uint8_t *payload, size_t len)
         tcs_reg_entry_t e;
         if (tcs_scan_registry_entry(body, blen, &e) != 0) break;
         if (e.idx < LINK_REGISTRY_MAX) {
+            /* M11-F-07：s_reg 被 link_get_registry()/link_param_value() 并发读，
+             * 写入必须整体进同一临界区（原实现逐字段写，读侧可能读到"新 id + 旧名字"）。*/
+            uint16_t got = 0, expect = 0;
+            uint8_t done = 0;
+            taskENTER_CRITICAL(&s_mux);
             s_reg[e.idx].used = 1;
             s_reg[e.idx].e = e;
             if (e.idx == 0) { s_reg_expect = e.count; s_reg_got = 0; }
             if ((uint16_t)(e.idx + 1u) > s_reg_got) s_reg_got = (uint16_t)(e.idx + 1u);
             if (!s_reg_done && s_reg_expect && s_reg_got >= s_reg_expect) {
                 s_reg_done = 1;
-                ESP_LOGI(TAG, "registry complete %u/%u", (unsigned)s_reg_got, (unsigned)s_reg_expect);
+                done = 1;
             }
+            got = s_reg_got; expect = s_reg_expect;
+            taskEXIT_CRITICAL(&s_mux);
+            if (done) ESP_LOGI(TAG, "registry complete %u/%u", (unsigned)got, (unsigned)expect);
             ESP_LOGI(TAG, "REG[%u/%u] 0x%02x %s", e.idx + 1, e.count, e.id, e.key);
             notify();
         }
@@ -404,10 +412,11 @@ int link_set_param(uint16_t id, float v)
     return 0;
 }
 
+/* 返回值（M08-F-06）：0=已入队，1=演示模式抑制（无真链路，属正常），-1=组帧失败 */
 int link_send_frame_mt(uint8_t mt, const uint8_t *pl, size_t n)
 {
 #if CONFIG_TCS_DEMO
-    if (s_demo_on) return 0;                       /* 演示模式不发（本地闭环）*/
+    if (s_demo_on) return 1;                       /* 演示模式不发（本地闭环）*/
 #endif
     uint8_t frame[MAX_FRAME];
     size_t fn = mt_frame(mt, comm_next_seq(&s_link), pl, n, frame, sizeof(frame));
@@ -455,12 +464,21 @@ void link_request_registry(void)
 
 bool link_alive(void)
 {
-    /* 只看真链路心跳（demo_step 不更新 s_real_status_us，防演示模式自锁）*/
-    int64_t last = s_real_status_us;
-    return last != 0 && (esp_timer_get_time() - last) < 3000000LL;
+    /* 只看真链路心跳（demo_step 不更新 s_real_status_ms，防演示模式自锁）*/
+    uint32_t last = s_real_status_ms;
+    uint32_t now  = (uint32_t)(esp_timer_get_time() / 1000LL);
+    return last != 0 && (uint32_t)(now - last) < 3000u;
 }
 
-const link_status_t *link_status(void) { return &s_status; }
+/* M11-F-12：整块拷贝返回，杜绝调用方拿着内部指针逐字段读（与 0x10 写入交错
+ * 会拼出"新温度 + 旧报警"的混合状态）。*out 恒有定义，valid=0 表示尚无 0x10。*/
+void link_status_copy(link_status_t *out)
+{
+    if (!out) return;
+    taskENTER_CRITICAL(&s_mux);
+    *out = s_status;
+    taskEXIT_CRITICAL(&s_mux);
+}
 void link_on_cmd(link_cmd_cb_t cb) { s_cmd_cb = cb; }
 uint32_t link_rx_bytes(void) { return s_rx_bytes; }
 uint32_t link_rx_frames(void) { return s_rx_frames; }

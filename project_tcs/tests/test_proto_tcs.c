@@ -286,6 +286,40 @@ int main(void)
         CHECK(a2 == 0, "seq200 dup not delivered");
     }
 
+    /* R1 M04-F-03: 半帧 + 线路静默 → 丢弃半帧，后续有效帧不再被吞 */
+    {
+        uint8_t f4[MAX_FRAME];
+        size_t n4 = mt_frame(MT_TCS_CMD, 0x21, (const uint8_t *)"\x09", 1,
+                             f4, sizeof(f4));
+        const uint8_t *r4; size_t l4; int d4, got4;
+
+        /* 反证（修复前行为）：无静默时，噪声帧头 Len=250 把后续帧当 payload 吞掉 */
+        comm_link_t L4;
+        comm_init(&L4, stub_send, stub_now, NULL, NULL, NULL);
+        fake_now = 500000;
+        got4 = 0;
+        comm_rx_feed_byte(&L4, 0xAA, &r4, &l4, &d4);
+        comm_rx_feed_byte(&L4, 0x55, &r4, &l4, &d4);
+        comm_rx_feed_byte(&L4, 0xFA, &r4, &l4, &d4);          /* 帧头后截断 */
+        for (size_t i = 0; i < n4; i++)
+            if (comm_rx_feed_byte(&L4, f4[i], &r4, &l4, &d4)) got4++;
+        CHECK(got4 == 0, "M04-F-03 无静默：有效帧被半帧吞掉（缺陷复现）");
+
+        /* 判别：同一串字节，中间隔 > COMM_RX_GAP_MS 的静默 → 立刻恢复并交付 */
+        comm_link_t L5;
+        comm_init(&L5, stub_send, stub_now, NULL, NULL, NULL);
+        fake_now = 600000;
+        got4 = 0;
+        comm_rx_feed_byte(&L5, 0xAA, &r4, &l4, &d4);
+        comm_rx_feed_byte(&L5, 0x55, &r4, &l4, &d4);
+        comm_rx_feed_byte(&L5, 0xFA, &r4, &l4, &d4);
+        fake_now += COMM_RX_GAP_MS + 1;                        /* 线路静默 */
+        for (size_t i = 0; i < n4; i++)
+            if (comm_rx_feed_byte(&L5, f4[i], &r4, &l4, &d4)) got4++;
+        CHECK(got4 == 1, "M04-F-03 静默后丢弃半帧并交付后续帧");
+        CHECK(L5.rx_gap_resets == 1, "M04-F-03 半帧丢弃计数");
+    }
+
     printf("test_proto_tcs: PASS=%d FAIL=%d\n", g_pass, g_fail);
     return g_fail ? 1 : 0;
 }

@@ -187,6 +187,22 @@ int comm_rx_feed_byte(comm_link_t *L, uint8_t b,
                       const uint8_t **out_payload, size_t *out_len, int *out_is_dup)
 {
     if (out_is_dup) *out_is_dup = 0;
+
+    /* M04-F-03：半帧 + 线路静默 → 丢弃半帧回"找帧头"。
+     * 阈值取 50ms 而非 3.5 字符时间（230400 下 ≈152µs）：本层只能测"处理时间"，
+     * 任务/主循环调度抖动会把正常突发误判成帧结束；50ms 远大于一帧线时（最满帧 250B≈11ms），
+     * 又远小于快照周期（200ms），只用于从"帧头后噪声/截断 + 静默"中恢复——
+     * 否则后续有效帧会被当成这半帧的 payload 吞掉（Len 被噪声放大时最多吞 250B）。*/
+    if (L->now_ms_fn) {
+        uint32_t now = L->now_ms_fn();
+        if (L->rx_gap_seen && (uint32_t)(now - L->rx_last_ms) > COMM_RX_GAP_MS) {
+            proto_rx_reset(&L->rx);
+            L->rx_gap_resets++;
+        }
+        L->rx_last_ms = now;
+        L->rx_gap_seen = 1;
+    }
+
     const uint8_t *payload; size_t plen;
     if (!proto_rx_feed(&L->rx, b, &payload, &plen)) {
         /* 还在收/CRC 错/杂字节，不交付 */

@@ -30,6 +30,7 @@
 #define COMM_ACK_TIMEOUT_MS   500    /* 等 ACK 超时（ms） */
 #define COMM_MAX_RETRIES      3      /* 最大重传次数（不含首传） */
 #define COMM_MAX_PENDING      8      /* 同时等 ACK 的帧上限（下行少，8 够） */
+#define COMM_RX_GAP_MS        50     /* M04-F-03：帧内静默 > 此值即丢弃半帧（见 comm.c 说明）*/
 #define MAX_TXQ               16     /* 待发队列深度（WP-A.5：注册表 8 条目+ACK 全量入队不丢；RAM +2KB 可承受） */
 #define COMM_LINK_OK_TRUE     1
 #define COMM_LINK_OK_FALSE    0
@@ -62,6 +63,10 @@ typedef struct {
     uint8_t next_seq;            /* 本端发送序号计数器（0-255 循环） */
     /* proto 接收状态机（逐字节喂） */
     proto_rx_t rx;
+    /* M04-F-03：帧内静默时间戳（上层检测到半帧+静默时丢弃半帧）*/
+    uint32_t rx_last_ms;
+    uint8_t  rx_gap_seen;
+    uint32_t rx_gap_resets;      /* 半帧丢弃次数（linkstat/P6 统计用）*/
     /* —— §0E 待发队列（环形，TX 串行化）—— */
     uint8_t  tx_queue[MAX_TXQ][MAX_FRAME];
     uint16_t tx_len[MAX_TXQ];

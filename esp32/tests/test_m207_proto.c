@@ -41,6 +41,19 @@ int main(void)
     CHECK(strcmp(r.param, "TCACTTEMP") == 0, "lowercase param");
     /* TC3 未知模块 */
     CHECK(m207_parse_line("TC3:TCACTTEMP=1.0", &r) == 0, "TC3 unknown");
+
+    /* M12-F-09：已知模块名查表（不再按名字长度判定）；未知模块仍拒绝 */
+    CHECK(m207_parse_line("PCB:SYSMODEL=1.0", &r) == 1 && r.module == M207_MOD_PCB,
+          "module PCB");
+    CHECK(m207_parse_line("SYSTEM:SYSMODEL=207", &r) == 1 && r.module == M207_MOD_SYSTEM,
+          "module SYSTEM");
+    CHECK(m207_parse_line("PCRS232:BAUD=57600", &r) == 1 && r.module == M207_MOD_PCRS232,
+          "module PCRS232");
+    CHECK(m207_parse_line("TC3:TCACTTEMP=1.0", &r) == 0, "unknown module rejected");
+    CHECK(m207_parse_line("TC:TCACTTEMP=1.0", &r) == 0, "short prefix rejected");
+    CHECK(strcmp(m207_mod_name(M207_MOD_TC2), "TC2") == 0
+          && strcmp(m207_mod_name(M207_MOD_PCB), "PCB") == 0
+          && strcmp(m207_mod_name(99), "?") == 0, "mod_name");
     /* 负值 */
     CHECK(m207_parse_line("TC1:TCACTTEMP=-5.5", &r) == 1, "negative");
     CHECK(r.value < -5.49f && r.value > -5.51f, "negative value");

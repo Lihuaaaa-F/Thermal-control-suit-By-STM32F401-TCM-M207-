@@ -94,8 +94,9 @@ static uint8_t  s_ever_online;
 static uint8_t  s_fail;
 static uint8_t  s_waiting;           /* 1=轮询已发在等应答 */
 static uint8_t  s_wait_ch;           /* 轮询在等的通道（轴分离：errcode 归属）*/
-static uint8_t  s_ch_open[3];        /* 1/2=该通道传感器断线态（F6，errcode=2 参数族隐藏）*/
-static uint8_t  s_open_cnt[3];       /* 断线去抖：连续 =2 计数（≥3 才置态，防交错误归属）*/
+static uint8_t  s_ch_open[M207_MOD_MAX];   /* 1/2=该通道传感器断线态（F6，errcode=2 参数族隐藏）；
+                                            * M12-F-09 起 module 可为 PCB/SYSTEM/PCRS232 */
+static uint8_t  s_open_cnt[M207_MOD_MAX];  /* 断线去抖：连续 =2 计数（≥3 才置态，防交错误归属）*/
 static uint8_t  s_poll_ch = 1;       /* 1↔2 交替 */
 static uint32_t s_tick;              /* 50ms 拍号 */
 static uint32_t s_next_poll;         /* 下一轮询拍号 */
@@ -104,9 +105,9 @@ static uint32_t s_next_probe;        /* 离线探测拍号 */
 static m207_lineasm_t s_asm;
 static m207_pend_t s_pend[M207_PEND_MAX];
 
-static float    s_temp[3];           /* [1]=tc1 [2]=tc2 TCACTTEMP */
-static uint32_t s_temp_tick[3];
-static uint8_t  s_have_temp[3];
+static float    s_temp[M207_MOD_MAX];      /* [1]=tc1 [2]=tc2 TCACTTEMP */
+static uint32_t s_temp_tick[M207_MOD_MAX];
+static uint8_t  s_have_temp[M207_MOD_MAX];
 
 static struct {
     uint16_t nak, verify_ok, resend, offline, wdrop, qdrop, unexpected;
@@ -322,8 +323,8 @@ static void m207_handle_line(const char *line)
         if (diff < 0) diff = -diff;
         if (diff <= pend_tol(p->decimals)) {
             s_stat.verify_ok++;
-            ESP_LOGI(TAG, "verify OK ch=%u %s=%.3f (want %.3f)",
-                     (unsigned)r.module, r.param, (double)r.value, (double)p->value);
+            ESP_LOGI(TAG, "verify OK ch=%s %s=%.3f (want %.3f)",
+                     m207_mod_name(r.module), r.param, (double)r.value, (double)p->value);
             pend_release(p);
         } else {
             pend_mark_resend(p, 1, "echo mismatch");
@@ -331,13 +332,21 @@ static void m207_handle_line(const char *line)
     }
 
     /* 缓存更新 */
+    /* M12-F-09：通道温度只属于 TC1/TC2。PCB/SYSTEM/PCRS232 现在能解析出模块号
+     * （用于观测留痕），但它们的 TCACTTEMP 不得写进 tc1/tc2 缓存或覆盖 g_tcs。*/
+    if (r.module != M207_MOD_TC1 && r.module != M207_MOD_TC2) {
+        if (r.kind == M207_KIND_REPLY)
+            ESP_LOGI(TAG, "module %s %s=%.3f (non-channel, log only)",
+                     m207_mod_name(r.module), r.param, (double)r.value);
+        return;
+    }
     if (r.kind == M207_KIND_REPLY && strcmp(r.param, "TCACTTEMP") == 0) {
         if (s_have_temp[r.module]) {
             float dt = (float)(s_tick - s_temp_tick[r.module]) *
                        (M207_TICK_MS / 1000.0f);
             if (!post_m207_sanity_ok(s_temp[r.module], r.value, dt)) {
-                ESP_LOGW(TAG, "implausible ch=%u %.1f→%.1f (dt=%.2fs) → count fail",
-                         (unsigned)r.module, (double)s_temp[r.module],
+                ESP_LOGW(TAG, "implausible ch=%s %.1f→%.1f (dt=%.2fs) → count fail",
+                         m207_mod_name(r.module), (double)s_temp[r.module],
                          (double)r.value, (double)dt);
                 s_fail++;
                 s_waiting = 0;
@@ -349,8 +358,8 @@ static void m207_handle_line(const char *line)
         s_have_temp[r.module] = 1;
         if (s_ch_open[r.module]) {                       /* F6 恢复沿（接回传感器）*/
             s_ch_open[r.module] = 0;
-            ESP_LOGW(TAG, "ch%u sensor RECOVERED (param family visible again)",
-                     (unsigned)r.module);
+            ESP_LOGW(TAG, "ch%s sensor RECOVERED (param family visible again)",
+                     m207_mod_name(r.module));
         }
         s_open_cnt[r.module] = 0;
         if (r.module == 1) {

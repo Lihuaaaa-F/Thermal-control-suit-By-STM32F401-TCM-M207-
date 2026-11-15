@@ -27,6 +27,10 @@ extern "C" {
 #define M207_MOD_NONE  0
 #define M207_MOD_TC1   1
 #define M207_MOD_TC2   2
+#define M207_MOD_PCB     3   /* M12-F-09：同总线非温控模块（原解析器按名字长度直接丢弃）*/
+#define M207_MOD_SYSTEM  4
+#define M207_MOD_PCRS232 5
+#define M207_MOD_MAX     6   /* module 作数组下标时的上界 */
 
 typedef enum {
     M207_KIND_NONE = 0,
@@ -60,6 +64,7 @@ int  m207_lineasm_feed(m207_lineasm_t *la, uint8_t b, char *line, size_t cap);
  * 小写自动大写；`模块:参数=值` → M207_KIND_REPLY；缺冒号/缺等号/空串/超长 → 0。
  * 返回 1=解析成功（out 填出），0=忽略。 */
 int m207_parse_line(const char *line, m207_reply_t *out);
+const char *m207_mod_name(uint8_t mod);   /* M12-F-09：日志用模块名 */
 
 /* ====== H10 映射表（纯逻辑，PC 可测）====== */
 /* 参数 id → M207 指令模板。文档到达后填表即可接入真参数（扩展成本=一行）。

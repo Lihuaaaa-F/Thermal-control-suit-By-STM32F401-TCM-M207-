@@ -105,12 +105,40 @@ int _write(int fd, char *ptr, int len)
 }
 
 /* ====== 主机邮箱命令注入（WP-D：无 COM/USB-TTL 时的控制台入口）======
- * 主机 probe-rs write RAM：先写 s_mb_line（含 '\0'），再写 s_mb_magic=MB_MAGIC_RUN；
- * console_poll 检测到即执行并 s_mb_seq++。读 s_mb_seq 确认消费。 */
+ * 主机 probe-rs 写 RAM，布局 v2（M07-F-07；tools/mb_console.py 同提交对齐）：
+ *   +0  magic (u32, 'CMST')  ← 最后写：写完即代表本条记录完整
+ *   +4  len   (u32)          ← cmd 有效字节数 1..96
+ *   +8  crc16 (u32, 低 16 位有效) ← CRC-16/CCITT-FALSE(init 0xFFFF) 覆盖 cmd[0..len)
+ *   +12 cmd[96]
+ * 消费时先校验 len 与 CRC 再执行；不合法只计数不执行（坏记录绝不能被当成命令）。
+ * 校验通过后 s_mb_seq++，主机轮询该值确认消费。 */
 #define MB_MAGIC_RUN  0x54534D43u   /* 'CMST' */
-static volatile uint32_t s_mb_magic;
+#define MB_CMD_MAX    96
+typedef struct {
+    volatile uint32_t magic;
+    volatile uint32_t len;
+    volatile uint32_t crc16;
+    char cmd[MB_CMD_MAX];
+} mb_mailbox_t;
+static mb_mailbox_t s_mb;
 static volatile uint32_t s_mb_seq;
-static char s_mb_line[CON_LINE_MAX];
+static uint32_t s_mb_bad;           /* 被拒记录数（stat 可查）*/
+
+/* CRC-16/CCITT-FALSE：poly 0x1021 / init 0xFFFF / 不反射 / 末不异或。
+ * 已知向量 "123456789" → 0x29B1（mb_console.py 内有同值断言）。*/
+static uint16_t mb_crc16(const uint8_t *p, uint32_t n)
+{
+    uint16_t crc = 0xFFFFu;
+    for (uint32_t i = 0; i < n; i++) {
+        crc ^= (uint16_t)((uint16_t)p[i] << 8);
+        for (int b = 0; b < 8; b++) {
+            uint16_t sh = (uint16_t)(crc << 1);
+            if (crc & 0x8000u) sh ^= 0x1021u;
+            crc = sh;
+        }
+    }
+    return crc;
+}
 
 /* ====== RX ====== */
 void console_isr_push(uint8_t b)
@@ -656,12 +684,24 @@ void console_poll(void)
     touch_log_dump_poll();   /* WP-M0：分块 CSV 导出（每拍续传）*/
 
     /* 主机邮箱命令注入（probe-rs 写 RAM 触发，先于 UART 行处理）*/
-    if (s_mb_magic == MB_MAGIC_RUN) {
-        s_mb_magic = 0;
-        s_mb_line[CON_LINE_MAX - 1] = '\0';
-        cmd_exec(s_mb_line);
-        s_mb_seq++;
-        tcs_log("[MB]", "done seq=%lu", (unsigned long)(s_mb_seq + 1));
+    if (s_mb.magic == MB_MAGIC_RUN) {
+        uint32_t len = s_mb.len;
+        uint32_t crc = s_mb.crc16 & 0xFFFFu;
+        uint8_t ok = (len >= 1u && len <= MB_CMD_MAX
+                      && mb_crc16((const uint8_t *)s_mb.cmd, len) == (uint16_t)crc);
+        s_mb.magic = 0;                 /* 先清：坏记录不能被下一拍重复处理 */
+        if (!ok) {
+            s_mb_bad++;
+            printf("[MB] reject len=%lu crc=%04lx (bad=%lu)\n",
+                   (unsigned long)len, (unsigned long)crc, (unsigned long)s_mb_bad);
+        } else {
+            /* 强制 NUL 结尾（len 由校验保证 ≤96；正好 96 时借用末字节）*/
+            if (len >= MB_CMD_MAX) s_mb.cmd[MB_CMD_MAX - 1] = '\0';
+            else                   s_mb.cmd[len] = '\0';
+            cmd_exec(s_mb.cmd);
+            s_mb_seq++;
+            tcs_log("[MB]", "done seq=%lu", (unsigned long)(s_mb_seq + 1));
+        }
     }
 
     /* RX 自愈：ORE 置位或 RXNEIE 失能（HAL 错误路径遗留）→ 恢复接收。

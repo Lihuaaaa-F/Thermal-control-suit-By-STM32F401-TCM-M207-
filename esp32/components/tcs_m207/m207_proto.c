@@ -78,11 +78,26 @@ int m207_parse_line(const char *line, m207_reply_t *out)
         return 1;
     }
 
-    /* 模块名 TC1/TC2，其它（如 TC3/空）→ module=NONE 且解析失败 */
-    int mlen = colon;
-    if (mlen != 3 || up[0] != 'T' || up[1] != 'C') return 0;
-    if (up[2] != '1' && up[2] != '2') return 0;
-    out->module = (up[2] == '1') ? M207_MOD_TC1 : M207_MOD_TC2;
+    /* 模块名前缀 → 枚举（M12-F-09：原按 `mlen==3` 判定，PCB/SYSTEM/PCRS232 这些
+     * 同总线模块会被无差别丢掉，且模块名长度一变判定就全错）。冒号前必须与表项
+     * 完全相等，未知模块整行忽略——不猜。*/
+    static const struct { const char *name; uint8_t mod; } mods[] = {
+        { "TC1",     M207_MOD_TC1     },
+        { "TC2",     M207_MOD_TC2     },
+        { "PCB",     M207_MOD_PCB     },
+        { "SYSTEM",  M207_MOD_SYSTEM  },
+        { "PCRS232", M207_MOD_PCRS232 },
+    };
+    uint8_t mod = M207_MOD_NONE;
+    for (size_t k = 0; k < sizeof(mods) / sizeof(mods[0]); k++) {
+        size_t nl = strlen(mods[k].name);
+        if ((size_t)colon == nl && strncmp(up, mods[k].name, nl) == 0) {
+            mod = mods[k].mod;
+            break;
+        }
+    }
+    if (mod == M207_MOD_NONE) return 0;
+    out->module = mod;
 
     /* 参数名 = colon+1 .. 分隔符前 */
     int sep = (eq >= 0) ? eq : qm;
@@ -102,6 +117,19 @@ int m207_parse_line(const char *line, m207_reply_t *out)
         out->value = v;
     }
     return 1;
+}
+
+/* 模块号 → 名字（日志/取证用；M12-F-09 与新枚举同源）*/
+const char *m207_mod_name(uint8_t mod)
+{
+    switch (mod) {
+    case M207_MOD_TC1:     return "TC1";
+    case M207_MOD_TC2:     return "TC2";
+    case M207_MOD_PCB:     return "PCB";
+    case M207_MOD_SYSTEM:  return "SYSTEM";
+    case M207_MOD_PCRS232: return "PCRS232";
+    default:               return "?";
+    }
 }
 
 /* ====== H10 映射表模板格式化（纯函数）====== */

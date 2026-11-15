@@ -3,11 +3,18 @@
 """mb_console.py — 主机邮箱控制台 + RTT 环直读（WP-D 前半，无 COM/USB-TTL 交互通道）
 
 原理：
-  1. console.c 邮箱（s_mb_line/s_mb_magic/s_mb_seq）：probe-rs write RAM 注入命令；
+  1. console.c 邮箱（符号 s_mb，布局 v2）：probe-rs write RAM 注入命令；
   2. printf 输出镜像进 RTT 上行环（_SEGGER_RTT.aUp[0]），本脚本按 WrOff 增量直读，
      全程只用 probe-rs read/write，不占探针独占会话。
 
+邮箱布局 v2（M07-F-07；与 console.c:mb_mailbox_t 同源，改一处必须同步另一处）：
+  s_mb+0   u32 magic  'CMST'  ← 最后写
+  s_mb+4   u32 len    1..96
+  s_mb+8   u32 crc16  CRC-16/CCITT-FALSE(init 0xFFFF)，覆盖 cmd[0..len)
+  s_mb+12  char cmd[96]
+
 用法：python tools/mb_console.py "ver" ["stat" ...]   （在 project_tcs 根目录）
+      python tools/mb_console.py --help               （打印布局与向量）
 """
 import os
 import re
@@ -20,6 +27,23 @@ CHIP = "STM32H743II"
 PROBE = "0d28:0204"
 ELF = Path(os.environ.get("TCS_ELF", "build/tcs_main.elf"))
 MB_MAGIC_RUN = 0x54534D43
+MB_LAYOUT_VER = 2
+MB_OFF_MAGIC, MB_OFF_LEN, MB_OFF_CRC, MB_OFF_CMD = 0, 4, 8, 12
+MB_CMD_MAX = 96
+
+
+def crc16_ccitt(data: bytes) -> int:
+    """CRC-16/CCITT-FALSE：poly 0x1021 / init 0xFFFF / 不反射 / 末不异或。
+    与 console.c:mb_crc16 逐位等价；"123456789" → 0x29B1。"""
+    crc = 0xFFFF
+    for b in data:
+        crc ^= b << 8
+        for _ in range(8):
+            crc = ((crc << 1) ^ 0x1021) & 0xFFFF if (crc & 0x8000) else (crc << 1) & 0xFFFF
+    return crc
+
+
+assert crc16_ccitt(b"123456789") == 0x29B1, "CRC16 vector mismatch (C/Python 不同源)"
 
 
 def nm_addr(symbol: str) -> int:
@@ -79,8 +103,7 @@ def rtt_fetch(old: int, new: int) -> bytes:
 
 
 def send_cmd(cmdline: str, wait=3.0) -> bytes:
-    line_a, magic_a, seq_a = (nm_addr("s_mb_line"), nm_addr("s_mb_magic"),
-                              nm_addr("s_mb_seq"))
+    mb_a, seq_a = nm_addr("s_mb"), nm_addr("s_mb_seq")
     # 先清积压并推进 RdOff（避免历史日志混入、或缓冲假满导致输出丢失）
     b0 = rtt_buf_info()
     if b0["wroff"] != b0["rd_off"]:
@@ -90,9 +113,12 @@ def send_cmd(cmdline: str, wait=3.0) -> bytes:
             pass
     seq0 = pr_read("b32", seq_a, 1)[0]
     wr0 = rtt_buf_info()["wroff"]
-    payload = cmdline.encode('utf-8')[:94] + b'\0'
-    pr_write(line_a, payload)
-    pr_write(magic_a, MB_MAGIC_RUN.to_bytes(4, 'little'))
+    payload = cmdline.encode('utf-8')[:MB_CMD_MAX]          # 不强制带 '\0'：长度由 len 表达
+    # 顺序：cmd → len → crc → magic（magic 最后写，固件见 magic 才消费整条记录）
+    pr_write(mb_a + MB_OFF_CMD, payload)
+    pr_write(mb_a + MB_OFF_LEN, len(payload).to_bytes(4, 'little'))
+    pr_write(mb_a + MB_OFF_CRC, crc16_ccitt(payload).to_bytes(4, 'little'))
+    pr_write(mb_a + MB_OFF_MAGIC, MB_MAGIC_RUN.to_bytes(4, 'little'))
     t0 = time.time()
     while time.time() - t0 < wait:
         time.sleep(0.15)
@@ -105,8 +131,10 @@ def send_cmd(cmdline: str, wait=3.0) -> bytes:
 
 
 def main():
-    if len(sys.argv) < 2:
-        raise SystemExit(__doc__)
+    if len(sys.argv) < 2 or sys.argv[1] in ("-h", "--help"):
+        print(__doc__)
+        print(f"邮箱布局版本 v{MB_LAYOUT_VER}；CRC16 '123456789' = 0x{crc16_ccitt(b'123456789'):04X}")
+        return
     for c in sys.argv[1:]:
         out = send_cmd(c)
         sys.stdout.write(out.decode('utf-8', errors='replace'))

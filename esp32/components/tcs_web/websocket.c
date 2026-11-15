@@ -396,7 +396,9 @@ esp_err_t ws_on_recv(httpd_req_t *req)
                     if (n > 0 && (size_t)n < sizeof(ack)) fds_send(ack, (size_t)n);
                 }
             }
-        } else if (strcmp(t->valuestring, "ota") == 0) {
+        }
+#if CONFIG_TCS_DIAG
+        else if (strcmp(t->valuestring, "ota") == 0) {
             /* WP-F.4：m=0 自拷贝+切换；m=1 回滚（boot 指回对槽）*/
             extern void app_ota_trigger(int rollback);
             cJSON *m = cJSON_GetObjectItem(root, "m");
@@ -404,6 +406,7 @@ esp_err_t ws_on_recv(httpd_req_t *req)
             ESP_LOGI(TAG, "ws ota trigger rollback=%d", rb);
             app_ota_trigger(rb);
         }
+#endif /* CONFIG_TCS_DIAG: ws ota */
     }
     cJSON_Delete(root);
     return ESP_OK;

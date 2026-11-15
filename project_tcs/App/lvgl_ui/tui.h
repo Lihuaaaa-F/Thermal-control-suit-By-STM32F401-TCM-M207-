@@ -10,7 +10,8 @@ void tui_init(void);
 void tui_poll(void);                 /* 500ms 数据刷新 + 横幅态同步（主循环节拍调用） */
 void tui_goto(tui_page_t p);
 void tui_request(tui_page_t p);      /* 延后切页（LVGL 回调上下文外执行） */
-void tui_request_rebuild(void);      /* 延后重建当前页 */
+void tui_request_rebuild(void);
+void tui_step_param(int dir);   /* R1 M03-F-08：补原型（原为隐式声明）*/      /* 延后重建当前页 */
 void tui_tick(void);
 
 /* —— G5 走查钩子（probe-rs 写 g_ui_cmd；=1 only）——

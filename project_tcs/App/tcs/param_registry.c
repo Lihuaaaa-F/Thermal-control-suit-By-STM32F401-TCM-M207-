@@ -227,6 +227,15 @@ static void side_effects(param_desc_t *p)
     }
 }
 
+/* R1 M05-F-09：clamp+quantize 只有这一份实现（param_set 与 param_link_sync 共用）*/
+static float param_clamp_quantize(const param_desc_t *p, float v)
+{
+    float c = v;
+    if (c < p->min) c = p->min;
+    if (c > p->max) c = p->max;
+    return type_quantize(p, c);
+}
+
 int param_set(uint16_t id, float v, uint8_t src)
 {
     param_desc_t *p = param_find(id);
@@ -238,10 +247,7 @@ int param_set(uint16_t id, float v, uint8_t src)
     if (!isfinite(v)) return -2;
 
     /* clamp（任务书：越界返回 clamp 后值经 src 通道回显 → 返回 1 由调用方回显）*/
-    float c = v;
-    if (c < p->min) c = p->min;
-    if (c > p->max) c = p->max;
-    c = type_quantize(p, c);
+    float c = param_clamp_quantize(p, v);
     int clamped = (c != v);
 
     /* 相等短路：值没变就什么都不做（R1 修复 M05-F-19：原来仍广播 0x11，与"变更即推"不符）。
@@ -268,10 +274,7 @@ void param_link_sync(uint16_t id, float v)
     param_desc_t *p = param_find(id);
     if (!p) return;
     if (!isfinite(v)) return;   /* R1 P1-05：对端快照里的坏值不得写入镜像 */
-    float c = v;
-    if (c < p->min) c = p->min;
-    if (c > p->max) c = p->max;
-    c = type_quantize(p, c);
+    float c = param_clamp_quantize(p, v);
     if (c != p->value) {
         p->value = c;
         p->dirty_ui = 1;

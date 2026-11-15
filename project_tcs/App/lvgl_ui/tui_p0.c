@@ -31,7 +31,7 @@ static lv_obj_t * click_zone(lv_obj_t * p, int x, int y, int w, int h, lv_event_
     lv_obj_remove_style_all(z);
     lv_obj_set_pos(z, x, y);
     lv_obj_set_size(z, w, h);
-    lv_obj_add_flag(z, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_set_clickable(z, true);
     lv_obj_add_event_cb(z, cb, LV_EVENT_CLICKED, NULL);
     return z;
 }

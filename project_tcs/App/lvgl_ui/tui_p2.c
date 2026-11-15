@@ -14,7 +14,7 @@ static lv_chart_series_t * s_ser1, * s_ser2;      /* M03-F-07：series 不是 lv
 static uint32_t s_last_sample;
 static int s_started;
 
-static void clk_back(lv_event_t * e) { LV_UNUSED(e); tui_goto(TUI_HOME); }
+static void clk_back(lv_event_t * e) { LV_UNUSED(e); tui_request(TUI_HOME); }   /* M03-F-15：延后切页 */
 
 /* 数据源=control 侧 60 点环形（G5 阶段-2：跨页持久采样） */
 static void push_sample(void)

@@ -3,7 +3,7 @@
 #include "ui_common.h"
 #include "qr/qrcodegen.h"
 
-static void clk_back(lv_event_t * e) { LV_UNUSED(e); tui_goto(TUI_HOME); }
+static void clk_back(lv_event_t * e) { LV_UNUSED(e); tui_request(TUI_HOME); }   /* M03-F-15：延后切页 */
 
 void tui_p3_build(lv_obj_t * scr)
 {
@@ -60,6 +60,6 @@ void tui_p3_build(lv_obj_t * scr)
     lv_obj_remove_style_all(z);
     lv_obj_set_pos(z, 40, 472);
     lv_obj_set_size(z, 208, 96);
-    lv_obj_add_flag(z, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_set_clickable(z, true);
     lv_obj_add_event_cb(z, clk_back, LV_EVENT_CLICKED, NULL);
 }

@@ -54,7 +54,7 @@ void tui_banner_build(lv_obj_t * parent)
     lv_color_t bg = s_alm[k].red ? TKS_ALMBG : TKS_WARNBG;
     lv_color_t tx = s_alm[k].red ? TKS_ALMTX : TKS_WARNTX;
     s_bn_box = ui_rrect(parent, 208, 8, 552, 56, 12, bg, TKS_BG);
-    lv_obj_add_flag(s_bn_box, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_set_clickable(s_bn_box, true);
     lv_obj_add_event_cb(s_bn_box, banner_ack_cb, LV_EVENT_CLICKED, NULL);
     if (s_alm[k].red) ui_icon_sq20(parent, 226, 26, tx);
     else              ui_icon_tri20(parent, 226, 26, tx, bg);
@@ -136,7 +136,7 @@ static void build_dialog(const char * title, const char * body, const char * ok,
     lv_obj_remove_style_all(ok_btn);
     lv_obj_set_pos(ok_btn, 296, 344);
     lv_obj_set_size(ok_btn, 192, 88);
-    lv_obj_add_flag(ok_btn, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_set_clickable(ok_btn, true);
     lv_obj_add_event_cb(ok_btn, ok_cb, LV_EVENT_CLICKED, NULL);
 
     ui_rrect(s_mask, 536, 344, 192, 88, 8, TKS_WHITE, TKS_WHITE);
@@ -149,7 +149,7 @@ static void build_dialog(const char * title, const char * body, const char * ok,
     lv_obj_remove_style_all(cancel);
     lv_obj_set_pos(cancel, 536, 344);
     lv_obj_set_size(cancel, 192, 88);
-    lv_obj_add_flag(cancel, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_set_clickable(cancel, true);
     lv_obj_add_event_cb(cancel, dlg_cancel, LV_EVENT_CLICKED, NULL);
 }
 
@@ -221,8 +221,6 @@ static void ui_cmd_dispatch(uint32_t cmd)
 }
 void tui_request_rebuild(void)   { s_pending = -1; }
 
-static uint32_t s_boot_tick;
-static int s_force_inv_done;
 void tui_tick(void)
 {
     /* ⓪ 走查命令消费（probe 写入） */
@@ -232,14 +230,12 @@ void tui_tick(void)
         ui_cmd_dispatch(c);
     }
     /* ① 延后导航/重建（在 lv_timer_handler 之外的上下文执行——LVGL 安全模式） */
-    if (s_pending != -2) {
+    if (s_pending != -2 && !s_mask) {        /* 模态期间保留请求（M03-F-11：原来被吞掉）*/
         int p = s_pending;
         s_pending = -2;
-        if (!s_mask) {                       /* 模态期间不重建（弹窗优先） */
-            if (p < 0) tui_goto(s_page);
-            else       tui_goto((tui_page_t)p);
-            s_rebuilt = 1;
-        }
+        if (p < 0) tui_goto(s_page);
+        else       tui_goto((tui_page_t)p);
+        s_rebuilt = 1;
     }
     /* ② 500ms 数据刷新（仅文本更新；需要重建的页自行 request） */
     uint32_t now = lv_tick_get();

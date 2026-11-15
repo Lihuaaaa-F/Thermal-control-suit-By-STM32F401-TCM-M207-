@@ -99,6 +99,7 @@ static uint8_t  s_open_cnt[3];       /* 断线去抖：连续 =2 计数（≥3 �
 static uint8_t  s_poll_ch = 1;       /* 1↔2 交替 */
 static uint32_t s_tick;              /* 50ms 拍号 */
 static uint32_t s_next_poll;         /* 下一轮询拍号 */
+static uint32_t s_poll_deadline;     /* R1 M12-F-06：本拍询问的应答截止（发送时刻+2 拍）*/
 static uint32_t s_next_probe;        /* 离线探测拍号 */
 static m207_lineasm_t s_asm;
 static m207_pend_t s_pend[M207_PEND_MAX];
@@ -411,7 +412,7 @@ static const char *m207_fsm_poll(void)
     static char cmd[24];
     if (!s_probing) {
         if (s_waiting) {
-            if (s_tick >= s_next_poll + M207_REPLY_TICKS) {
+            if ((int32_t)(s_tick - s_poll_deadline) >= 0) {
                 s_fail++;                /* 应答窗超时 */
                 s_waiting = 0;
                 if (s_fail >= M207_FAIL_LIMIT) { m207_go_offline(); return NULL; }
@@ -421,6 +422,7 @@ static const char *m207_fsm_poll(void)
         if (s_tick >= s_next_poll) {
             s_next_poll = s_tick + M207_POLL_MS / M207_TICK_MS;
             s_wait_ch = s_poll_ch;                      /* 轴分离：errcode 归属通道 */
+            s_poll_deadline = s_tick + M207_REPLY_TICKS; /* R1 M12-F-06：窗口=发送后 100ms（原来按 500+100 算成 600ms）*/
             snprintf(cmd, sizeof(cmd), "TC%u:TCACTTEMP?\r", (unsigned)s_poll_ch);
             s_poll_ch = (s_poll_ch == 1) ? 2u : 1u;
             s_waiting = 1;

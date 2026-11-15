@@ -65,6 +65,7 @@ static esp_err_t h_api_registry(httpd_req_t *req)
 
 /* WP-F.4 OTA 触发：POST /api/ota?m=0（自拷贝+切换）/ m=1（回滚）*/
 extern void app_ota_trigger(int rollback);
+#if CONFIG_TCS_DIAG
 static esp_err_t h_api_ota(httpd_req_t *req)
 {
     char q[32] = {0};
@@ -77,6 +78,7 @@ static esp_err_t h_api_ota(httpd_req_t *req)
     httpd_resp_set_type(req, "application/json");
     return httpd_resp_sendstr(req, "{\"t\":\"ota\",\"started\":true}");
 }
+#endif /* CONFIG_TCS_DIAG: /api/ota */
 
 /* /ws：握手 + 收发都进 websocket.c */
 static esp_err_t h_ws(httpd_req_t *req)
@@ -93,7 +95,11 @@ static const httpd_uri_t s_uris[] = {
     { .uri = "/chart.umd.min.js", .method = HTTP_GET, .handler = h_chart },
     { .uri = "/api/status",     .method = HTTP_GET, .handler = h_api_status },
     { .uri = "/api/registry",   .method = HTTP_GET, .handler = h_api_registry },
+#if CONFIG_TCS_DIAG
+    /* R1 P1-15：OTA 无鉴权（同 AP 任意手机可 POST 触发自拷贝+重启），
+     * 只在台架/出厂构建注册；生产固件不暴露该端点。*/
     { .uri = "/api/ota",        .method = HTTP_POST, .handler = h_api_ota },
+#endif
     { .uri = "/ws",             .method = HTTP_GET, .handler = h_ws,
       .is_websocket = true, .handle_ws_control_frames = true },
 };

@@ -59,6 +59,7 @@ run registry    tests/test_param_registry.c   App/tcs/param_registry.c App/proto
 run control     tests/test_control.c          App/tcs/control.c App/tcs/param_registry.c App/tcs/post.c App/proto/proto.c
 run post        tests/test_post.c             App/tcs/post.c App/tcs/param_registry.c App/proto/proto.c
 run proto_comm  tests/test_proto_tcs.c        App/proto/proto.c App/comm/comm.c
+run fuzz        tests/fuzz_m207.c             App/tcs/m207.c
 
 run touchsession tests/test_touch_session.c   App/tcs/touch_session.c Core/Src/ft5446.c
 run qr          tests/test_qr.c               App/tcs/qr/qrcodegen.c
@@ -243,6 +244,15 @@ PYEOF2
     then :; else FAIL=1; fi
 else
     echo "[card_surface] SKIP: 基线或 python 缺失"; FAIL=1
+fi
+
+# X06-F-02：ESP32 纯逻辑 5 套件纳入同一门禁（出货二进制=两端的组合，绿灯必须覆盖两端）
+if [ -f ../esp32/tests/run_m207_tests.sh ]; then
+    if bash ../esp32/tests/run_m207_tests.sh; then :; else
+        echo "[esp32_tests] FAIL"; FAIL=1
+    fi
+else
+    echo "[esp32_tests] SKIP: ../esp32/tests/run_m207_tests.sh 缺失"
 fi
 
 echo "==================="

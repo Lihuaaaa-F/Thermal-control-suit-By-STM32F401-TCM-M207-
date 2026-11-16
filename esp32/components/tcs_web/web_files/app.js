@@ -95,6 +95,8 @@ function onStatus(s) {
   const bar = $("alarmbar");
   if (msgs.length) { bar.textContent = "⚠ " + msgs.join("｜"); bar.classList.remove("hidden"); }
   else bar.classList.add("hidden");
+  /* 传感器断线与"通信失联"分开说：前者 M207 在线但通道温度不可用 */
+  if (s.sens_open) { bar.textContent = "⚠ 水温传感器断线 · 已停止加热，检查探头接线"; bar.classList.remove("hidden"); }
   $("btn-ack").classList.toggle("hidden", !s.alarm);
 
   /* 协议版本黄条（不拒绝服务）*/

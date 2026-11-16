@@ -365,7 +365,7 @@ static void m207_handle_line(const char *line)
         if (s_ch_open[r.module]) {                       /* F6 恢复沿（接回传感器）*/
             s_ch_open[r.module] = 0;
             g_tcs.m207_sensor_open = (uint8_t)(s_ch_open[1] || s_ch_open[2]);
-            ESP_LOGW(TAG, "ch%s sensor RECOVERED (param family visible again)",
+            ESP_LOGW(TAG, "ch%s temperature usable again (errcode=2 closed or timeout cleared)",
                      m207_mod_name(r.module));
         }
         s_open_cnt[r.module] = 0;

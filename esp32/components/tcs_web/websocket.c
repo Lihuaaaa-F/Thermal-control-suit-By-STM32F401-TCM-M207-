@@ -139,6 +139,7 @@ size_t ws_status_json(char *buf, size_t cap)
                 !cJSON_AddNumberToObject(root, "fan", s->fan) ||
                 !cJSON_AddNumberToObject(root, "mode", s->mode) ||
                 !cJSON_AddNumberToObject(root, "alarm", s->alarm) ||
+                !cJSON_AddBoolToObject(root, "sens_open", g_tcs.m207_sensor_open != 0) ||
                 !cJSON_AddNumberToObject(root, "online", s->online) ||
                 !cJSON_AddNumberToObject(root, "boot_s",
                                          (double)(esp_timer_get_time() / 1000000LL)))

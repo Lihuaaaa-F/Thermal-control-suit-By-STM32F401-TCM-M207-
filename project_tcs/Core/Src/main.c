@@ -318,6 +318,9 @@ static void hook_broadcast(param_desc_t *p, uint8_t src)
 /* ====== R2（v11.3 链路升级+协议换向）：快照接收状态 ======
  * 屏=唯一操作载体：显示全部取自 ESP32 权威快照（0x20/0x21）；
  * esp_link_ok=快照新鲜度（500ms 窗，v2.4 §13.4.6 销号）。*/
+/* X01-F-02：报警位按"谁能产生"分区。对端快照到达时本机独占位必须保留。*/
+#define ALM_SRC_LOCAL_H743   ((uint16_t)ALM_EEPROM)
+
 static uint32_t s_snap_ms;      /* 最近 0x20 到达时刻（ms）*/
 static uint32_t s_snap_seq;     /* 最近快照 seq（去重键）*/
 static uint8_t  s_snap_have;
@@ -332,7 +335,11 @@ static void snap_apply(const tcs_snap_pl_t *s)
     g_tcs.body_temp = s->body;
     g_tcs.tec1_on = s->tec1; g_tcs.tec2_on = s->tec2; g_tcs.fan_on = s->fan;
     g_tcs.mode = s->mode;
-    g_tcs.alarm_bits = s->alarm;
+    /* X01-F-02：整体覆盖会把"H743 独有的报警位"（ALM_EEPROM：参数持久化/镜像
+     * 校验失败，只有 H743 能置）在 200ms 内静默抹掉，且绕过 ack。这里只接受
+     * 对端负责的位，本机位保留。*/
+    g_tcs.alarm_bits = (uint16_t)((s->alarm & (uint16_t)~ALM_SRC_LOCAL_H743)
+                                  | (g_tcs.alarm_bits & ALM_SRC_LOCAL_H743));
     g_tcs.m207_online = (s->online & TCS_ONLINE_M207) ? 1u : 0u;
     g_tcs.body_sensor_ok = (s->online & TCS_ONLINE_BODY_SENSOR) ? 1u : 0u;
     param_link_sync(PARAM_ID_TC1_SET, s->tc1_set);
@@ -355,6 +362,7 @@ static void snap_reassert(void)
      * ESP32 还没跑到超温那一拍时，H743 的 SAFE 会在无 ack 的情况下自动退出。*/
     if (control_estop_latched())    g_tcs.alarm_bits |= ALM_ESTOP;
     if (control_overtemp_latched()) g_tcs.alarm_bits |= ALM_OVERTEMP;
+    if (tcs_alarm_active(ALM_EEPROM)) g_tcs.alarm_bits |= ALM_EEPROM;
 }
 
 /* R2：屏侧写 M207 温度参数 → 链路 0x12 发 ESP32（权威→M207 verify）；
@@ -476,7 +484,9 @@ void on_frame(const uint8_t *payload, size_t len)
         if (mask & TCS_D_FAN)     g_tcs.fan_on = d.fan;
         if (mask & TCS_D_MODE)  { g_tcs.mode = d.mode;
                                   param_link_sync(PARAM_ID_MODE, (float)d.mode); }
-        if (mask & TCS_D_ALARM)   g_tcs.alarm_bits = d.alarm;
+        if (mask & TCS_D_ALARM)   /* X01-F-02：与 0x20 同规——本机独占位不被覆盖 */
+            g_tcs.alarm_bits = (uint16_t)((d.alarm & (uint16_t)~ALM_SRC_LOCAL_H743)
+                                          | (g_tcs.alarm_bits & ALM_SRC_LOCAL_H743));
         if (mask & TCS_D_BODY)    g_tcs.body_temp = d.body;
         break;
     }

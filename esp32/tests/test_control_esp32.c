@@ -141,6 +141,23 @@ int main(void)
     tick();
     CHECK(control_state() == CTRL_IDLE, "recovered+ack -> IDLE");
 
+    /* ====== M06-F-06：无有效体温样本 → auto 不得开 HEAT（默认未布防场景）====== */
+    enter_auto_healthy();
+    set_armed(0);              /* 上电默认未布防：只记沿、不进 SAFE，最容易"带病加热" */
+    tick();                    /* 捕获 boot 基准 */
+    (void)param_set(PARAM_ID_MODE, 1.0f, 4);
+    g_tcs.body_sensor_ok = 0;  /* 传感器未接（上电默认）*/
+    g_tcs.body_temp = 0.0f;    /* 旧实现把这个 0 当真实体温 → 判 HEAT */
+    reset_stubs();
+    tick();
+    CHECK(control_state() == CTRL_IDLE, "no body sample -> IDLE (unarmed)");
+    CHECK(last_tec_on == 0, "no body sample -> TEC stays off");
+    /* 有样本后才允许进入 HEAT */
+    g_tcs.body_sensor_ok = 1;
+    g_tcs.body_temp = 30.0f;   /* < cold-hyst → HEAT */
+    tick();
+    CHECK(control_state() == CTRL_HEAT, "valid cold sample -> HEAT");
+
     /* ====== M12-F-01：M207 在线但通道传感器断线 → 按温度源丢失进 SAFE ====== */
     enter_auto_healthy();
     tick();                    /* 捕获 boot 基准 */

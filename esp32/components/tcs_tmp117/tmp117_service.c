@@ -136,10 +136,15 @@ static void tmp117_task(void *arg)
         }
         uint8_t ok_before = s_health.ok;
         tmp117_health_step(&s_health, ok, on_sensor_lost);
+        /* M06-F-06：状态真值 = 健康机 ok 且已有有效样本。
+         * 原来只在"掉线沿/恢复沿"写，上电初值 body_sensor_ok=1 + body_temp=0.0，
+         * auto 模式首个 500ms 评估就按"体温 0°C"开始加热。*/
+        g_tcs.body_sensor_ok = (uint8_t)(s_health.ok && s_have_valid);
         if (ok_before && !s_health.ok) {
-            g_tcs.body_sensor_ok = 0;      /* 掉线沿 */
+            /* 掉线沿：真值已由上句统一写，这里只补一条日志 */
+            ESP_LOGW(TAG, "LOST (data flow stopped; alarm raised by control)");
         } else if (!ok_before && s_health.ok) {
-            g_tcs.body_sensor_ok = 1;      /* 恢复沿（数据流恢复；报警位保持）*/
+            /* 恢复沿（报警位保持，需人工 ack）*/
             s_recover_edges++;
             ESP_LOGW(TAG, "RECOVERED (data flow; alarm stays until ack)");
         }
@@ -269,7 +274,7 @@ void tmp117_lb_boottest(void)
     tmp117_health_init(&s_health);
     tmp117_avg_init(&s_avg);
     s_have_valid = 0;
-    g_tcs.body_sensor_ok = 1;
+    g_tcs.body_sensor_ok = 0;      /* M06-F-06：未采到样本前一律"不就绪" */
     g_tcs.body_temp = 0.0f;
 
     ESP_LOGI(TAG, "[TB117] RESULT fail=%d %s", s_lb_fail,

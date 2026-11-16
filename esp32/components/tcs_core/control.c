@@ -23,9 +23,16 @@
 static portMUX_TYPE s_safety_mux = portMUX_INITIALIZER_UNLOCKED;
 #define SAFETY_LOCK()   taskENTER_CRITICAL(&s_safety_mux)
 #define SAFETY_UNLOCK() taskEXIT_CRITICAL(&s_safety_mux)
+/* X03-F-02：报警位 bitmask 的 |= / &= 是读改写，control/m207/link/httpd 多任务并发，
+ * 用独立 spinlock 收敛（不与 SAFETY_LOCK 嵌套：进入 ALM 段前不持有 SAFETY_LOCK）。*/
+static portMUX_TYPE s_alm_mux = portMUX_INITIALIZER_UNLOCKED;
+#define ALM_LOCK()      taskENTER_CRITICAL(&s_alm_mux)
+#define ALM_UNLOCK()    taskEXIT_CRITICAL(&s_alm_mux)
 #else
 #define SAFETY_LOCK()   ((void)0)
 #define SAFETY_UNLOCK() ((void)0)
+#define ALM_LOCK()      ((void)0)
+#define ALM_UNLOCK()    ((void)0)
 #endif
 
 static control_ops_t s_ops;
@@ -170,12 +177,18 @@ void control_init(const control_ops_t *ops)
 
 void tcs_alarm_raise(uint16_t bit)
 {
+    ALM_LOCK();
     g_tcs.alarm_bits |= bit;
+    ALM_UNLOCK();
 }
 
 uint8_t tcs_alarm_active(uint16_t bit)
 {
-    return (g_tcs.alarm_bits & bit) ? 1u : 0u;
+    uint16_t v;
+    ALM_LOCK();
+    v = g_tcs.alarm_bits;
+    ALM_UNLOCK();
+    return (v & bit) ? 1u : 0u;
 }
 
 /* ====== 安全态进入/退出 ====== */
@@ -209,6 +222,8 @@ void tcs_alarm_ack(void)
     SAFETY_LOCK();
     lat = s_safety_latch;
     SAFETY_UNLOCK();
+    /* X03-F-02：一连串 &= 合成一个临界区，避免并发 raise 的位被中间态抹掉 */
+    ALM_LOCK();
     if (!(lat & SAFETY_BIT_BODY_LOST) && g_tcs.body_sensor_ok)
         g_tcs.alarm_bits &= (uint16_t)~ALM_BODY_SENSOR;
     if (!(lat & SAFETY_BIT_M207_LOST) && g_tcs.m207_online && !g_tcs.m207_sensor_open)
@@ -220,6 +235,7 @@ void tcs_alarm_ack(void)
         s_estop_latch = 0;
     }
     g_tcs.alarm_bits &= (uint16_t)~ALM_EEPROM;   /* EEPROM 报警仅提示性 */
+    ALM_UNLOCK();
 }
 
 void tcs_emergency_stop(void)
@@ -330,6 +346,19 @@ void control_poll(uint32_t now_ms)
 
     /* 手动模式：状态机旁路（输出保持人工值）*/
     if (g_tcs.mode == 0) {
+        goto_state(CTRL_IDLE);
+        return;
+    }
+
+    /* M06-F-06：没有有效体温样本时不得启动/继续自动冷热输出（未布防也一样）。
+     * 上电默认 body_temp=0.0 曾是"合法样本"：auto 首个 500ms 评估就按 0°C 开 HEAT，
+     * 传感器没接也照样加热。已输出的通道先归零、风扇停，再停在 IDLE 等样本。*/
+    if (!g_tcs.body_sensor_ok) {
+        if (s_state == CTRL_HEAT || s_state == CTRL_COOL) {
+            out_tec_sw(1, 0);
+            out_tec_sw(2, 0);
+            out_fan(0);
+        }
         goto_state(CTRL_IDLE);
         return;
     }

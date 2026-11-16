@@ -54,13 +54,16 @@ typedef struct {
 void link_stats_get(link_stats_t *out);
 
 int  link_send_cmd(uint8_t cmd);                    /* → 0x15，异步等 ACK */
+int  link_send_param(uint16_t id, float v);         /* → 0x11（反向镜像：ESP32 权威 → 屏显示）*/
 int  link_send_frame_mt(uint8_t mt, const uint8_t *pl, size_t n);  /* R2：0x20/0x21 载荷发送（fire-and-forget，免 ARQ：0x20/0x21 走 comm_send_noarq）；返回 0=入队 1=演示抑制 -1=组帧失败 */
 int  link_get_registry(link_reg_t *out, int max);   /* 拷贝注册表缓存 */
 void link_request_registry(void);                   /* 发 0x13（握手全量）*/
 
 /* 最近一次 0x11 参数变更（pv 推送源：src=h743 触摸/CLI；含初值缓存）*/
 typedef struct { uint16_t id; float v; int64_t us; } link_param_change_t;
-const link_param_change_t *link_last_param(void);
+/* 最近一次 0x11 快照拷贝。指针版会在锁外逐字段读，与链路任务写交错时出现
+ * "新 id + 旧值"（与 M11-F-12 同类），故只提供整块拷贝。*/
+void link_last_param_copy(link_param_change_t *out);
 float link_param_value(uint16_t id);       /* 注册表初值（无缓存则 NaN→前端用 min）*/
 
 void link_on_event(link_event_cb_t cb);   /* 注册 ws 推送回调（单播即可）*/

@@ -104,6 +104,7 @@ typedef struct {
 #define PARAM_SRC_CONSOLE 2
 #define PARAM_SRC_WEB     3
 #define PARAM_SRC_DEFAULT 4
+#define PARAM_SRC_LINK    5   /* 来自链路对端（屏幕写参数）；用于抑制回推成环 */
 
 void  param_registry_init(const param_hooks_t *h);   /* 建表+装配钩子+装默认值 */
 int   param_count(void);                     /* 已注册参数条数 */

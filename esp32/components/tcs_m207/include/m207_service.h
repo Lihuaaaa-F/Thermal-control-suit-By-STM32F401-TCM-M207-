@@ -35,7 +35,6 @@ int  m207_save_all(void);
 
 /* ====== 状态读侧 ====== */
 uint8_t m207_online(void);                           /* 0/1（g_tcs.m207_online 同步）*/
-uint8_t m207_ch_sensor_open(uint8_t ch);             /* F6：1=该通道传感器断线（errcode=2 参数族隐藏；温度缓存冻结；恢复=温度正常到达）*/
 float   m207_last_temp(uint8_t ch);                  /* TCACTTEMP 最近值 */
 uint32_t m207_temp_age_ms(void);                     /* 双通道温度缓存龄（较旧者 ms；0xFFFF=离线/未知；R2 快照新鲜度）*/
 uint16_t m207_stats_nak(void);                       /* NAK 累计（写路径确认失败）*/

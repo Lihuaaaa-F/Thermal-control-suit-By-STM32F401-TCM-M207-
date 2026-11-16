@@ -112,6 +112,15 @@ void app_ota_trigger(int rollback)
 
 /* R2 协议换向：屏（H743）0x12 → 本端权威注册表 → M207 verify → 回 ACK。
  * 经 link_on_setparam 回调注入（tcs_core 依赖 tcs_link，反向直调会成组件环）。*/
+/* 网页/控制台改参数 → 反向 0x11 镜像给屏（v2 补口，2026-11-16）。
+ * 屏是纯显示终端，本地注册表只是镜像；不回推会让屏显示旧值并被屏上操作覆盖。*/
+static void esp_on_broadcast(param_desc_t *p, uint8_t src)
+{
+    if (!p) return;
+    if (src == PARAM_SRC_LINK) return;        /* 屏幕自己的改动已经在对端生效 */
+    (void)link_send_param(p->id, p->value);   /* 组帧失败/断链由 ARQ 与下次快照兜底 */
+}
+
 /* v2：屏幕（H743）急停/报警确认 → 在本端执行（TEC/风扇在这里）*/
 static void esp_on_cmd(uint8_t cmd, uint8_t seq)
 {
@@ -142,7 +151,7 @@ static void esp_on_cmd(uint8_t cmd, uint8_t seq)
 
 static void esp_on_setparam(uint16_t id, float v, uint8_t seq)
 {
-    int rv = param_set(id, v, PARAM_SRC_DEFAULT);
+    int rv = param_set(id, v, PARAM_SRC_LINK);   /* 来自屏幕：不回推，防 0x11/0x12 成环 */
     uint8_t st = TCS_ACK_OK;
     if (rv == 1) st = TCS_ACK_CLAMP;
     else if (rv == -1) st = TCS_ACK_BAD_ID;
@@ -178,7 +187,8 @@ void app_main(void)
     param_hooks_t hooks = { .eeprom_commit = nvs_registry_commit,
                             .on_m207_set = m207_hook_set_temp,
                             .on_m207_map_set = m207_hook_map_set,
-                            .on_mode_change = control_on_mode_change };
+                            .on_mode_change = control_on_mode_change,
+                            .on_broadcast = esp_on_broadcast };
     param_registry_init(&hooks);
     {
         uint8_t img[EE_IMG_SIZE];

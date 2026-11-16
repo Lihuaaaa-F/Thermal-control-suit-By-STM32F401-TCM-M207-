@@ -422,6 +422,17 @@ void on_frame(const uint8_t *payload, size_t len)
     size_t blen = len - 2;
 
     switch (mt) {
+    case MT_TCS_PARAM: {             /* v2 补口：ESP32 权威 → 屏镜像（反向 0x11）
+                                      * 网页/控制台改的非设定值参数在这里静默落表；
+                                      * param_link_sync 不广播，故不会反向成环。*/
+        tcs_param_pl_t pp;
+        if (tcs_scan_param(body, blen, &pp) == 0) {
+            float v = (pp.type == PARAM_TYPE_F32) ? tcs_b2f(pp.value) : (float)pp.value;
+            param_link_sync(pp.id, v);
+            tcs_log("[NET]", "mirror id=0x%02x v=%.2f", pp.id, (double)v);
+        }
+        break;
+    }
     case MT_TCS_SET_PARAM: {
         tcs_param_pl_t pp;
         if (tcs_scan_param(body, blen, &pp) != 0) {

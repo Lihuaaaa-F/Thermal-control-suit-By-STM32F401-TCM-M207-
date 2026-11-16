@@ -173,21 +173,24 @@ size_t ws_registry_json(char *buf, size_t cap)
     taskEXIT_CRITICAL(&s_reg_mux);
     if (hit) return hit_len < cap ? hit_len : 0;
 
-    /* R3-A-3：64×~104B≈6.6KB，原来开在 httpd 任务栈（8KB）上。本函数单实例，
-     * 与 s_push_buf 同策略移 static；并发保护见 s_reg_mux（构建期同一时刻只有一个）。*/
-    static link_reg_t regs[LINK_REGISTRY_MAX];
+    /* R3-A-3（修正版）：64×~104B≈6.6KB 不能开在 httpd 任务栈（8KB）上；也不能用 static——
+     * 本函数会被 WS 推送任务与 /api/registry 处理任务并发调用（缓存未命中时同时重建），
+     * static 缓冲会互相踩。改一次性堆分配（重建是低频事件，远低于 500ms 推送频率）。*/
+    link_reg_t *regs = malloc(sizeof(link_reg_t) * LINK_REGISTRY_MAX);
+    if (!regs) return 0;
     uint32_t g0 = s_reg_gen;      /* 数据快照前代（换入时盖 g0 非 current：构建窗口
                                      * 内到达的事件须使缓存失配——盖 current 会把陈
                                      * 帧虚标成新鲜，红队 W2-R2 反例坐实）*/
     int n = link_get_registry(regs, LINK_REGISTRY_MAX);
     cJSON *root = cJSON_CreateObject();
     cJSON *arr = cJSON_CreateArray();
-    if (!root || !arr) { cJSON_Delete(root); cJSON_Delete(arr); return 0; }
+    if (!root || !arr) { cJSON_Delete(root); cJSON_Delete(arr); free(regs); return 0; }
     /* root 两 Add 失败=残树不得入缓存；arr 未挂入 root 时须显式回收（W2-R3）*/
     if (!cJSON_AddStringToObject(root, "t", "reg") ||
         !cJSON_AddItemToObject(root, "list", arr)) {
         cJSON_Delete(root);
         cJSON_Delete(arr);       /* AddItem 失败时 arr 不为 root 所有，双删安全 */
+        free(regs);
         return 0;
     }
     for (int i = 0; i < n; i++) {
@@ -210,6 +213,7 @@ size_t ws_registry_json(char *buf, size_t cap)
     }
     char *j = cJSON_PrintBuffered(root, 16384, 0);   /* R1 P1-01：64 槽注册表 JSON 约 10KB */
     cJSON_Delete(root);
+    free(regs);
     if (!j) return 0;
     size_t len = strlen(j);
     /* 换入缓存：旧串延后释放（读侧持锁拷贝，不会拿到悬垂指针）；
@@ -249,10 +253,13 @@ static void push_pv(uint16_t id, float v, const char *src, int clamped)
  * src 判定：与网页最近 set 匹配（3s 内）→ web_ack（前端同步+clamp toast），
  * 否则 h743（触摸/CLI 改的，网页控件跟随）。clamp 信息从 0x90 ACK 取。 */
 static int64_t s_seen_param_us;
+static uint16_t s_clamp_id;   /* 本次 set 被限幅的参数 id（事件推送时打 clamped，单一路径不重复推）*/
 
 static void on_link_event(void)
 {
-    const link_param_change_t *p = link_last_param();
+    link_param_change_t pc;
+    link_last_param_copy(&pc);
+    const link_param_change_t *p = &pc;
     if (p->us == 0 || p->us == s_seen_param_us) return;
     s_seen_param_us = p->us;
 
@@ -268,7 +275,10 @@ static void on_link_event(void)
         src = "web_ack";
         s_expect_id = 0;
     }
-    push_pv(p->id, p->v, src, 0);   /* R3-E-1：clamp 由 set 的 param_set 返回值直接回执 */
+    /* R3-E-1：clamp 回执与事件推送合并成一条（避免同一次 set 推两条 pv）*/
+    int clamped = (s_clamp_id && s_clamp_id == p->id);
+    if (clamped) s_clamp_id = 0;
+    push_pv(p->id, p->v, src, clamped);
 }
 
 /* 500ms 推送任务
@@ -362,10 +372,8 @@ esp_err_t ws_on_recv(httpd_req_t *req)
                 /* R3-E-1：clamp/失败回执以本次 param_set 返回值为准（权威在本端）。
                  * 原来靠 0x90 ACK + link_set_param 的 id 关联，而 link_set_param 已无
                  * 调用者 → 链路恒为 0，clamped 判定永不成立（死链）。*/
-                if (prv == 1) {                 /* 被限幅：回显实际值 + clamped */
-                    s_expect_id = 0;            /* 本帧已由这里回显，不再等事件回显 */
-                    push_pv((uint16_t)id->valueint,
-                            param_get((uint16_t)id->valueint), "web_ack", 1);
+                if (prv == 1) {                 /* 被限幅：记下 id，事件推送时打 clamped */
+                    s_clamp_id = (uint16_t)id->valueint;
                 } else if (prv < 0) {           /* 只读/非法值/NaN */
                     char e[64];
                     snprintf(e, sizeof e, "{\"t\":\"perr\",\"id\":%u,\"rv\":%d}",

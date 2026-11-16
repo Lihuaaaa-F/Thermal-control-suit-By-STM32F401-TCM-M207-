@@ -750,7 +750,6 @@ int m207_send_raw(const char *cmd)
 }
 
 uint8_t m207_online(void) { return s_online; }
-uint8_t m207_ch_sensor_open(uint8_t ch) { return (ch == 1 || ch == 2) ? s_ch_open[ch] : 0u; }
 float m207_last_temp(uint8_t ch) { return (ch == 1 || ch == 2) ? s_temp[ch] : 0.0f; }
 uint32_t m207_temp_age_ms(void)
 {

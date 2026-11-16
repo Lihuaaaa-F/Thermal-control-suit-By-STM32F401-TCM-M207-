@@ -32,7 +32,7 @@
 
 /* ====== 消息号 ====== */
 #define MT_TCS_STATUS          0x10  /* H743→ESP 500ms 周期 */
-#define MT_TCS_PARAM           0x11  /* H743→ESP 变更即推 + 握手全量 */
+#define MT_TCS_PARAM           0x11  /* 双向参数帧：H743→ESP32=屏改参/握手全量；ESP32→H743=权威镜像（v2 补口）*/
 #define MT_TCS_SET_PARAM       0x12  /* ESP→H743 ACK 必达 */
 #define MT_TCS_GET_REGISTRY    0x13  /* ESP→H743 无载荷 */
 #define MT_TCS_REGISTRY_ENTRY  0x14  /* H743→ESP ×N 条 */

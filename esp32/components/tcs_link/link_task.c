@@ -430,6 +430,25 @@ int link_send_frame_mt(uint8_t mt, const uint8_t *pl, size_t n)
     return 0;
 }
 
+/* v2 补口（2026-11-16）：ESP32→H743 参数镜像。
+ * 0x11 原本只有 H743→ESP32 一个方向；v2 把权威放到 ESP32 后，网页/控制台改的
+ * 非设定值参数（body_hot/body_cold/hyst/tc_set_confirm/0x1xx…）没有通道回屏，
+ * 屏上显示旧值，用户在屏上再按 +/- 就会用旧值覆盖网页的新值（静默数据丢失）。
+ * 0x11 的载荷 tcs_param_pl_t 本来就是"参数变更"，反向复用不改格式；
+ * H743 侧 param_link_sync 静默落表、不回推，故不会成环。*/
+int link_send_param(uint16_t id, float v)
+{
+    uint8_t pl[TCS_PARAM_PL_LEN];
+    tcs_param_pl_t p = { .id = id, .type = PARAM_TYPE_F32, .value = tcs_f2b(v) };
+    size_t n = tcs_pl_param(pl, sizeof(pl), &p);
+    if (!n) return -1;
+    uint8_t frame[MAX_FRAME];
+    size_t fn = mt_frame(MT_TCS_PARAM, comm_next_seq(&s_link), pl, n, frame, sizeof(frame));
+    if (!fn) return -1;
+    comm_send(&s_link, frame, fn, MT_TCS_PARAM);
+    return 0;
+}
+
 int link_send_cmd(uint8_t cmd)
 {
 #if CONFIG_TCS_DEMO
@@ -496,7 +515,13 @@ void link_stats_get(link_stats_t *out)
     out->pending_evict = s_link.pending_evict;
     out->proto_mismatch = s_proto_mismatch;
 }
-const link_param_change_t *link_last_param(void) { return &s_last_param; }
+void link_last_param_copy(link_param_change_t *out)
+{
+    if (!out) return;
+    taskENTER_CRITICAL(&s_mux);
+    *out = s_last_param;
+    taskEXIT_CRITICAL(&s_mux);
+}
 
 float link_param_value(uint16_t id)
 {

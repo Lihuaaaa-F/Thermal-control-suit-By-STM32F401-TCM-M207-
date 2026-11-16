@@ -155,8 +155,13 @@ static const float s_defaults[PARAM_N_REGISTERED] = {
     0.4f, 40.0f, 0.1f, 30.0f, 15.0f, 1.0f, 0.0f, 5.0f, 9.0f, 100.0f, -20.0f,
     -10.0f, 120.0f, 8.0f, 1.0f, 0.01f,
     60.0f, -10.0f, 10.0f, 0.0f,
+    1.0f,                              /* 0x127 m207_pushlist（BTN，初值无实际含义）*/
     0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f,
 };
+/* X01-F-06：默认值表与参数表必须逐项对齐（位置敏感，少一个就整体错位/补零）*/
+_Static_assert(sizeof(s_defaults) / sizeof(s_defaults[0]) ==
+               sizeof(s_params) / sizeof(s_params[0]),
+               "s_defaults size mismatch with s_params");
 
 static param_hooks_t s_hooks;
 static uint32_t s_armed_at_ms;    /* 首个脏参出现后由 flush 起算的 2s 防抖窗口 */

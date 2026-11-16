@@ -135,10 +135,21 @@ const char *m207_mod_name(uint8_t mod)
 /* ====== H10 映射表模板格式化（纯函数）====== */
 int m207_map_format(const m207_map_entry_t *e, float v, char *out, size_t cap)
 {
-    if (!e || !out || e->ch < 1 || e->ch > 2 || e->cmd[0] == '\0') return -1;
-    if (e->decimals > 6) return -1;
-    int n = snprintf(out, cap, "TC%u:%s=%.*f\r",
-                     (unsigned)e->ch, e->cmd, (int)e->decimals, (double)v);
+    if (!e || !out || e->cmd[0] == '\0' || e->decimals > 6) return -1;
+    /* M12-F-05：前缀按模块归属。mod==0 → TC{ch}（TC1/TC2 通道参数）；
+     * mod!=0 → 模块名（PCB/SYSTEM/PCRS232）。原来 0x120-0x126 用 TC1 前缀下发
+     * PCB 参数，模块必拒，而网页 ACK 还报成功。*/
+    char pfx[12];
+    if (e->mod) {
+        const char *nm = m207_mod_name(e->mod);
+        if (nm[0] == '?') return -1;
+        snprintf(pfx, sizeof pfx, "%s", nm);
+    } else {
+        if (e->ch < 1 || e->ch > 2) return -1;
+        snprintf(pfx, sizeof pfx, "TC%u", (unsigned)e->ch);
+    }
+    int n = snprintf(out, cap, "%s:%s=%.*f\r",
+                     pfx, e->cmd, (int)e->decimals, (double)v);
     if (n < 0 || (size_t)n >= cap) return -1;
     return 0;
 }

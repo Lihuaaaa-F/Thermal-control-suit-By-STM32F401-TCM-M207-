@@ -145,6 +145,23 @@ int main(void)
     CHECK(m207_classify_poll_errcode(8, 1, "TCACTTEMP") == M207_POLLERR_LINK_ALIVE,
           "classify: err8 stray SAVE ACK -> link alive");
 
+
+    /* M12-F-05：模块前缀（PCB:/PCRS232:）；四段旧初始化器语义不变（mod=0）*/
+    {
+        char mb[40];
+        m207_map_entry_t ep = {0x120, 0, "TMOTPHT", 1, M207_MOD_PCB};
+        CHECK(m207_map_format(&ep, 60.0f, mb, sizeof mb) == 0
+              && strncmp(mb, "PCB:TMOTPHT=60.0", 16) == 0, "PCB prefix");
+        m207_map_entry_t es = {0x126, 0, "COMADDR", 0, M207_MOD_PCRS232};
+        CHECK(m207_map_format(&es, 7.0f, mb, sizeof mb) == 0
+              && strncmp(mb, "PCRS232:COMADDR=7", 17) == 0, "PCRS232 prefix");
+        m207_map_entry_t et = {0x100, 1, "TCPIDP", 3};
+        CHECK(m207_map_format(&et, 1.5f, mb, sizeof mb) == 0
+              && strncmp(mb, "TC1:TCPIDP=1.500", 16) == 0, "TC prefix unchanged");
+        m207_map_entry_t bad = {0x999, 3, "X", 1, 0};   /* 无 mod 且 ch 非法 */
+        CHECK(m207_map_format(&bad, 1.0f, mb, sizeof mb) == -1, "bad ch rejected");
+    }
+
     printf("test_m207_proto: PASS=%d FAIL=%d\n", g_pass, g_fail);
     return g_fail ? 1 : 0;
 }

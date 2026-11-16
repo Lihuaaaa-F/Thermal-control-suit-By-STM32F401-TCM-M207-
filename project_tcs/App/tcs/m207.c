@@ -141,10 +141,21 @@ const char *m207_mod_name(uint8_t mod)
 /* ====== H10 映射表模板格式化（纯函数）====== */
 int m207_map_format(const m207_map_entry_t *e, float v, char *out, size_t cap)
 {
-    if (!e || !out || e->ch < 1 || e->ch > 2 || e->cmd[0] == '\0') return -1;
-    if (e->decimals > 6) return -1;
-    int n = snprintf(out, cap, "TC%u:%s=%.*f\r",
-                     (unsigned)e->ch, e->cmd, (int)e->decimals, (double)v);
+    if (!e || !out || e->cmd[0] == '\0' || e->decimals > 6) return -1;
+    /* M12-F-05：前缀按模块归属。mod==0 → TC{ch}（TC1/TC2 通道参数）；
+     * mod!=0 → 模块名（PCB/SYSTEM/PCRS232）。原来 0x120-0x126 用 TC1 前缀下发
+     * PCB 参数，模块必拒，而网页 ACK 还报成功。*/
+    char pfx[12];
+    if (e->mod) {
+        const char *nm = m207_mod_name(e->mod);
+        if (nm[0] == '?') return -1;
+        snprintf(pfx, sizeof pfx, "%s", nm);
+    } else {
+        if (e->ch < 1 || e->ch > 2) return -1;
+        snprintf(pfx, sizeof pfx, "TC%u", (unsigned)e->ch);
+    }
+    int n = snprintf(out, cap, "%s:%s=%.*f\r",
+                     pfx, e->cmd, (int)e->decimals, (double)v);
     if (n < 0 || (size_t)n >= cap) return -1;
     return 0;
 }
@@ -182,9 +193,9 @@ static uint32_t s_recover_last_ms;
 static uint8_t  s_fail_cnt;
 static uint8_t  s_poll_ch = 1;                 /* 1↔2 交替 */
 static uint8_t  s_online;
-static float    s_last_temp[3];                /* [1]=tc1 [2]=tc2 */
-static uint32_t s_last_temp_ms[3];             /* H6.7：上回值时刻（合理性滤波）*/
-static uint8_t  s_have_temp[3];
+static float    s_last_temp[M207_MOD_MAX];     /* [1]=tc1 [2]=tc2；非 TC 模块不写（见 handle_line 早退）*/
+static uint32_t s_last_temp_ms[M207_MOD_MAX];  /* H6.7：上回值时刻（合理性滤波）*/
+static uint8_t  s_have_temp[M207_MOD_MAX];
 
 /* 待确认下发（回读校验）：每通道 1 条 */
 static m207_setpend_t s_pend[2];
@@ -231,10 +242,12 @@ static const m207_map_entry_t s_map[] = {
     { 0x11F, 2, "TCSTEPTEMP",   3 },
     /* 系统/PCB（PCB 模块无通道概念，ch=1 占位仅用于模板 TC 前缀不适用——
      * PCB:* 类下发由 R5 按 module 字段扩展，本表 ch 仅 TC 类有效）*/
-    { 0x120, 1, "PCBOTPHT",     1 },
-    { 0x121, 1, "PCBOTPLT",     1 },
-    { 0x122, 1, "PCBOTPHHYS",   1 },
-    { 0x126, 1, "COMADDR",      0 },
+    /* M12-F-05：正典 §2.5 的模块前缀是 PCB:/PCRS232:，参数名照抄正典
+     * （TMOTPHT/TMOTPLT/TMOTPHHYS/COMADDR）；mod!=0 时前缀由模块名生成。*/
+    { 0x120, 0, "TMOTPHT",      1, M207_MOD_PCB     },
+    { 0x121, 0, "TMOTPLT",      1, M207_MOD_PCB     },
+    { 0x122, 0, "TMOTPHHYS",    1, M207_MOD_PCB     },
+    { 0x126, 0, "COMADDR",      0, M207_MOD_PCRS232 },
 };
 #define M207_MAP_N  (sizeof(s_map) / sizeof(s_map[0]))
 
@@ -417,14 +430,17 @@ int m207_map_set(uint16_t pid, float v)
         char cmd[24];
         if (m207_map_format(e, v, cmd, sizeof(cmd)) != 0) return -1;
         if (m207_txq_push(cmd) != 0) return -1;
-        m207_setpend_t *p = &s_pend[e->ch - 1];
-        p->value = v;
-        p->ch = e->ch;
-        p->retries = 0;
-        p->active = 1;
-        strncpy(p->param, e->cmd, sizeof(p->param) - 1);
-        p->param[sizeof(p->param) - 1] = '\0';
-        p->decimals = e->decimals;
+        /* M12-F-05：mod!=0（PCB/SYSTEM/PCRS232）没有通道写确认语义，跳过 setpend */
+        if (e->mod == 0 && e->ch >= 1 && e->ch <= 2) {
+            m207_setpend_t *p = &s_pend[e->ch - 1];
+            p->value = v;
+            p->ch = e->ch;
+            p->retries = 0;
+            p->active = 1;
+            strncpy(p->param, e->cmd, sizeof(p->param) - 1);
+            p->param[sizeof(p->param) - 1] = '\0';
+            p->decimals = e->decimals;
+        }
         return 0;
     }
     return -1;   /* 未映射参数 */
@@ -444,6 +460,17 @@ static void m207_handle_line(const char *line, uint32_t now_ms)
     m207_reply_t r;
     if (!m207_parse_line(line, &r)) return;
     if (r.module == M207_MOD_NONE) return;
+    /* C-1（R3 复核）：解析器现在能识别 PCB/SYSTEM/PCRS232，但本文件的温度/写确认
+     * 语义只对 TC1/TC2 成立（数组与 s_pend 都按下标 1/2 设计）。非 TC 模块只留痕，
+     * 绝不下标——否则 module=3 会写穿 s_last_temp_ms[0]/s_pend[2]。*/
+    if (r.module != M207_MOD_TC1 && r.module != M207_MOD_TC2) {
+        char b[96];
+        snprintf(b, sizeof b, "[M207] module %s %s (non-channel, log only)
+",
+                 m207_mod_name(r.module), r.param);
+        SEGGER_RTT_WriteString(b);
+        return;
+    }
 
 #if TCS_USE_LVGL
     /* U-6：把最近一次错误码暴露给 UI 层（人话呈现用；=0 构建不编入，保 TL-17 字节恒等） */
@@ -486,6 +513,7 @@ static void m207_handle_line(const char *line, uint32_t now_ms)
         }
     }
     /* 写路径确认：该通道有待确认 && 收到 TCADJTEMP 回显 */
+    if (r.module < 1 || r.module > 2) return;   /* C-1：s_pend[2] 只能被 TC1/TC2 索引 */
     m207_setpend_t *p = &s_pend[r.module - 1];
     if (p->active && r.kind == M207_KIND_REPLY && strcmp(r.param, "TCADJTEMP") == 0) {
         float diff = r.value - p->value;

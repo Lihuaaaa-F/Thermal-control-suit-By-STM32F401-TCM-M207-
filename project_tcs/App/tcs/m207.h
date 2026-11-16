@@ -74,6 +74,9 @@ typedef struct {
     uint8_t  ch;           /* 下发通道 1/2 */
     char     cmd[14];      /* M207 参数名（如 "TCADJTEMP"/占位 "PIDKP"）*/
     uint8_t  decimals;     /* 下发小数位（回读容差 0.5×10^-decimals）*/
+    uint8_t  mod;          /* M12-F-05：0=按 ch 组 TC 前缀；非 0=模块号（M207_MOD_*），
+                            * 前缀用模块名（PCB:/SYSTEM:/PCRS232:）。追加在末尾，
+                            * 旧初始化器（4 项）语义不变。*/
 } m207_map_entry_t;
 
 /* 模板格式化（纯函数）：`TC{ch}:{cmd}=%.{}f\r`。返回 0=ok，-1=cap 不足/表项非法 */

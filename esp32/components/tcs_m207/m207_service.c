@@ -92,6 +92,8 @@ static uint8_t  s_online;
 static uint8_t  s_probing;           /* 0=常规轮询 FSM（含上电首联）1=离线探测 */
 static uint8_t  s_ever_online;
 static uint8_t  s_fail;
+static uint8_t  s_fail_ch[3];     /* M06-F-05：每通道连续超时（原来共享 s_fail，TC2 一成功就清零）*/
+static uint8_t  s_probe_ch = 2;    /* M12-F-03：离线探测通道（2→1 起始，与原 TC1 首问一致）*/
 static uint8_t  s_waiting;           /* 1=轮询已发在等应答 */
 static uint8_t  s_wait_ch;           /* 轮询在等的通道（轴分离：errcode 归属）*/
 static uint8_t  s_ch_open[M207_MOD_MAX];   /* 1/2=该通道传感器断线态（F6，errcode=2 参数族隐藏）；
@@ -225,6 +227,7 @@ static void pend_mark_resend(m207_pend_t *p, uint8_t phase, const char *why)
 static void m207_go_online(const char *why)
 {
     s_fail = 0;
+    s_fail_ch[1] = s_fail_ch[2] = 0;   /* M06-F-05：链路恢复即重置通道计数 */
     s_probing = 0;
     if (s_online) return;
     s_online = 1;
@@ -358,6 +361,7 @@ static void m207_handle_line(const char *line)
         s_temp[r.module] = r.value;
         s_temp_tick[r.module] = s_tick;
         s_have_temp[r.module] = 1;
+        s_fail_ch[r.module] = 0;                 /* M06-F-05：本通道恢复 */
         if (s_ch_open[r.module]) {                       /* F6 恢复沿（接回传感器）*/
             s_ch_open[r.module] = 0;
             g_tcs.m207_sensor_open = (uint8_t)(s_ch_open[1] || s_ch_open[2]);
@@ -425,7 +429,22 @@ static const char *m207_fsm_poll(void)
     if (!s_probing) {
         if (s_waiting) {
             if ((int32_t)(s_tick - s_poll_deadline) >= 0) {
-                s_fail++;                /* 应答窗超时 */
+                /* 超时归属本拍询问的通道（s_wait_ch）*/
+                uint8_t ch = s_wait_ch;
+                if (ch >= 1 && ch <= 2) {
+                    if (s_fail_ch[ch] < 255) s_fail_ch[ch]++;
+                    /* M06-F-05：单通道连续失败达上限 → 该通道温度视为不可用
+                     * （与 errcode=2 的传感器断线同一后果：control 进 SAFE）。
+                     * 原来共享一个 s_fail 且"任一成功回复清零"，TC1 单通道失联
+                     * 会被 TC2 的成功永久掩盖，tc1_act 冻结而系统判健康。*/
+                    if (s_fail_ch[ch] >= M207_FAIL_LIMIT && !s_ch_open[ch]) {
+                        s_ch_open[ch] = 1;
+                        g_tcs.m207_sensor_open = (uint8_t)(s_ch_open[1] || s_ch_open[2]);
+                        ESP_LOGW(TAG, "ch%u TIMEOUT x%u -> temperature unavailable",
+                                 (unsigned)ch, (unsigned)s_fail_ch[ch]);
+                    }
+                }
+                s_fail++;                /* 总链路失败计数（全通道静默才判离线）*/
                 s_waiting = 0;
                 if (s_fail >= M207_FAIL_LIMIT) { m207_go_offline(); return NULL; }
             }
@@ -441,10 +460,14 @@ static const char *m207_fsm_poll(void)
             return cmd;
         }
     } else {
-        /* 离线/恢复：1s 探测 TC1（失败不再计数——报警沿已锁定，恢复由成功沿驱动）*/
+        /* 离线/恢复：1s 探测，TC1/TC2 交替（M12-F-03）。
+         * 原来只问 TC1：TC1 传感器开路时模块回 ERRCODE=2，链路永远回不到 online，
+         * ALM_M207 也就永远 ack 不掉。任一通道能回温度即证明模块/链路活着；
+         * 单通道传感器开路由 s_ch_open/m207_sensor_open 单独表达（control 进 SAFE）。*/
         if (s_tick >= s_next_probe) {
             s_next_probe = s_tick + M207_PROBE_TICKS;
-            snprintf(cmd, sizeof(cmd), "TC1:TCACTTEMP?\r");
+            s_probe_ch = (s_probe_ch == 1) ? 2u : 1u;
+            snprintf(cmd, sizeof(cmd), "TC%u:TCACTTEMP?\r", (unsigned)s_probe_ch);
             return cmd;
         }
     }
@@ -665,10 +688,12 @@ static const m207_map_entry_t s_map[] = {
     { 0x11E, 2, "TCCOOLVRATIO", 2 },
     { 0x11F, 2, "TCSTEPTEMP",   3 },
     /* 系统/PCB 模块无通道概念；PCB:* 下发由 R5 按 module 字段扩展 */
-    { 0x120, 1, "PCBOTPHT",     1 },
-    { 0x121, 1, "PCBOTPLT",     1 },
-    { 0x122, 1, "PCBOTPHHYS",   1 },
-    { 0x126, 1, "COMADDR",      0 },
+    /* M12-F-05：正典 §2.5 的模块前缀是 PCB:/PCRS232:，参数名照抄正典
+     * （TMOTPHT/TMOTPLT/TMOTPHHYS/COMADDR）；mod!=0 时前缀由模块名生成。*/
+    { 0x120, 0, "TMOTPHT",      1, M207_MOD_PCB     },
+    { 0x121, 0, "TMOTPLT",      1, M207_MOD_PCB     },
+    { 0x122, 0, "TMOTPHHYS",    1, M207_MOD_PCB     },
+    { 0x126, 0, "COMADDR",      0, M207_MOD_PCRS232 },
 };
 #define M207_MAP_N  (sizeof(s_map) / sizeof(s_map[0]))
 
@@ -678,18 +703,16 @@ int m207_map_set(uint16_t pid, float v)
     for (size_t i = 0; i < M207_MAP_N; i++) {
         const m207_map_entry_t *e = &s_map[i];
         if (e->pid != pid) continue;
-        /* R1 M12-F-05：0x120-0x126 属 PCB/PCRS232 模块，映射表暂无 module 字段；
-         * 按 TC1 下发会生成非法帧（模块必拒），这里显式拒绝而不是发垃圾。*/
-        if (e->pid >= 0x120) {
-            ESP_LOGW(TAG, "map_set 0x%02x: PCB/PCRS232 语法未确认，拒绝下发", (unsigned)pid);
-            return -1;
-        }
+        /* M12-F-05：0x120-0x126 走 PCB:/PCRS232: 前缀（m207_map_entry_t.mod），不再拒绝 */
         m207_msg_t m;
         memset(&m, 0, sizeof(m));
         m.verify = 1; m.ch = e->ch; m.decimals = e->decimals; m.value = v;
         strncpy(m.param, e->cmd, sizeof(m.param) - 1);
         if (m207_map_format(e, v, m.cmd, sizeof(m.cmd)) != 0) return -1;
-        snprintf(m.qry, sizeof(m.qry), "TC%u:%s?\r", (unsigned)e->ch, e->cmd);
+        if (e->mod != 0)
+            snprintf(m.qry, sizeof(m.qry), "%s:%s?\r", m207_mod_name(e->mod), e->cmd);
+        else
+            snprintf(m.qry, sizeof(m.qry), "TC%u:%s?\r", (unsigned)e->ch, e->cmd);
         return m207_enqueue(&m);
     }
     return -1;                           /* 未映射参数 */

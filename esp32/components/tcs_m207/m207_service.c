@@ -295,6 +295,8 @@ static void m207_handle_line(const char *line)
                     if (s_open_cnt[ch] < 255) s_open_cnt[ch]++;
                     if (!s_ch_open[ch] && s_open_cnt[ch] >= M207_OPEN_DEBOUNCE) {
                         s_ch_open[ch] = 1;
+                        /* M12-F-01：镜像到 g_tcs，让控制层按「温度源丢失」处理 */
+                        g_tcs.m207_sensor_open = (uint8_t)(s_ch_open[1] || s_ch_open[2]);
                         ESP_LOGW(TAG, "ch%u SENSOR-OPEN (errcode=2 ×%u param "
                                  "hidden) — F6 断线态，控制按失联，温度缓存冻结",
                                  (unsigned)ch, (unsigned)s_open_cnt[ch]);
@@ -358,6 +360,7 @@ static void m207_handle_line(const char *line)
         s_have_temp[r.module] = 1;
         if (s_ch_open[r.module]) {                       /* F6 恢复沿（接回传感器）*/
             s_ch_open[r.module] = 0;
+            g_tcs.m207_sensor_open = (uint8_t)(s_ch_open[1] || s_ch_open[2]);
             ESP_LOGW(TAG, "ch%s sensor RECOVERED (param family visible again)",
                      m207_mod_name(r.module));
         }

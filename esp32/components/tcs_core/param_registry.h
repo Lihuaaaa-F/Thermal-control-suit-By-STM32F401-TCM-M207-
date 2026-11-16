@@ -82,6 +82,7 @@ typedef struct {
     uint8_t  mode;                /* 0手动 1自动（param mode 镜像）*/
     uint16_t alarm_bits;          /* §6.2 位定义 */
     uint8_t  m207_online;
+    uint8_t  m207_sensor_open;    /* M12-F-01：M207 在线但通道传感器断线（模块 errcode=2）*/
     uint8_t  body_sensor_ok;
     uint8_t  esp_link_ok;
     uint32_t fw_ver;              /* BCD 0x010000 = v1.0.0 */

@@ -201,7 +201,7 @@ void tcs_alarm_ack(void)
     /* 先按"当前"源状态刷新（不依赖上一拍缓存）：操作员降温后立即 ack 也应生效。*/
     safety_set_ok(SAFETY_BIT_OVERTEMP, (uint8_t)(g_tcs.tc1_act <= ALM_OVERTEMP_HARD_C));
     safety_set_ok(SAFETY_BIT_BODY_LOST, g_tcs.body_sensor_ok);
-    safety_set_ok(SAFETY_BIT_M207_LOST, g_tcs.m207_online);
+    safety_set_ok(SAFETY_BIT_M207_LOST, (uint8_t)(g_tcs.m207_online && !g_tcs.m207_sensor_open));
     /* P0：再按"源已恢复"清安全锁存；ALM 显示位跟随锁存，不能比锁存更早消失。*/
     safety_ack_latched();
     /* N-05：一次性取锁存快照，后续显示位判断都用它——避免"锁外读-判-清"与并发 trip 交错，
@@ -211,7 +211,7 @@ void tcs_alarm_ack(void)
     SAFETY_UNLOCK();
     if (!(lat & SAFETY_BIT_BODY_LOST) && g_tcs.body_sensor_ok)
         g_tcs.alarm_bits &= (uint16_t)~ALM_BODY_SENSOR;
-    if (!(lat & SAFETY_BIT_M207_LOST) && g_tcs.m207_online)
+    if (!(lat & SAFETY_BIT_M207_LOST) && g_tcs.m207_online && !g_tcs.m207_sensor_open)
         g_tcs.alarm_bits &= (uint16_t)~ALM_M207;
     if (!(lat & SAFETY_BIT_OVERTEMP) && g_tcs.tc1_act <= ALM_OVERTEMP_HARD_C)
         g_tcs.alarm_bits &= (uint16_t)~ALM_OVERTEMP;
@@ -295,7 +295,10 @@ void control_poll(uint32_t now_ms)
     /* F1/F2：传感器丢失 / M207 失联 → SAFE（含手动模式；M207 有 5s 上电宽限）
      * WP-A.5 commissioned：未布防（默认）→ 只记状态沿（上位机可查询），不置报警位
      * 不进 SAFE；布防后同一异常立即进完整 FMEA。 */
-    uint8_t m207_fault = (!g_tcs.m207_online) && (now_ms - s_boot_ms >= CTRL_BOOT_GRACE_MS);
+    /* M12-F-01：通道传感器断线（模块报 errcode=2、参数族隐藏）时 M207 仍"在线"，
+     * tc1_act 只是冻结值——过温判据对它完全失效。按"温度源丢失"处理，与失联同级。*/
+    uint8_t m207_src_lost = (uint8_t)((!g_tcs.m207_online) || g_tcs.m207_sensor_open);
+    uint8_t m207_fault = (uint8_t)(m207_src_lost && (now_ms - s_boot_ms >= CTRL_BOOT_GRACE_MS));
     uint8_t sensor_fault = (!g_tcs.body_sensor_ok) || m207_fault;
     static uint8_t s_unarmed_fault_prev;
     if (sensor_fault && !commissioned()) {
@@ -313,7 +316,7 @@ void control_poll(uint32_t now_ms)
     }
     /* 源恢复位：供 ack 判定"能否清锁存"（未布防时也维护，避免急停 ack 被误阻）*/
     safety_set_ok(SAFETY_BIT_BODY_LOST, g_tcs.body_sensor_ok);
-    safety_set_ok(SAFETY_BIT_M207_LOST, g_tcs.m207_online);
+    safety_set_ok(SAFETY_BIT_M207_LOST, (uint8_t)(g_tcs.m207_online && !g_tcs.m207_sensor_open));
 
     if (s_state == CTRL_SAFE) {
         /* SAFE 退出：双恢复 + 人工确认（急停自持需 ack）*/

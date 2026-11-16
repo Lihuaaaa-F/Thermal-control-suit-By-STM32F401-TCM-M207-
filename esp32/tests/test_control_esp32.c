@@ -141,6 +141,22 @@ int main(void)
     tick();
     CHECK(control_state() == CTRL_IDLE, "recovered+ack -> IDLE");
 
+    /* ====== M12-F-01：M207 在线但通道传感器断线 → 按温度源丢失进 SAFE ====== */
+    enter_auto_healthy();
+    tick();                    /* 捕获 boot 基准 */
+    s_now += 5000u;            /* 越过宽限 */
+    g_tcs.m207_online = 1;
+    g_tcs.m207_sensor_open = 1;
+    tick();
+    CHECK(control_state() == CTRL_SAFE, "ch sensor open -> SAFE");
+    CHECK(tcs_alarm_active(ALM_M207) == 1, "ALM_M207 on sensor open");
+    tcs_alarm_ack();           /* 传感器仍断线 → 锁存不清 */
+    CHECK(tcs_alarm_active(ALM_M207) == 1, "sensor-open latched through ack");
+    g_tcs.m207_sensor_open = 0;
+    tcs_alarm_ack();
+    tick();
+    CHECK(control_state() == CTRL_IDLE, "sensor open cleared+ack -> IDLE");
+
     /* ====== M207 上电宽限：前 5s 不因 online=0 进 SAFE ====== */
     control_init(&(control_ops_t){
         .fan_set = stub_fan, .tec_sw = stub_tec, .tec_temp = stub_temp, .on_state = 0,

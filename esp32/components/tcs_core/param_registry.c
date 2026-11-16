@@ -121,7 +121,7 @@ static param_desc_t s_params[] = {
     { 0x126, "m207_com_addr",  "M207 串口地址",    "",   PARAM_TYPE_U8,
       PF_RW|PF_WEB|PF_M207|PF_DANGER,                         0.0f, 254.0f, 1.0f, 0.0f, 0 },
     /* 0x127 BTN（P1-13，正典 §2.5）：动作项，不是可写寄存器——实际执行走 CMD 0x15
-     * TCS_CMD_M207_SAVE（网页"保存到模块"按钮 / CLI `m207 save`）。值域取 0..1 而非
+     * TCS_CMD_M207_SAVE（网页"保存到模块"按钮 → 0x15 CMD 10）。值域取 0..1 而非
      * 正典 1/1：POST 参数表自检要求 min<max（同 0x134/0x135 的既有处理）。不带
      * PF_RW/PF_WEB/PF_M207——网页已有唯一按钮，也避免被 0x12 当成可写数值下发。*/
     { 0x127, "m207_pushlist",  "保存到模块",       "",   PARAM_TYPE_BTN,

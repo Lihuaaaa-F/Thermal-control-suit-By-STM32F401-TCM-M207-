@@ -173,7 +173,9 @@ size_t ws_registry_json(char *buf, size_t cap)
     taskEXIT_CRITICAL(&s_reg_mux);
     if (hit) return hit_len < cap ? hit_len : 0;
 
-    link_reg_t regs[LINK_REGISTRY_MAX];
+    /* R3-A-3：64×~104B≈6.6KB，原来开在 httpd 任务栈（8KB）上。本函数单实例，
+     * 与 s_push_buf 同策略移 static；并发保护见 s_reg_mux（构建期同一时刻只有一个）。*/
+    static link_reg_t regs[LINK_REGISTRY_MAX];
     uint32_t g0 = s_reg_gen;      /* 数据快照前代（换入时盖 g0 非 current：构建窗口
                                      * 内到达的事件须使缓存失配——盖 current 会把陈
                                      * 帧虚标成新鲜，红队 W2-R2 反例坐实）*/
@@ -259,13 +261,6 @@ static void on_link_event(void)
     s_reg_gen++;
     taskEXIT_CRITICAL(&s_reg_mux);
 
-    int clamped = 0;
-    const link_ack_t *ack = link_last_param() ? link_last_ack() : NULL;
-    if (ack && ack->id == p->id && ack->us >= p->us - 100000LL
-        && esp_timer_get_time() - ack->us < 5000000LL
-        && ack->status == TCS_ACK_CLAMP)
-        clamped = 1;
-
     const char *src = "h743";
     if (s_expect_id && p->id == s_expect_id
         && esp_timer_get_time() - s_expect_us < 3000000LL
@@ -273,7 +268,7 @@ static void on_link_event(void)
         src = "web_ack";
         s_expect_id = 0;
     }
-    push_pv(p->id, p->v, src, clamped);
+    push_pv(p->id, p->v, src, 0);   /* R3-E-1：clamp 由 set 的 param_set 返回值直接回执 */
 }
 
 /* 500ms 推送任务
@@ -364,6 +359,19 @@ esp_err_t ws_on_recv(httpd_req_t *req)
                 ESP_LOGI(TAG, "ws set id=%u v=%.2f rv=%d -> %.2f",
                          (unsigned)id->valueint, v->valuedouble, prv,
                          (double)param_get((uint16_t)id->valueint));
+                /* R3-E-1：clamp/失败回执以本次 param_set 返回值为准（权威在本端）。
+                 * 原来靠 0x90 ACK + link_set_param 的 id 关联，而 link_set_param 已无
+                 * 调用者 → 链路恒为 0，clamped 判定永不成立（死链）。*/
+                if (prv == 1) {                 /* 被限幅：回显实际值 + clamped */
+                    s_expect_id = 0;            /* 本帧已由这里回显，不再等事件回显 */
+                    push_pv((uint16_t)id->valueint,
+                            param_get((uint16_t)id->valueint), "web_ack", 1);
+                } else if (prv < 0) {           /* 只读/非法值/NaN */
+                    char e[64];
+                    snprintf(e, sizeof e, "{\"t\":\"perr\",\"id\":%u,\"rv\":%d}",
+                             (unsigned)id->valueint, prv);
+                    fds_send(e, strlen(e));
+                }
             }
         } else if (strcmp(t->valuestring, "cmd") == 0) {
             cJSON *c = cJSON_GetObjectItem(root, "c");

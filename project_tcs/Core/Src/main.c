@@ -438,7 +438,7 @@ void on_frame(const uint8_t *payload, size_t len)
         break;
     }
     case MT_TCS_GET_REGISTRY: {
-        /* 注册表全量 → 0x14 帧 ×N。v1.2 H10 全表 50 条 > txq 16 深 → 改节拍化
+        /* 注册表全量 → 0x14 帧 ×N。v1.2 H10 全表 51 条（0x127 已入表） > txq 16 深 → 改节拍化
          * 下发（registry_dump_tick 每拍 2 帧，50 条≈250ms，前端零感知）。*/
         link_send_ack(seq, mt, TCS_ACK_OK, 0.0f);
         g_dbg_getreg++;
@@ -519,7 +519,7 @@ void on_frame(const uint8_t *payload, size_t len)
     }
 }
 
-/* ====== 注册表节拍化下发（P3：H10 全表 50 条，2 帧/拍防 txq 溢出）====== */
+/* ====== 注册表节拍化下发（P3：H10 全表 51 条（0x127 已入表），2 帧/拍防 txq 溢出）====== */
 static void registry_dump_tick(void)
 {
     if (!s_dump_active) return;

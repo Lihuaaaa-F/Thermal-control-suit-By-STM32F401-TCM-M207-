@@ -27,6 +27,7 @@ static const char *TAG = "tcs_link";
 #define PARAM_TYPE_F32   0
 #define PARAM_TYPE_U8    1
 #define PARAM_TYPE_U16   2
+#define PARAM_TYPE_BTN   3   /* R3-D-1：与 param_registry.h 同步（BTN=动作项，不走 0x11/0x12）*/
 #endif
 
 #define LINK_UART       UART_NUM_1
@@ -48,8 +49,6 @@ static link_reg_t s_reg[LINK_REGISTRY_MAX];
 static uint16_t s_reg_expect;
 static uint16_t s_reg_got;
 static volatile uint8_t s_reg_done;
-static link_ack_t s_ack;
-static uint16_t s_last_set_id;   /* M11-F-08：最近一次 0x12 的 id，用于把 ACK 关联回参数 */
 static link_param_change_t s_last_param;
 static float s_param_val[LINK_REGISTRY_MAX];   /* 与 s_reg 同下标缓存 */
 static uint8_t s_param_valid[LINK_REGISTRY_MAX];
@@ -203,6 +202,7 @@ static void demo_step(void)
     s_status.mode = s_demo.mode;
     s_status.alarm = s_demo.alarm;
     s_status.online = 0x03;   /* 演示：M207+体温在线 */
+    s_status.ver = TCS_PROTO_VER;    /* R3-E-6：演示态也要带版本，否则网页常驻版本黄条 */
     s_status.last_status_us = now;
     taskEXIT_CRITICAL(&s_mux);
     notify();
@@ -410,22 +410,6 @@ static void on_frame(const uint8_t *payload, size_t len)
 }
 
 /* —— 上行 API —— */
-int link_set_param(uint16_t id, float v)
-{
-#if CONFIG_TCS_DEMO
-    if (s_demo_on) return demo_set_param(id, v);   /* WP-F.2：演示模式本地闭环 */
-#endif
-    s_last_set_id = id;
-    uint8_t pl[TCS_PARAM_PL_LEN];
-    tcs_param_pl_t p = { .id = id, .type = PARAM_TYPE_F32, .value = tcs_f2b(v) };
-    size_t n = tcs_pl_param(pl, sizeof(pl), &p);
-    uint8_t frame[MAX_FRAME];
-    size_t fn = mt_frame(MT_TCS_SET_PARAM, comm_next_seq(&s_link), pl, n,
-                         frame, sizeof(frame));
-    if (!fn) return -1;
-    comm_send(&s_link, frame, fn, MT_TCS_SET_PARAM);
-    return 0;
-}
 
 /* 返回值（M08-F-06）：0=已入队，1=演示模式抑制（无真链路，属正常），-1=组帧失败 */
 int link_send_frame_mt(uint8_t mt, const uint8_t *pl, size_t n)
@@ -528,22 +512,6 @@ float link_param_value(uint16_t id)
     }
     taskEXIT_CRITICAL(&s_mux);
     return ok ? v : NAN;
-}
-/* M11-F-08：原来 s_ack 无写点 → 永远零值，网页 clamp toast 永不触发。
- * 现在从 comm 层留存的最近一次 ACK 取 status/ret（comm 层不解析业务，只搬运）。
- * id 用"最近一次 0x12 的 id"关联：网页写参数是串行用户动作，错配窗口可忽略。*/
-const link_ack_t *link_last_ack(void)
-{
-    uint8_t seq = 0, mt = 0, st = 0;
-    float ret = 0.0f;
-    if (comm_last_ack(&s_link, &seq, &mt, &st, &ret)) {
-        (void)seq;
-        s_ack.status = st;
-        s_ack.ret = ret;
-        s_ack.id = (mt == MT_TCS_SET_PARAM || mt == MT_TCS_PARAM) ? s_last_set_id : 0;
-        s_ack.us = esp_timer_get_time();
-    }
-    return &s_ack;
 }
 void link_on_event(link_event_cb_t cb) { s_cb = cb; }
 

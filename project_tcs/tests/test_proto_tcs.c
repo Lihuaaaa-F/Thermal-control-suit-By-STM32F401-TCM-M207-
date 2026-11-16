@@ -341,6 +341,24 @@ int main(void)
               "M04-F-05 newest kept");
     }
 
+    /* R3-A-1：uptime 回绕（now 从 0xFFFFFFxx 回到 0）不得误判超时 */
+    {
+        comm_link_t L7;
+        wire_len = 0;
+        comm_init(&L7, stub_send, stub_now, NULL, NULL, NULL);
+        fake_now = 0xFFFFFF00u;
+        uint8_t f7[MAX_FRAME];
+        size_t n7 = mt_frame(MT_TCS_CMD, 0x33, (const uint8_t *)"1", 1, f7, sizeof(f7));
+        comm_send(&L7, f7, n7, MT_TCS_CMD);        /* deadline 回绕到 0x000000F4 */
+        fake_now = 0x00000010u;                    /* 回绕后的 0x110ms 处 */
+        comm_tick(&L7);
+        CHECK(comm_pending_count(&L7) == 1, "nowrap: no premature timeout");
+        CHECK(L7.pending[0].retries == 0, "nowrap: no premature retransmit");
+        fake_now = 0x00000210u;                    /* 回绕后 > 500ms */
+        comm_tick(&L7);
+        CHECK(L7.pending[0].retries == 1, "nowrap: retransmit after real timeout");
+    }
+
     printf("test_proto_tcs: PASS=%d FAIL=%d\n", g_pass, g_fail);
     return g_fail ? 1 : 0;
 }

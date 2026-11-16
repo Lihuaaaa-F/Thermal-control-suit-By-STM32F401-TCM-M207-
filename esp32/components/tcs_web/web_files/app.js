@@ -39,6 +39,7 @@ function wsConnect() {
     else if (m.t === "pv") onPv(m);
     else if (m.t === "reg") { registry = m.list || []; buildParams(); }
     else if (m.t === "ack") onCmdAck(m);
+    else if (m.t === "perr") toast(`设置失败(rv=${m.rv})：只读或非法值`);
   };
 }
 
@@ -123,6 +124,9 @@ function onPv(m) {
   const disp = valOf(m.id);
   if (disp) disp.textContent = fmtVal(m.id, m.v);
   if (m.id === 6) $("sw-mode").classList.toggle("on", m.v !== 0);
+  /* R3-E-1：限幅由本端 param_set 返回值直接回执（{t:"pv",clamped}），
+   * 不再依赖 0x90 ACK——原来那条链路没有生产者，toast 从未触发过。*/
+  if (m.clamped) toast(`已限幅至 ${(+m.v).toFixed(1)}`);
 }
 
 /* ====== 注册表 → 控件 ====== */

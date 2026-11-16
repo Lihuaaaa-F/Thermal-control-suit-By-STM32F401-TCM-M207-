@@ -112,16 +112,21 @@ void comm_poll_tx(comm_link_t *L)
 
     /* 取队头：head 是主循环独占消费索引，ISR 只 push 改 tail 不碰 head
      * （push_front 已按 W3-A/终审 MF-8 删除）；故此处 head 无竞态。*/
-    uint8_t h = L->tx_head;
-    L->send_fn(L->tx_queue[h], L->tx_len[h]);
-
-    /* 消费后 head 前移，tx_count-- 。tx_count 被 ISR 的 push 读，故这里要
-     * 临界区保护 tx_count 的写（防 ISR 同时读到一个中间态）。
-     * head 的写仅主循环，不冲突。*/
-    if (L->enter_critical) L->enter_critical();
+    /* R3-A-2：先在锁内把队头帧拷到局部再发送。原实现在锁外 send_fn(tx_queue[h])，
+     * 队列满时 push 会「丢最老」并把 head 前移——tail==head 时正好覆盖正在发送的槽，
+     * 发出去的帧后半段变成别的帧。拷贝 + 解锁后发送，槽位内容不再被读。*/
+    uint8_t tmp[MAX_FRAME];
+    uint16_t tlen;
+    uint8_t h;
+    comm_lock(L);
+    h = L->tx_head;
+    tlen = L->tx_len[h];
+    memcpy(tmp, L->tx_queue[h], tlen);
     L->tx_head = (uint8_t)((h + 1) % MAX_TXQ);
     L->tx_count--;
-    if (L->exit_critical) L->exit_critical();
+    comm_unlock(L);
+
+    L->send_fn(tmp, tlen);
 }
 
 uint8_t comm_send(comm_link_t *L, const uint8_t *frame_bytes, size_t len, uint8_t msg_type)
@@ -177,7 +182,7 @@ void comm_tick(comm_link_t *L)
     for (int i = 0; i < COMM_MAX_PENDING; i++) {
         comm_pending_t *e = &L->pending[i];
         if (!e->in_use) continue;
-        if (now - e->deadline_ms < 0x80000000u) continue;  /* 未超时（模 2^32 比较）*/
+        if ((int32_t)(now - e->deadline_ms) < 0) continue;  /* 未超时（模 2^32 有符号差）*/
         if (e->retries >= COMM_MAX_RETRIES) {
             /* 超重传上限：清该 pending，判链路断 */
             e->in_use = 0;
@@ -249,21 +254,6 @@ int comm_rx_feed_byte(comm_link_t *L, uint8_t b,
     if (mt == MT_UPLINK_ACK || mt == MT_DOWNLINK_ACK || mt == 0x90 /* MT_TCS_ACK */) {
         if (plen < 4) return 0;
         comm_on_ack(L, payload[2], payload[3]);
-        /* M11-F-08：留一份 ACK 观测（不改 ARQ）。0x90 带 status + f32 ret
-         * （tcs_ack_pl_t: [2]seq [3]mt [4]status [5..8]ret），老式 3B ACK 只有 status。*/
-        {
-            uint32_t raw = 0;
-            if (plen >= 9) {
-                raw = (uint32_t)payload[5] | ((uint32_t)payload[6] << 8)
-                    | ((uint32_t)payload[7] << 16) | ((uint32_t)payload[8] << 24);
-            }
-            L->ack_seq = payload[2];
-            L->ack_mt = payload[3];
-            L->ack_status = (plen >= 5) ? payload[4] : 0;
-            L->ack_ret = 0.0f;
-            if (plen >= 9) memcpy(&L->ack_ret, &raw, sizeof(raw));   /* 小端 f32 */
-            L->ack_valid = 1;
-        }
         return 0;
     }
 
@@ -303,13 +293,3 @@ int comm_last_dup_info(comm_link_t *L, uint8_t *out_seq, uint8_t *out_mt)
     return 1;
 }
 
-int comm_last_ack(const comm_link_t *L, uint8_t *seq, uint8_t *mt,
-                  uint8_t *status, float *ret)
-{
-    if (!L->ack_valid) return 0;
-    if (seq) *seq = L->ack_seq;
-    if (mt) *mt = L->ack_mt;
-    if (status) *status = L->ack_status;
-    if (ret) *ret = L->ack_ret;
-    return 1;
-}

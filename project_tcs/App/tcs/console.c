@@ -122,7 +122,7 @@ typedef struct {
 } mb_mailbox_t;
 static mb_mailbox_t s_mb;
 static volatile uint32_t s_mb_seq;
-static uint32_t s_mb_bad;           /* 被拒记录数（stat 可查）*/
+static uint32_t s_mb_bad;           /* 被拒记录数（拒绝时打 [MB] reject，累计计数）*/
 
 /* CRC-16/CCITT-FALSE：poly 0x1021 / init 0xFFFF / 不反射 / 末不异或。
  * 已知向量 "123456789" → 0x29B1（mb_console.py 内有同值断言）。*/

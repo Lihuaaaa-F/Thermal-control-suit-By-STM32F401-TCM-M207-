@@ -32,28 +32,41 @@ static tcs_delta_src_t s_last;      /* 上次已发状态（差分基准）*/
 static uint8_t s_last_valid;
 static portMUX_TYPE s_snap_mux = portMUX_INITIALIZER_UNLOCKED;
 
-/* M08-F-05：0x20/0x21 曾逐字段读 g_tcs，控制任务恰好在这十几个读之间完成一拍更新，
- * 就会出现"新设定 + 旧实测"这种同一帧内不同时刻的撕裂快照（屏端据此判越界/绘图）。
- * 现在整个周期只取一次结构体副本，两帧都从副本组装。
- * 残余：控制任务侧不参与该临界区，跨核并发写仍可能在 memcpy 内部交错（窗口 = 一次 24B 拷贝）；
- * 若要彻底消除，须让所有 g_tcs 写者进入同一把 spinlock——改动面远大于收益，此处按设计只收敛读侧。*/
-static void snap_copy_state(tcs_state_t *out)
+/* M08-F-05 / R3-B-1/B-2：一个任务周期内所有"同帧"字段必须同源。
+ * 0x20/0x21 曾逐字段读 g_tcs、设定值又各自 param_get 一次——控制任务刚好在两次读之间
+ * 完成一拍更新，就会出现"新设定 + 旧实测"这种同帧不同时刻的组合（屏端据此判越界/绘图）。
+ * 现在整个周期只取一次采样（g_tcs 整块 + 两路设定 + fresh_ms + badge），两帧都从它组装。
+ * 临界区说明（R3-B-3）：这里只挡本核抢占（本核上若有 g_tcs 写者），跨核写者不参与，
+ * 仍可能在一次结构体赋值内部交错；彻底修法要让所有写者共用一把 spinlock，改动面大于收益，
+ * 按设计只收敛读侧并如实记录残余风险。*/
+typedef struct {
+    tcs_state_t st;
+    float    tc1_set, tc2_set;
+    uint16_t fresh_ms;
+    uint8_t  badge;
+} snap_cycle_t;
+
+static void snap_sample(snap_cycle_t *c)
 {
     taskENTER_CRITICAL(&s_snap_mux);
-    *out = g_tcs;
+    c->st = g_tcs;                                   /* 约 28B */
+    c->tc1_set = param_get(PARAM_ID_TC1_SET);
+    c->tc2_set = param_get(PARAM_ID_TC2_SET);
+    c->fresh_ms = (uint16_t)m207_temp_age_ms();
+    c->badge = (uint8_t)post_arm_state();
     taskEXIT_CRITICAL(&s_snap_mux);
 }
 
-static void build_delta_src(tcs_delta_src_t *d, const tcs_state_t *st)
+static void build_delta_src(tcs_delta_src_t *d, const snap_cycle_t *c)
 {
-    d->tc1_set = param_get(PARAM_ID_TC1_SET);
-    d->tc2_set = param_get(PARAM_ID_TC2_SET);
-    d->body    = st->body_temp;
-    d->tec     = (uint8_t)((st->tec1_on ? 1 : 0) | (st->tec2_on ? 2 : 0));
-    d->fan     = st->fan_on;
-    d->mode    = st->mode;
-    d->alarm   = st->alarm_bits;
-    d->badge   = (uint8_t)post_arm_state();
+    d->tc1_set = c->tc1_set;
+    d->tc2_set = c->tc2_set;
+    d->body    = c->st.body_temp;
+    d->tec     = (uint8_t)((c->st.tec1_on ? 1 : 0) | (c->st.tec2_on ? 2 : 0));
+    d->fan     = c->st.fan_on;
+    d->mode    = c->st.mode;
+    d->alarm   = c->st.alarm_bits;
+    d->badge   = c->badge;
 }
 
 /* M08-F-06：以前 `link_send_frame_mt(...); cnt++;` 把失败也记成发出去了，
@@ -78,13 +91,13 @@ static void snap_task(void *arg)
         vTaskDelayUntil(&last_wake, pdMS_TO_TICKS(SNAP_PERIOD_MS));
         int32_t t0 = (int32_t)esp_timer_get_time();
 
-        /* ① 本拍状态副本（M08-F-05：两帧共用，避免同帧不同时刻）*/
-        tcs_state_t st;
-        snap_copy_state(&st);
+        /* ① 本拍唯一采样（M08-F-05：两帧共用，避免同帧不同时刻）*/
+        snap_cycle_t cy;
+        snap_sample(&cy);
 
         /* ② 0x21 增量：与上次差异位图（首拍全量 mask 不发 0x21，由 0x20 承载）*/
         tcs_delta_src_t now;
-        build_delta_src(&now, &st);
+        build_delta_src(&now, &cy);
         if (s_last_valid) {
             uint16_t mask = 0;
             if (now.tc1_set != s_last.tc1_set) mask |= TCS_D_TC1_SET;
@@ -107,18 +120,18 @@ static void snap_task(void *arg)
             .ver = TCS_PROTO_VER,
             .seq = ++s_seq,
             .ms  = (uint32_t)(t0 / 1000),
-            .tc1_act = st.tc1_act,
-            .tc2_act = st.tc2_act,
-            .body    = st.body_temp,
-            .tc1_set = now.tc1_set,
-            .tc2_set = now.tc2_set,
-            .tec1 = st.tec1_on, .tec2 = st.tec2_on,
-            .fan = st.fan_on, .mode = st.mode,
-            .alarm = st.alarm_bits,
-            .online = (uint8_t)((st.m207_online ? TCS_ONLINE_M207 : 0) |
-                                (st.body_sensor_ok ? TCS_ONLINE_BODY_SENSOR : 0)),
-            .fresh_ms = (uint16_t)m207_temp_age_ms(),
-            .badge = (uint8_t)post_arm_state(),
+            .tc1_act = cy.st.tc1_act,
+            .tc2_act = cy.st.tc2_act,
+            .body    = cy.st.body_temp,
+            .tc1_set = cy.tc1_set,
+            .tc2_set = cy.tc2_set,
+            .tec1 = cy.st.tec1_on, .tec2 = cy.st.tec2_on,
+            .fan = cy.st.fan_on, .mode = cy.st.mode,
+            .alarm = cy.st.alarm_bits,
+            .online = (uint8_t)((cy.st.m207_online ? TCS_ONLINE_M207 : 0) |
+                                (cy.st.body_sensor_ok ? TCS_ONLINE_BODY_SENSOR : 0)),
+            .fresh_ms = cy.fresh_ms,
+            .badge = cy.badge,
             .rfu = 0,
         };
         uint8_t pl[TCS_SNAP_PL_LEN];

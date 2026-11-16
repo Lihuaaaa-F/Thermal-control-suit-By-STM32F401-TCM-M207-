@@ -123,6 +123,8 @@ void proto_rx_reset(proto_rx_t *rx)
 void proto_rx_init(proto_rx_t *rx)
 {
     proto_rx_reset(rx);
+    rx->n_crc_err = 0;      /* R3-E-3：init 才清统计；proto_rx_reset 保留（运行期复位不清）*/
+    rx->n_len_err = 0;
 }
 
 int proto_rx_feed(proto_rx_t *rx, uint8_t b,

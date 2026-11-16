@@ -54,9 +54,10 @@ static esp_err_t h_api_status(httpd_req_t *req)
 
 static esp_err_t h_api_registry(httpd_req_t *req)
 {
-    char *buf = malloc(8192);
+    /* R3-E-7：与 WS 路径同宽（64 槽 JSON 约 10KB，原来 8192 → 返回 0 = 空响应）*/
+    char *buf = malloc(16384);
     if (!buf) return httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "oom");
-    size_t n = ws_registry_json(buf, 8192);
+    size_t n = ws_registry_json(buf, 16384);
     httpd_resp_set_type(req, "application/json");
     esp_err_t rv = httpd_resp_send(req, buf, n);
     free(buf);

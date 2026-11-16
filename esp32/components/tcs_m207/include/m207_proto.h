@@ -33,7 +33,7 @@ typedef enum {
 } m207_kind_t;
 
 typedef struct {
-    uint8_t module;              /* M207_MOD_TC1/TC2，0=未知模块 */
+    uint8_t module;              /* M207_MOD_*（0=未知；1/2=TC1/TC2；3/4/5=PCB/SYSTEM/PCRS232）*/
     char    param[16];           /* "TCACTTEMP"/"TCADJTEMP"/"TCSW"（大写）*/
     m207_kind_t kind;
     float   value;               /* '=' 后的浮点值（缺等号时 0）*/

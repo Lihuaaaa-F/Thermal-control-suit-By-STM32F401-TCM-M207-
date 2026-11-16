@@ -53,9 +53,8 @@ typedef struct {
 } link_stats_t;
 void link_stats_get(link_stats_t *out);
 
-int  link_set_param(uint16_t id, float v);          /* → 0x12，异步等 ACK */
 int  link_send_cmd(uint8_t cmd);                    /* → 0x15，异步等 ACK */
-int  link_send_frame_mt(uint8_t mt, const uint8_t *pl, size_t n);  /* R2：0x20/0x21 载荷发送（fire-and-forget，ARQ 同 0x10 惯例=4 拷贝+收端去重）；返回 0=入队 1=演示抑制 -1=组帧失败 */
+int  link_send_frame_mt(uint8_t mt, const uint8_t *pl, size_t n);  /* R2：0x20/0x21 载荷发送（fire-and-forget，免 ARQ：0x20/0x21 走 comm_send_noarq）；返回 0=入队 1=演示抑制 -1=组帧失败 */
 int  link_get_registry(link_reg_t *out, int max);   /* 拷贝注册表缓存 */
 void link_request_registry(void);                   /* 发 0x13（握手全量）*/
 
@@ -63,10 +62,6 @@ void link_request_registry(void);                   /* 发 0x13（握手全量�
 typedef struct { uint16_t id; float v; int64_t us; } link_param_change_t;
 const link_param_change_t *link_last_param(void);
 float link_param_value(uint16_t id);       /* 注册表初值（无缓存则 NaN→前端用 min）*/
-
-/* 最后一次 0x90 ACK（web_ack/clamp toast 用）*/
-typedef struct { uint8_t status; float ret; uint16_t id; int64_t us; } link_ack_t;
-const link_ack_t *link_last_ack(void);
 
 void link_on_event(link_event_cb_t cb);   /* 注册 ws 推送回调（单播即可）*/
 

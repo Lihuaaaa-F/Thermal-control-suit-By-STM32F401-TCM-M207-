@@ -157,7 +157,9 @@ void comm_tick(comm_link_t *L)
     for (int i = 0; i < COMM_MAX_PENDING; i++) {
         comm_pending_t *e = &L->pending[i];
         if (!e->in_use) continue;
-        if (now < e->deadline_ms) continue;  /* 未超时 */
+        /* R3-A-1：模 2^32 比较。原 `now < deadline` 在 uptime 跨 49.7 天回绕时
+         * 会把「刚发的帧」误判成超时并重传/断链。*/
+        if ((int32_t)(now - e->deadline_ms) < 0) continue;  /* 未超时（模 2^32 有符号差）*/
         if (e->retries >= COMM_MAX_RETRIES) {
             /* 超重传上限：清该 pending，判链路断 */
             e->in_use = 0;
@@ -224,21 +226,6 @@ int comm_rx_feed_byte(comm_link_t *L, uint8_t b,
     if (mt == MT_UPLINK_ACK || mt == MT_DOWNLINK_ACK || mt == 0x90 /* MT_TCS_ACK */) {
         if (plen < 4) return 0;
         comm_on_ack(L, payload[2], payload[3]);
-        /* M11-F-08：留一份 ACK 观测（不改 ARQ）。0x90 带 status + f32 ret
-         * （tcs_ack_pl_t: [2]seq [3]mt [4]status [5..8]ret），老式 3B ACK 只有 status。*/
-        {
-            uint32_t raw = 0;
-            if (plen >= 9) {
-                raw = (uint32_t)payload[5] | ((uint32_t)payload[6] << 8)
-                    | ((uint32_t)payload[7] << 16) | ((uint32_t)payload[8] << 24);
-            }
-            L->ack_seq = payload[2];
-            L->ack_mt = payload[3];
-            L->ack_status = (plen >= 5) ? payload[4] : 0;
-            L->ack_ret = 0.0f;
-            if (plen >= 9) memcpy(&L->ack_ret, &raw, sizeof(raw));   /* 小端 f32 */
-            L->ack_valid = 1;
-        }
         return 0;
     }
 
@@ -279,13 +266,3 @@ int comm_last_dup_info(comm_link_t *L, uint8_t *out_seq, uint8_t *out_mt)
     return 1;
 }
 
-int comm_last_ack(const comm_link_t *L, uint8_t *seq, uint8_t *mt,
-                  uint8_t *status, float *ret)
-{
-    if (!L->ack_valid) return 0;
-    if (seq) *seq = L->ack_seq;
-    if (mt) *mt = L->ack_mt;
-    if (status) *status = L->ack_status;
-    if (ret) *ret = L->ack_ret;
-    return 1;
-}

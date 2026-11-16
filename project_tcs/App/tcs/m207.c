@@ -207,39 +207,39 @@ static const m207_map_entry_t s_map[] = {
     /* H10 全表（v1.2 §2.5；cmd=《现行M207协议_v1.md》字典参数名，TC1/TC2 双通道）
      * decimals=下发小数位（回读容差 0.5×10^-decimals）。R5 接真实传输。 */
     /* TC1 */
-    { 0x100, 1, "TCPIDP",       3 },
-    { 0x101, 1, "TCPIDTI",      2 },
-    { 0x102, 1, "TCPIDTD",      3 },
-    { 0x103, 1, "TCOTPHT",      1 },
-    { 0x104, 1, "TCOTPLT",      1 },
-    { 0x105, 1, "TCOTPHHYS",    1 },
-    { 0x106, 1, "TCOTPMODE",    0 },
-    { 0x107, 1, "TCOCPADJTHR",  2 },
-    { 0x108, 1, "TCOVPADJTHR",  2 },
-    { 0x109, 1, "TCRTOCPHT",    1 },
-    { 0x10A, 1, "TCRTOCPLT",    1 },
-    { 0x10B, 1, "TCMINTEMP",    1 },
-    { 0x10C, 1, "TCMAXTEMP",    1 },
-    { 0x10D, 1, "TCMAXV",       2 },
-    { 0x10E, 1, "TCCOOLVRATIO", 2 },
-    { 0x10F, 1, "TCSTEPTEMP",   3 },
+    { 0x100, 1, "TCPIDP",       3, 0 },   /* mod=0：TC 前缀 */
+    { 0x101, 1, "TCPIDTI",      2, 0 },   /* mod=0：TC 前缀 */
+    { 0x102, 1, "TCPIDTD",      3, 0 },   /* mod=0：TC 前缀 */
+    { 0x103, 1, "TCOTPHT",      1, 0 },   /* mod=0：TC 前缀 */
+    { 0x104, 1, "TCOTPLT",      1, 0 },   /* mod=0：TC 前缀 */
+    { 0x105, 1, "TCOTPHHYS",    1, 0 },   /* mod=0：TC 前缀 */
+    { 0x106, 1, "TCOTPMODE",    0, 0 },   /* mod=0：TC 前缀 */
+    { 0x107, 1, "TCOCPADJTHR",  2, 0 },   /* mod=0：TC 前缀 */
+    { 0x108, 1, "TCOVPADJTHR",  2, 0 },   /* mod=0：TC 前缀 */
+    { 0x109, 1, "TCRTOCPHT",    1, 0 },   /* mod=0：TC 前缀 */
+    { 0x10A, 1, "TCRTOCPLT",    1, 0 },   /* mod=0：TC 前缀 */
+    { 0x10B, 1, "TCMINTEMP",    1, 0 },   /* mod=0：TC 前缀 */
+    { 0x10C, 1, "TCMAXTEMP",    1, 0 },   /* mod=0：TC 前缀 */
+    { 0x10D, 1, "TCMAXV",       2, 0 },   /* mod=0：TC 前缀 */
+    { 0x10E, 1, "TCCOOLVRATIO", 2, 0 },   /* mod=0：TC 前缀 */
+    { 0x10F, 1, "TCSTEPTEMP",   3, 0 },   /* mod=0：TC 前缀 */
     /* TC2 */
-    { 0x110, 2, "TCPIDP",       3 },
-    { 0x111, 2, "TCPIDTI",      2 },
-    { 0x112, 2, "TCPIDTD",      3 },
-    { 0x113, 2, "TCOTPHT",      1 },
-    { 0x114, 2, "TCOTPLT",      1 },
-    { 0x115, 2, "TCOTPHHYS",    1 },
-    { 0x116, 2, "TCOTPMODE",    0 },
-    { 0x117, 2, "TCOCPADJTHR",  2 },
-    { 0x118, 2, "TCOVPADJTHR",  2 },
-    { 0x119, 2, "TCRTOCPHT",    1 },
-    { 0x11A, 2, "TCRTOCPLT",    1 },
-    { 0x11B, 2, "TCMINTEMP",    1 },
-    { 0x11C, 2, "TCMAXTEMP",    1 },
-    { 0x11D, 2, "TCMAXV",       2 },
-    { 0x11E, 2, "TCCOOLVRATIO", 2 },
-    { 0x11F, 2, "TCSTEPTEMP",   3 },
+    { 0x110, 2, "TCPIDP",       3, 0 },   /* mod=0：TC 前缀 */
+    { 0x111, 2, "TCPIDTI",      2, 0 },   /* mod=0：TC 前缀 */
+    { 0x112, 2, "TCPIDTD",      3, 0 },   /* mod=0：TC 前缀 */
+    { 0x113, 2, "TCOTPHT",      1, 0 },   /* mod=0：TC 前缀 */
+    { 0x114, 2, "TCOTPLT",      1, 0 },   /* mod=0：TC 前缀 */
+    { 0x115, 2, "TCOTPHHYS",    1, 0 },   /* mod=0：TC 前缀 */
+    { 0x116, 2, "TCOTPMODE",    0, 0 },   /* mod=0：TC 前缀 */
+    { 0x117, 2, "TCOCPADJTHR",  2, 0 },   /* mod=0：TC 前缀 */
+    { 0x118, 2, "TCOVPADJTHR",  2, 0 },   /* mod=0：TC 前缀 */
+    { 0x119, 2, "TCRTOCPHT",    1, 0 },   /* mod=0：TC 前缀 */
+    { 0x11A, 2, "TCRTOCPLT",    1, 0 },   /* mod=0：TC 前缀 */
+    { 0x11B, 2, "TCMINTEMP",    1, 0 },   /* mod=0：TC 前缀 */
+    { 0x11C, 2, "TCMAXTEMP",    1, 0 },   /* mod=0：TC 前缀 */
+    { 0x11D, 2, "TCMAXV",       2, 0 },   /* mod=0：TC 前缀 */
+    { 0x11E, 2, "TCCOOLVRATIO", 2, 0 },   /* mod=0：TC 前缀 */
+    { 0x11F, 2, "TCSTEPTEMP",   3, 0 },   /* mod=0：TC 前缀 */
     /* 系统/PCB（PCB 模块无通道概念，ch=1 占位仅用于模板 TC 前缀不适用——
      * PCB:* 类下发由 R5 按 module 字段扩展，本表 ch 仅 TC 类有效）*/
     /* M12-F-05：正典 §2.5 的模块前缀是 PCB:/PCRS232:，参数名照抄正典
@@ -465,8 +465,7 @@ static void m207_handle_line(const char *line, uint32_t now_ms)
      * 绝不下标——否则 module=3 会写穿 s_last_temp_ms[0]/s_pend[2]。*/
     if (r.module != M207_MOD_TC1 && r.module != M207_MOD_TC2) {
         char b[96];
-        snprintf(b, sizeof b, "[M207] module %s %s (non-channel, log only)
-",
+        snprintf(b, sizeof b, "[M207] module %s %s (non-channel, log only)\n",
                  m207_mod_name(r.module), r.param);
         SEGGER_RTT_WriteString(b);
         return;

@@ -64,10 +64,6 @@ typedef struct {
     uint8_t next_seq;            /* 本端发送序号计数器（0-255 循环） */
     /* proto 接收状态机（逐字节喂） */
     proto_rx_t rx;
-    /* M11-F-08：最近一次收到的 ACK（上层 clamp/回执观测；不改 ARQ 行为）*/
-    uint8_t  ack_valid;
-    uint8_t  ack_seq, ack_mt, ack_status;
-    float    ack_ret;
     /* M04-F-03：帧内静默时间戳（上层检测到半帧+静默时丢弃半帧）*/
     uint32_t rx_last_ms;
     uint8_t  rx_gap_seen;
@@ -142,10 +138,6 @@ void comm_tick(comm_link_t *L);
  * 返回 1=匹配到并清掉，0=没匹配。
  */
 int comm_on_ack(comm_link_t *L, uint8_t acked_seq, uint8_t acked_mt);
-/* M11-F-08：最近一次收到的 ACK（只读观测，不改 ARQ 行为）。返回 1=有新 ACK 可读；
- * 0x90 的 ret 字段可解析，老式 3 字节 ACK 的 ret=0。*/
-int comm_last_ack(const comm_link_t *L, uint8_t *seq, uint8_t *mt,
-                  uint8_t *status, float *ret);
 
 /**
  * 接收侧：喂一个字节。若凑成完整且 CRC 正确的帧：

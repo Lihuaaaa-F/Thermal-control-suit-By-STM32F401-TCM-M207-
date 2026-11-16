@@ -438,6 +438,9 @@ int link_send_frame_mt(uint8_t mt, const uint8_t *pl, size_t n)
  * H743 侧 param_link_sync 静默落表、不回推，故不会成环。*/
 int link_send_param(uint16_t id, float v)
 {
+#if CONFIG_TCS_DEMO
+    if (s_demo_on) return 1;          /* 演示模式无真链路（与 link_send_frame_mt 同规）*/
+#endif
     uint8_t pl[TCS_PARAM_PL_LEN];
     tcs_param_pl_t p = { .id = id, .type = PARAM_TYPE_F32, .value = tcs_f2b(v) };
     size_t n = tcs_pl_param(pl, sizeof(pl), &p);
@@ -445,7 +448,9 @@ int link_send_param(uint16_t id, float v)
     uint8_t frame[MAX_FRAME];
     size_t fn = mt_frame(MT_TCS_PARAM, comm_next_seq(&s_link), pl, n, frame, sizeof(frame));
     if (!fn) return -1;
-    comm_send(&s_link, frame, fn, MT_TCS_PARAM);
+    /* 首发就用 no-ARQ：0x11 是对端"变更即推"的单向帧，H743 侧收到不回的 ACK。
+     * 用 comm_send 会登记 pending 却永远等不到确认 → 4 次重传后把链路判成断开。*/
+    comm_send_noarq(&s_link, frame, fn);
     return 0;
 }
 

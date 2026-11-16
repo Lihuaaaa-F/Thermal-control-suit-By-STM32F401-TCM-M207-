@@ -33,9 +33,12 @@ static void post_step_100ms(void)
     if (now - last_step < 100u) return;
     last_step = now;
 
-    uint8_t healthy = (g_tcs.body_sensor_ok && g_tcs.m207_online) ? 1u : 0u;
+    /* 健康/已确认都要把"探头开路"算进去：M207 在线但温度不可用不算健康 */
+    uint8_t healthy = (g_tcs.body_sensor_ok && g_tcs.m207_online
+                       && !g_tcs.m207_sensor_open) ? 1u : 0u;
     uint8_t acked = (!(g_tcs.alarm_bits & ALM_BODY_SENSOR) &&
-                     !(g_tcs.alarm_bits & ALM_M207)) ? 1u : 0u;
+                     !(g_tcs.alarm_bits & ALM_M207) &&
+                     !(g_tcs.alarm_bits & ALM_SENSOR_OPEN)) ? 1u : 0u;
     uint8_t mode08 = (uint8_t)param_get(PARAM_ID_COMMISSIONED);
     uint8_t post_pass = healthy;   /* ESP32 偏差：无 POST 电池，pass:=双源健康（R1.md）*/
     post_arm_t prev = post_arm_state();

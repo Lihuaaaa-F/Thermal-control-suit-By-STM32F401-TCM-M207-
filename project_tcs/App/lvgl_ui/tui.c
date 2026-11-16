@@ -23,6 +23,7 @@ typedef struct { uint16_t bit; const char * msg; const char * act; uint8_t red; 
 static const alm_row_t s_alm[] = {
     { ALM_ESTOP,       "急停已触发",       "已断电制动 · 点击横幅确认恢复",  1 },
     { ALM_OVERTEMP,    "水温过高",         "已停止加热 · 点击横幅确认恢复",  1 },
+    { ALM_SENSOR_OPEN, "水温传感器断线",   "已停止加热 · 检查传感器接线后确认", 1 },
     { ALM_BODY_SENSOR, "体温传感器失联",   "检查传感器接头 · 点击横幅确认恢复", 0 },
     { ALM_M207,        "M207 通信失联",    "检查通信线缆 · 点击横幅确认恢复", 0 },
     { ALM_EEPROM,      "配置校验失败",     "已恢复默认参数 · 请重新设定",   0 },

@@ -6,6 +6,7 @@
 #include <string.h>
 #include <math.h>
 #include "param_registry.h"
+#include "tcs_proto.h"   /* ALM_* 位（X01-F-02 合并断言）*/
 #include "proto.h"          /* proto_crc8 */
 
 static int g_pass, g_fail;
@@ -163,6 +164,25 @@ int main(void)
         CHECK(param_get(PARAM_ID_BODY_HOT) == before, "NAN does not change value");
         param_link_sync(PARAM_ID_BODY_HOT, NAN);
         CHECK(param_get(PARAM_ID_BODY_HOT) == before, "NAN ignored by link_sync");
+    }
+
+    /* v2 参数镜像落表（ESP32 权威 → 屏）：可写值生效、NaN/未知 id 拒绝、clamp 生效 */
+    {
+        CHECK(param_mirror_apply(PARAM_ID_BODY_HOT, 38.0f) == 0, "mirror ok");
+        CHECK(param_get(PARAM_ID_BODY_HOT) == 38.0f, "mirror applied");
+        CHECK(param_mirror_apply(PARAM_ID_BODY_HOT, 99.0f) == 0
+              && param_get(PARAM_ID_BODY_HOT) <= 40.0f, "mirror clamps");
+        CHECK(param_mirror_apply(PARAM_ID_BODY_HOT, NAN) == -1, "mirror rejects NaN");
+        CHECK(param_mirror_apply(0x999, 1.0f) == -1, "mirror rejects unknown id");
+        CHECK(param_mirror_apply(0x127, 1.0f) == -1, "mirror rejects BTN (no value semantics)");
+    }
+
+    /* X01-F-02：对端快照不得抹掉本机独占报警位 */
+    {
+        const uint16_t own = ALM_EEPROM;
+        CHECK(alarm_merge_peer(0, own, ALM_EEPROM) == ALM_EEPROM, "local bit survives peer 0");
+        CHECK(alarm_merge_peer(ALM_OVERTEMP, own, 0) == ALM_OVERTEMP, "peer bits accepted");
+        CHECK(alarm_merge_peer(0xFFFF, own, ALM_EEPROM) == 0xFFFF, "peer all + local");
     }
 
     printf("test_param_registry: PASS=%d FAIL=%d\n", g_pass, g_fail);

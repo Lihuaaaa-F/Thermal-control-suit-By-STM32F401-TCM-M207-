@@ -132,6 +132,11 @@ void  param_broadcast(param_desc_t *p, uint8_t src);
 
 /* R2：链路快照回灌（ESP32 权威值 → 本地显示副本；无副作用无广播）*/
 void  param_link_sync(uint16_t id, float v);
+/* v2 补口：对端（ESP32 权威）参数镜像落表；NaN/未知 id 拒绝。
+ * 抽成函数以便 PC 单测（main.c 不可测）。*/
+int   param_mirror_apply(uint16_t id, float v);
+/* X01-F-02：对端快照报警位与本机独占位合并（本机位不被整字覆盖）。*/
+uint16_t alarm_merge_peer(uint16_t remote, uint16_t local_owned, uint16_t local_now);
 
 void  param_load_defaults(void);
 /* 上电恢复：img 由 eeprom.c 读出；magic/ver/CRC 任一不符 → 默认值 + 返回 -1 */

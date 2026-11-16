@@ -338,8 +338,7 @@ static void snap_apply(const tcs_snap_pl_t *s)
     /* X01-F-02：整体覆盖会把"H743 独有的报警位"（ALM_EEPROM：参数持久化/镜像
      * 校验失败，只有 H743 能置）在 200ms 内静默抹掉，且绕过 ack。这里只接受
      * 对端负责的位，本机位保留。*/
-    g_tcs.alarm_bits = (uint16_t)((s->alarm & (uint16_t)~ALM_SRC_LOCAL_H743)
-                                  | (g_tcs.alarm_bits & ALM_SRC_LOCAL_H743));
+    g_tcs.alarm_bits = alarm_merge_peer(s->alarm, ALM_SRC_LOCAL_H743, g_tcs.alarm_bits);
     g_tcs.m207_online = (s->online & TCS_ONLINE_M207) ? 1u : 0u;
     g_tcs.body_sensor_ok = (s->online & TCS_ONLINE_BODY_SENSOR) ? 1u : 0u;
     param_link_sync(PARAM_ID_TC1_SET, s->tc1_set);
@@ -428,8 +427,8 @@ void on_frame(const uint8_t *payload, size_t len)
         tcs_param_pl_t pp;
         if (tcs_scan_param(body, blen, &pp) == 0) {
             float v = (pp.type == PARAM_TYPE_F32) ? tcs_b2f(pp.value) : (float)pp.value;
-            param_link_sync(pp.id, v);
-            tcs_log("[NET]", "mirror id=0x%02x v=%.2f", pp.id, (double)v);
+            if (param_mirror_apply(pp.id, v) == 0)
+                tcs_log("[NET]", "mirror id=0x%02x v=%.2f", pp.id, (double)v);
         }
         break;
     }
@@ -496,8 +495,7 @@ void on_frame(const uint8_t *payload, size_t len)
         if (mask & TCS_D_MODE)  { g_tcs.mode = d.mode;
                                   param_link_sync(PARAM_ID_MODE, (float)d.mode); }
         if (mask & TCS_D_ALARM)   /* X01-F-02：与 0x20 同规——本机独占位不被覆盖 */
-            g_tcs.alarm_bits = (uint16_t)((d.alarm & (uint16_t)~ALM_SRC_LOCAL_H743)
-                                          | (g_tcs.alarm_bits & ALM_SRC_LOCAL_H743));
+            g_tcs.alarm_bits = alarm_merge_peer(d.alarm, ALM_SRC_LOCAL_H743, g_tcs.alarm_bits);
         if (mask & TCS_D_BODY)    g_tcs.body_temp = d.body;
         break;
     }

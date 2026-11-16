@@ -296,6 +296,20 @@ void param_link_sync(uint16_t id, float v)
     }
 }
 
+int param_mirror_apply(uint16_t id, float v)
+{
+    if (!isfinite(v)) return -1;
+    param_desc_t *p = param_find(id);
+    if (!p || !(p->flags & PF_RW)) return -1;   /* 只读/BTN 没有"值"可镜像 */
+    param_link_sync(id, v);
+    return 0;
+}
+
+uint16_t alarm_merge_peer(uint16_t remote, uint16_t local_owned, uint16_t local_now)
+{
+    return (uint16_t)((remote & (uint16_t)~local_owned) | (local_now & local_owned));
+}
+
 /* ====== EEPROM v2 序列化（纯函数，PC 单测 §5.1）====== */
 /* 物理布局：记录区 0x04..0xF7 共 244B = 30 条 8B 记录；CRC 在 0xF8。
  * 任务书 count 字段口径 ≤31；30 < 31，取更严者 → >30 条返回 -1（防记录覆盖 CRC 区）。 */

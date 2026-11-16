@@ -166,11 +166,14 @@ int main(void)
     g_tcs.m207_sensor_open = 1;
     tick();
     CHECK(control_state() == CTRL_SAFE, "ch sensor open -> SAFE");
-    CHECK(tcs_alarm_active(ALM_M207) == 1, "ALM_M207 on sensor open");
+    /* 语义分离：探头开路报 ALM_SENSOR_OPEN，不能借用"通信失联"位 */
+    CHECK(tcs_alarm_active(ALM_SENSOR_OPEN) == 1, "ALM_SENSOR_OPEN set");
+    CHECK(tcs_alarm_active(ALM_M207) == 0, "ALM_M207 NOT used for open probe");
     tcs_alarm_ack();           /* 传感器仍断线 → 锁存不清 */
-    CHECK(tcs_alarm_active(ALM_M207) == 1, "sensor-open latched through ack");
+    CHECK(tcs_alarm_active(ALM_SENSOR_OPEN) == 1, "sensor-open latched through ack");
     g_tcs.m207_sensor_open = 0;
     tcs_alarm_ack();
+    CHECK(tcs_alarm_active(ALM_SENSOR_OPEN) == 0, "sensor-open cleared by ack");
     tick();
     CHECK(control_state() == CTRL_IDLE, "sensor open cleared+ack -> IDLE");
 

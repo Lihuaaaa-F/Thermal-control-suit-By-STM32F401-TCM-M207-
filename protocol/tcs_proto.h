@@ -70,6 +70,7 @@
 #define ALM_ESTOP              0x0004
 #define ALM_OVERTEMP           0x0008
 #define ALM_EEPROM             0x0010
+#define ALM_SENSOR_OPEN        0x0020  /* 通道探头开路（M207 在线但该通道温度不可用；与 ALM_M207 通信失联分离）*/
 
 /* ====== 0x10 TCS_STATUS（19B 小端）====== */
 typedef struct {

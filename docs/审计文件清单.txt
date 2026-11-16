@@ -171,3 +171,4 @@ protocol/proto_layout.h
 protocol/tcs_proto.h
 tools/proto_sync.py
 project_tcs/tools/web_gz_check.py
+project_tcs/tools/src_byte_check.py

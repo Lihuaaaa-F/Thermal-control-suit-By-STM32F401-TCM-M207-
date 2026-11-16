@@ -279,7 +279,8 @@ void post_poll(uint32_t now_ms)
     last_step = now_ms;
 
     uint8_t healthy = (g_tcs.body_sensor_ok && g_tcs.m207_online) ? 1u : 0u;
-    uint8_t acked = (!(g_tcs.alarm_bits & ALM_BODY_SENSOR) && !(g_tcs.alarm_bits & ALM_M207)) ? 1u : 0u;
+    uint8_t acked = (!(g_tcs.alarm_bits & ALM_BODY_SENSOR) && !(g_tcs.alarm_bits & ALM_M207)
+                     && !(g_tcs.alarm_bits & ALM_SENSOR_OPEN)) ? 1u : 0u;
     uint8_t mode08 = (uint8_t)param_get(PARAM_ID_COMMISSIONED);
     post_arm_t prev = (post_arm_t)s_arm.state;
     post_arm_t st = post_arm_step(&s_arm, mode08, post_all_pass(), healthy, acked);

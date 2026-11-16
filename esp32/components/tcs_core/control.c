@@ -226,8 +226,10 @@ void tcs_alarm_ack(void)
     ALM_LOCK();
     if (!(lat & SAFETY_BIT_BODY_LOST) && g_tcs.body_sensor_ok)
         g_tcs.alarm_bits &= (uint16_t)~ALM_BODY_SENSOR;
-    if (!(lat & SAFETY_BIT_M207_LOST) && g_tcs.m207_online && !g_tcs.m207_sensor_open)
+    if (!(lat & SAFETY_BIT_M207_LOST) && g_tcs.m207_online)
         g_tcs.alarm_bits &= (uint16_t)~ALM_M207;
+    if (!(lat & SAFETY_BIT_M207_LOST) && !g_tcs.m207_sensor_open)
+        g_tcs.alarm_bits &= (uint16_t)~ALM_SENSOR_OPEN;
     if (!(lat & SAFETY_BIT_OVERTEMP) && g_tcs.tc1_act <= ALM_OVERTEMP_HARD_C)
         g_tcs.alarm_bits &= (uint16_t)~ALM_OVERTEMP;
     if (!(lat & SAFETY_BIT_ESTOP)) {
@@ -326,7 +328,13 @@ void control_poll(uint32_t now_ms)
     }
     if (sensor_fault && commissioned()) {
         if (!g_tcs.body_sensor_ok) { tcs_alarm_raise(ALM_BODY_SENSOR); safety_trip(SAFETY_BIT_BODY_LOST); }
-        if (m207_fault)            { tcs_alarm_raise(ALM_M207);        safety_trip(SAFETY_BIT_M207_LOST); }
+        if (m207_fault) {
+            /* 语义分离（2026-11-16）：通信失联与探头开路是两种故障，报两句话。
+             * SAFE 走同一条锁存（SAFETY_BIT_M207_LOST 表示"温度源不可用"）。*/
+            if (!g_tcs.m207_online)     tcs_alarm_raise(ALM_M207);
+            if (g_tcs.m207_sensor_open) tcs_alarm_raise(ALM_SENSOR_OPEN);
+            safety_trip(SAFETY_BIT_M207_LOST);
+        }
         enter_safe();
         return;
     }
@@ -337,7 +345,8 @@ void control_poll(uint32_t now_ms)
     if (s_state == CTRL_SAFE) {
         /* SAFE 退出：双恢复 + 人工确认（急停自持需 ack）*/
         if (safe_sources_recovered() && !s_estop_latch && tcs_alarm_active(ALM_BODY_SENSOR) == 0
-            && tcs_alarm_active(ALM_M207) == 0 && tcs_alarm_active(ALM_ESTOP) == 0) {
+            && tcs_alarm_active(ALM_M207) == 0 && tcs_alarm_active(ALM_SENSOR_OPEN) == 0
+            && tcs_alarm_active(ALM_ESTOP) == 0) {
             out_fan(0);
             goto_state(CTRL_IDLE);
         }

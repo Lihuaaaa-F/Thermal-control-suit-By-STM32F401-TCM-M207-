@@ -246,6 +246,13 @@ else
     echo "[card_surface] SKIP: 基线或 python 缺失"; FAIL=1
 fi
 
+# 源码字节门禁：NUL / 孤立 CR（"转义写成真字符"类损坏，2026-11-16 事故后加）
+if [ -n "$PYBIN" ]; then
+    if "$PYBIN" tools/src_byte_check.py; then :; else FAIL=1; fi
+else
+    echo "[src_bytes] SKIP: python not found"; FAIL=1
+fi
+
 # X06-F-02：ESP32 纯逻辑 5 套件纳入同一门禁（出货二进制=两端的组合，绿灯必须覆盖两端）
 if [ -f ../esp32/tests/run_m207_tests.sh ]; then
     if bash ../esp32/tests/run_m207_tests.sh; then :; else

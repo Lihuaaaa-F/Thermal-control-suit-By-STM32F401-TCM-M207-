@@ -145,6 +145,7 @@ int proto_rx_feed(proto_rx_t *rx, uint8_t b,
     case RX_READ_LEN:
         if (b > MAX_PAYLOAD) {
             /* 长度非法，回到找起始符（前进 1 字节重找） */
+            rx->n_len_err++;
             rx->state = (b == START_BYTE0) ? RX_WAIT_START1 : RX_WAIT_START0;
             return 0;
         }
@@ -175,6 +176,7 @@ int proto_rx_feed(proto_rx_t *rx, uint8_t b,
             *out_len = rx->len;
             return 1;  /* CRC 对，交付 */
         }
+        rx->n_crc_err++;
         return 0;  /* CRC 错，丢弃，不交付 */
     }
     default:

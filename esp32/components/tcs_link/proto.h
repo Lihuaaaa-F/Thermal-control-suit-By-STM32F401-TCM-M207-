@@ -155,6 +155,9 @@ typedef struct {
     uint8_t  len;             /* 本帧 Payload 长度 */
     uint8_t  payload[MAX_PAYLOAD];
     size_t   idx;             /* 当前写入位置 */
+    /* M11-F-10：接收侧故障分桶（只观测，不改变状态机行为）*/
+    uint32_t n_crc_err;       /* CRC 不符 */
+    uint32_t n_len_err;       /* Length 字段非法（>MAX_PAYLOAD）*/
 } proto_rx_t;
 
 void proto_rx_init(proto_rx_t *rx);

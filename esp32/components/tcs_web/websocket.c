@@ -128,7 +128,7 @@ size_t ws_status_json(char *buf, size_t cap)
         } else {
             bool sensor_ok = (s->online & TCS_ONLINE_BODY_SENSOR) != 0;
             if (!cJSON_AddBoolToObject(root, "valid", true) ||
-                !cJSON_AddNumberToObject(root, "ver", 1) ||
+                !cJSON_AddNumberToObject(root, "ver", s->ver) ||
                 !cJSON_AddNumberToObject(root, "seq", s->seq) ||
                 !cJSON_AddNumberToObject(root, "tc1_act", s->tc1_act) ||
                 !cJSON_AddNumberToObject(root, "tc2_act", s->tc2_act) ||

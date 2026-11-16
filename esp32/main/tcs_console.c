@@ -13,6 +13,7 @@
 #include "m207_service.h"
 #include "tmp117_service.h"
 #include "fan_service.h"
+#include "link_task.h"   /* M11-F-10：linkstat 打故障分桶 */
 #include "driver/gpio.h"
 #include "esp_timer.h"      /* R1 复核 R-13：cmd_gedge 用 esp_timer_get_time，必须显式包含 */
 
@@ -226,10 +227,17 @@ static int cmd_ledtest(int argc, char **argv)
 static int cmd_linkstat(int argc, char **argv)
 {
     (void)argc; (void)argv;
-    extern uint32_t link_rx_bytes(void);
-    extern uint32_t link_rx_frames(void);
-    printf("link rx_bytes=%lu rx_frames=%lu\n",
-           (unsigned long)link_rx_bytes(), (unsigned long)link_rx_frames());
+    link_stats_t st;
+    link_stats_get(&st);
+    /* M11-F-10：一次打出全部故障桶（注入已知故障后应只有对应桶增长）*/
+    printf("link rx_b=%lu rx_f=%lu crc=%lu len=%lu gap=%lu dup=%lu retry=%lu "
+           "txqdrop=%lu evict=%lu verg=%lu",
+           (unsigned long)st.rx_bytes, (unsigned long)st.rx_frames,
+           (unsigned long)st.crc_err, (unsigned long)st.len_err,
+           (unsigned long)st.gap_resets, (unsigned long)st.dup,
+           (unsigned long)st.retry, (unsigned long)st.txq_drop,
+           (unsigned long)st.pending_evict, (unsigned long)st.proto_mismatch);
+    printf("\n");
     return 0;
 }
 

@@ -320,6 +320,27 @@ int main(void)
         CHECK(L5.rx_gap_resets == 1, "M04-F-03 半帧丢弃计数");
     }
 
+    /* R1 M04-F-05: pending 满 → 逐"最早登记"那条（原实现固定覆盖第 8 槽）*/
+    {
+        comm_link_t L6;
+        wire_len = 0;
+        fake_now = 900000;
+        comm_init(&L6, stub_send, stub_now, NULL, NULL, NULL);
+        uint8_t f6[MAX_FRAME];
+        uint8_t seqs[COMM_MAX_PENDING + 1];
+        for (int i = 0; i <= COMM_MAX_PENDING; i++) {
+            size_t n6 = mt_frame(MT_TCS_CMD, (uint8_t)(0x40 + i),
+                                 (const uint8_t *)"1", 1, f6, sizeof(f6));
+            seqs[i] = comm_send(&L6, f6, n6, MT_TCS_CMD);
+            fake_now += 10;                  /* 登记时刻可区分 */
+        }
+        CHECK(comm_pending_count(&L6) == COMM_MAX_PENDING, "M04-F-05 pending full");
+        CHECK(L6.pending_evict == 1, "M04-F-05 eviction counted");
+        CHECK(comm_on_ack(&L6, seqs[0], MT_TCS_CMD) == 0, "M04-F-05 oldest evicted");
+        CHECK(comm_on_ack(&L6, seqs[COMM_MAX_PENDING], MT_TCS_CMD) == 1,
+              "M04-F-05 newest kept");
+    }
+
     printf("test_proto_tcs: PASS=%d FAIL=%d\n", g_pass, g_fail);
     return g_fail ? 1 : 0;
 }

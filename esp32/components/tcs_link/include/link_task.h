@@ -17,6 +17,7 @@
 typedef struct {
     /* 0x10 快照 */
     uint8_t  valid;
+    uint8_t  ver;                /* M11-F-09：对端协议版本（原网页硬编码 1，版本不符看不出来）*/
     uint32_t seq;
     float    tc1_act, tc2_act, body;
     uint8_t  tec1, tec2, fan, mode;
@@ -38,6 +39,19 @@ bool link_alive(void);                    /* 0x10 3s 内有新鲜帧 */
 /* M11-F-12：整块快照拷贝（临界区内一次结构体赋值）。取代原 link_status() 指针——
  * 指针让调用方在锁外逐字段读，与链路任务写 0x10 交错会拼出"新温度+旧报警"混合态。*/
 void link_status_copy(link_status_t *out);
+
+/* M11-F-10：链路诊断计数（原来只有"收了多少"，出故障分不出类型）。
+ * 全部自上次复位累计；RX 侧来自 proto 状态机分桶，TX 侧来自 comm 层。*/
+typedef struct {
+    uint32_t rx_bytes, rx_frames;
+    uint32_t crc_err, len_err;       /* 帧校验失败 / 长度字段非法 */
+    uint32_t gap_resets;             /* 半帧静默丢弃（M04-F-03）*/
+    uint32_t dup;                    /* 重复帧（对端重传）*/
+    uint32_t retry;                  /* 本端累计重传 */
+    uint32_t txq_drop, pending_evict;/* 发送/待确认溢出 */
+    uint32_t proto_mismatch;         /* STATUS 版本不符帧数（M11-F-09）*/
+} link_stats_t;
+void link_stats_get(link_stats_t *out);
 
 int  link_set_param(uint16_t id, float v);          /* → 0x12，异步等 ACK */
 int  link_send_cmd(uint8_t cmd);                    /* → 0x15，异步等 ACK */

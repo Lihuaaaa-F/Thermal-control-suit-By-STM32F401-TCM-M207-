@@ -83,6 +83,7 @@ static void txq_push_unlocked(comm_link_t *L, const uint8_t *frame, size_t len)
     if (L->tx_count >= MAX_TXQ) {   /* 满：丢最老，head 前移 */
         L->tx_head = (uint8_t)((L->tx_head + 1) % MAX_TXQ);
         L->tx_count--;
+        L->txq_drop++;              /* M11-F-10：溢出可观测（原实现静默丢）*/
     }
     memcpy(L->tx_queue[t], frame, len);
     L->tx_len[t] = (uint16_t)len;
@@ -128,8 +129,12 @@ uint8_t comm_send(comm_link_t *L, const uint8_t *frame_bytes, size_t len, uint8_
     int idx = find_pending(L, seq, msg_type);
     if (idx < 0) idx = find_free_slot(L);
     if (idx < 0) {
-        /* pending 满，丢老的（LIFO）腾位 */
-        idx = COMM_MAX_PENDING - 1;
+        /* M04-F-05：满了就逐"最早登记"的那条（原实现固定覆盖最后一槽，注释却写
+         * "丢老的"——真丢的可能是刚登记、还没重传过的急停/命令）。*/
+        idx = 0;
+        for (int i = 1; i < COMM_MAX_PENDING; i++)
+            if ((int32_t)(L->pending[i].enq_ms - L->pending[idx].enq_ms) < 0) idx = i;
+        L->pending_evict++;
     }
     comm_pending_t *e = &L->pending[idx];
     memcpy(e->frame, frame_bytes, len);
@@ -138,7 +143,8 @@ uint8_t comm_send(comm_link_t *L, const uint8_t *frame_bytes, size_t len, uint8_
     e->msg_type = msg_type;
     e->retries = 0;
     e->in_use = 1;
-    e->deadline_ms = L->now_ms_fn() + COMM_ACK_TIMEOUT_MS;
+    e->enq_ms = L->now_ms_fn();
+    e->deadline_ms = e->enq_ms + COMM_ACK_TIMEOUT_MS;
 
     /* §0E：首传入队（不直接 send_fn），主循环 comm_poll_tx 串行消费 */
     comm_txq_push(L, frame_bytes, len);
@@ -164,6 +170,7 @@ void comm_tick(comm_link_t *L)
         }
         /* 超时未达上限 → 重传入队（§0E，不 send_fn） */
         e->retries++;
+        L->retry_cnt++;
         e->deadline_ms = now + COMM_ACK_TIMEOUT_MS;
         comm_txq_push(L, e->frame, e->frame_len);
     }
@@ -217,6 +224,21 @@ int comm_rx_feed_byte(comm_link_t *L, uint8_t b,
     if (mt == MT_UPLINK_ACK || mt == MT_DOWNLINK_ACK || mt == 0x90 /* MT_TCS_ACK */) {
         if (plen < 4) return 0;
         comm_on_ack(L, payload[2], payload[3]);
+        /* M11-F-08：留一份 ACK 观测（不改 ARQ）。0x90 带 status + f32 ret
+         * （tcs_ack_pl_t: [2]seq [3]mt [4]status [5..8]ret），老式 3B ACK 只有 status。*/
+        {
+            uint32_t raw = 0;
+            if (plen >= 9) {
+                raw = (uint32_t)payload[5] | ((uint32_t)payload[6] << 8)
+                    | ((uint32_t)payload[7] << 16) | ((uint32_t)payload[8] << 24);
+            }
+            L->ack_seq = payload[2];
+            L->ack_mt = payload[3];
+            L->ack_status = (plen >= 5) ? payload[4] : 0;
+            L->ack_ret = 0.0f;
+            if (plen >= 9) memcpy(&L->ack_ret, &raw, sizeof(raw));   /* 小端 f32 */
+            L->ack_valid = 1;
+        }
         return 0;
     }
 
@@ -232,6 +254,7 @@ int comm_rx_feed_byte(comm_link_t *L, uint8_t b,
     }
 
     if (is_dup) {
+        L->dup_cnt++;               /* M11-F-10：重复帧分桶 */
         /* 重复帧：记信息供上层回 ACK，但不交上层处理 */
         s_dup_seq = seq;
         s_dup_mt = mt;
@@ -253,5 +276,16 @@ int comm_last_dup_info(comm_link_t *L, uint8_t *out_seq, uint8_t *out_mt)
     if (out_seq) *out_seq = s_dup_seq;
     if (out_mt) *out_mt = s_dup_mt;
     s_dup_valid = 0;  /* 取一次清一次 */
+    return 1;
+}
+
+int comm_last_ack(const comm_link_t *L, uint8_t *seq, uint8_t *mt,
+                  uint8_t *status, float *ret)
+{
+    if (!L->ack_valid) return 0;
+    if (seq) *seq = L->ack_seq;
+    if (mt) *mt = L->ack_mt;
+    if (status) *status = L->ack_status;
+    if (ret) *ret = L->ack_ret;
     return 1;
 }

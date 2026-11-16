@@ -44,6 +44,7 @@ typedef struct {
     uint8_t  msg_type;
     uint8_t  retries;         /* 已重传次数（不含首传） */
     uint32_t deadline_ms;     /* 下次重传/判失败时刻（ms） */
+    uint32_t enq_ms;          /* M04-F-05：登记时刻（pending 满时逐最老用）*/
 } comm_pending_t;
 
 /* 链路实例 */
@@ -63,10 +64,18 @@ typedef struct {
     uint8_t next_seq;            /* 本端发送序号计数器（0-255 循环） */
     /* proto 接收状态机（逐字节喂） */
     proto_rx_t rx;
+    /* M11-F-08：最近一次收到的 ACK（上层 clamp/回执观测；不改 ARQ 行为）*/
+    uint8_t  ack_valid;
+    uint8_t  ack_seq, ack_mt, ack_status;
+    float    ack_ret;
     /* M04-F-03：帧内静默时间戳（上层检测到半帧+静默时丢弃半帧）*/
     uint32_t rx_last_ms;
     uint8_t  rx_gap_seen;
     uint32_t rx_gap_resets;      /* 半帧丢弃次数（linkstat/P6 统计用）*/
+    uint32_t pending_evict;      /* M04-F-05：pending 满被逐出的在途帧数（可观测）*/
+    uint32_t dup_cnt;            /* M11-F-10：重复帧（幂等重传）计数 */
+    uint32_t retry_cnt;          /* M11-F-10：累计重传次数 */
+    uint32_t txq_drop;           /* M11-F-10：tx 环满被挤出丢弃的帧数 */
     /* —— §0E 待发队列（环形，TX 串行化）—— */
     uint8_t  tx_queue[MAX_TXQ][MAX_FRAME];
     uint16_t tx_len[MAX_TXQ];
@@ -133,6 +142,10 @@ void comm_tick(comm_link_t *L);
  * 返回 1=匹配到并清掉，0=没匹配。
  */
 int comm_on_ack(comm_link_t *L, uint8_t acked_seq, uint8_t acked_mt);
+/* M11-F-08：最近一次收到的 ACK（只读观测，不改 ARQ 行为）。返回 1=有新 ACK 可读；
+ * 0x90 的 ret 字段可解析，老式 3 字节 ACK 的 ret=0。*/
+int comm_last_ack(const comm_link_t *L, uint8_t *seq, uint8_t *mt,
+                  uint8_t *status, float *ret);
 
 /**
  * 接收侧：喂一个字节。若凑成完整且 CRC 正确的帧：

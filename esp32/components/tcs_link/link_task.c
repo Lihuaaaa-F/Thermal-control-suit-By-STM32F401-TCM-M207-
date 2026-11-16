@@ -41,6 +41,7 @@ static QueueHandle_t s_uart_queue;
 static link_status_t s_status;
 static volatile uint32_t s_rx_bytes;   /* UART1 收到的字节总数（真机取证）*/
 static volatile uint32_t s_rx_frames;  /* 解出的完整帧数 */
+static uint32_t s_proto_mismatch;      /* M11-F-09：STATUS 协议版本不符帧数 */
 static link_cmd_cb_t s_cmd_cb;         /* v2：屏幕 0x15 命令回调 */
 static link_reg_t s_reg[LINK_REGISTRY_MAX];
 /* R1 P1-01：注册表接收进度（替代"种子 used 恒真"导致永不重发 0x13 的短路）*/
@@ -48,6 +49,7 @@ static uint16_t s_reg_expect;
 static uint16_t s_reg_got;
 static volatile uint8_t s_reg_done;
 static link_ack_t s_ack;
+static uint16_t s_last_set_id;   /* M11-F-08：最近一次 0x12 的 id，用于把 ACK 关联回参数 */
 static link_param_change_t s_last_param;
 static float s_param_val[LINK_REGISTRY_MAX];   /* 与 s_reg 同下标缓存 */
 static uint8_t s_param_valid[LINK_REGISTRY_MAX];
@@ -299,8 +301,20 @@ static void on_frame(const uint8_t *payload, size_t len)
     case MT_TCS_STATUS: {
         tcs_status_pl_t s;
         if (tcs_scan_status(body, blen, &s) != 0) break;
+        /* M11-F-09：版本不符不能静默吞掉——留痕 + 计数，网页用真实 ver 显示黄条
+         * （原 ws_status_json 硬编码 ver=1，双方版本漂移永远看不见）。
+         * 不新增 ALM_PROTO 报警位：ALM 是发给屏的线格式契约，屏侧文案/字模未同步前
+         * 加位只会得到"未知位"；版本差的既定 UX 就是网页顶部黄条。*/
+        if (s.ver != TCS_PROTO_VER) {
+            s_proto_mismatch++;
+            if (s_proto_mismatch <= 3 || (s_proto_mismatch % 100u) == 0)
+                ESP_LOGW(TAG, "STATUS ver=%u != local %u (count=%lu)",
+                         (unsigned)s.ver, (unsigned)TCS_PROTO_VER,
+                         (unsigned long)s_proto_mismatch);
+        }
         taskENTER_CRITICAL(&s_mux);
         s_status.valid = 1;
+        s_status.ver = s.ver;
         s_status.seq = s.seq;
         s_status.tc1_act = s.tc1_act;
         s_status.tc2_act = s.tc2_act;
@@ -401,6 +415,7 @@ int link_set_param(uint16_t id, float v)
 #if CONFIG_TCS_DEMO
     if (s_demo_on) return demo_set_param(id, v);   /* WP-F.2：演示模式本地闭环 */
 #endif
+    s_last_set_id = id;
     uint8_t pl[TCS_PARAM_PL_LEN];
     tcs_param_pl_t p = { .id = id, .type = PARAM_TYPE_F32, .value = tcs_f2b(v) };
     size_t n = tcs_pl_param(pl, sizeof(pl), &p);
@@ -482,6 +497,21 @@ void link_status_copy(link_status_t *out)
 void link_on_cmd(link_cmd_cb_t cb) { s_cmd_cb = cb; }
 uint32_t link_rx_bytes(void) { return s_rx_bytes; }
 uint32_t link_rx_frames(void) { return s_rx_frames; }
+
+void link_stats_get(link_stats_t *out)
+{
+    if (!out) return;
+    out->rx_bytes = s_rx_bytes;
+    out->rx_frames = s_rx_frames;
+    out->crc_err = s_link.rx.n_crc_err;
+    out->len_err = s_link.rx.n_len_err;
+    out->gap_resets = s_link.rx_gap_resets;
+    out->dup = s_link.dup_cnt;
+    out->retry = s_link.retry_cnt;
+    out->txq_drop = s_link.txq_drop;
+    out->pending_evict = s_link.pending_evict;
+    out->proto_mismatch = s_proto_mismatch;
+}
 const link_param_change_t *link_last_param(void) { return &s_last_param; }
 
 float link_param_value(uint16_t id)
@@ -499,7 +529,22 @@ float link_param_value(uint16_t id)
     taskEXIT_CRITICAL(&s_mux);
     return ok ? v : NAN;
 }
-const link_ack_t *link_last_ack(void)  { return &s_ack; }
+/* M11-F-08：原来 s_ack 无写点 → 永远零值，网页 clamp toast 永不触发。
+ * 现在从 comm 层留存的最近一次 ACK 取 status/ret（comm 层不解析业务，只搬运）。
+ * id 用"最近一次 0x12 的 id"关联：网页写参数是串行用户动作，错配窗口可忽略。*/
+const link_ack_t *link_last_ack(void)
+{
+    uint8_t seq = 0, mt = 0, st = 0;
+    float ret = 0.0f;
+    if (comm_last_ack(&s_link, &seq, &mt, &st, &ret)) {
+        (void)seq;
+        s_ack.status = st;
+        s_ack.ret = ret;
+        s_ack.id = (mt == MT_TCS_SET_PARAM || mt == MT_TCS_PARAM) ? s_last_set_id : 0;
+        s_ack.us = esp_timer_get_time();
+    }
+    return &s_ack;
+}
 void link_on_event(link_event_cb_t cb) { s_cb = cb; }
 
 /* —— 任务 —— */

@@ -17,7 +17,8 @@ static uint32_t s_last_refresh;
 /* ---------------- 报警横幅（优先级：ESTOP>OVERTEMP>BODY>M207>EEPROM） ---------------- */
 volatile uint32_t g_ui_probe[80];
 static lv_obj_t * s_bn_box;
-static int s_bn_kind = -1;               /* -1=无报警 0..4=种类；变化才重建内容 */
+static lv_obj_t * s_bn_layer;            /* 横幅层：所有横幅元素挂在这里，便于整块删除 */
+static int s_bn_kind = -1;               /* -1=无报警 0..n=种类；变化才重建内容 */
 
 typedef struct { uint16_t bit; const char * msg; const char * act; uint8_t red; } alm_row_t;
 static const alm_row_t s_alm[] = {
@@ -48,10 +49,20 @@ static void banner_ack_cb(lv_event_t * e)
 void tui_banner_build(lv_obj_t * parent)
 {
     s_bn_box = NULL;
+    s_bn_layer = NULL;
     int extra = 0;
     int k = alarm_pick(g_tcs.alarm_bits, &extra);
     s_bn_kind = k;
     if (k < 0) return;
+    /* 2026-11-19：横幅原来直接挂在页面上、且只有首页建（tui_p0）——切到调参/曲线/
+     * 连接页就看不到报警、也没有确认入口（UI 规范 §3 "报警横幅二级页驻留"）。
+     * 现在统一挂在一个全屏透明层里，由 tui_goto/refresh 在任意页重建。*/
+    s_bn_layer = lv_obj_create(parent);
+    lv_obj_remove_style_all(s_bn_layer);
+    lv_obj_set_pos(s_bn_layer, 0, 0);
+    lv_obj_set_size(s_bn_layer, 1024, 600);
+    lv_obj_set_clickable(s_bn_layer, false);
+    parent = s_bn_layer;
     lv_color_t bg = s_alm[k].red ? TKS_ALMBG : TKS_WARNBG;
     lv_color_t tx = s_alm[k].red ? TKS_ALMTX : TKS_WARNTX;
     s_bn_box = ui_rrect(parent, 208, 8, 552, 56, 12, bg, TKS_BG);
@@ -63,8 +74,10 @@ void tui_banner_build(lv_obj_t * parent)
 
     /* U-6：M207 失联且模块回过错误码时，第二行改成人话原因（禁止裸代码上屏） */
     const char * act = s_alm[k].act;
+#if TCS_USE_LVGL && !TCS_H743_LINK_ONLY
     char actbuf[64];
-#if TCS_USE_LVGL
+    /* 只有 BENCH/SIM（本机 M207 驱动在跑）时这个错误码才有意义；v2 PROD 下
+     * H743 不连模块，读到的只会是 0 或陈旧值，不能拿它改写横幅文案。*/
     extern volatile uint8_t g_m207_last_errcode;
     extern const char * m207_errcode_text(uint8_t code);
     uint8_t ec = g_m207_last_errcode;
@@ -84,11 +97,20 @@ void tui_banner_build(lv_obj_t * parent)
     }
 }
 
-void tui_banner_refresh(void)
+void tui_banner_sync(void)
 {
     int extra = 0;
     int k = alarm_pick(g_tcs.alarm_bits, &extra);
-    if (k != s_bn_kind) tui_request_rebuild();
+    if (k == s_bn_kind && (k < 0 || s_bn_layer)) return;
+    if (s_bn_layer) { lv_obj_delete(s_bn_layer); s_bn_layer = NULL; s_bn_box = NULL; }
+    s_bn_kind = -1;
+    if (k >= 0) tui_banner_build(s_scr);
+}
+
+void tui_banner_refresh(void)
+{
+    /* 只换横幅，不整页重建（原来 tui_request_rebuild 会在调参页把页面状态冲掉）*/
+    tui_banner_sync();
 }
 
 /* ---------------- 弹窗 ---------------- */
@@ -178,6 +200,9 @@ void tui_goto(tui_page_t p)
     s_page = p;
     tui_dlg_close();
     lv_obj_clean(s_scr);
+    s_bn_layer = NULL;       /* 上面 clean 已把旧横幅连同层一起删掉 */
+    s_bn_box = NULL;
+    s_bn_kind = -1;
     switch (p) {
         case TUI_HOME:  tui_p0_build(s_scr); break;
         case TUI_TUNE:  tui_p1_build(s_scr); break;
@@ -185,6 +210,7 @@ void tui_goto(tui_page_t p)
         case TUI_CONN:  tui_p3_build(s_scr); break;
         case TUI_DIAG:  tui_diag_build(s_scr, s_diag_mode); break;
     }
+    tui_banner_sync();       /* 二级页驻留：报警横幅在每一页都要在（含点击确认入口）*/
 }
 
 tui_page_t tui_current(void) { return s_page; }
@@ -249,6 +275,9 @@ void tui_tick(void)
             case TUI_CHART: tui_p2_refresh(); break;
             default: break;
         }
+        /* 2026-11-19：tui_banner_refresh() 此前**没有任何调用者**——报警出现/消失
+         * 时横幅不更新（只在换页时碰巧重建）。这里挂上 500ms 节拍。*/
+        tui_banner_refresh();
     }
 }
 

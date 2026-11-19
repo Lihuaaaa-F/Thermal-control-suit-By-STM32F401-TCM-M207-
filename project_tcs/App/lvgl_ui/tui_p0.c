@@ -97,7 +97,6 @@ void tui_p0_build(lv_obj_t * scr)
     ui_dot8(scr, 76, 36, g_tcs.mode ? TKS_GREEN : TKS_GRAY);
     ui_text24(scr, 88, 24, g_tcs.mode ? "自动" : "手动", TKS_TX);
 
-    tui_banner_build(scr);
     if (!g_tcs.alarm_bits) {
         ui_dot8(scr, 780, 31, g_tcs.m207_online ? TKS_GREEN : TKS_GRAY);
         ui_aux20(scr, 796, 18, "M207", TKS_TX2);

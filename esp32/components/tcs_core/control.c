@@ -20,6 +20,7 @@
 #ifdef ESP_PLATFORM
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"      /* N-04：落盘串行化用 mutex */
+#include "esp_log.h"           /* 通信类自动恢复留痕（只此一处日志）*/
 static portMUX_TYPE s_safety_mux = portMUX_INITIALIZER_UNLOCKED;
 #define SAFETY_LOCK()   taskENTER_CRITICAL(&s_safety_mux)
 #define SAFETY_UNLOCK() taskEXIT_CRITICAL(&s_safety_mux)
@@ -49,6 +50,13 @@ static uint8_t s_safety_ok = 0xFF;
 
 /* 传感器类源（除急停外）的集合：ack 清急停要求这三者全部恢复 */
 #define SAFETY_SENSOR_MASK (SAFETY_BIT_OVERTEMP | SAFETY_BIT_BODY_LOST | SAFETY_BIT_M207_LOST)
+
+/* 2026-11-19（实测阻碍）：通信类故障（体温/M207 失联、探头开路）不是安全事件，
+ * 源持续健康 2s 就自动清锁存——否则每次线缆抖动都要人工 ack，实测无法连续跑。
+ * 急停与超温**不**在此列，仍必须人工确认（安全红线不变）。*/
+#define COMM_AUTO_RECOVER_MS   2000u
+#define SAFETY_COMM_MASK       ((uint8_t)(SAFETY_BIT_BODY_LOST | SAFETY_BIT_M207_LOST))
+static uint32_t s_comm_ok_since;
 
 /* N-04：落盘串行化。trip 与 ack 可能在不同任务并发，直接各自写 NVS 会用旧值覆盖新值。
  * 这里用一把 mutex 串行化"读最新 latch + 写盘"，且**每次写当前值**，所以最后一次写入
@@ -191,6 +199,13 @@ uint8_t tcs_alarm_active(uint16_t bit)
     return (v & bit) ? 1u : 0u;
 }
 
+static void alarm_clear_bits(uint16_t mask)
+{
+    ALM_LOCK();
+    g_tcs.alarm_bits &= (uint16_t)~mask;
+    ALM_UNLOCK();
+}
+
 /* ====== 安全态进入/退出 ====== */
 static void enter_safe(void)
 {
@@ -266,6 +281,22 @@ void control_manual_fan(uint8_t on)
     out_fan(on);
 }
 
+int control_apply_cmd(uint8_t cmd)
+{
+    switch (cmd) {
+    case TCS_CMD_TEC1_ON:       control_manual_tec(1, 1); return 0;
+    case TCS_CMD_TEC1_OFF:      control_manual_tec(1, 0); return 0;
+    case TCS_CMD_TEC2_ON:       control_manual_tec(2, 1); return 0;
+    case TCS_CMD_TEC2_OFF:      control_manual_tec(2, 0); return 0;
+    case TCS_CMD_FAN_TOGGLE:    control_manual_fan(g_tcs.fan_on ? 0 : 1); return 0;
+    case TCS_CMD_MODE_AUTO:     return (param_set(PARAM_ID_MODE, 1.0f, PARAM_SRC_WEB) < 0) ? -1 : 0;
+    case TCS_CMD_MODE_MANUAL:   return (param_set(PARAM_ID_MODE, 0.0f, PARAM_SRC_WEB) < 0) ? -1 : 0;
+    case TCS_CMD_ESTOP:         tcs_emergency_stop(); return 0;
+    case TCS_CMD_ALARM_ACK:     tcs_alarm_ack(); return 0;
+    default:                    return -1;
+    }
+}
+
 void control_on_mode_change(uint8_t m)
 {
     (void)m;   /* 手动进出不强制改输出；自动评估在下一拍 control_poll 接管 */
@@ -305,6 +336,35 @@ void control_poll(uint32_t now_ms)
      * R-18：M207 离线时 m207_tec 直接返回 -2（不入队），本处重发并不产生帧；
      * 离线期的兜底是复联重同步（m207_go_online 里补发 TCSW=0）。P1-09 的彻底修法
      * （m207_tec_force 强制归零通道）仍在待办，勿据本注释认为离线已被覆盖。*/
+    /* 通信类故障自动恢复（见 COMM_AUTO_RECOVER_MS 注释）。必须放在"锁存即返回"之前，
+     * 且健康判据直接取 g_tcs（s_safety_ok 在锁存期间不刷新）。
+     * 计时器只在"有锁存"期间累计：无锁存时清零，避免上次锁存的时间戳让下一次一进锁存
+     * 就满足 2s（单测里连跑多段会踩到，现场表现为"刚跳 SAFE 又自己弹回"）。*/
+    if (!s_safety_latch) s_comm_ok_since = 0;
+    if (s_safety_latch) {
+        uint8_t comm_ok = (uint8_t)(g_tcs.body_sensor_ok && g_tcs.m207_online
+                                    && !g_tcs.m207_sensor_open
+                                    && g_tcs.tc1_act <= ALM_OVERTEMP_HARD_C);
+        if (comm_ok && (s_safety_latch & SAFETY_COMM_MASK)) {
+            if (!s_comm_ok_since) s_comm_ok_since = now_ms ? now_ms : 1u;
+            if ((uint32_t)(now_ms - s_comm_ok_since) >= COMM_AUTO_RECOVER_MS) {
+                SAFETY_LOCK();
+                s_safety_latch &= (uint8_t)~SAFETY_COMM_MASK;
+                SAFETY_UNLOCK();
+                alarm_clear_bits((uint16_t)(ALM_M207 | ALM_BODY_SENSOR | ALM_SENSOR_OPEN));
+                safety_persist_now();
+                s_comm_ok_since = 0;
+#ifdef ESP_PLATFORM
+                ESP_LOGW("ctrl", "comm fault auto-recovered (%ums healthy; estop/overtemp stay manual)",
+                         (unsigned)COMM_AUTO_RECOVER_MS);
+#endif
+                (void)COMM_AUTO_RECOVER_MS;
+            }
+        } else {
+            s_comm_ok_since = 0;
+        }
+    }
+
     if (s_safety_latch) {
         enter_safe();
         return;

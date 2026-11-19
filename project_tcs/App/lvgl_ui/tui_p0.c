@@ -14,7 +14,7 @@ static void clk_estop(lv_event_t * e) { LV_UNUSED(e); tui_dlg_estop(); }
 static void clk_fan(lv_event_t * e)
 {
     LV_UNUSED(e);
-    control_manual_fan(g_tcs.fan_on ? 0 : 1);
+    control_fan_toggle();     /* v2：PROD 下发 0x15 由 ESP32 执行；BENCH 本地直控 */
     tui_request_rebuild();
 }
 static void clk_mode(lv_event_t * e)

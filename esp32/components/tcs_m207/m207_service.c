@@ -49,7 +49,9 @@ static const char *TAG = "M207";
 
 #define M207_TICK_MS     50u     /* 队列服务节拍 = 铁律间隔 */
 #define M207_POLL_MS     500u    /* 轮询交替周期 */
-#define M207_REPLY_TICKS 2u      /* 应答窗 100ms（2 拍）*/
+#define M207_REPLY_TICKS 6u      /* 应答窗 300ms（6 拍）。原 100ms 对 57600 波特+模块行
+                                  * 组装过紧：偶发超时累计 5 次即误判离线→SAFE，实测表现
+                                  * 为「拔插一次线就停机、要人工确认」。（2026-11-19）*/
 #define M207_FAIL_LIMIT  5       /* 5 连败离线（F5）*/
 #define M207_PROBE_TICKS 20u     /* 离线探测 1s */
 #define M207_Q_LEN       16
@@ -453,7 +455,7 @@ static const char *m207_fsm_poll(void)
         if (s_tick >= s_next_poll) {
             s_next_poll = s_tick + M207_POLL_MS / M207_TICK_MS;
             s_wait_ch = s_poll_ch;                      /* 轴分离：errcode 归属通道 */
-            s_poll_deadline = s_tick + M207_REPLY_TICKS; /* R1 M12-F-06：窗口=发送后 100ms（原来按 500+100 算成 600ms）*/
+            s_poll_deadline = s_tick + M207_REPLY_TICKS; /* 应答窗=发送后 300ms（M207_REPLY_TICKS，2026-11-19 从 100ms 放宽）*/
             snprintf(cmd, sizeof(cmd), "TC%u:TCACTTEMP?\r", (unsigned)s_poll_ch);
             s_poll_ch = (s_poll_ch == 1) ? 2u : 1u;
             s_waiting = 1;

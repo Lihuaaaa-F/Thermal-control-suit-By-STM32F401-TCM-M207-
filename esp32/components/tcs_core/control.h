@@ -79,6 +79,11 @@ uint8_t control_safety_latched(void);           /* 非 0 = 仍在安全锁存 */
 /* N-01：设备服务层（M207 解析等）可直接置安全锁存——超温切断不得只依赖 control 任务存活。*/
 void    control_safety_trip(uint8_t bit);
 
+/* 统一命令执行端（网页 WS 与屏幕 0x15 共用一份语义，避免两处 switch 漂移）。
+ * 覆盖 cmd 1..9（TEC1/2 开/关、风扇切换、自动/手动、急停、确认）；
+ * 返回 0=执行成功，-1=未知命令。10（保存到模块）依赖 tcs_m207，由调用方处理。*/
+int control_apply_cmd(uint8_t cmd);
+
 #ifdef TCS_UNIT_TEST
 /* 测试专用：不经过 poll 直接置锁存，用于验证"锁存门控"独立于状态机（R1 复核 R-14）。
  * 只在单测构建可见，生产固件不编入。*/

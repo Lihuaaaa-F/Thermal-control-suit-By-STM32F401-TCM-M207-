@@ -392,18 +392,10 @@ esp_err_t ws_on_recv(httpd_req_t *req)
                 /* R1 P1-03：补齐网页 cmd 1–7/10 的执行端（原来只实现 8/9，其余静默丢弃、
                  * 前端却弹"成功"）。1-4=TEC1/2 开/关，5=风扇切换，6/7=自动/手动，
                  * 10=保存到模块（逐参数 `!`）。安全门控仍在 out_tec_sw（锁存期禁开）。*/
-                switch (cv) {
-                case 1: control_manual_tec(1, 1); break;
-                case 2: control_manual_tec(1, 0); break;
-                case 3: control_manual_tec(2, 1); break;
-                case 4: control_manual_tec(2, 0); break;
-                case 5: control_manual_fan(g_tcs.fan_on ? 0 : 1); break;
-                case 6: rv = param_set(PARAM_ID_MODE, 1.0f, PARAM_SRC_WEB); break;
-                case 7: rv = param_set(PARAM_ID_MODE, 0.0f, PARAM_SRC_WEB); break;
-                case 8: tcs_emergency_stop(); break;
-                case 9: tcs_alarm_ack(); break;
-                case 10: rv = m207_save_all(); break;
-                default: rv = -1; break;
+                if (cv == TCS_CMD_M207_SAVE) {
+                    rv = m207_save_all();          /* 10：返回下发条数 */
+                } else {
+                    rv = control_apply_cmd((uint8_t)cv);   /* 与屏幕 0x15 同一实现 */
                 }
                 ESP_LOGI(TAG, "ws cmd=%d rv=%d -> state=%d alarm=0x%04X",
                          cv, rv, (int)control_state(), (unsigned)g_tcs.alarm_bits);

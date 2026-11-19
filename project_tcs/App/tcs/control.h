@@ -48,6 +48,9 @@ ctrl_state_t control_state(void);
 /* 手动直控（UI/网页/CLI 同一入口；SAFE/急停期 TEC 拒绝、风扇拒绝关）*/
 void  control_manual_tec(uint8_t ch, uint8_t on);
 void  control_manual_fan(uint8_t on);
+/* 风扇切换：PROD（v2 纯显示终端）下发 0x15 CMD 5 由 ESP32 执行；
+ * BENCH/SIM 保持本地直控（台架没有对端也能驱动）。*/
+void  control_fan_toggle(void);
 /* mode 切换通知（param on_mode_change 钩子转发）；退出自动时保持当前输出 */
 void  control_on_mode_change(uint8_t m);
 

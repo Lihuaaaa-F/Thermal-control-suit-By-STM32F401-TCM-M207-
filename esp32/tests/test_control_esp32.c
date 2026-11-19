@@ -141,6 +141,59 @@ int main(void)
     tick();
     CHECK(control_state() == CTRL_IDLE, "recovered+ack -> IDLE");
 
+    /* ====== 2026-11-19：统一命令执行端（网页 WS 与屏幕 0x15 共用一份语义）====== */
+    {
+        enter_auto_healthy();
+        (void)param_set(PARAM_ID_MODE, 0.0f, 4);   /* 手动，便于直控 */
+        reset_stubs();
+        CHECK(control_apply_cmd(TCS_CMD_TEC1_ON) == 0 && last_tec_on == 1, "cmd tec1 on");
+        CHECK(control_apply_cmd(TCS_CMD_TEC1_OFF) == 0 && last_tec_on == 0, "cmd tec1 off");
+        {
+            int f0 = g_tcs.fan_on;
+            CHECK(control_apply_cmd(TCS_CMD_FAN_TOGGLE) == 0 && g_tcs.fan_on != f0,
+                  "cmd fan toggle");
+        }
+        CHECK(control_apply_cmd(TCS_CMD_MODE_AUTO) == 0 && g_tcs.mode == 1, "cmd mode auto");
+        CHECK(control_apply_cmd(TCS_CMD_MODE_MANUAL) == 0 && g_tcs.mode == 0, "cmd mode manual");
+        CHECK(control_apply_cmd(TCS_CMD_ALARM_ACK) == 0, "cmd alarm ack");
+        CHECK(control_apply_cmd(99) == -1, "unknown cmd rejected");
+        CHECK(control_apply_cmd(TCS_CMD_M207_SAVE) == -1, "cmd 10 handled by caller (not control)");
+    }
+
+    /* ====== 2026-11-19：通信类故障 2s 健康后自动恢复（急停/超温不在此列）====== */
+    {
+        enter_auto_healthy();
+        tick();                       /* 捕获 boot 基准 */
+        s_now += 5000u;
+        tcs_alarm_raise(ALM_M207);      /* 真实路径：故障分支会同时置显示位 */
+        control_test_trip(SAFETY_BIT_M207_LOST);
+        tick();
+        CHECK(control_state() == CTRL_SAFE, "comm trip -> SAFE");
+        CHECK(tcs_alarm_active(ALM_M207) == 1, "comm trip -> ALM_M207");
+        /* 源健康持续 2s（4 拍）→ 自动清锁存，无需 ack */
+        for (int i = 0; i < 5; i++) { s_now += 500u; control_poll(s_now); }
+        CHECK(control_state() == CTRL_IDLE, "comm fault auto-recovers (no ack)");
+        CHECK(tcs_alarm_active(ALM_M207) == 0, "comm alarm cleared");
+
+        /* 反证：源不健康时不自动清 */
+        control_test_trip(SAFETY_BIT_M207_LOST);
+        g_tcs.m207_online = 0;
+        for (int i = 0; i < 6; i++) { s_now += 500u; control_poll(s_now); }
+        CHECK(control_state() == CTRL_SAFE, "unhealthy source -> stays SAFE");
+        g_tcs.m207_online = 1;
+        for (int i = 0; i < 5; i++) { s_now += 500u; control_poll(s_now); }
+        CHECK(control_state() == CTRL_IDLE, "recovered -> auto exit");
+
+        /* 急停必须人工确认：健康 3s 也不自动清 */
+        tcs_emergency_stop();
+        for (int i = 0; i < 6; i++) { s_now += 500u; control_poll(s_now); }
+        CHECK(control_state() == CTRL_SAFE, "estop stays latched without ack");
+        CHECK(tcs_alarm_active(ALM_ESTOP) == 1, "ALM_ESTOP still set");
+        tcs_alarm_ack();
+        tick();
+        CHECK(control_state() == CTRL_IDLE, "estop clears by ack");
+    }
+
     /* ====== M06-F-06：无有效体温样本 → auto 不得开 HEAT（默认未布防场景）====== */
     enter_auto_healthy();
     set_armed(0);              /* 上电默认未布防：只记沿、不进 SAFE，最容易"带病加热" */

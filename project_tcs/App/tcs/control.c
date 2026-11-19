@@ -144,14 +144,14 @@ void tcs_alarm_ack(void)
         s_overtemp_latch = 0;            /* R-03：只有 ack 且温度已回落才清本地超温自持 */
         s_overtemp_tx_pending = 0;       /* N-01：隐患已被确认，未送达的停机请求作废 */
     }
-    if (s_state != CTRL_SAFE || safe_sources_recovered()) {
-        control_estop_clear();
-        /* N-03：非急停报警（BODY/M207/OVERTEMP）的屏 ack 也必须通知对端，
-         * 否则 ESP32 侧锁存永远清不掉（屏是主操作载体）。
-         * 只在"本地已无急停自持"时发：避免本地急停未清却把对端急停清掉。
-         * 对端 tcs_alarm_ack 仍会检查自己的源是否恢复。*/
-        if (!s_estop_latch && s_cmd_hook) s_cmd_hook(9);
-    }
+    control_estop_clear();
+    /* N-03：非急停报警（BODY/M207/OVERTEMP）的屏 ack 也必须通知对端，
+     * 否则 ESP32 侧锁存永远清不掉（屏是主操作载体）。
+     * 只在"本地已无急停自持"时发：避免本地急停未清却把对端急停清掉；
+     * 对端 tcs_alarm_ack 会复核它自己的源是否恢复，所以**不要**在这里用
+     * 本地 SAFE/源恢复做前置门——2026-11-19 实测：断链后本地 g_tcs 仍是旧快照，
+     * 点横幅会因此静默不发 cmd 9，表现为"屏幕确认了但设备不恢复"。*/
+    if (!s_estop_latch && s_cmd_hook) s_cmd_hook(9);
     g_tcs.alarm_bits &= (uint16_t)~ALM_EEPROM;   /* EEPROM 报警仅提示性 */
 }
 
@@ -190,6 +190,17 @@ void control_manual_fan(uint8_t on)
 {
     if (s_state == CTRL_SAFE) return;             /* SAFE 期风扇锁全开 */
     out_fan(on);
+}
+
+void control_fan_toggle(void)
+{
+#if TCS_H743_LINK_ONLY
+    /* v2：执行端在 ESP32。原来这里调 control_manual_fan()——本机没有 M207，
+     * 只改 g_tcs 显示，200ms 后被快照打回，表现为「按了没反应/又跳回去」。*/
+    if (s_cmd_hook) s_cmd_hook(TCS_CMD_FAN_TOGGLE);
+#else
+    control_manual_fan(g_tcs.fan_on ? 0 : 1);
+#endif
 }
 
 void control_on_mode_change(uint8_t m)

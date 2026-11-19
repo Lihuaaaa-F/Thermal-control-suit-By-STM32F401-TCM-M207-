@@ -101,12 +101,21 @@ else()
     message(FATAL_ERROR "TCS_PROFILE must be PROD | BENCH | SIM (got '${TCS_PROFILE}')")
 endif()
 message(STATUS "TCS_PROFILE=${TCS_PROFILE_U} (=${TCS_PROFILE_NUM})")
+# v2/AD-1：PROD = 纯显示终端（停跑本地 M207/TMP117/control/post 闭环）。
+# 台架要本地闭环请用 BENCH/SIM（本开关自动为 0）。改档位后必须重新 configure。
+if(TCS_PROFILE_U STREQUAL "PROD")
+    set(TCS_H743_LINK_ONLY 1)
+else()
+    set(TCS_H743_LINK_ONLY 0)
+endif()
+message(STATUS "TCS_H743_LINK_ONLY=${TCS_H743_LINK_ONLY}")
 
 target_compile_definitions(tcs_main.elf PRIVATE
     STM32H743xx
     USE_HAL_DRIVER
     ENABLE_LCD
     TCS_PROFILE=${TCS_PROFILE_NUM}
+    TCS_H743_LINK_ONLY=${TCS_H743_LINK_ONLY}
     # 无 SCREEN_TEST：TCS 直接出正式版（任务书 §3.1）
 )
 

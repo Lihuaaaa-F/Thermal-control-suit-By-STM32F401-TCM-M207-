@@ -253,6 +253,15 @@ static uint32_t link_now_ms(void)
 static void link_crit_enter(void) { taskENTER_CRITICAL(&s_mux); }
 static void link_crit_exit(void)  { taskEXIT_CRITICAL(&s_mux); }
 
+/* comm_tick 判 ARQ 全败（链路死）时调用：作废注册表收齐标记，重连后重新全量请求。
+ * 只做这一件事——链路丢失按用户裁决「只报告」，不置任何锁存。*/
+static void link_on_down(void)
+{
+    s_reg_done = 0;
+    s_reg_got = 0;
+    ESP_LOGW(TAG, "link down (ARQ) -> registry resync armed");
+}
+
 /* —— 组帧（MT+Seq+body → 整帧）—— */
 static size_t mt_frame(uint8_t mt, uint8_t seq, const uint8_t *body, size_t blen,
                        uint8_t *out, size_t cap)
@@ -619,7 +628,10 @@ void link_start(void)
 #if CONFIG_TCS_DEMO
     s_boot_us = esp_timer_get_time();       /* 演示宽限起点；生产档无此变量 */
 #endif
-    comm_init(&s_link, link_uart_send, link_now_ms, NULL, link_crit_enter, link_crit_exit);
+    /* 2026-11-19：原来 on_link_down 传 NULL——ARQ 判死后没人记账，重连不重问注册表。
+     * 现在断链即作废注册表收齐状态，重连后由 5s 请求/心跳自动补齐。*/
+    comm_init(&s_link, link_uart_send, link_now_ms, link_on_down,
+              link_crit_enter, link_crit_exit);
 
     uart_config_t cfg = {
         .baud_rate = LINK_BAUD,

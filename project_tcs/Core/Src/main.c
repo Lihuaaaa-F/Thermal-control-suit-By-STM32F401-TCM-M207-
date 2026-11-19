@@ -883,7 +883,9 @@ int main(void)
         iwdg_refresh();
         comm_poll_tx(&g_link);           /* 链路 TX 串行消费（唯一 HAL_UART_Transmit 处之一）*/
         console_poll();
+#if !TCS_H743_LINK_ONLY
         m207_poll(now);
+#endif
         registry_dump_tick();    /* P3：注册表全量节拍化下发 */
         /* v2 架构：M207 挂在 ESP32 侧，H743 不再有本地 M207。
          * 实际水温唯一来源 = 0x20 快照（snap_apply 已写入 g_tcs）。
@@ -895,12 +897,23 @@ int main(void)
         tcs_lvgl_estop_watch();   /* D-L7② 屏入口兜底：先于 LVGL 的原始坐标判定 */
         tcs_lvgl_poll();
 #endif
+#if TCS_H743_LINK_ONLY
+        /* v2/AD-1（2026-11-19）：PROD=纯显示终端。本地 M207/TMP117/POST 在 v2 无机载外设，
+         * 却每 100/500ms 把 g_tcs.m207_online/body_sensor_ok 写成 0，与 200ms 快照抢写
+         * 同一组字段：断链时 control_poll 因"失联"进 SAFE/置报警，重连后 0/1 抖动，
+         * 现场表现为「断联后不恢复 / 横幅闪」。PROD 档不跑本地闭环；
+         * 需要本机闭环的台架用 -DTCS_PROFILE=BENCH。*/
+        (void)0;
+#else
         control_poll(now);
         tmp117_poll(now);
         post_poll(now);          /* H6：M207 宽限裁决 + 角标 + 布防三态机 100ms */
+#endif
         param_persist_flush(now);
         kill_key_poll();
         snap_reassert();         /* v2：本地轮询后回灌 ESP32 快照（屏显一致性）*/
+        tcs_hist_tick(now);      /* 2026-11-19：曲线页数据源——该函数此前无人调用，
+                                  * 曲线永远空（30s/点 × 60 点 = 近 30min）*/
         /* R1 修复 P1（M01-F-02）：status_tx 必须在 snap_reassert 之后——原来先打包 0x10，
          * 会把 H743 本机 body_sensor_ok=0（v2 无 TMP117）发给 ESP32，网页误报传感器离线。*/
         status_tx(now);

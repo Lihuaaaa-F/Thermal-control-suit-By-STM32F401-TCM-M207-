@@ -120,6 +120,7 @@ static void esp_on_broadcast(param_desc_t *p, uint8_t src)
     /* 注册表 JSON 的 def 取本端权威值，本地改参后缓存必须失配（否则网页重载看到旧值）*/
     extern void ws_registry_invalidate(void);
     ws_registry_invalidate();
+    link_demo_note_param(p->id, p->value);    /* 演示模型跟随（生产档编译为空操作）*/
     if (src == PARAM_SRC_LINK) return;        /* 屏幕自己的改动已经在对端生效 */
     (void)link_send_param(p->id, p->value);   /* 反向镜像：屏幕显示跟随 */
 }

@@ -134,19 +134,6 @@ static void demo_push_param(uint16_t id, float v)
     notify();
 }
 
-static int demo_set_param(uint16_t id, float v)
-{
-    switch (id) {
-    case 0x01: s_demo.tc1_set = v; break;
-    case 0x02: s_demo.tc2_set = v; break;
-    case 0x06: s_demo.mode = (uint8_t)v; break;
-    case 0x08: s_demo.commissioned = (uint8_t)v; break;
-    default: break;   /* 其余参数仅缓存 */
-    }
-    demo_push_param(id, v);
-    ESP_LOGI(TAG, "demo set id=0x%02x v=%.2f", id, v);
-    return 0;
-}
 
 static int demo_cmd(uint8_t cmd)
 {
@@ -228,6 +215,25 @@ static int demo_active(void)
 #define s_demo_on 0                      /* 编译期常 0：所有演示分支被优化掉 */
 static int demo_active(void) { return 0; }
 #endif /* CONFIG_TCS_DEMO */
+
+/* 演示模型同步（v2）：参数写入都落在 ESP32 的 param_set，main 的 on_broadcast
+ * 调到本函数。tcs_link 不依赖 tcs_core（组件环），所以走注入而不是 param_get。*/
+void link_demo_note_param(uint16_t id, float v)
+{
+#if CONFIG_TCS_DEMO
+    if (!s_demo_on) return;
+    switch (id) {
+    case 0x01: s_demo.tc1_set = v; break;
+    case 0x02: s_demo.tc2_set = v; break;
+    case 0x06: s_demo.mode = (uint8_t)(v != 0.0f); break;
+    default: break;
+    }
+    demo_push_param(id, v);   /* 演示档：网页/屏都跟着变 */
+#else
+    (void)id; (void)v;
+#endif
+}
+
 
 /* —— UART 发送钩子（comm 注入；comm_poll_tx 任务内串行调用）—— */
 static void link_uart_send(const uint8_t *d, size_t n)

@@ -123,6 +123,9 @@ size_t ws_status_json(char *buf, size_t cap)
     if (!root) return 0;
     do {
         if (!cJSON_AddStringToObject(root, "t", "st")) break;
+        /* 2026-11-19：屏链路断时 0x10 停更，但最后一份数据仍"valid"——网页必须能
+         * 分辨"冻结值"与"实时值"，否则实测时会把停更当成设备不动。*/
+        if (!cJSON_AddBoolToObject(root, "stale", !link_alive())) break;
         if (!s->valid) {
             if (!cJSON_AddBoolToObject(root, "valid", false)) break;
         } else {
@@ -160,9 +163,19 @@ size_t ws_status_json(char *buf, size_t cap)
  * 代未变直接复用缓存串，变了才重建（重建在锁外，换入在锁内）。*/
 static char *s_reg_cache;
 static size_t s_reg_cache_len;
-static volatile uint32_t s_reg_gen;          /* 事件代（on_link_event 递增） */
+static volatile uint32_t s_reg_gen;          /* 事件代（link 事件或本地改参递增） */
+
 static uint32_t s_reg_built_gen;             /* 缓存构建时的事件代 */
 static portMUX_TYPE s_reg_mux = portMUX_INITIALIZER_UNLOCKED;
+
+/* 本地（网页/控制台/控制）改参 → 注册表 JSON 的 def 变了，缓存必须失配。
+ * 由 main 的 on_broadcast 钩子调用（与 0x11 事件同一入口）。*/
+void ws_registry_invalidate(void)
+{
+    taskENTER_CRITICAL(&s_reg_mux);
+    s_reg_gen++;
+    taskEXIT_CRITICAL(&s_reg_mux);
+}
 
 size_t ws_registry_json(char *buf, size_t cap)
 {
@@ -196,8 +209,10 @@ size_t ws_registry_json(char *buf, size_t cap)
     }
     for (int i = 0; i < n; i++) {
         const tcs_reg_entry_t *e = &regs[i].e;
-        float def = link_param_value(e->id);
-        if (isnan(def)) def = e->min;   /* 无缓存（未收到 0x11）→ 滑条置 min */
+        /* 2026-11-19：v2 权威在 ESP32——滑块初值必须取本端注册表，而不是"屏幕 0x11
+         * 缓存"。原来未收到 0x11 的参数 def=NaN → 一律显示 min（5.0°C），
+         * 用户拖动就会把 25/37.5 设成 5.0。H743 独有条目（若有）退回表内 min。*/
+        float def = param_find(e->id) ? param_get(e->id) : e->min;
         cJSON *it = cJSON_CreateObject();
         if (!it) break;
         cJSON_AddNumberToObject(it, "id", e->id);

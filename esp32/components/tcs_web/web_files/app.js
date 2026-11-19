@@ -98,10 +98,15 @@ function onStatus(s) {
   else bar.classList.add("hidden");
   $("btn-ack").classList.toggle("hidden", !s.alarm);
 
-  /* 协议版本黄条（不拒绝服务）*/
-  if (s.ver !== PROTO_VER_EXPECT) {
+  /* 协议版本/数据陈旧黄条（不拒绝服务）。陈旧优先：冻结值不能当实时值看。*/
+  if (s.stale) {
+    $("verbar").textContent = "⚠ 屏链路断开：以下为最后一次数据（不代表当前状态）";
+    $("verbar").classList.remove("hidden");
+  } else if (s.ver !== PROTO_VER_EXPECT) {
     $("verbar").textContent = `固件协议 v${s.ver} ≠ 网页预期 v${PROTO_VER_EXPECT}，功能可能受限`;
     $("verbar").classList.remove("hidden");
+  } else {
+    $("verbar").classList.add("hidden");
   }
   pushCurve(s.body);
 }

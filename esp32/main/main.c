@@ -117,8 +117,11 @@ void app_ota_trigger(int rollback)
 static void esp_on_broadcast(param_desc_t *p, uint8_t src)
 {
     if (!p) return;
+    /* 注册表 JSON 的 def 取本端权威值，本地改参后缓存必须失配（否则网页重载看到旧值）*/
+    extern void ws_registry_invalidate(void);
+    ws_registry_invalidate();
     if (src == PARAM_SRC_LINK) return;        /* 屏幕自己的改动已经在对端生效 */
-    (void)link_send_param(p->id, p->value);   /* 组帧失败/断链由 ARQ 与下次快照兜底 */
+    (void)link_send_param(p->id, p->value);   /* 反向镜像：屏幕显示跟随 */
 }
 
 /* v2：屏幕（H743）急停/报警确认 → 在本端执行（TEC/风扇在这里）*/

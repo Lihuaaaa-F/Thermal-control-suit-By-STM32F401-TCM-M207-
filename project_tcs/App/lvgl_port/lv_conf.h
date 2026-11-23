@@ -16,7 +16,12 @@
 #define LV_USE_CHECK_ARG        0               /* 警告1清零：调试件关断 */
 #define LV_DRAW_LAYER_SIMPLE_BUF_SIZE (64U * 1024U)  /* 警告2清零：≥屏 1/20（60KB） */
 #define LV_USE_SYSMON           1
-#define LV_USE_PERF_MONITOR     1      /* 真机 FPS/CPU 叠层（G4① 取证口径） */
+/* 2026-11-23 现场：叠层画在右下角 (905..1023,565..595)，压住急停键一角——交付档
+ * 不应有调试叠层。取证档（BENCH/SIM）保留，G4① 的 FPS/CPU 口径不受影响。*/
+#ifndef TCS_PROFILE
+#include "tcs_profile.h"
+#endif
+#define LV_USE_PERF_MONITOR     (TCS_PROFILE != 0)   /* 真机 FPS/CPU 叠层（G4① 取证口径，仅台架档） */
 
 #define LV_FONT_MONTSERRAT_14 1          /* 默认字体 */
 #define LV_FONT_MONTSERRAT_20 1          /* benchmark 硬性要求 */

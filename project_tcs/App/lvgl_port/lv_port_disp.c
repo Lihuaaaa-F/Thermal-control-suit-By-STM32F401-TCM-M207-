@@ -24,23 +24,23 @@ static uint16_t * s_hidden = LCD_BACK_BUF;       /* 隐藏帧（=非显示缓冲
 
 static void flush_cb(lv_display_t * disp, const lv_area_t * area, uint8_t * px_map)
 {
-    /* G4-Z22（角标区闪烁根因）：PARTIAL+交替翻转架构下，每帧都更新的区域
-     * （perf 角标）两 fb 各持交替历史 → 翻转交替显示旧/新=闪。修复=脏区
-     * 双写两块 fb（两 fb 恒等→交替与否则无视觉差异；VBR 上屏保无撕裂）。 */
-    int32_t aw = area->x2 - area->x1 + 1;
-    int32_t ah = area->y2 - area->y1 + 1;
-    /* G4-Z23（闪屏+字形压扁共同根因）：PARTIAL 的 px_map 行距=整屏宽（draw_buf 以
-     * 整屏宽 × chunk 行创建，lv_display_set_buffers_with_stride 实证），此前按 area
-     * 宽度取行距 → 窄区域被纵向压扁（96px 大字成小横杠；全宽区域碰巧正确）。 */
-    uint32_t src_stride = lv_draw_buf_width_to_stride((uint32_t)LCD_WIDTH, LV_COLOR_FORMAT_RGB565);
-    /* G4-Z26：px_map=chunk 基址 + 区域按 chunk 高度取模（跨 chunk 大区分段渲染，
-     * 每段从 chunk 第 0 行重写；src 行号须对 60 取模，否则越界读 chunk 后 AXIRAM） */
-    /* G5-Z28（终极修复）：px_map=chunk 基址，LVGL 按「绝对屏幕坐标」渲染写入
-     * （实证：chunk 全屏化后 hero 区出现 TC1 卡复制=拷了 chunk 低位行）。
-     * src 按 area 绝对坐标偏移取行。 */
+    int32_t aw = lv_area_get_width(area);
+    int32_t ah = lv_area_get_height(area);
+    /* 2026-11-23 现场实测修复（阶段 0 基线抓到）：LVGL 9 PARTIAL 模式下，draw_buf
+     * 在每次 refr_area 被 reshape 成「区域宽 × 区域高、行距 = 区域宽」
+     * （lv_refr.c: refr_area → layer_reshape_draw_buf(LV_STRIDE_AUTO)），px_map 从
+     * 偏移 0 起紧密排列，而 flush 收到的 area 是绝对屏幕坐标。
+     * 原实现按「整屏宽行距 + 绝对坐标偏移」取源——只有整屏 area（x1=y1=0、宽=1024）
+     * 时两种算法才碰巧等价；任何局部刷新都从 chunk 里无关位置取像素拷回标签区。
+     * 后果：首帧之后所有数值/横幅/状态变化都不上屏（现场实测：体温 36.8→38.5，
+     * g_tcs 已变而帧缓冲字节级不变；hero 停在开机时的灰色 "--.-"）。整页重建走
+     * 整屏 area 所以正常 → 表现为「切页能刷新、数字不动、横幅点不掉」。
+     * 脏区双写两块 fb 的做法保留（Z22）。CHUNK_LINES=600 保证单条带，无需处理
+     * 多条带的 partial_y_offset。*/
+    uint32_t src_stride = lv_draw_buf_width_to_stride((uint32_t)aw, LV_COLOR_FORMAT_RGB565);
     uint16_t * dst1 = LCD_FRONT_BUF + (uint32_t)area->y1 * LCD_WIDTH + area->x1;
     uint16_t * dst2 = LCD_BACK_BUF + (uint32_t)area->y1 * LCD_WIDTH + area->x1;
-    uint8_t * src = px_map + (uint32_t)area->y1 * src_stride + (uint32_t)area->x1 * 2;
+    const uint8_t * src = px_map;
     for(int32_t y = 0; y < ah; y++) {
         memcpy(dst1, src, (size_t)aw * 2);
         memcpy(dst2, src, (size_t)aw * 2);

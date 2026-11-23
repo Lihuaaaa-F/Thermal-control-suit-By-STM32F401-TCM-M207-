@@ -3,3 +3,6 @@ sdkconfig
 sdkconfig.old
 managed_components/
 # dependencies.lock 已入 git（W9：官方可复现构建机制，版本钉 3.1.1）
+# 现场测试构建（PROD + CONFIG_TCS_SIM：TMP117 假值注入），不入库
+build-site/
+sdkconfig.site

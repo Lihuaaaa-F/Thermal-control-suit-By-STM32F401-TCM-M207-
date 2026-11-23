@@ -35,6 +35,12 @@ static const char *TAG = "tcs_link";
 #define LINK_RXD        18
 #define LINK_BAUD       230400
 #define LINK_RXBUF      2048
+/* 2026-11-23 现场实测（阶段 0 基线）：TX 环原为 0（无环，阻塞直写），而
+ * link_uart_send 用 uart_get_tx_buffer_free_size() 判"环是否满"——无 TX 环时它
+ * 恒返回 0 → free>=n 永假 → 每一帧都被当"环满"丢弃，日志刷
+ * "link tx ring full"。即自 316e5a9（11-15 非阻塞改造）起链路发送实际全灭，
+ * 主机单测/门禁覆盖不到（IDF 驱动行为）。给驱动一个真实 TX 环，非阻塞判定才成立。*/
+#define LINK_TXBUF      1024
 #define LINK_EVT_QUEUE  20
 
 static comm_link_t s_link;
@@ -241,6 +247,8 @@ void link_demo_note_param(uint16_t id, float v)
 
 
 /* —— UART 发送钩子（comm 注入；comm_poll_tx 任务内串行调用）—— */
+static uint32_t s_uart_txdrop;   /* 驱动 TX 环满丢弃（linkstat 可见）*/
+
 static void link_uart_send(const uint8_t *d, size_t n)
 {
     /* R1 P1-07：非阻塞写——TX 环满时丢弃该帧（comm 层 ARQ 会重传），
@@ -249,9 +257,8 @@ static void link_uart_send(const uint8_t *d, size_t n)
     if (uart_get_tx_buffer_free_size(LINK_UART, &free_sz) == ESP_OK && free_sz >= n) {
         uart_write_bytes(LINK_UART, d, n);
     } else {
-        static uint32_t s_txdrop;
-        s_txdrop++;
-        if ((s_txdrop % 50u) == 1u) ESP_LOGW(TAG, "link tx ring full, dropped %lu frames", (unsigned long)s_txdrop);
+        s_uart_txdrop++;
+        if ((s_uart_txdrop % 50u) == 1u) ESP_LOGW(TAG, "link tx ring full, dropped %lu frames", (unsigned long)s_uart_txdrop);
     }
 }
 
@@ -537,6 +544,7 @@ void link_stats_get(link_stats_t *out)
     out->dup = s_link.dup_cnt;
     out->retry = s_link.retry_cnt;
     out->txq_drop = s_link.txq_drop;
+    out->uart_txdrop = s_uart_txdrop;
     out->pending_evict = s_link.pending_evict;
     out->proto_mismatch = s_proto_mismatch;
 }
@@ -661,7 +669,7 @@ void link_start(void)
         .flow_ctrl = UART_HW_FLOWCTRL_DISABLE,
         .source_clk = UART_SCLK_DEFAULT,
     };
-    ESP_ERROR_CHECK(uart_driver_install(LINK_UART, LINK_RXBUF, 0, LINK_EVT_QUEUE,
+    ESP_ERROR_CHECK(uart_driver_install(LINK_UART, LINK_RXBUF, LINK_TXBUF, LINK_EVT_QUEUE,
                                         &s_uart_queue, 0));
     ESP_ERROR_CHECK(uart_param_config(LINK_UART, &cfg));
     ESP_ERROR_CHECK(uart_set_pin(LINK_UART, LINK_TXD, LINK_RXD,

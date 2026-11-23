@@ -5,6 +5,9 @@
 #include <stdio.h>
 
 static lv_obj_t * s_v1, * s_v2, * s_set1, * s_set2, * s_body;
+static lv_obj_t * s_u1, * s_u2, * s_ub;   /* 单位「°C」label（随数值宽度重定位）*/
+static void place_unit(lv_obj_t * val, lv_obj_t * unit, const lv_font_t * f, int base_x, int gap);
+
 static uint8_t s_st_mode, s_st_fan, s_st_tec1, s_st_tec2, s_st_estop, s_st_alm;
 
 static void clk_tune(lv_event_t * e)  { LV_UNUSED(e); tui_request(TUI_TUNE); }
@@ -36,6 +39,17 @@ static lv_obj_t * click_zone(lv_obj_t * p, int x, int y, int w, int h, lv_event_
     return z;
 }
 
+/* 2026-11-23 现场实测：单位 x 只在页面创建时按当时的文字算一次（失联 "--.-" 或
+ * 初值 "0.0"），数值变成 "18.6"/"37.4" 后变宽，单位没跟着挪 → 压在末位数字上。
+ * 现在每次数值文本变化后按新文本宽度重放单位。*/
+static void place_unit(lv_obj_t * val, lv_obj_t * unit, const lv_font_t * f, int base_x, int gap)
+{
+    if (!val || !unit) return;
+    lv_point_t sz;
+    lv_text_get_size(&sz, lv_label_get_text(val), f, 0, 0, 1000, LV_TEXT_FLAG_NONE);
+    lv_obj_set_x(unit, base_x + (int)sz.x + gap);
+}
+
 static lv_obj_t * value_label(lv_obj_t * p, int x, int y, lv_color_t c,
                               const lv_font_t * f, const char * txt)
 {
@@ -64,17 +78,16 @@ static void tc_card(lv_obj_t * p, int cx, const char * title, uint8_t tec_on,
     if (lost) snprintf(big, sizeof(big), "--.-");
     else      snprintf(big, sizeof(big), "%.1f", (double)act);
     *val_out = value_label(p, cx + 24, 160, lost ? TKS_GRAY : TKS_HERO, &tcs_font_lv96, big);
-    lv_point_t sz;
-    lv_text_get_size(&sz, big, &tcs_font_lv96, 0, 0, 1000, LV_TEXT_FLAG_NONE);
-    ui_text32(p, cx + 24 + (int)sz.x + 8, 224, "°C", TKS_TX2);
+    lv_obj_t * u = ui_text32(p, cx + 24, 224, "°C", TKS_TX2);
+    place_unit(*val_out, u, &tcs_font_lv96, cx + 24, 8);
+    if (cx == 32) s_u1 = u; else s_u2 = u;
     ui_dot8(p, cx + 423, 173, lost ? TKS_GRAY : TKS_GREEN);
 
     ui_text24(p, cx + 24, 272, "设定", TKS_TX2);
     lv_obj_t * sp = value_label(p, cx + 24 + 56, 268, TKS_TX, &tcs_font_lv32, "00.0");
     if (cx == 32) s_set1 = sp; else s_set2 = sp;
-    lv_point_t sv;
-    lv_text_get_size(&sv, "00.0", &tcs_font_lv32, 0, 0, 1000, LV_TEXT_FLAG_NONE);
-    ui_text32(p, cx + 24 + 56 + (int)sv.x + 4, 268, "°C", TKS_TX2);
+    lv_obj_t * su = ui_text32(p, cx + 24 + 56, 268, "°C", TKS_TX2);
+    place_unit(sp, su, &tcs_font_lv32, cx + 24 + 56, 4);
 
     click_zone(p, cx, 88, 460, 240, clk_chart);   /* P2 入口：点 hero 卡看 30min 曲线 */
 }
@@ -117,9 +130,8 @@ void tui_p0_build(lv_obj_t * scr)
     if (body_lost) snprintf(bb, sizeof(bb), "--.-");
     else           snprintf(bb, sizeof(bb), "%.1f", (double)g_tcs.body_temp);
     s_body = value_label(scr, 152, 372, body_lost ? TKS_GRAY : TKS_HERO, &tcs_font_lv48, bb);
-    lv_point_t bz;
-    lv_text_get_size(&bz, bb, &tcs_font_lv48, 0, 0, 1000, LV_TEXT_FLAG_NONE);
-    ui_aux20(scr, 152 + (int)bz.x + 6, 400, "°C", TKS_TX2);
+    s_ub = ui_aux20(scr, 152, 400, "°C", TKS_TX2);
+    place_unit(s_body, s_ub, &tcs_font_lv48, 152, 6);
     ui_dot8(scr, 333, 397, body_lost ? TKS_GRAY : TKS_GREEN);
     if (body_lost) {
         ui_rrect(scr, 380, 380, 88, 40, 20, TKS_WARNBG, TKS_CARD);
@@ -163,11 +175,13 @@ void tui_p0_refresh(void)
         if (!g_tcs.m207_online) snprintf(b, sizeof(b), "--.-");
         else                    snprintf(b, sizeof(b), "%.1f", (double)g_tcs.tc1_act);
         ui_lab_set(s_v1, b);
+        place_unit(s_v1, s_u1, &tcs_font_lv96, 56, 8);
     }
     if (s_v2) {
         if (!g_tcs.m207_online) snprintf(b, sizeof(b), "--.-");
         else                    snprintf(b, sizeof(b), "%.1f", (double)g_tcs.tc2_act);
         ui_lab_set(s_v2, b);
+        place_unit(s_v2, s_u2, &tcs_font_lv96, 556, 8);
     }
     if (s_set1) { snprintf(b, sizeof(b), "%.1f", (double)param_get(PARAM_ID_TC1_SET)); ui_lab_set(s_set1, b); }
     if (s_set2) { snprintf(b, sizeof(b), "%.1f", (double)param_get(PARAM_ID_TC2_SET)); ui_lab_set(s_set2, b); }
@@ -175,5 +189,6 @@ void tui_p0_refresh(void)
         if (!g_tcs.body_sensor_ok) snprintf(b, sizeof(b), "--.-");
         else                       snprintf(b, sizeof(b), "%.1f", (double)g_tcs.body_temp);
         ui_lab_set(s_body, b);
+        place_unit(s_body, s_ub, &tcs_font_lv48, 152, 6);
     }
 }

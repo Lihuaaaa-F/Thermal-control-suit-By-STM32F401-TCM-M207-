@@ -127,15 +127,18 @@ void ui_btn(lv_obj_t * p, int x, int y, int w, int h, const char * label,
     else          ui_text24(p, lx, ly, label, tx);
 }
 
-void ui_lab(lv_obj_t * p, int x, int y, const lv_font_t * f, lv_color_t c,
-            const char * text)
+/* 2026-11-23：返回 label 指针——单位「°C」需要按数值宽度重定位（tui_p0.place_unit）*/
+lv_obj_t * ui_lab(lv_obj_t * p, int x, int y, const lv_font_t * f, lv_color_t c,
+                  const char * text)
 {
+    if (!p || !text) return NULL;
     lv_obj_t * l = lv_label_create(p);
     lv_obj_remove_style_all(l);
     lv_obj_set_style_text_font(l, f, 0);
     lv_obj_set_style_text_color(l, c, 0);
     lv_label_set_text(l, text);
     lv_obj_set_pos(l, x, y);
+    return l;
 }
 
 void ui_lab_set(lv_obj_t * o, const char * s)
@@ -146,11 +149,11 @@ void ui_lab_set(lv_obj_t * o, const char * s)
     lv_label_set_text(o, s);
 }
 
-void ui_text24(lv_obj_t * p, int x, int y, const char * s, lv_color_t c) { ui_lab(p, x, y, &tcs_font_lv24, c, s); }
-void ui_text32(lv_obj_t * p, int x, int y, const char * s, lv_color_t c) { ui_lab(p, x, y, &tcs_font_lv32, c, s); }
-void ui_text48(lv_obj_t * p, int x, int y, const char * s, lv_color_t c) { ui_lab(p, x, y, &tcs_font_lv48, c, s); }
-void ui_text96(lv_obj_t * p, int x, int y, const char * s, lv_color_t c) { ui_lab(p, x, y, &tcs_font_lv96, c, s); }
-void ui_aux20(lv_obj_t * p, int x, int y, const char * s, lv_color_t c) { ui_lab(p, x, y, &tcs_font_lv20, c, s); }
+lv_obj_t * ui_text24(lv_obj_t * p, int x, int y, const char * s, lv_color_t c) { return ui_lab(p, x, y, &tcs_font_lv24, c, s); }
+lv_obj_t * ui_text32(lv_obj_t * p, int x, int y, const char * s, lv_color_t c) { return ui_lab(p, x, y, &tcs_font_lv32, c, s); }
+lv_obj_t * ui_text48(lv_obj_t * p, int x, int y, const char * s, lv_color_t c) { return ui_lab(p, x, y, &tcs_font_lv48, c, s); }
+lv_obj_t * ui_text96(lv_obj_t * p, int x, int y, const char * s, lv_color_t c) { return ui_lab(p, x, y, &tcs_font_lv96, c, s); }
+lv_obj_t * ui_aux20(lv_obj_t * p, int x, int y, const char * s, lv_color_t c) { return ui_lab(p, x, y, &tcs_font_lv20, c, s); }
 
 static int nchars(const char * s)
 {

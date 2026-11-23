@@ -69,7 +69,12 @@ run qr          tests/test_qr.c               App/tcs/qr/qrcodegen.c
 # H13 二维码解码回读（PC 出图 → zxing-cpp 解码比对）
 PYBIN=$(command -v python3 || command -v python)
 if [ -n "$PYBIN" ]; then
-    if "$PYBIN" tools/qr_verify.py build/test_qr.pbm "http://192.168.4.1"; then :; else FAIL=1; fi
+    # 2026-11-23：原来失败不打印（"静默红"）——shell 里先 source 过 IDF 环境时，
+    # python 指向 IDF 自带解释器（无 Pillow）→ 本步 import 失败却看不到原因。
+    if "$PYBIN" -c "import PIL" 2>/dev/null; then :; else
+        echo "[qr_verify] FAIL: 当前 python 无 Pillow（$PYBIN）——换系统 python 或别在同 shell 先 source IDF"; FAIL=1
+    fi
+    if "$PYBIN" tools/qr_verify.py build/test_qr.pbm "http://192.168.4.1"; then :; else echo "[qr_verify] FAIL"; FAIL=1; fi
 else
     echo "[qr_verify] SKIP: python not found"; FAIL=1
 fi

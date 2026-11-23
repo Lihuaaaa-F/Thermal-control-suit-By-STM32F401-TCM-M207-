@@ -30,15 +30,15 @@ void ui_card(lv_obj_t * p, int x, int y, int w, int h, lv_color_t base, lv_color
 void ui_btn(lv_obj_t * p, int x, int y, int w, int h, const char * label,
             int style, int fs);
 
-void ui_lab(lv_obj_t * p, int x, int y, const lv_font_t * f, lv_color_t c,
+lv_obj_t * ui_lab(lv_obj_t * p, int x, int y, const lv_font_t * f, lv_color_t c,
             const char * text);
 /* 文本相同则不触发 realloc/重绘（TL-8 每 500ms 尾部尖峰根因修复） */
 void ui_lab_set(lv_obj_t * o, const char * s);
-void ui_text24(lv_obj_t * p, int x, int y, const char * s, lv_color_t c);
-void ui_text32(lv_obj_t * p, int x, int y, const char * s, lv_color_t c);
-void ui_text48(lv_obj_t * p, int x, int y, const char * s, lv_color_t c);
-void ui_text96(lv_obj_t * p, int x, int y, const char * s, lv_color_t c);
-void ui_aux20(lv_obj_t * p, int x, int y, const char * s, lv_color_t c);
+lv_obj_t * ui_text24(lv_obj_t * p, int x, int y, const char * s, lv_color_t c);
+lv_obj_t * ui_text32(lv_obj_t * p, int x, int y, const char * s, lv_color_t c);
+lv_obj_t * ui_text48(lv_obj_t * p, int x, int y, const char * s, lv_color_t c);
+lv_obj_t * ui_text96(lv_obj_t * p, int x, int y, const char * s, lv_color_t c);
+lv_obj_t * ui_aux20(lv_obj_t * p, int x, int y, const char * s, lv_color_t c);
 
 int ui_text24_w(const char * s);
 int ui_text32_w(const char * s);

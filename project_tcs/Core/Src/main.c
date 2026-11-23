@@ -830,6 +830,13 @@ int main(void)
     });
     /* v2：急停/报警确认必须同步到 ESP32（TEC/风扇执行端）*/
     control_set_cmd_hook(link_send_cmd_upstream);
+#if TCS_H743_LINK_ONLY
+    /* PROD（裁决 2026-11-23）：参数真值在 ESP32/NVS，本机不读不写参数区，
+     * 注册表从默认值起步、随后由链路全量镜像覆盖（见 tcs_snap 的镜像泵）。
+     * 这样屏上永远显示权威值，不会出现"本机 EEPROM 里的旧副本"。*/
+    tcs_log("[SYSTEM]", "params: mirror-only (PROD), local EEPROM unused");
+    (void)ee_rv;
+#else
     if (ee_rv == 0) {
         eeprom_selftest();
         uint8_t img[EE_IMAGE_SIZE];
@@ -845,6 +852,7 @@ int main(void)
         ee_cfg_invalid = 1;
         tcs_log("[WARN]", "eeprom offline -> RAM only");
     }
+#endif
 
     /* 安全控制 + 外设桥 */
     control_init(&(control_ops_t){
@@ -909,7 +917,9 @@ int main(void)
         tmp117_poll(now);
         post_poll(now);          /* H6：M207 宽限裁决 + 角标 + 布防三态机 100ms */
 #endif
-        param_persist_flush(now);
+#if !TCS_H743_LINK_ONLY
+        param_persist_flush(now);   /* PROD 无本地持久化（裁决 2026-11-23）*/
+#endif
         kill_key_poll();
         snap_reassert();         /* v2：本地轮询后回灌 ESP32 快照（屏显一致性）*/
         tcs_hist_tick(now);      /* 2026-11-19：曲线页数据源——该函数此前无人调用，

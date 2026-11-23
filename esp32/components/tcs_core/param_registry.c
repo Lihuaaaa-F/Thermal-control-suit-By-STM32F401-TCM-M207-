@@ -40,7 +40,7 @@ static param_desc_t s_params[] = {
     { 0x07, "tc_set_confirm", "高温二次确认阈值", "°C", PARAM_TYPE_F32,
       PF_RW|PF_WEB|PF_PERSIST,                                38.0f, 45.0f, 0.5f, 40.0f, 0 },
     { 0x08, "commissioned", "布防模式",     "",   PARAM_TYPE_U8,
-      PF_RW|PF_SCREEN|PF_WEB|PF_PERSIST,                      0.0f,  2.0f,  1.0f, 0.0f, 0 },
+      PF_RW|PF_SCREEN|PF_WEB|PF_PERSIST|PF_DANGER,            0.0f,  2.0f,  1.0f, 0.0f, 0 },
     /* ====== H10 映射全表（v1.2 §2.5；所有权矩阵=模块 EEPROM 唯一真值，本地不持久）======
      * flags：PF_RW|PF_WEB|PF_M207（无 PF_SCREEN=屏不显红线；无 PF_PERSIST=不落本地 EEPROM）。
      * 值域/默认按《现行M207协议_v1.md》字典；危险参数加 PF_DANGER（网页二次确认）。

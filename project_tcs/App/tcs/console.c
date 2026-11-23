@@ -485,8 +485,8 @@ static void cmd_exec(char *line)
         if (strcmp(argv[1], "defaults") == 0) {
             if (argc == 3 && argv[2][0] == 'Y') {
                 param_load_defaults();
-                (void)param_persist_now();
-                printf("defaults restored+saved\n");
+                int rv = param_persist_all();   /* M05-F-02：load 会清脏，必须显式置脏再写 */
+                printf("defaults restored+saved rv=%d\n", rv);
             } else {
                 printf("confirm: p defaults Y\n");
             }

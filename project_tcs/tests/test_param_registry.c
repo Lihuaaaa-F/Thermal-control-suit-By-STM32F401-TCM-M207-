@@ -177,6 +177,26 @@ int main(void)
         CHECK(param_mirror_apply(0x127, 1.0f) == -1, "mirror rejects BTN (no value semantics)");
     }
 
+    /* M05-F-02：恢复默认后必须真正落盘（load_defaults 会清 dirty，原实现静默不写）*/
+    {
+        param_set(PARAM_ID_BODY_HOT, 38.5f, PARAM_SRC_CONSOLE);
+        (void)param_persist_flush(UINT32_MAX);          /* 先让脏值排出 */
+        int before = commit_cnt;
+        param_load_defaults();
+        CHECK(param_get(PARAM_ID_BODY_HOT) == 37.5f, "defaults restored");
+        int rv = param_persist_all();
+        CHECK(rv == 0, "persist_all writes");
+        CHECK(commit_cnt == before + 1, "eeprom_commit called once");
+        /* 再调一次不应重复写（已无脏）*/
+        CHECK(param_persist_now() == 1, "no dirty after persist_all");
+    }
+
+    /* 2026-11-23 裁决：布防模式 0x08 属危险参数（网页改需二次确认） */
+    {
+        const param_desc_t *cm = param_find(PARAM_ID_COMMISSIONED);
+        CHECK(cm && (cm->flags & PF_DANGER), "0x08 commissioned is PF_DANGER");
+    }
+
     /* X01-F-02：对端快照不得抹掉本机独占报警位 */
     {
         const uint16_t own = ALM_EEPROM;

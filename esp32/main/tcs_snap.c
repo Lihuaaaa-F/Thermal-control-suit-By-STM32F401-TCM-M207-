@@ -31,6 +31,8 @@ static uint32_t s_seq;
 static tcs_delta_src_t s_last;      /* 上次已发状态（差分基准）*/
 static uint8_t s_last_valid;
 static portMUX_TYPE s_snap_mux = portMUX_INITIALIZER_UNLOCKED;
+static uint32_t s_mirror_tick;      /* 镜像泵节拍 */
+static uint16_t s_mirror_idx;       /* 镜像泵游标 */
 
 /* M08-F-05 / R3-B-1/B-2：一个任务周期内所有"同帧"字段必须同源。
  * 0x20/0x21 曾逐字段读 g_tcs、设定值又各自 param_get 一次——控制任务刚好在两次读之间
@@ -91,11 +93,27 @@ static void snap_task(void *arg)
         vTaskDelayUntil(&last_wake, pdMS_TO_TICKS(SNAP_PERIOD_MS));
         int32_t t0 = (int32_t)esp_timer_get_time();
 
-        /* ① 本拍唯一采样（M08-F-05：两帧共用，避免同帧不同时刻）*/
+        /* ① 参数镜像泵（裁决 2026-11-23）：PROD 的 H743 不做本地持久化，
+         * 启动是默认值，必须靠 0x11 镜像拿全量权威值。变更即推已覆盖"改一次推一次"，
+         * 这里再做一轮慢速全量轮转（每 800ms 一条，51 条约 41s 走完），
+         * 兜住：H743 重启、免 ARQ 丢帧、链路抖动期间漏掉的镜像。
+         * 不在 link_alive() 判定里做——屏刚启动时 0x10 未到，会白等 3s。*/
+        if ((s_mirror_tick++ % 4u) == 0u) {
+            int n = param_count();
+            if (n > 0) {
+                if (s_mirror_idx >= (uint16_t)n) s_mirror_idx = 0;
+                const param_desc_t *mp = param_at((int)s_mirror_idx++);
+                if (mp && (mp->flags & PF_RW)) {
+                    (void)link_send_param(mp->id, mp->value);
+                }
+            }
+        }
+
+        /* ② 本拍唯一采样（M08-F-05：两帧共用，避免同帧不同时刻）*/
         snap_cycle_t cy;
         snap_sample(&cy);
 
-        /* ② 0x21 增量：与上次差异位图（首拍全量 mask 不发 0x21，由 0x20 承载）*/
+        /* ③ 0x21 增量：与上次差异位图（首拍全量 mask 不发 0x21，由 0x20 承载）*/
         tcs_delta_src_t now;
         build_delta_src(&now, &cy);
         if (s_last_valid) {
@@ -115,7 +133,7 @@ static void snap_task(void *arg)
             }
         }
 
-        /* ③ 0x20 全量（与 0x21 同源副本）*/
+        /* ④ 0x20 全量（与 0x21 同源副本）*/
         tcs_snap_pl_t s = {
             .ver = TCS_PROTO_VER,
             .seq = ++s_seq,

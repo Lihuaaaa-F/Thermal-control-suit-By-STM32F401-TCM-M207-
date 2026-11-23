@@ -125,6 +125,10 @@ float param_get(uint16_t id);
 void  param_persist_flush(uint32_t now_ms);
 /* 立即固化（p save / 调参页保存按钮）。返回 0=已提交，1=无脏参，-1=commit 失败。 */
 int   param_persist_now(void);
+/* M05-F-02：把全部 PF_PERSIST 参数置脏并立即落盘（工厂复位/恢复默认用）。
+ * 原实现 load_defaults 会清 dirty → persist_now 直接返回「无脏」，实际什么都没写。
+ * PROD 档无本地持久化，恒返回 1。*/
+int   param_persist_all(void);
 uint32_t param_persist_fail_count(void);   /* R1 P1-04：连续落盘失败次数 */
 
 /* 广播（param_set 内部已调；模式等非参数变更可手动调）*/

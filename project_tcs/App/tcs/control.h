@@ -45,6 +45,9 @@ typedef struct {
 void  control_init(const control_ops_t *ops);
 void  control_poll(uint32_t now_ms);            /* 主循环 500ms 节拍调用 */
 ctrl_state_t control_state(void);
+#if TCS_H743_LINK_ONLY
+void  control_link_follow(void);            /* PROD：本地诊断态跟随对端退出 SAFE（主循环每拍）*/
+#endif
 
 /* 手动直控（UI/网页/CLI 同一入口；SAFE/急停期 TEC 拒绝、风扇拒绝关）*/
 void  control_manual_tec(uint8_t ch, uint8_t on);

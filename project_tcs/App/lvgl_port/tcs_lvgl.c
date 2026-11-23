@@ -31,6 +31,10 @@ volatile uint8_t g_m207_last_errcode;
 
 volatile tcs_lvgl_guard_t g_lvgl_guard;
 
+/* LVGL 渲染心跳：每次 lv_timer_handler() 真正执行 +1（低水位被跳过时不计）。
+ * tcs_lvgl_estop_watch 用它判断"屏入口兜底"该不该抢在弹窗之前直接急停。*/
+volatile uint32_t g_lvgl_beat;
+
 /* 耗尽注入分配块登记：drain 归 0 时全部释放，验证 UI 可恢复 */
 #define DRAIN_MAX 96
 static void * s_drain_ptr[DRAIN_MAX];
@@ -223,6 +227,7 @@ void tcs_lvgl_poll(void)
     }
 
     uint32_t cy0 = DWT->CYCCNT;
+    g_lvgl_beat++;
     lv_timer_handler();
 #if !defined(TCS_LVGL_SCENE_BENCH) && !defined(TCS_LVGL_SCENE_HELLO)
     tui_tick();   /* 延后导航/500ms 数据刷新（LVGL 回调上下文外） */
@@ -260,23 +265,59 @@ void tcs_lvgl_poll(void)
     }
 }
 
+#define TCS_ESTOP_GRACE_MS       5u      /* 至少跨一个主循环节拍再看心跳（watch 在 poll 之前调用）*/
+#define TCS_ESTOP_FORCE_HOLD_MS   600u    /* 按住这么久还没弹窗 → 判 LVGL 半死，直接急停*/
+
 void tcs_lvgl_estop_watch(void)
 {
     touch_event_t ev;
-    /* 合成触摸优先（probe 注入；正常运行 g_tap_inject[0] 恒 0） */
-    static uint32_t s_seq;
-    if (g_tap_inject[0] != s_seq) {
-        s_seq = g_tap_inject[0];
-        if (g_tap_inject[1]) {
-            uint32_t x = g_tap_inject[2], y = g_tap_inject[3];
-            if (x >= 768 && x < 768 + 216 && y >= 472 && y < 472 + 112)
-                tcs_emergency_stop();
-        }
+    static uint8_t  s_in_zone, s_fired;
+    static uint32_t s_since, s_beat0;
+    /* 合成触摸（probe/console 注入；正常运行 g_tap_inject[0] 恒 0）与真实触摸走**同一条**
+     * 门控。2026-11-23 之前注入是"seq 一变就急停"的旁路，走查测的不是真手指那条路径。
+     * mode 1 = 150ms 按压；mode 2 = 持续按住直到 mode 改 0（与 lv_port_indev 口径一致）。*/
+    static uint32_t s_seq, s_synth_until;
+    uint32_t now = HAL_GetTick();
+    uint32_t seq = g_tap_inject[0];
+    if (seq != s_seq) {
+        s_seq = seq;
+        s_synth_until = (g_tap_inject[1] == 1u) ? now + 150u : 0u;
+    }
+    uint8_t  pressed;
+    uint32_t x, y;
+    if (g_tap_inject[1] == 2u || (s_synth_until && (int32_t)(s_synth_until - now) > 0)) {
+        pressed = 1;
+        x = g_tap_inject[2];
+        y = g_tap_inject[3];
+    } else {
+        if (ft5446_read(&ev) != 0) { s_in_zone = 0; return; }
+        pressed = (ev.valid && ev.touched) ? 1u : 0u;
+        x = ev.x;
+        y = ev.y;
+    }
+
+    /* D-L7② 屏入口兜底：热区=底栏急停键（768,472,216,112），主循环节拍判定，不依赖 LVGL。
+     * 2026-11-23 现场修正边界：规范是"急停二次确认（弹窗）"（UI 规范 §、规格书
+     * "屏弹窗"），正常路径由 LVGL 弹"确认急停？"。原实现不分情况先触发 → 一按就急停，
+     * 弹窗反而在急停之后才弹出，还把红色横幅挡住（现场实测）。现在：
+     *   - LVGL 心跳停了（卡死/低水位跳过 handler）→ 按下后下一个节拍直接急停（兜底本职）；
+     *   - LVGL 活着 → 交给弹窗确认；按住 ≥TCS_ESTOP_FORCE_HOLD_MS 仍无弹窗（半死）→ 直接急停。
+     * 每次按压只触发一次：重发由主循环 200ms pending 块负责（R-15），本机动作幂等。*/
+    if (!pressed || x < 768 || x >= 768 + 216 || y < 472 || y >= 472 + 112) {
+        s_in_zone = 0;
         return;
     }
-    if(ft5446_read(&ev) != 0) return;
-    if(!ev.valid || !ev.touched) return;
-    /* D-L7② 屏入口兜底：热区=底栏急停键（768,472,216,112），主循环节拍判定 */
-    if(ev.x >= 768 && ev.x < 768 + 216 && ev.y >= 472 && ev.y < 472 + 112)
+    if (!s_in_zone) {
+        s_in_zone = 1;
+        s_fired = 0;
+        s_since = now;
+        s_beat0 = g_lvgl_beat;
+    }
+    if (s_fired || (uint32_t)(now - s_since) < TCS_ESTOP_GRACE_MS) return;
+    uint8_t lvgl_alive = (g_lvgl_beat != s_beat0);
+    uint8_t held = ((uint32_t)(now - s_since) >= TCS_ESTOP_FORCE_HOLD_MS);
+    if (!lvgl_alive || (held && !tui_dlg_active())) {
+        s_fired = 1;
         tcs_emergency_stop();
+    }
 }

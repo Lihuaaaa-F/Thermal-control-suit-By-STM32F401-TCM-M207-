@@ -13,7 +13,14 @@ static uint8_t s_st_mode, s_st_fan, s_st_tec1, s_st_tec2, s_st_estop, s_st_alm;
 static void clk_tune(lv_event_t * e)  { LV_UNUSED(e); tui_request(TUI_TUNE); }
 static void clk_chart(lv_event_t * e) { LV_UNUSED(e); tui_request(TUI_CHART); }
 static void clk_conn(lv_event_t * e)  { LV_UNUSED(e); tui_request(TUI_CONN); }
-static void clk_estop(lv_event_t * e) { LV_UNUSED(e); tui_dlg_estop(); }
+static void clk_estop(lv_event_t * e)
+{
+    LV_UNUSED(e);
+    /* 已经急停（对端锁存，或长按兜底刚触发）→ 不再弹"确认急停？"：
+     * 弹窗会盖住红色横幅，而横幅正是恢复入口（2026-11-23 现场）。*/
+    if (control_estop_latched() || (g_tcs.alarm_bits & ALM_ESTOP)) return;
+    tui_dlg_estop();
+}
 static void clk_fan(lv_event_t * e)
 {
     LV_UNUSED(e);

@@ -340,3 +340,18 @@ void control_poll(uint32_t now_ms)
 }
 
 ctrl_state_t control_state(void) { return s_state; }
+
+#if TCS_H743_LINK_ONLY
+void control_link_follow(void)
+{
+    /* PROD 不跑 control_poll：本机 SAFE 只由急停/超温兜底进入，原来没人把它切回去
+     * （2026-11-23 现场：点横幅确认后设备已恢复，`stat` 仍显示 ctrl=3）。
+     * 判据跟设备走——本机无自持/无待投递意图 + 快照无安全类报警 → IDLE；
+     * 对端拒绝确认时快照仍带报警位，本机保持 SAFE。只动诊断态：v2 执行端在 ESP32，
+     * g_tcs 归快照所有，这里不碰输出。*/
+    if (s_state != CTRL_SAFE) return;
+    if (s_estop_latch || s_overtemp_latch || s_estop_tx_pending || s_overtemp_tx_pending) return;
+    if (g_tcs.alarm_bits & (ALM_ESTOP | ALM_OVERTEMP | ALM_BODY_SENSOR | ALM_M207)) return;
+    goto_state(CTRL_IDLE);
+}
+#endif

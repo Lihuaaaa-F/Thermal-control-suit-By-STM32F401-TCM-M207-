@@ -938,6 +938,7 @@ int main(void)
         /* 复核 A1：PROD 不跑 control_poll，屏仍需独立超温兜底——
          * 用刚回灌的快照温度判一次（只读，不依赖本地 M207/TMP117）。*/
         control_observe_temp(g_tcs.tc1_act);
+        control_link_follow();  /* 对端已退出 SAFE（快照报警位清零）→ 本机诊断态跟着退出 */
 #endif
         /* R1 修复 P1（M01-F-02）：status_tx 必须在 snap_reassert 之后——原来先打包 0x10，
          * 会把 H743 本机 body_sensor_ok=0（v2 无 TMP117）发给 ESP32，网页误报传感器离线。*/

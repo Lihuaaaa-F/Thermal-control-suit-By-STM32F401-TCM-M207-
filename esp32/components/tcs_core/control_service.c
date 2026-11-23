@@ -25,14 +25,20 @@ static uint32_t s_poll_max_us;      /* control_poll 段耗时峰值（预算 100
 static uint32_t s_polls;
 static post_arm_ctx_t s_arm_ctx;    /* H6 布防三态机上下文 */
 
-/* post 步进（H743 post_poll 272-288 行同语义；无 UI 角标——屏角标 R2 起）*/
-static void post_step_100ms(void)
-{
-    static uint32_t last_step;
-    uint32_t now = (uint32_t)(esp_timer_get_time() / 1000);
-    if (now - last_step < 100u) return;
-    last_step = now;
+/* 节拍：任务 100ms 一拍（U 线 E1，原 500ms）。
+ *   每拍：control_poll（故障发现 / 自愈计时 / 退出 SAFE 都是 100ms 粒度）+ 布防步进；
+ *   每 5 拍：参数落盘冲洗（2s 防抖逻辑在 param_registry 内，不依赖本节拍）。
+ *   SAFE 期间给模块重申 TCSW=0 的频率由 control.c 内部限在 500ms，不随本节拍变密。
+ * 背景：原来整个任务 500ms 一拍，post_step_100ms 里的 100ms 闸永远不触发——
+ * "10 个健康样本回布防"实际约 5s（设计 1s）；通信类故障自愈要 2.0–2.5s，
+ * 之后还要再等一整拍才退出 SAFE。*/
+#define CTRL_TICK_MS        100u
+#define CTRL_PERSIST_DIV    5u      /* 落盘冲洗：每 5 拍 = 500ms */
 
+/* post 步进（H743 post_poll 272-288 行同语义；无 UI 角标——屏角标 R2 起）*/
+static void post_step(uint32_t now)
+{
+    (void)now;
     /* 健康/已确认都要把"探头开路"算进去：M207 在线但温度不可用不算健康 */
     uint8_t healthy = (g_tcs.body_sensor_ok && g_tcs.m207_online
                        && !g_tcs.m207_sensor_open) ? 1u : 0u;
@@ -45,7 +51,7 @@ static void post_step_100ms(void)
     post_arm_t st = post_arm_step(&s_arm_ctx, mode08, post_pass, healthy, acked);
     post_arm_commit(st);
     if (st == POST_ARM_ARMED_ONLINE && prev == POST_ARM_LOST_ALARM)
-        ESP_LOGI(TAG, "arm LOST->ARMED (10 healthy samples)");
+        ESP_LOGI(TAG, "arm LOST->ARMED (10 healthy samples = 1s)");
     else if (st == POST_ARM_LOST_ALARM && prev == POST_ARM_ARMED_ONLINE)
         ESP_LOGI(TAG, "arm ARMED->LOST (source lost)");
     else if (st == POST_ARM_ARMED_ONLINE && prev == POST_ARM_UNARMED_ABSENT)
@@ -56,17 +62,22 @@ static void control_task(void *arg)
 {
     (void)arg;
     TickType_t last_wake = xTaskGetTickCount();
+    uint32_t div = 0;
     esp_task_wdt_add(NULL);         /* 订阅 TWDT（3s；F3/F12）*/
     for (;;) {
-        vTaskDelayUntil(&last_wake, pdMS_TO_TICKS(500));
+        vTaskDelayUntil(&last_wake, pdMS_TO_TICKS(CTRL_TICK_MS));
         int32_t t0 = (int32_t)esp_timer_get_time();
-        control_poll((uint32_t)(t0 / 1000));
-        post_step_100ms();
-        param_persist_flush((uint32_t)(t0 / 1000));   /* H743 同款 2s 防抖落盘 */
+        uint32_t now_ms = (uint32_t)(t0 / 1000);
+        control_poll(now_ms);
+        post_step(now_ms);
+        if (++div >= CTRL_PERSIST_DIV) {
+            div = 0;
+            param_persist_flush(now_ms);   /* H743 同款 2s 防抖落盘 */
+        }
         int32_t dt = (int32_t)esp_timer_get_time() - t0;
         if (dt > 0 && (uint32_t)dt > s_poll_max_us) s_poll_max_us = (uint32_t)dt;
         s_polls++;
-        if (!s_hang_test) esp_task_wdt_reset();   /* 500ms 间隙 <1s 铁律；E-20 停喂 */
+        if (!s_hang_test) esp_task_wdt_reset();   /* 100ms 间隙 <1s 铁律；E-20 停喂 */
     }
 }
 
@@ -80,7 +91,8 @@ int control_service_start(void)
     if (xTaskCreatePinnedToCore(control_task, "ctrl_svc", 4096, NULL,
                                 4, &s_task, 1) != pdPASS) return -1;
     s_started = 1;
-    ESP_LOGI(TAG, "service started core=1 500ms poll + 100ms arm-step, wdt 3s");
+    ESP_LOGI(TAG, "service started core=1 %ums tick (poll+arm-step), wdt 3s",
+             (unsigned)CTRL_TICK_MS);
     return 0;
 }
 

@@ -43,6 +43,14 @@ static uint8_t       s_boot_ms_base_set;
 static uint32_t      s_boot_ms;
 static volatile uint8_t s_estop_latch;   /* 仅作急停显示/语义；硬门控见 s_safety_latch（N-05：跨任务写，加 volatile）*/
 
+/* SAFE 期间记忆故障前输出（语义见下方"安全态进入/退出"注释）*/
+#define CTRL_SAFE_REASSERT_MS   500u   /* 锁存期间重申 TCSW=0 / 风扇全开的间隔（不随节拍变密）*/
+static uint8_t  s_fan_before_safe;     /* 进 SAFE 前的风扇 */
+static uint8_t  s_tec2_before_safe;    /* 进 SAFE 前的 TEC2 */
+static uint8_t  s_auto_before_safe;    /* 进 SAFE 前是自动模式 */
+static uint8_t  s_restore_tec2_ok;     /* 本轮 SAFE 只因体温传感器引起，可复原 TEC2 */
+static uint32_t s_safe_assert_ms;      /* 上次重申安全输出的时刻 */
+
 /* 安全锁存：位含义见 control.h。上电默认"源全恢复"，由 control_poll 每拍刷新。
  * volatile：写侧在临界区，读侧（执行器门控/ack/读 API）裸读，必须每次重取（R1 复核 R-09）。*/
 static volatile uint8_t s_safety_latch;
@@ -160,6 +168,12 @@ void control_init(const control_ops_t *ops)
     s_last_eval = 0;
     s_boot_ms_base_set = 0;
     s_estop_latch = 0;
+    /* SAFE 记忆量随 init 复位：上电恢复的锁存没有"故障前输出"，退出后一律全关 */
+    s_fan_before_safe = 0;
+    s_tec2_before_safe = 0;
+    s_auto_before_safe = 0;
+    s_restore_tec2_ok = 0;
+    s_safe_assert_ms = 0;
     g_tcs.alarm_bits = 0;
     /* N-04：落盘串行化用 mutex（只在首次 init 时创建；失败则退化为不加锁）*/
 #ifdef ESP_PLATFORM
@@ -206,13 +220,46 @@ static void alarm_clear_bits(uint16_t mask)
     ALM_UNLOCK();
 }
 
-/* ====== 安全态进入/退出 ====== */
-static void enter_safe(void)
+/* ====== 安全态进入/退出 ======
+ * SAFE 期间记下故障前的输出，退出时复原（U 线 B3）：
+ *   - 风扇：故障前开着，自愈/解除后不该被关掉（原来一律 out_fan(0)）；
+ *   - TEC2（手动通道）：只有"体温传感器"一个危险源、且模块全程在线时才复原——
+ *     模块通信/探头类故障期间模块侧状态未知，TEC 不自动重开；
+ *   - 急停会把自动切成手动：故障前的风扇是状态机开的而不是人选的，这时不复原。
+ * 上电恢复的锁存没有"故障前"可言（s_state 在 control_init 里直接置 SAFE，
+ * 不经 enter_safe），以上记忆量保持 0 → 退出后输出全关。*/
+static void safe_outputs(void)
 {
     out_tec_sw(1, 0);
     out_tec_sw(2, 0);
     out_fan(1);                       /* 安全态风扇全开 */
     goto_state(CTRL_SAFE);
+}
+
+/* 只在进入沿记忆：SAFE 期间再次 enter_safe 时输出已被关掉，不能当成"故障前状态" */
+static void safe_remember_outputs(void)
+{
+    s_fan_before_safe  = g_tcs.fan_on;
+    s_tec2_before_safe = g_tcs.tec2_on;
+    s_auto_before_safe = (uint8_t)(g_tcs.mode != 0);
+    s_restore_tec2_ok  = (uint8_t)((s_safety_latch & (uint8_t)~SAFETY_BIT_BODY_LOST) == 0);
+}
+
+static void enter_safe(void)
+{
+    if (s_state != CTRL_SAFE) safe_remember_outputs();
+    safe_outputs();
+}
+
+static void leave_safe(uint32_t now_ms)
+{
+    uint8_t estop_forced_manual = (uint8_t)(s_auto_before_safe && g_tcs.mode == 0);
+    out_fan(estop_forced_manual ? 0u : s_fan_before_safe);
+    if (s_restore_tec2_ok) out_tec_sw(2, s_tec2_before_safe);
+    s_restore_tec2_ok = 0;
+    /* 自动模式：下一拍立刻评估，不等 500ms（风扇随即由状态机定夺）*/
+    s_last_eval = now_ms - CTRL_EVAL_MS;
+    goto_state(CTRL_IDLE);
 }
 
 static uint8_t safe_sources_recovered(void)
@@ -261,12 +308,12 @@ void tcs_emergency_stop(void)
     s_estop_latch = 1;
     safety_trip(SAFETY_BIT_ESTOP);          /* P0-04：置锁存后，在途状态机的"开"被 out_tec_sw 压成 0 */
     tcs_alarm_raise(ALM_ESTOP);
+    /* 故障前输出要在切手动**之前**记（记忆量里有"当时是不是自动模式"）*/
+    if (s_state != CTRL_SAFE) safe_remember_outputs();
+    s_restore_tec2_ok = 0;                  /* 急停不复原 TEC */
     /* mode=手动（经 param_set 同一数据源路径，自动广播 0x11）*/
     (void)param_set(PARAM_ID_MODE, 0.0f, PARAM_SRC_CONSOLE);
-    out_tec_sw(1, 0);
-    out_tec_sw(2, 0);
-    out_fan(1);
-    goto_state(CTRL_SAFE);
+    safe_outputs();
 }
 
 /* ====== 手动直控 ====== */
@@ -336,6 +383,7 @@ void control_poll(uint32_t now_ms)
     if (!s_boot_ms_base_set) {
         s_boot_ms = now_ms;
         s_boot_ms_base_set = 1;
+        s_safe_assert_ms = now_ms - CTRL_SAFE_REASSERT_MS;   /* 见下方"锁存期间"注释 */
     }
 
     /* R1 P1-04：参数落盘连续失败 → 可见报警（提示性，ack 可清）*/
@@ -388,7 +436,17 @@ void control_poll(uint32_t now_ms)
     }
 
     if (s_safety_latch) {
-        enter_safe();
+        /* 期间模块掉线 / 探头断线 / 冒出别的危险源 → 模块侧状态不再可信，退出后不复原 TEC2 */
+        if (!g_tcs.m207_online || g_tcs.m207_sensor_open
+            || (s_safety_latch & (uint8_t)~SAFETY_BIT_BODY_LOST)) {
+            s_restore_tec2_ok = 0;
+        }
+        /* 进入沿立刻断输出；之后按 CTRL_SAFE_REASSERT_MS 重申（节拍是 100ms，重申仍是 500ms）。
+         * 首拍 s_safe_assert_ms 已在时间基准建立时置成"过期"，保证上电恢复的锁存第一拍就断输出。*/
+        if (s_state != CTRL_SAFE || (uint32_t)(now_ms - s_safe_assert_ms) >= CTRL_SAFE_REASSERT_MS) {
+            s_safe_assert_ms = now_ms;
+            enter_safe();
+        }
         return;
     }
 
@@ -430,8 +488,7 @@ void control_poll(uint32_t now_ms)
             && tcs_alarm_active(ALM_M207) == 0 && tcs_alarm_active(ALM_SENSOR_OPEN) == 0
             && tcs_alarm_active(ALM_OVERTEMP) == 0    /* 复核 B4：显式依赖，别靠锁存门隐式兜底 */
             && tcs_alarm_active(ALM_ESTOP) == 0) {
-            out_fan(0);
-            goto_state(CTRL_IDLE);
+            leave_safe(now_ms);      /* 复原故障前的风扇 / 手动 TEC2（见 enter_safe 上方注释）*/
         }
         return;
     }

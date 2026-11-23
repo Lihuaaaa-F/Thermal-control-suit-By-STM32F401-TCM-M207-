@@ -393,6 +393,181 @@ int main(void)
     tcs_alarm_ack();
     CHECK(control_safety_latched() == 0, "ack clears after source recovered");
 
+    /* ====== U 线 W2（2026-11-24）：退出 SAFE 复原故障前输出；100ms 节拍下的时序 ======
+     * 判别性：W2-1/W2-3/W2-6/W2-7/W2-8 在旧实现（退出 SAFE 一律 out_fan(0)、TEC 不复原、
+     * 每拍重申输出）上必然失败。服务任务的 100ms 节拍本身是 FreeRTOS 代码，
+     * 由真机日志时间戳取证（见结果文档），这里验证状态机在 100ms 调用下的行为。*/
+#define tick100() do { s_now += 100u; control_poll(s_now); } while (0)
+
+    /* W2-1 手动模式：故障前风扇开着，体温传感器自愈后风扇应复原，且自愈 ≤2.1s */
+    enter_auto_healthy();
+    (void)param_set(PARAM_ID_MODE, 0.0f, 4);
+    tick();                                   /* 捕获 boot 基准 */
+    control_manual_fan(1);
+    CHECK(g_tcs.fan_on == 1, "W2-1 precondition: manual fan on");
+    g_tcs.body_sensor_ok = 0;
+    tick100();
+    CHECK(control_state() == CTRL_SAFE && g_tcs.fan_on == 1, "W2-1 body lost -> SAFE, fan full");
+    g_tcs.body_sensor_ok = 1;
+    {
+        uint32_t t_ok = s_now;
+        int n = 0;
+        while (control_state() == CTRL_SAFE && n < 40) { tick100(); n++; }
+        uint32_t dt = s_now - t_ok;
+        CHECK(control_state() == CTRL_IDLE, "W2-1 auto exit after 2s healthy");
+        CHECK(dt >= 2000u && dt <= 2100u, "W2-1 exit within [2000,2100]ms of health");
+        CHECK(g_tcs.fan_on == 1, "W2-1 fan restored to pre-fault state");
+    }
+
+    /* W2-2 故障前风扇关着 → 退出后仍关（复原不是"一律开"）
+     * 注意 g_tcs 不被 control_init 复位：上一段留下 fan=1，这里必须显式关掉再测 */
+    enter_auto_healthy();
+    (void)param_set(PARAM_ID_MODE, 0.0f, 4);
+    tick();
+    control_manual_fan(0);
+    CHECK(g_tcs.fan_on == 0, "W2-2 precondition: fan off");
+    g_tcs.body_sensor_ok = 0; tick100();
+    CHECK(control_state() == CTRL_SAFE, "W2-2 -> SAFE");
+    g_tcs.body_sensor_ok = 1;
+    for (int i = 0; i < 25; i++) tick100();
+    CHECK(control_state() == CTRL_IDLE && g_tcs.fan_on == 0, "W2-2 fan stays off");
+
+    /* W2-3 手动 TEC2：体温传感器故障（模块全程在线）自愈后复原 */
+    enter_auto_healthy();
+    (void)param_set(PARAM_ID_MODE, 0.0f, 4);
+    tick();
+    control_manual_tec(2, 1);
+    CHECK(g_tcs.tec2_on == 1, "W2-3 precondition: TEC2 on");
+    g_tcs.body_sensor_ok = 0; tick100();
+    CHECK(g_tcs.tec2_on == 0, "W2-3 SAFE turns TEC2 off");
+    g_tcs.body_sensor_ok = 1;
+    for (int i = 0; i < 25; i++) tick100();
+    CHECK(control_state() == CTRL_IDLE, "W2-3 auto exit");
+    CHECK(g_tcs.tec2_on == 1, "W2-3 TEC2 restored after body-sensor-only fault");
+
+    /* W2-4 模块通信故障：自愈后 TEC2 不复原（模块侧状态未知）；风扇复原 */
+    enter_auto_healthy();
+    (void)param_set(PARAM_ID_MODE, 0.0f, 4);
+    tick();
+    s_now += 5000u;                           /* 越过 M207 上电宽限 */
+    control_manual_tec(2, 1);
+    control_manual_fan(1);
+    g_tcs.m207_online = 0; tick100();
+    CHECK(control_state() == CTRL_SAFE, "W2-4 m207 loss -> SAFE");
+    g_tcs.m207_online = 1;
+    for (int i = 0; i < 25; i++) tick100();
+    CHECK(control_state() == CTRL_IDLE, "W2-4 auto exit");
+    CHECK(g_tcs.tec2_on == 0, "W2-4 TEC2 NOT restored after module fault");
+    CHECK(g_tcs.fan_on == 1, "W2-4 fan restored after module fault");
+
+    /* W2-5 急停：自动被切成手动 → 风扇不复原；TEC 全关 */
+    enter_auto_healthy();
+    g_tcs.body_temp = 40.0f; tick();          /* 自动 COOL：风扇开 */
+    CHECK(control_state() == CTRL_COOL && g_tcs.fan_on == 1, "W2-5 precondition: COOL fan on");
+    tcs_emergency_stop();
+    tcs_alarm_ack();
+    tick100();
+    CHECK(control_state() == CTRL_IDLE, "W2-5 estop cleared");
+    CHECK(g_tcs.fan_on == 0, "W2-5 fan off after estop reset (auto was forced to manual)");
+    CHECK(g_tcs.tec1_on == 0 && g_tcs.tec2_on == 0, "W2-5 TEC stay off after estop reset");
+
+    /* W2-6 自动模式制冷中体温传感器抖动：自愈后风扇不灭，状态机下一拍接管制冷 */
+    enter_auto_healthy();
+    g_tcs.body_temp = 40.0f; tick();          /* COOL */
+    g_tcs.body_sensor_ok = 0; tick100();      /* SAFE */
+    CHECK(control_state() == CTRL_SAFE, "W2-6 -> SAFE");
+    g_tcs.body_sensor_ok = 1;
+    for (int i = 0; i < 25; i++) tick100();
+    CHECK(g_tcs.mode == 1, "W2-6 still auto mode");
+    CHECK(control_state() == CTRL_COOL, "W2-6 SAFE exited and COOL resumed");
+    CHECK(g_tcs.fan_on == 1 && g_tcs.tec1_on == 1, "W2-6 fan never dropped, TEC1 back on");
+
+    /* W2-7 锁存期间重申输出的频率仍是 500ms（节拍变密不给模块加流量）*/
+    enter_auto_healthy();
+    (void)param_set(PARAM_ID_MODE, 0.0f, 4);
+    tick();
+    control_test_trip(SAFETY_BIT_ESTOP);
+    reset_stubs();
+    for (int i = 0; i < 10; i++) tick100();   /* 1000ms */
+    CHECK(fan_calls == 2, "W2-7 SAFE re-assert every 500ms (2 in 1000ms)");
+    CHECK(control_state() == CTRL_SAFE, "W2-7 stays SAFE");
+
+    /* W2-8 人工确认退出（体温传感器类）：与自愈同样复原 TEC2 */
+    enter_auto_healthy();
+    (void)param_set(PARAM_ID_MODE, 0.0f, 4);
+    tick();
+    control_manual_tec(2, 1);
+    g_tcs.body_sensor_ok = 0; tick100();
+    g_tcs.body_sensor_ok = 1;
+    tcs_alarm_ack();
+    tick100();
+    CHECK(control_state() == CTRL_IDLE && g_tcs.tec2_on == 1, "W2-8 ack path restores TEC2 too");
+
+    /* W2-9 超温：解除后风扇复原、TEC2 不复原（超温期间输出必须保持关）*/
+    enter_auto_healthy();
+    (void)param_set(PARAM_ID_MODE, 0.0f, 4);
+    tick();
+    control_manual_tec(2, 1);
+    control_manual_fan(1);
+    g_tcs.tc1_act = 49.0f; tick100();
+    CHECK(control_state() == CTRL_SAFE, "W2-9 overtemp -> SAFE");
+    g_tcs.tc1_act = 30.0f;
+    tcs_alarm_ack();
+    tick100();
+    CHECK(control_state() == CTRL_IDLE, "W2-9 overtemp cleared");
+    CHECK(g_tcs.fan_on == 1 && g_tcs.tec2_on == 0, "W2-9 fan restored, TEC2 stays off");
+
+    /* W2-10 体温传感器故障期间模块又掉线 → 自愈后不复原 TEC2 */
+    enter_auto_healthy();
+    (void)param_set(PARAM_ID_MODE, 0.0f, 4);
+    tick();
+    s_now += 5000u;
+    control_manual_tec(2, 1);
+    g_tcs.body_sensor_ok = 0; tick100();      /* SAFE，仅体温类 */
+    g_tcs.m207_online = 0; tick100();         /* 期间模块掉线 */
+    g_tcs.m207_online = 1;
+    g_tcs.body_sensor_ok = 1;
+    for (int i = 0; i < 25; i++) tick100();
+    CHECK(control_state() == CTRL_IDLE && g_tcs.tec2_on == 0, "W2-10 no TEC2 restore if module dropped meanwhile");
+
+    /* W2-11 手动模式下急停（TEC2 原本开着）→ 解除后 TEC2 保持关；风扇回故障前状态 */
+    enter_auto_healthy();
+    (void)param_set(PARAM_ID_MODE, 0.0f, 4);
+    tick();
+    control_manual_tec(2, 1);
+    control_manual_fan(1);
+    tcs_emergency_stop();
+    CHECK(g_tcs.tec2_on == 0 && g_tcs.fan_on == 1, "W2-11 estop: TEC off, fan full");
+    tcs_alarm_ack();
+    tick100();
+    CHECK(control_state() == CTRL_IDLE && g_tcs.tec2_on == 0, "W2-11 TEC2 stays off after estop reset");
+    CHECK(g_tcs.fan_on == 1, "W2-11 fan back to pre-estop (manual) state");
+
+    /* W2-12 短于一个评估周期的故障：退出 SAFE 后下一拍立刻评估，不多等 500ms
+     * （时间线：T0 评估进 COOL → T0+100 进 SAFE → T0+200 解除 → T0+300 必须已回 COOL）*/
+    enter_auto_healthy();
+    g_tcs.body_temp = 40.0f; tick();          /* T0：评估 → COOL */
+    g_tcs.body_sensor_ok = 0; tick100();      /* T0+100：SAFE */
+    g_tcs.body_sensor_ok = 1;
+    tcs_alarm_ack();
+    tick100();                                /* T0+200：解除 → IDLE */
+    CHECK(control_state() == CTRL_IDLE, "W2-12 ack exits SAFE");
+    tick100();                                /* T0+300 */
+    CHECK(control_state() == CTRL_COOL, "W2-12 auto evaluation runs on the very next tick");
+
+    /* W2-13 上电恢复的锁存：上电后第一拍（<500ms）就必须断输出，不能等重申间隔 */
+    control_init(&(control_ops_t){
+        .fan_set = stub_fan, .tec_sw = stub_tec, .tec_temp = stub_temp,
+        .on_state = 0, .safety_persist = persist_cb, .safety_load = load_cb,
+    });
+    param_registry_init(&(param_hooks_t){0});
+    g_tcs.fan_on = 1;                         /* 假设复位前风扇是开的 */
+    s_now = 100u;
+    reset_stubs();
+    tick100();
+    CHECK(fan_calls == 1 && last_fan == 1, "W2-13 restored latch: fan asserted on first poll");
+    CHECK(tec_calls == 2 && last_tec_on == 0, "W2-13 restored latch: both TEC off on first poll");
+
     printf("test_control: PASS=%d FAIL=%d\n", g_pass, g_fail);
     return g_fail ? 1 : 0;
 }

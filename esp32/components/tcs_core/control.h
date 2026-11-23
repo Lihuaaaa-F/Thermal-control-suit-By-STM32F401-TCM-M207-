@@ -54,7 +54,10 @@ typedef struct {
 } control_ops_t;
 
 void  control_init(const control_ops_t *ops);
-void  control_poll(uint32_t now_ms);            /* 主循环 500ms 节拍调用 */
+/* 控制节拍（U 线 E1：服务任务每 100ms 调一次；自动模式的状态机评估仍每 CTRL_EVAL_MS 一次）。
+ * 100ms 粒度决定：故障发现、通信类自愈计时、退出 SAFE；锁存期间给模块重申输出的
+ * 频率由 control.c 限在 500ms。*/
+void  control_poll(uint32_t now_ms);
 ctrl_state_t control_state(void);
 
 /* 手动直控（UI/网页/CLI 同一入口；SAFE/急停期 TEC 拒绝、风扇拒绝关）*/

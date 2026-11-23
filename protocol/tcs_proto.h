@@ -410,4 +410,59 @@ static inline int tcs_scan_delta(const uint8_t *pl, size_t len, tcs_delta_src_t 
     return 0;
 }
 
+/* ====== 0x22 TCS_INFO（U 线 W3：ESP32→H743 设备信息，免 ARQ 周期推送）======
+ * 载荷 = UTF-8 文本，每行 "key=value"，行间 '\n'，结尾不带 '\n'；总长 ≤ TCS_INFO_MAX_LEN。
+ * 现有键：ssid（热点名）/ pass（热点密码）/ url（控制台网址）/ fw（主控固件版本）。
+ * 值里的 '\n' 与 '=' 被换成空格（保证一行一键）；键为空或含这两个字符的整对跳过。
+ * 旧屏固件对未知消息号静默丢弃（on_frame 的 default 分支）→ 前向兼容。*/
+#define MT_TCS_INFO          0x22
+#define TCS_INFO_MAX_LEN     120
+
+/* 编 n 对 key=value。返回载荷字节数（不含结尾 NUL）；一对都放不下或参数非法返回 0。*/
+static inline size_t tcs_pl_info(char *out, size_t cap, const char *const *keys,
+                                 const char *const *vals, int n)
+{
+    size_t o = 0;
+    if (!out || cap < 2 || !keys || !vals || n <= 0) return 0;
+    out[0] = '\0';
+    for (int i = 0; i < n; i++) {
+        const char *k = keys[i] ? keys[i] : "";
+        const char *v = vals[i] ? vals[i] : "";
+        if (!*k || strchr(k, '=') || strchr(k, '\n')) continue;
+        size_t need = strlen(k) + 1u + strlen(v) + (o ? 1u : 0u);
+        if (need > cap - 1u - o) return 0;      /* 放不下：整条不发（收端不做半截解析）*/
+        if (o) out[o++] = '\n';
+        while (*k) out[o++] = *k++;
+        out[o++] = '=';
+        while (*v) { out[o++] = (*v == '\n' || *v == '=') ? ' ' : *v; v++; }
+    }
+    out[o] = '\0';
+    return o;
+}
+
+/* 取 key 对应的值（拷贝到 out，含 NUL）。返回值长度；未找到/参数非法/值放不下返回 -1
+ * （热点名与密码不能被截断显示——放不下宁可显示"未知"）。*/
+static inline int tcs_info_get(const char *pl, size_t len, const char *key,
+                               char *out, size_t cap)
+{
+    if (!pl || !key || !out || cap == 0) return -1;
+    size_t klen = strlen(key);
+    if (klen == 0) return -1;
+    size_t i = 0;
+    while (i <= len) {
+        size_t j = i;
+        while (j < len && pl[j] != '\n') j++;
+        if (j - i > klen && pl[i + klen] == '=' && memcmp(pl + i, key, klen) == 0) {
+            size_t vlen = j - i - klen - 1u;
+            if (vlen >= cap) return -1;
+            memcpy(out, pl + i + klen + 1u, vlen);
+            out[vlen] = '\0';
+            return (int)vlen;
+        }
+        if (j >= len) break;
+        i = j + 1u;
+    }
+    return -1;
+}
+
 #endif /* TCS_PROTO_H */

@@ -17,6 +17,10 @@
 #include "esp_timer.h"
 #include "esp_log.h"
 #include "esp_task_wdt.h"
+#include "esp_netif.h"
+#include "esp_ip.h"
+#include "esp_app_desc.h"
+#include "softap.h"
 
 #define TAG "SNAP"
 
@@ -82,6 +86,22 @@ static void snap_send(uint8_t mt, const uint8_t *pl, size_t n, uint32_t *ok)
     else              s_send_drop++;
 }
 
+/* 把热点名/密码/网址/固件版本组成 0x22 载荷并发给屏（格式见 protocol/tcs_proto.h）*/
+static void push_info(void)
+{
+    char ssid[33] = {0}, pass[65] = {0}, url[40] = "http://192.168.4.1";
+    (void)softap_credentials(ssid, sizeof ssid, pass, sizeof pass);   /* 没拿到=空串，屏显示"—" */
+    esp_netif_t *nf = esp_netif_get_handle_from_ifkey("WIFI_AP_DEF");
+    esp_netif_ip_info_t ip;
+    if (nf && esp_netif_get_ip_info(nf, &ip) == ESP_OK)
+        snprintf(url, sizeof url, "http://" IPSTR, IP2STR(&ip.ip));
+    const char *keys[] = { "ssid", "pass", "url", "fw" };
+    const char *vals[] = { ssid, pass, url, esp_app_get_description()->version };
+    uint8_t pl[TCS_INFO_MAX_LEN + 1];
+    size_t n = tcs_pl_info((char *)pl, sizeof pl, keys, vals, 4);
+    if (n) (void)link_send_info(pl, n);
+}
+
 static void snap_task(void *arg)
 {
     esp_task_wdt_add(NULL);   /* R1 P1-07：关键任务纳入 TWDT（原来只有 ctrl_svc）*/
@@ -108,6 +128,11 @@ static void snap_task(void *arg)
                 }
             }
         }
+
+        /* ①b 设备信息（U 线 W3）：每 16 拍（3.2s）推一次 0x22，免 ARQ。
+         * 屏的连接页据此显示真实热点名/密码/网址并生成扫码连网的二维码；
+         * 屏单独重启后最多 3.2s 就能拿到，不需要屏主动请求。*/
+        if ((s_mirror_tick % 16u) == 8u) push_info();
 
         /* ② 本拍唯一采样（M08-F-05：两帧共用，避免同帧不同时刻）*/
         snap_cycle_t cy;

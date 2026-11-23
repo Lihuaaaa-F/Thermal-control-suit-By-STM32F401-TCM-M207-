@@ -57,6 +57,8 @@ void link_stats_get(link_stats_t *out);
 
 int  link_send_cmd(uint8_t cmd);                    /* → 0x15，异步等 ACK */
 int  link_send_param(uint16_t id, float v);         /* → 0x11（反向镜像：ESP32 权威 → 屏显示）*/
+/* → 0x22 设备信息（热点名/密码/网址/固件版本；载荷由调用方按 tcs_pl_info 组好）*/
+int  link_send_info(const uint8_t *pl, size_t n);
 int  link_send_frame_mt(uint8_t mt, const uint8_t *pl, size_t n);  /* R2：0x20/0x21 载荷发送（fire-and-forget，免 ARQ：0x20/0x21 走 comm_send_noarq）；返回 0=入队 1=演示抑制 -1=组帧失败 */
 int  link_get_registry(link_reg_t *out, int max);   /* 拷贝注册表缓存 */
 void link_request_registry(void);                   /* 发 0x13（握手全量）*/

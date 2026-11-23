@@ -15,6 +15,11 @@
 
 static const char *TAG = "tcs_wifi";
 
+/* 当前生效的凭据：屏的连接页要显示真实热点名（0x22 INFO），不是写死的占位串 */
+static char s_ssid[33];
+static char s_pass[65];
+static uint8_t s_ready;
+
 void softap_start(void)
 {
     char ssid[32] = {0};
@@ -37,6 +42,10 @@ void softap_start(void)
         snprintf(ssid, sizeof(ssid), "TCS-%02X%02X", mac[4], mac[5]);
     }
 
+    strncpy(s_ssid, ssid, sizeof(s_ssid) - 1);
+    strncpy(s_pass, pass, sizeof(s_pass) - 1);
+    s_ready = 1;
+
     esp_netif_create_default_wifi_ap();
     wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
     ESP_ERROR_CHECK(esp_wifi_init(&cfg));
@@ -58,4 +67,13 @@ void softap_start(void)
         ESP_LOGI(TAG, "AP \"%s\" up, IP " IPSTR " pass=%s",
                  ssid, IP2STR(&ip.ip), pass);
     }
+}
+
+int softap_credentials(char *ssid, size_t ssid_cap, char *pass, size_t pass_cap)
+{
+    if (!s_ready || !ssid || !pass || ssid_cap < 2 || pass_cap < 2) return -1;
+    if (strlen(s_ssid) + 1u > ssid_cap || strlen(s_pass) + 1u > pass_cap) return -1;
+    strcpy(ssid, s_ssid);
+    strcpy(pass, s_pass);
+    return 0;
 }

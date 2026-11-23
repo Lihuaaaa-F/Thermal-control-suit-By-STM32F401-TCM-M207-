@@ -502,6 +502,21 @@ int link_send_param(uint16_t id, float v)
     return 0;
 }
 
+/* U 线 W3：0x22 设备信息（热点名/密码/网址/固件版本）→ 屏的连接页。
+ * 与 link_send_param 同规：单向周期帧，免 ARQ（屏侧不回 ACK）。载荷由调用方组好。*/
+int link_send_info(const uint8_t *pl, size_t n)
+{
+#if CONFIG_TCS_DEMO
+    if (s_demo_on) return 1;
+#endif
+    if (!pl || !n || n > TCS_INFO_MAX_LEN) return -1;
+    uint8_t frame[MAX_FRAME];
+    size_t fn = mt_frame(MT_TCS_INFO, comm_next_seq(&s_link), pl, n, frame, sizeof(frame));
+    if (!fn) return -1;
+    comm_send_noarq(&s_link, frame, fn);
+    return 0;
+}
+
 int link_send_cmd(uint8_t cmd)
 {
 #if CONFIG_TCS_DEMO

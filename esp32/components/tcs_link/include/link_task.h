@@ -50,6 +50,7 @@ typedef struct {
     uint32_t retry;                  /* 本端累计重传 */
     uint32_t txq_drop, pending_evict;/* 发送/待确认溢出 */
     uint32_t uart_txdrop;         /* 驱动 TX 环满丢弃（2026-11-23：恒增=链路实际没发出去）*/
+    uint32_t echo_drop;          /* 回声防护丢弃数（本端发送窗内收到等长帧；2026-11-23）*/
     uint32_t proto_mismatch;         /* STATUS 版本不符帧数（M11-F-09）*/
 } link_stats_t;
 void link_stats_get(link_stats_t *out);

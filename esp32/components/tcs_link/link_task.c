@@ -249,6 +249,21 @@ void link_demo_note_param(uint16_t id, float v)
 /* —— UART 发送钩子（comm 注入；comm_poll_tx 任务内串行调用）—— */
 static uint32_t s_uart_txdrop;   /* 驱动 TX 环满丢弃（linkstat 可见）*/
 
+/* 回声防护（2026-11-23 现场）：屏→ESP32 那根发送线接触不良时，本端会在自己发送期间
+ * 从 RX 脚串扰收到自己刚发出去的帧（参数镜像 0x11 为主）。完好的回声只是日志噪音；
+ * 但劣化链路上回声内容会被改写，约 1/256 的坏帧仍能碰巧通过 CRC8——现场实测一条被
+ * 改写成 tc1_set=0 的回声被当成"屏的写入"落进权威注册表（40.1 → 钳到下限 5.0）。
+ * 规则：本端刚发完一帧（线路上仍处在这一帧的发送窗内）就"收"到等长的帧 → 判为回声，
+ * 不上抛，计入 echo 统计并周期性告警（提示查接线）。
+ * 误杀面：屏的真帧与本端刚发的那帧等长且落在同一窗——等长的只有 0x11/0x12/0x90
+ * （载荷 9）对镜像 0x11：镜像 1.7 帧/s、窗≈4.5ms → 屏的 0x11 约 0.8% 被丢；0x12/0x90
+ * 走 ARQ 会重传。周期帧之间长度都不同（STATUS 21 / 快照 42），不存在相位锁定风险。*/
+#define TCS_ECHO_MARGIN_MS   4u
+static uint32_t link_now_ms(void);
+static volatile uint32_t s_echo_plen;      /* 本端刚发那帧的载荷长度（0=无窗）*/
+static volatile uint32_t s_echo_until_ms;  /* 该帧在线路上发完的时刻 + 余量 */
+static uint32_t s_echo_drop;
+
 static void link_uart_send(const uint8_t *d, size_t n)
 {
     /* R1 P1-07：非阻塞写——TX 环满时丢弃该帧（comm 层 ARQ 会重传），
@@ -256,6 +271,12 @@ static void link_uart_send(const uint8_t *d, size_t n)
     size_t free_sz = 0;
     if (uart_get_tx_buffer_free_size(LINK_UART, &free_sz) == ESP_OK && free_sz >= n) {
         uart_write_bytes(LINK_UART, d, n);
+        size_t pend = 0;
+        uint32_t on_wire = (uint32_t)n;
+        if (uart_get_tx_buffer_free_size(LINK_UART, &pend) == ESP_OK) on_wire = LINK_TXBUF - pend;
+        s_echo_plen = 0u;      /* 先关旧窗再开新窗（两个 32 位写各自原子）*/
+        s_echo_until_ms = link_now_ms() + on_wire * 10000u / (uint32_t)LINK_BAUD + TCS_ECHO_MARGIN_MS;
+        s_echo_plen = (uint32_t)n - 4u;   /* AA 55 + Len + 载荷 + CRC8 → 载荷 = n-4 */
     } else {
         s_uart_txdrop++;
         if ((s_uart_txdrop % 50u) == 1u) ESP_LOGW(TAG, "link tx ring full, dropped %lu frames", (unsigned long)s_uart_txdrop);
@@ -545,6 +566,7 @@ void link_stats_get(link_stats_t *out)
     out->retry = s_link.retry_cnt;
     out->txq_drop = s_link.txq_drop;
     out->uart_txdrop = s_uart_txdrop;
+    out->echo_drop = s_echo_drop;
     out->pending_evict = s_link.pending_evict;
     out->proto_mismatch = s_proto_mismatch;
 }
@@ -607,8 +629,15 @@ static void link_task(void *arg)
                 for (int i = 0; i < n; i++) {
                     const uint8_t *pl; size_t plen; int dup;
                     if (comm_rx_feed_byte(&s_link, buf[i], &pl, &plen, &dup)) {
-                        s_rx_frames++;
-                        on_frame(pl, plen);
+                        if (plen == s_echo_plen && (int32_t)(s_echo_until_ms - link_now_ms()) >= 0) {
+                            s_echo_drop++;
+                            if ((s_echo_drop % 20u) == 1u)
+                                ESP_LOGW(TAG, "self-echo on RX dropped=%lu (check H743 TX wire / crosstalk)",
+                                         (unsigned long)s_echo_drop);
+                        } else {
+                            s_rx_frames++;
+                            on_frame(pl, plen);
+                        }
                     } else if (dup) {
                         /* R1 修复 M11-F-04：重复帧也回 ACK（幂等）。
                          * 原来丢弃且不回 ACK，发送端 ARQ 3 次后误判链路失败。*/

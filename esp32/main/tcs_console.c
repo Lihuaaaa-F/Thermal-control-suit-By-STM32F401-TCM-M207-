@@ -231,12 +231,12 @@ static int cmd_linkstat(int argc, char **argv)
     link_stats_get(&st);
     /* M11-F-10：一次打出全部故障桶（注入已知故障后应只有对应桶增长）*/
     printf("link rx_b=%lu rx_f=%lu crc=%lu len=%lu gap=%lu dup=%lu retry=%lu "
-           "txqdrop=%lu uartdrop=%lu evict=%lu verg=%lu",
+           "txqdrop=%lu uartdrop=%lu echo=%lu evict=%lu verg=%lu",
            (unsigned long)st.rx_bytes, (unsigned long)st.rx_frames,
            (unsigned long)st.crc_err, (unsigned long)st.len_err,
            (unsigned long)st.gap_resets, (unsigned long)st.dup,
            (unsigned long)st.retry, (unsigned long)st.txq_drop,
-           (unsigned long)st.uart_txdrop,
+           (unsigned long)st.uart_txdrop, (unsigned long)st.echo_drop,
            (unsigned long)st.pending_evict, (unsigned long)st.proto_mismatch);
     printf("\n");
     return 0;

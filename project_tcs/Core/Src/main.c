@@ -809,17 +809,22 @@ int main(void)
      * 调试停顿期冻结 IWDG（仅 halt 时生效，现场运行不受影响）。 */
     DBGMCU->APB4FZ1 |= DBGMCU_APB4FZ1_DBG_IWDG1;
 
+    /* P1-14（2026-11-23）：IWDG 2.0s 已启动，而触摸初始化最坏 2.9s、EEPROM 也走 I2C
+     * ——启动窗口里超过 2s 不喂狗会"上电反复复位"。每个阶段之间补喂一次。*/
     /* 显示（失败不阻塞协议/控制）*/
 #ifdef ENABLE_LCD
     int lcd_rv = ltdc_init();
     tcs_log("[SYSTEM]", "ltdc init rv=%d ready=%d", lcd_rv, lcd_ready());
 #endif
+    iwdg_refresh();
     int tp_rv = ft5446_init();
     tcs_log("[SYSTEM]", "ft5446 init rv=%d ready=%d", tp_rv, touch_ready());
+    iwdg_refresh();
     /* keypad 有意不初始化：KP_COL2=PD5 归 USART2_TX（接线表 #3），文件仅保留编译 */
 
     /* EEPROM → 参数注册表（离线/CRC 坏不阻塞，默认值 + ALM_EEPROM）*/
     int ee_rv = eeprom_init();
+    iwdg_refresh();
     uint8_t ee_cfg_invalid = 0;
     param_registry_init(&(param_hooks_t){
         .on_broadcast   = hook_broadcast,
@@ -870,8 +875,10 @@ int main(void)
 
 #ifdef ENABLE_LCD
     tcs_lvgl_init();     /* LVGL 单栈（2026-11-15：旧 tcs_ui 已删除） */
+    iwdg_refresh();      /* P1-14：LVGL/字体初始化前补喂 */
 #endif
     post_init(ee_cfg_invalid);   /* H6：六项自检（M207 项宽限窗内异步裁决）*/
+    iwdg_refresh();      /* P1-14：POST 前补喂（其后进入主循环节拍） */
     tcs_log("[SYSTEM]", "init done, entering main loop");
 
     uint32_t last_tick = 0;

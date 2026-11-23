@@ -134,14 +134,20 @@ static int cmd_status(int argc, char **argv)
 {
     (void)argc; (void)argv;
     printf("tc1=%.2f tc2=%.2f body=%.2f(ok=%u) fan=%u%% mode=%u m207=%u "
-           "alarm=0x%04X armed=%u state=%d sim=%u latch=0x%02X heap=%u\n",
+           "alarm=0x%04X armed=%u state=%d sim=%u latch=0x%02X heap=%u up=%us rst=%d\n",
            (double)g_tcs.tc1_act, (double)g_tcs.tc2_act, (double)g_tcs.body_temp,
            (unsigned)g_tcs.body_sensor_ok, (unsigned)fan_get_duty(),
            (unsigned)g_tcs.mode, (unsigned)g_tcs.m207_online,
            (unsigned)g_tcs.alarm_bits, (unsigned)control_service_armed(),
            (int)control_state(), (unsigned)tmp117_sim_active(),
            (unsigned)control_safety_latched(),      /* R-10：现场能看出"为什么还锁着" */
-           (unsigned)esp_get_minimum_free_heap_size());
+           (unsigned)esp_get_minimum_free_heap_size(),
+           /* 2026-11-24 现场：ESP32 运行 1264s 时自行复位一次，复位原因无法事后取证
+            * （启动日志在 USB 串口重枚举期间丢失）。这里带上运行时长与复位原因
+            * （esp_reset_reason_t：0 UNKNOWN 1 POWERON 2 EXT 3 SW 4 PANIC 5 INT_WDT 6 TASK_WDT
+            *   7 WDT 8 DEEPSLEEP 9 BROWNOUT 10 SDIO 11 USB 12 JTAG 13 EFUSE 14 PWR_GLITCH
+            *   15 CPU_LOCKUP）。*/
+           (unsigned)(esp_timer_get_time() / 1000000LL), (int)esp_reset_reason());
     return 0;
 }
 

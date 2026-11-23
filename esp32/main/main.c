@@ -1,6 +1,6 @@
 /* main.c — 调温服 ESP32-S3 无线端（任务书 v5.1 WP-F）
  *
- * ESP32 = 纯桥 + Web 服务器：不存业务参数、不做决策（H743 唯一数据源）。
+ * ESP32 = 主控（参数/控制闭环/锁存的权威）+ Web 服务器；H743 是显示与操作终端（v2 架构）。
  * 启动序：NVS → event loop → SoftAP(TCS-XXXX/12345678) → 回环自测(WP-F.1)
  *        → 链路任务(UART1 230400，含内置注册表快照+演示模式 WP-F.2/F3) → HTTP/WS :80
  * OTA（WP-F.4）：/api/ota 或 WS {"t":"ota"} 触发——运行镜像自拷贝到对槽+切换；
@@ -25,6 +25,7 @@
 #include "softap.h"
 #include "link_task.h"
 #include "http_server.h"
+#include "websocket.h"
 #include "param_registry.h"
 #include "nvs_store.h"
 #include "m207_service.h"
@@ -117,9 +118,8 @@ void app_ota_trigger(int rollback)
 static void esp_on_broadcast(param_desc_t *p, uint8_t src)
 {
     if (!p) return;
-    /* 注册表 JSON 的 def 取本端权威值，本地改参后缓存必须失配（否则网页重载看到旧值）*/
-    extern void ws_registry_invalidate(void);
-    ws_registry_invalidate();
+    /* 网页：推 pv（带来源/回执）+ 记事件日志 + 注册表缓存失配（U 线 W1）*/
+    ws_param_changed(p, src);
     link_demo_note_param(p->id, p->value);    /* 演示模型跟随（生产档编译为空操作）*/
     if (src == PARAM_SRC_LINK) return;        /* 屏幕自己的改动已经在对端生效 */
     (void)link_send_param(p->id, p->value);   /* 反向镜像：屏幕显示跟随 */

@@ -3,7 +3,8 @@
  * 扩展字库 32px（新增 UI 字符，msyh 全盒，口径同 gen_font_cn.py）
  * 源：tcs_font_cn.inc / tcs_font96|48|20.inc（gen_font_cn.py / gen_font_ui.py 生成，勿手改）
  * line_height=32 base_line=0（比例轨为数据驱动：L=max(yoff+h)+1, B=L-32）
- ******************************************************************************/
+ ***************************************************************************** * 度量后处理：font_metrics_patch.py（ASCII/符号按墨迹比例步进；重生成后必须重跑）
+ */
 
 #ifdef __has_include
     #if __has_include("lvgl.h")
@@ -401,10 +402,10 @@ static LV_ATTRIBUTE_LARGE_CONST const uint8_t glyph_bitmap[] = {
 
 static const lv_font_fmt_txt_glyph_dsc_t glyph_dsc[] = {
     {.bitmap_index = 0, .adv_w = 0, .box_w = 0, .box_h = 0, .ofs_x = 0, .ofs_y = 0}, /* id = 0 reserved */
-    {.bitmap_index = 0, .adv_w = 512, .box_w = 32, .box_h = 32, .ofs_x = 0, .ofs_y = 0}, /* U+00B1 */
-    {.bitmap_index = 128, .adv_w = 512, .box_w = 32, .box_h = 32, .ofs_x = 0, .ofs_y = 0}, /* U+00B7 */
-    {.bitmap_index = 256, .adv_w = 512, .box_w = 32, .box_h = 32, .ofs_x = 0, .ofs_y = 0}, /* U+2039 */
-    {.bitmap_index = 384, .adv_w = 512, .box_w = 32, .box_h = 32, .ofs_x = 0, .ofs_y = 0}, /* U+203A */
+    {.bitmap_index = 0, .adv_w = 288, .box_w = 32, .box_h = 32, .ofs_x = -7, .ofs_y = 0}, /* U+00B1 */
+    {.bitmap_index = 128, .adv_w = 128, .box_w = 32, .box_h = 32, .ofs_x = -12, .ofs_y = 0}, /* U+00B7 */
+    {.bitmap_index = 256, .adv_w = 160, .box_w = 32, .box_h = 32, .ofs_x = -10, .ofs_y = 0}, /* U+2039 */
+    {.bitmap_index = 384, .adv_w = 160, .box_w = 32, .box_h = 32, .ofs_x = -11, .ofs_y = 0}, /* U+203A */
     {.bitmap_index = 512, .adv_w = 512, .box_w = 32, .box_h = 32, .ofs_x = 0, .ofs_y = 0}, /* U+2190 */
     {.bitmap_index = 640, .adv_w = 512, .box_w = 32, .box_h = 32, .ofs_x = 0, .ofs_y = 0}, /* U+2192 */
     {.bitmap_index = 768, .adv_w = 512, .box_w = 32, .box_h = 32, .ofs_x = 0, .ofs_y = 0}, /* U+25B2 */

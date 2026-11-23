@@ -12,10 +12,13 @@
   B 无 fallback 档位：lv20 / lv48 / lv96 的 fallback=NULL，渲染到缺字会直接空白；
     对这三档断言"数字/符号/单位/汉字"白名单必须齐全。
   C 诊断页字符集：`tui_charset_data.h` 的 7 组码点非空，且 24/32 两链覆盖全部 UI 字面量。
+  D 字形度量（U 线 S1）：24/32px 字表的 ASCII/符号必须保持比例步进——重生成字库后忘跑
+    `tools/font_metrics_patch.py` 会退回全角等宽（屏上出现 `5 . 0`），这里直接拦下。
 
 退出码 0=PASS 1=FAIL（可直接入 run_all/nightly）。
 """
 import re
+import subprocess
 import sys
 from pathlib import Path
 
@@ -132,13 +135,22 @@ def main():
         if "CP24CORE" not in sizes or "CP32EXT" not in sizes:
             fails.append(("charset", ["关键数组缺失"]))
 
+    # D 字形度量：tools/font_metrics_patch.py --check（与期望不一致 → 非零退出）
+    r = subprocess.run(
+        [sys.executable, str(ROOT / "tools" / "font_metrics_patch.py"), "--check"],
+        capture_output=True, text=True, encoding="utf-8", errors="replace")
+    for ln in r.stdout.splitlines():
+        print("      " + ln)
+    if r.returncode != 0:
+        fails.append(("D", ["字形度量不是比例步进：重跑 python tools/font_metrics_patch.py"]))
+
     print()
     if fails:
         print("FONT_AUDIT_LVGL: FAIL")
         for k, v in fails:
             print("  -", k, v)
         return 1
-    print("FONT_AUDIT_LVGL: PASS — 字面量全覆盖，三档无 fallback 字体白名单齐全")
+    print("FONT_AUDIT_LVGL: PASS — 字面量全覆盖，三档无 fallback 字体白名单齐全，字形度量为比例步进")
     return 0
 
 

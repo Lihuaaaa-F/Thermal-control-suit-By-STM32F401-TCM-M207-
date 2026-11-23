@@ -149,6 +149,7 @@ project_tcs/tests/test_ws_json_escape.c
 project_tcs/tools/colorblind_check.py
 project_tcs/tools/fb_dump.py
 project_tcs/tools/font_audit_lvgl.py
+project_tcs/tools/font_metrics_patch.py
 project_tcs/tools/g4_e04_tl9b.py
 project_tcs/tools/g5_centering_audit.py
 project_tcs/tools/g5_walkthrough.py

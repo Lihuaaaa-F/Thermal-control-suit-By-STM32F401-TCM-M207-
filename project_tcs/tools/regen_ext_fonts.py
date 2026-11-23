@@ -10,6 +10,7 @@
 用法：python tools/regen_ext_fonts.py [--dry]
 """
 import re
+import subprocess
 import sys
 from pathlib import Path
 
@@ -101,6 +102,9 @@ def main():
     (FONTS / "tcs_font_lv_ext_cp.txt").write_text(
         "\n".join("%04X" % c for c in cps) + "\n", encoding="utf-8")
     print(f"[regen] ext24 重生成：{len(cps)} 字（新增 {len(missing)}）")
+    # U 线 S1：新生成的是全角等宽表，接着跑度量补丁，否则其中的 ASCII/符号会被撑开
+    subprocess.run([sys.executable, str(FIRMWARE / "tools" / "font_metrics_patch.py"),
+                    "tcs_font_lv_ext.c"], check=False)
     return 0
 
 

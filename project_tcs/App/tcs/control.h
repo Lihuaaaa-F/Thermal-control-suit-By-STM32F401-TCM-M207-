@@ -15,6 +15,7 @@
 
 #include <stdint.h>
 #include "tcs_proto.h"   /* ALM_* 报警位定义（双端同一份，PC 可编译）*/
+#include "tcs_profile.h"   /* 档位派生（TCS_H743_LINK_ONLY 缺省值）*/
 
 #ifdef __cplusplus
 extern "C" {
@@ -51,6 +52,8 @@ void  control_manual_fan(uint8_t on);
 /* 风扇切换：PROD（v2 纯显示终端）下发 0x15 CMD 5 由 ESP32 执行；
  * BENCH/SIM 保持本地直控（台架没有对端也能驱动）。*/
 void  control_fan_toggle(void);
+/* 超温判据（PROD 由主循环用快照温度调用；BENCH 由 control_poll 调用）。*/
+void  control_observe_temp(float tc1_act);
 /* mode 切换通知（param on_mode_change 钩子转发）；退出自动时保持当前输出 */
 void  control_on_mode_change(uint8_t m);
 

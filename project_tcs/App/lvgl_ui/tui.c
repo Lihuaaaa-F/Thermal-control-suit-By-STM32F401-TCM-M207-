@@ -19,6 +19,7 @@ volatile uint32_t g_ui_probe[80];
 static lv_obj_t * s_bn_box;
 static lv_obj_t * s_bn_layer;            /* 横幅层：所有横幅元素挂在这里，便于整块删除 */
 static int s_bn_kind = -1;               /* -1=无报警 0..n=种类；变化才重建内容 */
+static int s_bn_extra = -1;              /* 复核 E2："还有N条"也要参与重建判据 */
 
 typedef struct { uint16_t bit; const char * msg; const char * act; uint8_t red; } alm_row_t;
 static const alm_row_t s_alm[] = {
@@ -53,6 +54,7 @@ void tui_banner_build(lv_obj_t * parent)
     int extra = 0;
     int k = alarm_pick(g_tcs.alarm_bits, &extra);
     s_bn_kind = k;
+    s_bn_extra = extra;
     if (k < 0) return;
     /* 2026-11-19：横幅原来直接挂在页面上、且只有首页建（tui_p0）——切到调参/曲线/
      * 连接页就看不到报警、也没有确认入口（UI 规范 §3 "报警横幅二级页驻留"）。
@@ -65,12 +67,15 @@ void tui_banner_build(lv_obj_t * parent)
     parent = s_bn_layer;
     lv_color_t bg = s_alm[k].red ? TKS_ALMBG : TKS_WARNBG;
     lv_color_t tx = s_alm[k].red ? TKS_ALMTX : TKS_WARNTX;
-    s_bn_box = ui_rrect(parent, 208, 8, 552, 56, 12, bg, TKS_BG);
+    /* 复核 E4：首页横幅占顶栏槽位（y=8）；二级页标题在 y=16，会把横幅压住——
+     * 二级页整体下移 56px，落在标题下方。*/
+    int dy = (s_page == TUI_HOME) ? 0 : 56;
+    s_bn_box = ui_rrect(parent, 208, 8 + dy, 552, 56, 12, bg, TKS_BG);
     lv_obj_set_clickable(s_bn_box, true);
     lv_obj_add_event_cb(s_bn_box, banner_ack_cb, LV_EVENT_CLICKED, NULL);
-    if (s_alm[k].red) ui_icon_sq20(parent, 226, 26, tx);
-    else              ui_icon_tri20(parent, 226, 26, tx, bg);
-    ui_lab(parent, 258, 12, &tcs_font_lv24, tx, s_alm[k].msg);
+    if (s_alm[k].red) ui_icon_sq20(parent, 226, 26 + dy, tx);
+    else              ui_icon_tri20(parent, 226, 26 + dy, tx, bg);
+    ui_lab(parent, 258, 12 + dy, &tcs_font_lv24, tx, s_alm[k].msg);
 
     /* U-6：M207 失联且模块回过错误码时，第二行改成人话原因（禁止裸代码上屏） */
     const char * act = s_alm[k].act;
@@ -86,14 +91,14 @@ void tui_banner_build(lv_obj_t * parent)
         act = actbuf;
     }
 #endif
-    ui_lab(parent, 258, 38, &tcs_font_lv24, tx, act);
+    ui_lab(parent, 258, 38 + dy, &tcs_font_lv24, tx, act);
     if (extra) {
         char cnt[24];
         snprintf(cnt, sizeof(cnt), "还有%d条", extra);
         int cw = ui_text24_w(cnt) + 16;
         int cx0 = 208 + 552 - cw - 12;
-        ui_outline(parent, cx0, 12, cx0 + cw - 1, 28, tx);
-        ui_lab(parent, cx0 + 8, 14, &tcs_font_lv24, tx, cnt);
+        ui_outline(parent, cx0, 12 + dy, cx0 + cw - 1, 28 + dy, tx);
+        ui_lab(parent, cx0 + 8, 14 + dy, &tcs_font_lv24, tx, cnt);
     }
 }
 
@@ -101,9 +106,10 @@ void tui_banner_sync(void)
 {
     int extra = 0;
     int k = alarm_pick(g_tcs.alarm_bits, &extra);
-    if (k == s_bn_kind && (k < 0 || s_bn_layer)) return;
+    if (k == s_bn_kind && extra == s_bn_extra && (k < 0 || s_bn_layer)) return;
     if (s_bn_layer) { lv_obj_delete(s_bn_layer); s_bn_layer = NULL; s_bn_box = NULL; }
     s_bn_kind = -1;
+    s_bn_extra = -1;
     if (k >= 0) tui_banner_build(s_scr);
 }
 
@@ -203,6 +209,7 @@ void tui_goto(tui_page_t p)
     s_bn_layer = NULL;       /* 上面 clean 已把旧横幅连同层一起删掉 */
     s_bn_box = NULL;
     s_bn_kind = -1;
+    s_bn_extra = -1;
     switch (p) {
         case TUI_HOME:  tui_p0_build(s_scr); break;
         case TUI_TUNE:  tui_p1_build(s_scr); break;
@@ -227,7 +234,7 @@ static void ui_cmd_dispatch(uint32_t cmd)
         case 3: tui_request(TUI_TUNE); break;
         case 4: tui_request(TUI_CHART); break;
         case 5: tui_request(TUI_CONN); break;
-        case 6: control_manual_fan(g_tcs.fan_on ? 0 : 1); tui_request_rebuild(); break;
+        case 6: control_fan_toggle(); tui_request_rebuild(); break;   /* 复核 D3：与按钮同路径 */
         case 7: param_set(PARAM_ID_MODE, 0.0f, PARAM_SRC_TOUCH); tui_request_rebuild(); break;
         case 8: tcs_alarm_ack(); tui_request_rebuild(); break;
         case 9: tui_step_param(+1); tui_request_rebuild(); break;

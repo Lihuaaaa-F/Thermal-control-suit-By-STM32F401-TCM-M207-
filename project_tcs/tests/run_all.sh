@@ -12,7 +12,7 @@ VARS64="C:\\Program Files\\Microsoft Visual Studio\\2022\\Community\\VC\\Auxilia
 
 cl_run() {  # cl_run <out.exe> <src...> — bat 内 cd 到 build，产物/对象全落 build
     local out="$1"; shift
-    local cmd_line='cl /nologo /W4 /std:c11 /utf-8 /D_CRT_SECURE_NO_WARNINGS /DTCS_UNIT_TEST /I..\App\tcs /I..\App\proto /I..\App\comm /I..\Core\Inc'
+    local cmd_line='cl /nologo /W4 /std:c11 /utf-8 /D_CRT_SECURE_NO_WARNINGS /DTCS_UNIT_TEST /DTCS_PROFILE=1 /I..\App\tcs /I..\App\proto /I..\App\comm /I..\Core\Inc'
     for s in "$@"; do
         cmd_line="$cmd_line \"$(cygpath -w "$PWD/$s")\""
     done
@@ -29,7 +29,9 @@ cl_run() {  # cl_run <out.exe> <src...> — bat 内 cd 到 build，产物/对象
 
 if command -v gcc >/dev/null 2>&1; then
     GCC=${GCC:-gcc}
-    CFLAGS="-Wall -Wextra -std=c11 -O1 -DTCS_UNIT_TEST $IFLAGS"
+    # 单测按台架语义（TCS_PROFILE=1）：本地闭环/参数持久化都在，才能测到它们。
+# 交付语义（PROD=0）的差异由构建/反汇编门禁覆盖，不在主机单测里跑。
+CFLAGS="-Wall -Wextra -std=c11 -O1 -DTCS_UNIT_TEST -DTCS_PROFILE=1 $IFLAGS"
     MODE=gcc
 else
     MODE=cl

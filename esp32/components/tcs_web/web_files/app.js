@@ -52,7 +52,7 @@ function onCmdAck(m) {
                   10: "保存到模块" };
   const name = names[m.c] || ("cmd " + m.c);
   const ok = (m.rv === undefined) || (m.rv >= 0);
-  let msg = name + (ok ? "：成功" : "：失败(rv=" + m.rv + ")");
+  let msg = name + (ok ? "：成功" : (m.rv === -2 ? "：安全态拒绝" : "：失败(rv=" + m.rv + ")"));
   if (m.c === 10 && ok) msg = "保存到模块：已下发 " + m.rv + " 条（无逐条确认）";
   toast(msg);
 }
@@ -77,6 +77,14 @@ function send(obj) { if (wsAlive && ws.readyState === 1) ws.send(JSON.stringify(
 /* ====== 状态 ====== */
 function onStatus(s) {
   lastStatus = s;
+  /* 复核 F1：屏还没连过（valid=false）时服务端不带 tc1_act 等字段，
+   * 原来这里直接 s.tc1_act.toFixed() 抛 TypeError → 横幅/版本条/曲线全停摆。*/
+  if (s.valid === false) {
+    $("app").classList.add("hidden");
+    $("verbar").textContent = "⚠ 尚未收到屏幕数据（等待链路建立）";
+    $("verbar").classList.remove("hidden");
+    return;
+  }
   $("app").classList.remove("hidden");
   $("t1").textContent = s.tc1_act.toFixed(1);
   $("t2").textContent = s.tc2_act.toFixed(1);
@@ -102,7 +110,7 @@ function onStatus(s) {
   if (s.stale) {
     $("verbar").textContent = "⚠ 屏链路断开：以下为最后一次数据（不代表当前状态）";
     $("verbar").classList.remove("hidden");
-  } else if (s.ver !== PROTO_VER_EXPECT) {
+  } else if (s.ver !== undefined && s.ver !== PROTO_VER_EXPECT) {
     $("verbar").textContent = `固件协议 v${s.ver} ≠ 网页预期 v${PROTO_VER_EXPECT}，功能可能受限`;
     $("verbar").classList.remove("hidden");
   } else {

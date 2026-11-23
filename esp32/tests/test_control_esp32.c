@@ -160,6 +160,22 @@ int main(void)
         CHECK(control_apply_cmd(TCS_CMD_M207_SAVE) == -1, "cmd 10 handled by caller (not control)");
     }
 
+    /* ====== 2026-11-23 复核 D0：cmd 11（超温停机）不得被命令统一吞掉 ====== */
+    {
+        enter_auto_healthy();
+        (void)param_set(PARAM_ID_MODE, 1.0f, 4);
+        g_tcs.tc1_act = 40.0f;          /* 远端还没报超温，靠命令触发 */
+        reset_stubs();
+        CHECK(control_apply_cmd(TCS_CMD_OVERTEMP_STOP) == 0, "cmd 11 accepted");
+        CHECK(control_safety_latched() & SAFETY_BIT_OVERTEMP, "cmd 11 latches OVERTEMP");
+        CHECK(tcs_alarm_active(ALM_OVERTEMP) == 1, "cmd 11 raises ALM_OVERTEMP");
+        CHECK(last_tec_on == 0 && tec_calls >= 2, "cmd 11 stops both TEC");
+        CHECK((control_safety_latched() & SAFETY_BIT_ESTOP) == 0, "cmd 11 is not estop");
+        g_tcs.tc1_act = 40.0f;
+        tcs_alarm_ack();
+        CHECK((control_safety_latched() & SAFETY_BIT_OVERTEMP) == 0, "cmd 11 latch clearable by ack");
+    }
+
     /* ====== 2026-11-19：通信类故障 2s 健康后自动恢复（急停/超温不在此列）====== */
     {
         enter_auto_healthy();

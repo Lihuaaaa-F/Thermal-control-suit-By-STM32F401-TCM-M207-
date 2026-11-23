@@ -235,6 +235,35 @@ int main(void)
         control_set_cmd_hook(0);
     }
 
+    /* 复核 A1（2026-11-23）：PROD 不跑 control_poll 时，主循环用快照温度调用
+     * control_observe_temp() 仍要完成"切断 + 置报警 + 发 cmd 11"。*/
+    {
+        control_set_cmd_hook(hook_cb);
+        enter_auto_healthy();
+        hook_calls = 0; hook_last = 0;
+        reset_stubs();
+        g_tcs.tc1_act = 48.5f;
+        control_observe_temp(g_tcs.tc1_act);
+        CHECK(control_state() == CTRL_SAFE, "A1 observe_temp -> SAFE");
+        CHECK(tec_calls >= 2 && last_tec_on == 0, "A1 observe_temp stops TEC");
+        CHECK(tcs_alarm_active(ALM_OVERTEMP) == 1, "A1 observe_temp raises alarm");
+        CHECK(hook_calls == 1 && hook_last == TCS_CMD_OVERTEMP_STOP,
+              "A1 observe_temp sends cmd 11");
+        CHECK(control_overtemp_latched() == 1, "A1 observe_temp latches");
+        /* 幂等：再调一次不再发第二帧（重发交给 pending 块）*/
+        hook_calls = 0;
+        control_observe_temp(48.5f);
+        CHECK(hook_calls == 0, "A1 observe_temp idempotent");
+        /* 不超温不动 */
+        enter_auto_healthy();
+        reset_stubs(); hook_calls = 0;
+        control_observe_temp(40.0f);
+        CHECK(control_state() == CTRL_IDLE && tec_calls == 0, "A1 normal temp no action");
+        g_tcs.tc1_act = 40.0f;
+        tcs_alarm_ack();
+        control_set_cmd_hook(0);
+    }
+
     /* ====== WP-A.5 未布防（默认 0）：传感器类异常只记状态沿，不上横幅不进 SAFE ====== */
     enter_auto_healthy();
     set_armed(0);

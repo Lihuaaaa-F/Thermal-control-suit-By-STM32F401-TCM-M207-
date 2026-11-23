@@ -132,8 +132,12 @@ static void esp_on_cmd(uint8_t cmd, uint8_t seq)
     if (cmd == TCS_CMD_M207_SAVE) {          /* 10：依赖 tcs_m207，不进 control */
         st = (m207_save_all() >= 0) ? TCS_ACK_OK : TCS_ACK_BUSY;
     } else {
-        /* 1..9 与网页 WS 走同一份语义（control_apply_cmd），避免两处 switch 漂移 */
-        if (control_apply_cmd(cmd) != 0) {
+        /* 1..9 + 11 与网页 WS 走同一份语义（control_apply_cmd），避免两处 switch 漂移 */
+        int cr = control_apply_cmd(cmd);
+        if (cr == -2) {
+            st = TCS_ACK_BUSY;
+            ESP_LOGW(TAG, "H743 CMD %u rejected by SAFE -> BUSY", (unsigned)cmd);
+        } else if (cr != 0) {
             st = TCS_ACK_BAD_ID;
             ESP_LOGW(TAG, "H743 CMD %u unknown -> BAD_ID", (unsigned)cmd);
         } else {

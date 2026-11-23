@@ -219,6 +219,7 @@ static uint8_t safe_sources_recovered(void)
 {
     if (!g_tcs.body_sensor_ok) return 0;
     if (!g_tcs.m207_online) return 0;
+    if (g_tcs.m207_sensor_open) return 0;   /* 复核 B4：探头开路不算"源恢复" */
     if (g_tcs.tc1_act > ALM_OVERTEMP_HARD_C) return 0;
     return 1;
 }
@@ -283,6 +284,14 @@ void control_manual_fan(uint8_t on)
 
 int control_apply_cmd(uint8_t cmd)
 {
+    /* 复核 D1：SAFE 下手动执行器命令会被 control_manual_* 静默吞掉，原来仍回 0
+     * → 网页/屏幕都显示"成功"。这里显式拒绝（-2），由调用方映射成 BUSY。*/
+    if (control_state() == CTRL_SAFE
+        && (cmd == TCS_CMD_TEC1_ON || cmd == TCS_CMD_TEC1_OFF
+            || cmd == TCS_CMD_TEC2_ON || cmd == TCS_CMD_TEC2_OFF
+            || cmd == TCS_CMD_FAN_TOGGLE)) {
+        return -2;
+    }
     switch (cmd) {
     case TCS_CMD_TEC1_ON:       control_manual_tec(1, 1); return 0;
     case TCS_CMD_TEC1_OFF:      control_manual_tec(1, 0); return 0;
@@ -293,6 +302,16 @@ int control_apply_cmd(uint8_t cmd)
     case TCS_CMD_MODE_MANUAL:   return (param_set(PARAM_ID_MODE, 0.0f, PARAM_SRC_WEB) < 0) ? -1 : 0;
     case TCS_CMD_ESTOP:         tcs_emergency_stop(); return 0;
     case TCS_CMD_ALARM_ACK:     tcs_alarm_ack(); return 0;
+    case TCS_CMD_OVERTEMP_STOP:
+        /* R2-N-01：屏观测到超温 → 请求停机。只锁 OVERTEMP + 停两条 TCSW，
+         * 不置急停锁存、不改手动模式（与 cmd 8 语义分离）。
+         * 2026-11-23 复核 D0：统一命令入口时这一段被删，cmd 11 落到 default→BAD_ID，
+         * 屏侧 5Hz 重发且对端继续加热——P0 级回归，已补回并加单测。*/
+        control_safety_trip(SAFETY_BIT_OVERTEMP);
+        tcs_alarm_raise(ALM_OVERTEMP);
+        out_tec_sw(1, 0);
+        out_tec_sw(2, 0);
+        return 0;
     default:                    return -1;
     }
 }
@@ -346,8 +365,11 @@ void control_poll(uint32_t now_ms)
                                     && !g_tcs.m207_sensor_open
                                     && g_tcs.tc1_act <= ALM_OVERTEMP_HARD_C);
         if (comm_ok && (s_safety_latch & SAFETY_COMM_MASK)) {
-            if (!s_comm_ok_since) s_comm_ok_since = now_ms ? now_ms : 1u;
-            if ((uint32_t)(now_ms - s_comm_ok_since) >= COMM_AUTO_RECOVER_MS) {
+            if (now_ms == 0) {
+                /* 复核 B3：0 是"时间基准未建立"，不能当时间戳——否则 0-1 溢出成立即自愈 */
+            } else if (!s_comm_ok_since) {
+                s_comm_ok_since = now_ms;
+            } else if ((uint32_t)(now_ms - s_comm_ok_since) >= COMM_AUTO_RECOVER_MS) {
                 SAFETY_LOCK();
                 s_safety_latch &= (uint8_t)~SAFETY_COMM_MASK;
                 SAFETY_UNLOCK();
@@ -406,6 +428,7 @@ void control_poll(uint32_t now_ms)
         /* SAFE 退出：双恢复 + 人工确认（急停自持需 ack）*/
         if (safe_sources_recovered() && !s_estop_latch && tcs_alarm_active(ALM_BODY_SENSOR) == 0
             && tcs_alarm_active(ALM_M207) == 0 && tcs_alarm_active(ALM_SENSOR_OPEN) == 0
+            && tcs_alarm_active(ALM_OVERTEMP) == 0    /* 复核 B4：显式依赖，别靠锁存门隐式兜底 */
             && tcs_alarm_active(ALM_ESTOP) == 0) {
             out_fan(0);
             goto_state(CTRL_IDLE);

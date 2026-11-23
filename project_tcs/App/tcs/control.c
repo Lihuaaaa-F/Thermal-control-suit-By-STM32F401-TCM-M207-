@@ -217,6 +217,24 @@ static uint8_t commissioned(void)
     return post_armed();
 }
 
+/* 超温判据（2026-11-23 复核 A1）：>48°C 立即本地切断 + 请求对端停机。
+ * 原来只在 control_poll 里，PROD 把 control_poll 停了 → 屏失去独立超温兜底
+ * （只剩被动显示对端 alarm 位）。现在抽成函数：control_poll 用本地/快照值调用，
+ * PROD 由主循环在 snap_reassert 之后用快照温度调用（只读快照，不依赖本地外设）。*/
+void control_observe_temp(float tc1_act)
+{
+    if (!(tc1_act > ALM_OVERTEMP_HARD_C)) return;
+    tcs_alarm_raise(ALM_OVERTEMP);
+    s_overtemp_latch = 1;
+    if (s_state == CTRL_SAFE) return;      /* 已切断：重发由 pending 块负责 */
+    out_tec_sw(1, 0);
+    out_tec_sw(2, 0);
+    out_fan(1);
+    goto_state(CTRL_SAFE);
+    s_overtemp_tx_pending = 1;             /* N-01：独立于急停的停机请求，纳入 200ms 重发 */
+    if (s_cmd_hook) s_cmd_hook(TCS_CMD_OVERTEMP_STOP);
+}
+
 /* ====== 500ms 评估 ====== */
 void control_poll(uint32_t now_ms)
 {
@@ -237,16 +255,7 @@ void control_poll(uint32_t now_ms)
      * 若 ESP32 的 control 任务创建失败/卡死，H743 的这条请求仍能让对端执行急停。
      * 只在首次进入 SAFE 时发，重发由主循环的 pending 块负责。*/
     if (g_tcs.tc1_act > ALM_OVERTEMP_HARD_C) {
-        tcs_alarm_raise(ALM_OVERTEMP);
-        s_overtemp_latch = 1;
-        if (s_state != CTRL_SAFE) {
-            out_tec_sw(1, 0);
-            out_tec_sw(2, 0);
-            out_fan(1);
-            goto_state(CTRL_SAFE);
-            s_overtemp_tx_pending = 1;    /* N-01：独立于急停的停机请求，纳入 200ms 重发 */
-            if (s_cmd_hook) s_cmd_hook(TCS_CMD_OVERTEMP_STOP);
-        }
+        control_observe_temp(g_tcs.tc1_act);
         return;
     }
 

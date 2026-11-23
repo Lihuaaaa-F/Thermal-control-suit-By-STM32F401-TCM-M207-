@@ -68,6 +68,7 @@ float link_param_value(uint16_t id);       /* 注册表初值（无缓存则 NaN
 
 void link_on_event(link_event_cb_t cb);   /* 注册 ws 推送回调（单播即可）*/
 void link_demo_note_param(uint16_t id, float v);   /* 演示模型同步（CONFIG_TCS_DEMO 时有效）*/
+uint8_t link_demo_running(void);   /* 演示态接管中（网页 stale 判据要放过它）*/
 
 /* v2：H743（屏幕）下发的 0x15 CMD（8=急停 9=报警确认）——执行端在 ESP32 */
 typedef void (*link_cmd_cb_t)(uint8_t cmd, uint8_t seq);

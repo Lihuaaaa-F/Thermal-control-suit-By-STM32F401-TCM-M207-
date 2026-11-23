@@ -930,8 +930,15 @@ int main(void)
 #endif
         kill_key_poll();
         snap_reassert();         /* v2：本地轮询后回灌 ESP32 快照（屏显一致性）*/
+#if TCS_USE_LVGL
         tcs_hist_tick(now);      /* 2026-11-19：曲线页数据源——该函数此前无人调用，
                                   * 曲线永远空（30s/点 × 60 点 = 近 30min）*/
+#endif
+#if TCS_H743_LINK_ONLY
+        /* 复核 A1：PROD 不跑 control_poll，屏仍需独立超温兜底——
+         * 用刚回灌的快照温度判一次（只读，不依赖本地 M207/TMP117）。*/
+        control_observe_temp(g_tcs.tc1_act);
+#endif
         /* R1 修复 P1（M01-F-02）：status_tx 必须在 snap_reassert 之后——原来先打包 0x10，
          * 会把 H743 本机 body_sensor_ok=0（v2 无 TMP117）发给 ESP32，网页误报传感器离线。*/
         status_tx(now);

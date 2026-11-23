@@ -15,6 +15,7 @@
 #define PARAM_REGISTRY_H
 
 #include <stdint.h>
+#include "tcs_profile.h"
 #include <stddef.h>
 
 #ifdef __cplusplus

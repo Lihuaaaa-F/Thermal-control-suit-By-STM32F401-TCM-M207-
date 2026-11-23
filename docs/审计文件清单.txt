@@ -107,6 +107,7 @@ project_tcs/App/tcs/m207.c
 project_tcs/App/tcs/m207.h
 project_tcs/App/tcs/param_registry.c
 project_tcs/App/tcs/param_registry.h
+project_tcs/App/tcs/tcs_profile.h
 project_tcs/App/tcs/post.c
 project_tcs/App/tcs/post.h
 project_tcs/App/tcs/tcs_proto.h

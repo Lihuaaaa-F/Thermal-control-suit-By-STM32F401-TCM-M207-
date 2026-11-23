@@ -125,7 +125,8 @@ size_t ws_status_json(char *buf, size_t cap)
         if (!cJSON_AddStringToObject(root, "t", "st")) break;
         /* 2026-11-19：屏链路断时 0x10 停更，但最后一份数据仍"valid"——网页必须能
          * 分辨"冻结值"与"实时值"，否则实测时会把停更当成设备不动。*/
-        if (!cJSON_AddBoolToObject(root, "stale", !link_alive())) break;
+        /* 复核 G4：演示模式刻意不更新真链路心跳（防自锁），stale 要放过它 */
+        if (!cJSON_AddBoolToObject(root, "stale", !link_alive() && !link_demo_running())) break;
         if (!s->valid) {
             if (!cJSON_AddBoolToObject(root, "valid", false)) break;
         } else {
@@ -380,16 +381,25 @@ esp_err_t ws_on_recv(httpd_req_t *req)
                 /* v2 权威在 ESP32：网页写必须落本端注册表（→M207 verify），
                  * 再由 0x20/0x21 回传屏幕。此前误走 link_set_param（反向 0x12），
                  * 会让网页值只到屏幕、不改 M207，两侧长期分叉。*/
-                int prv = param_set((uint16_t)id->valueint,
-                                    (float)v->valuedouble, PARAM_SRC_WEB);
+                const uint16_t sid = (uint16_t)id->valueint;
+                const float before = param_get(sid);   /* 复核 F5：判断这次会不会广播 */
+                int prv = param_set(sid, (float)v->valuedouble, PARAM_SRC_WEB);
                 ESP_LOGI(TAG, "ws set id=%u v=%.2f rv=%d -> %.2f",
                          (unsigned)id->valueint, v->valuedouble, prv,
                          (double)param_get((uint16_t)id->valueint));
                 /* R3-E-1：clamp/失败回执以本次 param_set 返回值为准（权威在本端）。
                  * 原来靠 0x90 ACK + link_set_param 的 id 关联，而 link_set_param 已无
                  * 调用者 → 链路恒为 0，clamped 判定永不成立（死链）。*/
-                if (prv == 1) {                 /* 被限幅：记下 id，事件推送时打 clamped */
-                    s_clamp_id = (uint16_t)id->valueint;
+                if (prv == 1) {
+                    /* 被限幅。param_set 只在"值真的变了"时广播；若钳制后与当前值相同，
+                     * 就没有事件可等——必须立刻回执，否则 s_clamp_id 挂着，之后同 id 的
+                     * 任何事件（包括屏上改的）都会被误标 clamped（复核 F5）。*/
+                    if (param_get(sid) == before) {
+                        s_clamp_id = 0;
+                        push_pv(sid, before, "web_ack", 1);
+                    } else {
+                        s_clamp_id = sid;       /* 事件推送时打 clamped */
+                    }
                 } else if (prv < 0) {           /* 只读/非法值/NaN */
                     char e[64];
                     snprintf(e, sizeof e, "{\"t\":\"perr\",\"id\":%u,\"rv\":%d}",

@@ -122,6 +122,9 @@ static struct {
 
 static void demo_push_param(uint16_t id, float v)
 {
+    /* 复核 G3：与 link_last_param_copy()/link_get_registry() 的读共用 s_mux，
+     * 否则 DEMO 下 httpd 任务可能读到"新 id + 旧值"。*/
+    taskENTER_CRITICAL(&s_mux);
     s_last_param.id = id;
     s_last_param.v = v;
     s_last_param.us = esp_timer_get_time();
@@ -131,6 +134,7 @@ static void demo_push_param(uint16_t id, float v)
             s_param_valid[i] = 1;
             break;
         }
+    taskEXIT_CRITICAL(&s_mux);
     notify();
 }
 
@@ -226,6 +230,7 @@ void link_demo_note_param(uint16_t id, float v)
     case 0x01: s_demo.tc1_set = v; break;
     case 0x02: s_demo.tc2_set = v; break;
     case 0x06: s_demo.mode = (uint8_t)(v != 0.0f); break;
+    case 0x08: s_demo.commissioned = (uint8_t)(v != 0.0f); break;   /* 复核 G2 */
     default: break;
     }
     demo_push_param(id, v);   /* 演示档：网页/屏都跟着变 */
@@ -559,6 +564,15 @@ float link_param_value(uint16_t id)
     return ok ? v : NAN;
 }
 void link_on_event(link_event_cb_t cb) { s_cb = cb; }
+
+uint8_t link_demo_running(void)
+{
+#if CONFIG_TCS_DEMO
+    return s_demo_on;
+#else
+    return 0;
+#endif
+}
 
 /* —— 任务 —— */
 static void link_task(void *arg)

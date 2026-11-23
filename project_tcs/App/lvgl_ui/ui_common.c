@@ -241,21 +241,29 @@ void ui_icon_estop24(lv_obj_t * p, int x, int y, lv_color_t fg, bool alert)
     mk_img(p, x, y, 24, 24, buf, LV_COLOR_FORMAT_RGB565);
 }
 
-/* 3px 点阵遮罩：3x3 瓦片平铺（36B 级，替代 2.4MB 整屏 sprite） */
+/* 3px 点阵遮罩：瓦片平铺（替代 2.4MB 整屏 sprite）。
+ * 2026-11-24 现场实测：原来 3x3 瓦片 → 整屏约 6.8 万个瓦片，LVGL 逐瓦片建绘制任务，
+ * 弹窗从触发到帧缓冲画完整约 2s（"确认急停？"也在其列，其间只看得到半张弹窗）。
+ * 瓦片放大到 48x48：点距仍为 3px，像素级外观不变，瓦片数降到约 1100；静态 9KB。*/
+#define MASK_TILE_PX   48
 void ui_mask_dots(lv_obj_t * p)
 {
-    static uint8_t tile[3 * 3 * 4];
+    static uint8_t tile[MASK_TILE_PX * MASK_TILE_PX * 4];
     static lv_image_dsc_t dsc;
     static int inited;
     if (!inited) {
         inited = 1;
         memset(tile, 0, sizeof(tile));
-        tile[0] = 0xE6; tile[1] = 0xDE; tile[2] = 0xD8; tile[3] = 0xFF;
+        for (int y = 0; y < MASK_TILE_PX; y += 3)
+            for (int x = 0; x < MASK_TILE_PX; x += 3) {
+                uint8_t *px = tile + (y * MASK_TILE_PX + x) * 4;
+                px[0] = 0xE6; px[1] = 0xDE; px[2] = 0xD8; px[3] = 0xFF;
+            }
         dsc.header.magic = LV_IMAGE_HEADER_MAGIC;
         dsc.header.cf = LV_COLOR_FORMAT_ARGB8888;
-        dsc.header.w = 3;
-        dsc.header.h = 3;
-        dsc.header.stride = 12;
+        dsc.header.w = MASK_TILE_PX;
+        dsc.header.h = MASK_TILE_PX;
+        dsc.header.stride = MASK_TILE_PX * 4;
         dsc.data_size = sizeof(tile);
         dsc.data = tile;
     }

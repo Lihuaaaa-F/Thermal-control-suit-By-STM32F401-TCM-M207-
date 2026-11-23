@@ -133,6 +133,18 @@ SECTIONS
     __bss_end__ = _ebss;
   } >DTCMRAM
 
+  /* X04-F-03（2026-11-23）：复位不清除的故障记录（HardFault 现场）。
+   * startup 只清 .bss，本段由链接脚本分配、启动代码不触碰；掉电仍会丢。*/
+  .noinit (NOLOAD) :
+  {
+    . = ALIGN(8);
+    _snoinit = .;
+    *(.noinit)
+    *(.noinit*)
+    . = ALIGN(4);
+    _enoinit = .;
+  } >DTCMRAM
+
   /* DMA 缓冲等放 SRAM1（D-Cache 对齐区）*/
   .dma_ram (NOLOAD) :
   {

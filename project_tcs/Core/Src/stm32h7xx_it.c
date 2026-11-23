@@ -21,6 +21,14 @@ void link_uart_error_recover(void);      /* main.c：ORE 清标志+重置 */
 /* ====== §0B.2 全局 fault 信息（probe-rs 可读）====== */
 volatile uint32_t g_fault_cfsr, g_fault_hfsr, g_fault_bfar, g_fault_pc, g_fault_lr, g_fault_sp;
 
+/* X04-F-03（2026-11-23）：复位后仍可读的故障记录（.noinit，掉电才丢）。
+ * 现场无 RTT 时靠它回答「上次为什么死/复位」。magic 区分「未发生」与「清零后的 0」。*/
+#define FAULT_REC_MAGIC 0x54434641u   /* 'AFCT' */
+typedef struct {
+    uint32_t magic, pc, lr, cfsr, hfsr, bfar;
+} fault_rec_t;
+volatile fault_rec_t g_fault_rec __attribute__((section(".noinit")));
+
 void NMI_Handler(void)        { while (1) {} }
 void MemManage_Handler(void)  { while (1) {} }
 void BusFault_Handler(void)   { while (1) {} }
@@ -45,6 +53,14 @@ void HardFault_Handler(void)
     g_fault_cfsr = SCB->CFSR;
     g_fault_hfsr = SCB->HFSR;
     g_fault_bfar = SCB->BFAR;
+
+    /* 先落盘（纯内存写，几拍完成），再打印/停机 */
+    g_fault_rec.magic = FAULT_REC_MAGIC;
+    g_fault_rec.pc = g_fault_pc;
+    g_fault_rec.lr = g_fault_lr;
+    g_fault_rec.cfsr = g_fault_cfsr;
+    g_fault_rec.hfsr = g_fault_hfsr;
+    g_fault_rec.bfar = g_fault_bfar;
 
     SEGGER_RTT_printf(0, "FAULT CFSR=%08x HFSR=%08x BFAR=%08x PC=%08x LR=%08x SP=%08x\n",
                       (unsigned)g_fault_cfsr, (unsigned)g_fault_hfsr, (unsigned)g_fault_bfar,

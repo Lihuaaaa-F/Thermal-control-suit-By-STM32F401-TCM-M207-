@@ -800,6 +800,7 @@ int main(void)
 
     console_init(&huart_console);
     console_print_reset_source();
+    console_print_fault_record();   /* X04-F-03：上次 HardFault 现场（复位存活）*/
     tcs_log("[SYSTEM]", "boot project_tcs fw=v1.2.0 HCLK=%lu MHz",
             (unsigned long)(SystemCoreClock / 1000000U));
 

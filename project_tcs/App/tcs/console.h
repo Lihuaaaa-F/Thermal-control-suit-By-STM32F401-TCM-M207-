@@ -33,6 +33,7 @@ void tcs_log(const char *prefix, const char *fmt, ...);
 
 /* 复位源解析（RCC CSR）→ 首行日志（main 上电调用）*/
 void console_print_reset_source(void);
+void console_print_fault_record(void);   /* X04-F-03：打印上次 HardFault 现场（.noinit）*/
 
 #ifdef __cplusplus
 }

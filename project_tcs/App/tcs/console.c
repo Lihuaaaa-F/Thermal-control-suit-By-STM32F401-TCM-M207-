@@ -751,6 +751,17 @@ void console_init(UART_HandleTypeDef *huart)
 /* ====== 复位源解析（§3.9：复位后首行日志）======
  * WP-C.4：IWDG1RSTF 优先于 PIN——IWDG 复位时 NRST 也被拉低，PINRSTF 同样置位，
  * 按 PIN 优先会误报。其余位照常见义。 */
+/* X04-F-03：上次 HardFault 现场（.noinit，复位存活）。只在发生过时打印，不主动清。*/
+void console_print_fault_record(void)
+{
+    extern volatile struct { uint32_t magic, pc, lr, cfsr, hfsr, bfar; } g_fault_rec;
+    if (g_fault_rec.magic != 0x54434641u) return;
+    tcs_log("[FAULT]", "last HardFault PC=0x%08lx LR=0x%08lx CFSR=0x%08lx HFSR=0x%08lx BFAR=0x%08lx",
+            (unsigned long)g_fault_rec.pc, (unsigned long)g_fault_rec.lr,
+            (unsigned long)g_fault_rec.cfsr, (unsigned long)g_fault_rec.hfsr,
+            (unsigned long)g_fault_rec.bfar);
+}
+
 void console_print_reset_source(void)
 {
     uint32_t rs = RCC->RSR;

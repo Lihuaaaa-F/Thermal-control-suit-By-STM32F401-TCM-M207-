@@ -9,6 +9,10 @@ static lv_obj_t * s_u1, * s_u2, * s_ub;   /* 单位「°C」label（随数值宽
 static void place_unit(lv_obj_t * val, lv_obj_t * unit, const lv_font_t * f, int base_x, int gap);
 
 static uint8_t s_st_mode, s_st_fan, s_st_tec1, s_st_tec2, s_st_estop, s_st_alm;
+/* 体温 / M207 在线态。2026-11-24 现场：这两项决定体温卡样式（黄框/灰字/"失联"角标）
+ * 和水箱 "--.-"，但原来不参与"要不要重建"的判断——未布防时传感器掉线/恢复不置
+ * 报警位，没人触发重建，结果 sensor=1、无报警的主页仍挂着红色"失联"角标。*/
+static uint8_t s_st_body, s_st_m207;
 
 static void clk_tune(lv_event_t * e)  { LV_UNUSED(e); tui_request(TUI_TUNE); }
 static void clk_chart(lv_event_t * e) { LV_UNUSED(e); tui_request(TUI_CHART); }
@@ -107,6 +111,8 @@ void tui_p0_build(lv_obj_t * scr)
     s_st_tec2 = g_tcs.tec2_on;
     s_st_estop = (uint8_t)((g_tcs.alarm_bits & ALM_ESTOP) ? 1 : 0);
     s_st_alm = (uint8_t)(g_tcs.alarm_bits != 0);
+    s_st_body = (uint8_t)(g_tcs.body_sensor_ok ? 1 : 0);
+    s_st_m207 = (uint8_t)(g_tcs.m207_online ? 1 : 0);
 
     /* 顶栏 */
     ui_rrect(scr, 24, 16, 160, 40, 20, TKS_CARD, TKS_BG);
@@ -173,7 +179,9 @@ void tui_p0_refresh(void)
     if (s_st_mode != (uint8_t)(g_tcs.mode != 0) || s_st_fan != g_tcs.fan_on ||
         s_st_tec1 != g_tcs.tec1_on || s_st_tec2 != g_tcs.tec2_on ||
         s_st_estop != (uint8_t)((g_tcs.alarm_bits & ALM_ESTOP) ? 1 : 0) ||
-        s_st_alm != (uint8_t)(g_tcs.alarm_bits != 0)) {
+        s_st_alm != (uint8_t)(g_tcs.alarm_bits != 0) ||
+        s_st_body != (uint8_t)(g_tcs.body_sensor_ok ? 1 : 0) ||
+        s_st_m207 != (uint8_t)(g_tcs.m207_online ? 1 : 0)) {
         tui_request_rebuild();
         return;
     }

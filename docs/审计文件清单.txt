@@ -32,6 +32,7 @@ esp32/components/tcs_web/http_server.c
 esp32/components/tcs_web/include/http_server.h
 esp32/components/tcs_web/include/web_status.h
 esp32/components/tcs_web/include/websocket.h
+esp32/components/tcs_web/web_selftest.c
 esp32/components/tcs_web/web_status.c
 esp32/components/tcs_web/websocket.c
 esp32/components/tcs_wifi/include/softap.h

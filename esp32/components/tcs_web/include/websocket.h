@@ -19,4 +19,8 @@ size_t ws_linkstats_json(char *buf, size_t cap);     /* 屏链路收发统计（
 
 /* 任一来源改参后调用（main 的 on_broadcast 钩子）：推 pv、记事件日志、reg 缓存失配。*/
 void ws_param_changed(const param_desc_t *p, uint8_t src);
+
+/* 网页端点自检（web_selftest.c）：回环 GET 全部端点并打印状态码/字节数，全 200 返回 0。
+ * 只在台架/现场档有实现；生产档恒返回 -1。*/
+int ws_selftest(void);
 void ws_registry_invalidate(void);

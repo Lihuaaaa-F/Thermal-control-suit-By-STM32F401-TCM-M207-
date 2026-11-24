@@ -17,6 +17,10 @@ extern "C" {
 int tcs_snap_start(void);            /* 起快照任务（核 0，200ms）。0=ok */
 uint32_t tcs_snap_enc_max_us(void);  /* 编码+发送耗时峰值（预算 500µs）*/
 
+/* 现场取证（仅台架/现场档注册命令）：N 秒内不给屏发 0x20/0x21/0x22，模拟"主控不在"，
+ * 用来验证屏幕的断链显示与自动回连。0 = 立即恢复。主控自身控制不受影响。*/
+int tcs_snap_mute(uint32_t seconds);
+
 #ifdef __cplusplus
 }
 #endif

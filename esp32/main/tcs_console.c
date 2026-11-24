@@ -6,6 +6,8 @@
  * 官方查证：检索 components.espressif.com 2026-10-26，esp_console 即官方控制台件；REPL 用官方 esp_console（linenoise/argtable 官方件）；自研仅为命令表与派发；实现参考 IDF examples/system/console/basic
  */
 #include "tcs_console.h"
+#include "websocket.h"      /* ws_selftest：网页端点自检 */
+#include "tcs_snap.h"       /* tcs_snap_mute：linkmute 取证 */
 #include "param_registry.h"
 #include "nvs_store.h"
 #include "control.h"
@@ -129,6 +131,24 @@ static int cmd_ack(int argc, char **argv)
            (int)control_state());
     return 0;
 }
+
+/* ——以下两条只在台架/现场档编入（生产档没有这两个命令，也没有对应实现）—— */
+#if CONFIG_TCS_DIAG || CONFIG_TCS_SIM
+static int cmd_webtest(int argc, char **argv)
+{
+    (void)argc; (void)argv;
+    return ws_selftest();
+}
+
+static int cmd_linkmute(int argc, char **argv)
+{
+    uint32_t s = (argc >= 2) ? (uint32_t)strtoul(argv[1], NULL, 10) : 0u;
+    if (s > 3600u) s = 3600u;          /* 1 小时封顶：再大 s*1000 会回绕成"立刻到期" */
+    tcs_snap_mute(s);
+    printf("linkmute %lu s (0 = resume)\r\n", (unsigned long)s);
+    return 0;
+}
+#endif
 
 static int cmd_status(int argc, char **argv)
 {
@@ -344,6 +364,12 @@ int tcs_console_start(void)
           .func=cmd_ack, .argtable=NULL },
         { .command="status", .help="状态一行", .hint=NULL,
           .func=cmd_status, .argtable=NULL },
+#if CONFIG_TCS_DIAG || CONFIG_TCS_SIM
+        { .command="webtest", .help="网页端点自检：回环 GET 9 个端点并打印状态码/字节数（台架/现场档）", .hint=NULL,
+          .func=cmd_webtest, .argtable=NULL },
+        { .command="linkmute", .help="linkmute <s>：s 秒内不给屏发快照/设备信息（取证屏幕断链显示；0=恢复）", .hint="<s>",
+          .func=cmd_linkmute, .argtable=NULL },
+#endif
 #if CONFIG_TCS_DIAG
         { .command="m207", .help="m207 raw <帧>（台架直查/注入；自动补 \r）", .hint="raw <frame>",
           .func=cmd_m207, .argtable=NULL },

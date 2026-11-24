@@ -270,6 +270,13 @@
       return true;
     });
     vis($('no-alarm'), !shown);
+    // 没有报警位 ≠ 一切正常：未布防时体温传感器 / 温控模块失联不进报警位（固件语义，见 ALARMS 上方说明），
+    // 这时再写"运行正常"就和上面卡片里的红字"传感器失联"自相矛盾了。数据不新鲜时报警位同样不可信。
+    const cur = store.st, lost = !cur ? '' : num(cur.body_ok, 1) === 0 ? '体温传感器' : num(cur.m207, 1) === 0 ? '温控模块' : '';
+    const unknown = !cur || store.stale;
+    txt($('no-alarm'), unknown ? '○ 报警状态未知：数据没有更新'
+      : lost ? '○ 没有需要确认的报警 · ' + lost + '失联中，自动温控不会启动' : '● 无报警，运行正常');
+    $('no-alarm').classList.toggle('watch', !!(unknown || lost));
   }
 
   // chart and CSV export
@@ -440,7 +447,10 @@
   }
 
   // device page: the rows come from one table; a missing value is always shown as "—"
-  const RESET = ['未知', '上电', '外部复位', '软件复位', '程序异常', '中断看门狗', '任务看门狗', '其它看门狗', '深度睡眠唤醒', '欠压'];
+  // 下标 = esp_reset_reason_t（IDF v5.5.5 esp_system.h）。11 在 ESP32-S3 上就是 USB 串口：
+  // 下载程序、或电脑打开串口（DTR/RTS 翻转）都会让芯片复位——看到它不用慌，不是死机。
+  const RESET = ['未知', '上电', '外部复位', '软件复位', '程序异常', '中断看门狗', '任务看门狗', '其它看门狗', '深度睡眠唤醒', '欠压',
+    'SDIO 复位', 'USB 串口复位（下载程序或电脑打开串口）', 'JTAG 复位', 'eFuse 错误', '电源毛刺', 'CPU 锁死（连续两次异常）'];
   const STATE = ['待机', '制冷', '制热', '安全态'], ARMED = ['未布防', '已布防', '布防但源丢失报警中'];
   const LATCH = [[1, '超温锁存'], [2, '体温传感器丢失锁存'], [4, '温控模块/探头丢失锁存'], [8, '急停锁存']];
   /* [label, formatter]; a formatter gives text, or [state colour, text] (colour first: that is what set() expects) */

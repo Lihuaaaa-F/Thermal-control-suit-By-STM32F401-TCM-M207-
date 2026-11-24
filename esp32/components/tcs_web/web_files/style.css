@@ -64,6 +64,7 @@ dl + h2 { margin-top: 14px; }                      /* a second list in the same 
 .sw[aria-pressed="true"] { border-color: var(--green); }
 .sw[aria-pressed="true"] b { color: var(--green); }
 .allok { display: flex; align-items: center; min-height: 48px; padding: 0 12px; color: var(--tx2); font-size: 14px; }
+.allok.watch { color: var(--warn-tx); }   /* 没有报警位、但有部件失联或数据不新鲜 */
 .alarm { padding: 12px; border: 1px solid currentColor; border-radius: 12px; background: var(--alm-bg); color: var(--alm-tx); }
 .alarm.auto { background: var(--warn-bg); color: var(--warn-tx); }
 .alarm-head { font-size: 15px; font-weight: 600; }

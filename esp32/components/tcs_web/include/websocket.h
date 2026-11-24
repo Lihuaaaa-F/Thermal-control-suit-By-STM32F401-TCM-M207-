@@ -26,7 +26,11 @@ void ws_param_changed(const param_desc_t *p, uint8_t src);
 void ws_registry_invalidate(void);
 
 /* 网页端点自检（只在台架/现场档有实现；生产档恒返回 -1）：
- *   ws_selftest      回环 GET 全部 HTTP 端点并打印状态码/字节数，全 200 返回 0（web_selftest.c）
- *   ws_selftest_ws   固件自己当 WS 客户端连自己：握手/首推/回执/CLOSE/上限（web_selftest_ws.c）*/
-int ws_selftest(void);
-int ws_selftest_ws(const char *ip, int port, int *pass, int *total);
+ *   ws_selftest(dump) 回环 GET 全部 HTTP 端点并打印状态码/字节数，全 200 且 WS 部分全过返回 0
+ *                     （web_selftest.c）；dump≠0 时把 /api/ 各接口的响应体与收到的每一帧原文转储
+ *   ws_selftest_ws    固件自己当 WS 客户端连自己：握手/首推/回执/CLOSE/上限（web_selftest_ws.c）
+ *   ws_dump           把一段原始字节按 base64 分块打到控制台，行格式见 web_selftest_ws.c
+ *                     （电脑端用 esp32/tools/web_replay.py 解析并回放进真实浏览器）*/
+int ws_selftest(int dump);
+int ws_selftest_ws(const char *ip, int port, int *pass, int *total, int dump);
+void ws_dump(const char *tag, const uint8_t *data, size_t len);

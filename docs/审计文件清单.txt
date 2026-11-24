@@ -63,6 +63,7 @@ esp32/tools/strict_audit.py
 esp32/tools/web_audit.py
 esp32/tools/web_e2e.py
 esp32/tools/web_mock.py
+esp32/tools/web_replay.py
 project_tcs/App/comm/comm.c
 project_tcs/App/comm/comm.h
 project_tcs/App/eeprom/eeprom.c

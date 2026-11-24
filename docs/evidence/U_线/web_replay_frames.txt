@@ -1,0 +1,25 @@
+# webtest dump 转储清单（ESP32-S3 现场档，固件 1.3.0-rc1，2026-11-25 02:27）
+# 原始字节不入库（/api/linkstats 里带热点密码）；这里只留每一段的类型、字节数与 CRC32。
+# 复现：现场档/台架档 `webtest dump` → python esp32/tools/web_replay.py parse <串口日志> frames.json
+
+tag             type    bytes  crc32
+F0001           reg       6578  fff414e5
+F0002           log        234  1093e61a
+F0003           st         280  dd998bc2
+F0004           log         85  90c9a57f
+F0005           st         280  1b10a88c
+F0006           pong        31  0f48a7eb
+F0007           pv          74  23961264
+F0008           st         280  c0288f43
+F0009           pv          77  934d2180
+F0010           err         68  964fa55e
+F0011           err         68  c6bb6975
+F0012           st         280  f1c0875c
+F0013           ack         32  32e9d55f
+F0014           log         91  74bc3bf8
+H/api/linkstats http       248  bfd8f4e9
+H/api/log       http       234  1093e61a
+H/api/registry  http      6578  fff414e5
+H/api/status    http       280  d61abcb3
+
+合计 18 段 / 15798 字节，逐段 CRC32 与固件转出时一致。

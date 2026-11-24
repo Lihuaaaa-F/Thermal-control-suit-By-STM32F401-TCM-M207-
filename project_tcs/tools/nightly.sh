@@ -2,7 +2,8 @@
 # tools/nightly.sh — 夜间回归（v2 架构）
 #
 #   ① 从零多档位构建矩阵：H743 PROD/BENCH/SIM/SIMWG 各自从零构建并核对告警基线；
-#      PROD 再构建一次比对 md5（可复现构建）；ESP32 默认档与现场档从零构建
+#      PROD 再构建一次比对 md5（可复现构建）；ESP32 默认档 / 诊断档 / 现场档从零构建；
+#      并做交付档干净核对（PROD 产物不得含调试/台架钩子与命令，台架档里它们必须还在）
 #   ② PC 单测 run_all（含 fuzz、源码字节门禁、审计只读核对）
 #   ③ 汇总；任一步 FAIL → 退出码非零
 #
@@ -27,14 +28,14 @@ echo "=== nightly @ $(date '+%F %T') ===" | tee -a "$LOG"
 
 echo "--- ① 构建矩阵 ---" | tee -a "$LOG"
 ARGS="--twice"
-command -v idf.py >/dev/null 2>&1 && ARGS="$ARGS --esp32" || echo "（没有 idf.py：跳过 ESP32，只做 H743）" | tee -a "$LOG"
+command -v idf.py >/dev/null 2>&1 && ARGS="$ARGS --esp32 --diag" || echo "（没有 idf.py：跳过 ESP32，只做 H743）" | tee -a "$LOG"
 if command -v idf.py >/dev/null 2>&1; then
     if [ -f ../esp32/sdkconfig.site ]; then ARGS="$ARGS --site"; else echo "（没有 esp32/sdkconfig.site：跳过 ESP32 现场档）" | tee -a "$LOG"; fi
 fi
 bash tools/build_matrix.sh $ARGS > build/nightly_matrix.txt 2>&1
 RC=$?
 cat build/nightly_matrix.txt >> "$LOG"
-grep -aE "^\[[A-Za-z0-9_-]+\] (exit=|告警数|没有告警基线)|可复现构建|ESP32：|build_matrix: (PASS|FAIL)" build/nightly_matrix.txt | tee -a "$LOG"
+grep -aE "^\[[A-Za-z0-9_-]+\] (exit=|告警数|没有告警基线)|可复现构建|交付档干净核对|干净核对 (PASS|FAIL)|ESP32：|build_matrix: (PASS|FAIL)" build/nightly_matrix.txt | tee -a "$LOG"
 [ "$RC" -ne 0 ] && FAIL=1
 
 echo "--- ② PC 单测 ---" | tee -a "$LOG"

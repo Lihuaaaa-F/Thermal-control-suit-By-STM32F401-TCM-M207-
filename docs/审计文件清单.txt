@@ -192,8 +192,10 @@ project_tcs/tools/site/rtt_live.py
 project_tcs/tools/site/site_common.py
 project_tcs/tools/site/site_web_check.py
 project_tcs/tools/site/tap.py
+project_tcs/tools/site/test_mb_fwcheck.py
 project_tcs/tools/site/test_ws_client.py
 project_tcs/tools/site/tune_refresh_check.py
+project_tcs/tools/site/verify_prod_clean.py
 project_tcs/tools/site/wvar.py
 project_tcs/tools/src_byte_check.py
 project_tcs/tools/tl8_read.py

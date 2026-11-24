@@ -7,7 +7,13 @@
 #        PROD  交付档（TCS_PROFILE=PROD）        BENCH  台架档（本地闭环 + 台架命令）
 #        SIM   仿真档（TCS_PROFILE=SIM）          SIMWG  板内仿真器（-DTCS_SIM=ON，WP-G）
 # 可选：  --esp32      再做 ESP32 默认档从零构建（先 source IDF 环境）
+#        --diag       再做 ESP32 诊断档（sdkconfig.defaults + CONFIG_TCS_DIAG=y；需同时加 --esp32）
 #        --site       再做 ESP32 现场档（sdkconfig.site：PROD + CONFIG_TCS_SIM=y；文件不入库，需自备）
+#        三个 ESP32 档各用一份自己的 sdkconfig.matrix.<档>（副本），工作树里的 sdkconfig / sdkconfig.site
+#        只读不写。2026-11-24 教训：条件编译的代码必须在让它生效的那一档上编译——link_task.h 缺
+#        esp_err.h 就是"默认档 0 告警、SIM/DIAG 档编译失败"。
+# 门禁②：交付档干净核对（tools/site/verify_prod_clean.py）——PROD 产物里不得有调试/台架钩子与命令，
+#        台架/仿真/诊断档里它们必须还在（证明核对工具查得出来）。任一不符 → 退出码 1。
 #        --twice      PROD 档再从零构建一次，比对两次 tcs_main.bin 的 md5（可复现构建；
 #                     __DATE__/__TIME__ 与绝对路径会让 md5 不同，所以同时给出"剔除后的可比 md5"见下）
 #        --keep       结束时不删 build-matrix/ 目录（默认保留，方便接着烧录；加 --clean 才删）
@@ -17,7 +23,7 @@
 #       （objcopy --remove-section=.comment --strip-debug），并固定 SOURCE_DATE_EPOCH。
 #       固件里的版本字符串用 __DATE__/__TIME__，跨天构建必然不同——所以只在同一天内可比；
 #       脚本两次构建是背靠背做的，天不换就应一致，不一致会如实报出来。
-# 用法：bash tools/build_matrix.sh [--esp32] [--site] [--twice] [--init-baseline] [--clean]
+# 用法：bash tools/build_matrix.sh [--esp32] [--diag] [--site] [--twice] [--init-baseline] [--clean]
 #       产物目录 project_tcs/build-matrix/<档>/（已被 .gitignore 的 build-*/ 覆盖），日志在同目录 build.log
 set -u
 cd "$(dirname "$0")/.." || exit 1
@@ -26,10 +32,11 @@ CHIP=STM32H743II
 TOOLCHAIN=arm-none-eabi-gcc.cmake
 OUT=build-matrix
 BASE=tools/build_matrix_baseline.txt
-DO_ESP32=0; DO_SITE=0; DO_TWICE=0; INIT_BASE=0; CLEAN=0
+DO_ESP32=0; DO_DIAG=0; DO_SITE=0; DO_TWICE=0; INIT_BASE=0; CLEAN=0
 for a in "$@"; do
     case "$a" in
         --esp32) DO_ESP32=1 ;;
+        --diag) DO_DIAG=1 ;;
         --site) DO_SITE=1 ;;
         --twice) DO_TWICE=1 ;;
         --init-baseline) INIT_BASE=1 ;;
@@ -98,6 +105,21 @@ h743 BENCH -DTCS_PROFILE=BENCH; check_base BENCH
 h743 SIM   -DTCS_PROFILE=SIM;   check_base SIM
 h743 SIMWG -DTCS_PROFILE=BENCH -DTCS_SIM=ON; check_base SIMWG
 
+# ---------- 交付档干净核对（S 线 C01，2026-11-24）----------
+CLEAN_NOTE="未做（需要 python 与 arm-none-eabi-nm）"
+if command -v python >/dev/null 2>&1 && command -v arm-none-eabi-nm >/dev/null 2>&1; then
+    export PYTHONUTF8=1
+    CLEAN_NOTE="PASS"
+    python tools/site/verify_prod_clean.py --elf "$OUT/PROD/tcs_main.elf" \
+        || { CLEAN_NOTE="FAIL（交付档产物里有钩子，见上方明细）"; FAIL=1; }
+    for p in BENCH SIM SIMWG; do
+        python tools/site/verify_prod_clean.py --elf "$OUT/$p/tcs_main.elf" --expect-hooks \
+            || { CLEAN_NOTE="FAIL（$p 档里钩子不全，见上方明细）"; FAIL=1; }
+    done
+    # tools/mb_console.py 的"板上固件身份核对"离线自测：同源镜像 0 处不符、异源镜像必有不符
+    python tools/site/test_mb_fwcheck.py "$OUT" || { CLEAN_NOTE="FAIL（固件身份核对自测不过）"; FAIL=1; }
+fi
+
 # ---------- 可复现：PROD 再从零构建一次 ----------
 REPRO_NOTE="未做（加 --twice）"
 if [ "$DO_TWICE" = 1 ]; then
@@ -111,38 +133,63 @@ if [ "$DO_TWICE" = 1 ]; then
 fi
 
 # ---------- ESP32 ----------
-ESP_NOTE="未做（加 --esp32 / --site）"
-if [ "$DO_ESP32" = 1 ] || [ "$DO_SITE" = 1 ]; then
+ESP_NOTE="未做（加 --esp32 / --diag / --site）"
+if [ "$DO_ESP32" = 1 ] || [ "$DO_DIAG" = 1 ] || [ "$DO_SITE" = 1 ]; then
     if ! command -v idf.py >/dev/null 2>&1; then
         echo "[esp32] FAIL：找不到 idf.py，先 source IDF 环境"; FAIL=1
     else
         (
             cd ../esp32 || exit 1
-            if [ "$DO_ESP32" = 1 ]; then
-                # 用独立的 sdkconfig.matrix（内容 = sdkconfig.defaults）。不动工作树自己的 sdkconfig：
-                # 2026-11-24 首次带 --esp32 运行时这里是 `rm -rf build-matrix sdkconfig`，会把别人
-                # menuconfig 改过的配置悄悄清掉（当时只在本脚本作者自己的工作树里跑过，没有伤到别人）。
-                rm -rf build-matrix sdkconfig.matrix sdkconfig.matrix.old
-                echo "=== [esp32-default] 从零构建（配置 = sdkconfig.defaults，落在 sdkconfig.matrix）"
-                idf.py -B build-matrix -D SDKCONFIG=sdkconfig.matrix set-target esp32s3 > build-matrix.settarget.log 2>&1 && \
-                    idf.py -B build-matrix -D SDKCONFIG=sdkconfig.matrix build > build-matrix.build.log 2>&1
+            APP=tcs_wireless.bin
+            # esp32 <档名> <现成的 sdkconfig（只读，脚本复制一份来用）>
+            # sdkconfig.matrix.<档> 与 build-matrix-<档> 都是本脚本的产物，先清掉再建。
+            esp32() {
+                local name="$1" cfg="$2" rc err warn
+                rm -rf "build-matrix-$name" "sdkconfig.matrix.$name" "sdkconfig.matrix.$name.old"
+                cp "$cfg" "sdkconfig.matrix.$name"
+                echo "=== [esp32-$name] 从零构建（配置取自 $cfg，原文件不动）"
+                idf.py -B "build-matrix-$name" -D SDKCONFIG="sdkconfig.matrix.$name" build > "build-matrix-$name.build.log" 2>&1
                 rc=$?
-                echo "[esp32-default] exit=$rc error=$(grep -acE ' error:|FAILED:' build-matrix.build.log) warning=$(grep -acE 'warning:' build-matrix.build.log)"
-                [ "$rc" -ne 0 ] && exit 1
+                err=$(grep -acE ' error:|FAILED:' "build-matrix-$name.build.log")
+                warn=$(grep -acE 'warning:' "build-matrix-$name.build.log")
+                echo "[esp32-$name] exit=$rc error=$err warning=$warn"
+                [ "$rc" -ne 0 ] && return 1
+                return 0
+            }
+            if [ "$DO_ESP32" = 1 ]; then
+                # 默认档 = sdkconfig.defaults 生成出来的完整配置。先用 set-target 生成到本脚本自己的
+                # sdkconfig.matrix.seed——这一步会重写它指定的那个 sdkconfig，所以绝不能指向工作树的
+                # sdkconfig（2026-11-24 首次运行时就是这样把它删掉重建的）。
+                rm -rf build-matrix-seed sdkconfig.matrix.seed sdkconfig.matrix.seed.old
+                idf.py -B build-matrix-seed -D SDKCONFIG=sdkconfig.matrix.seed set-target esp32s3 > build-matrix-seed.settarget.log 2>&1 || exit 1
+                esp32 default sdkconfig.matrix.seed || exit 1
+            fi
+            if [ "$DO_DIAG" = 1 ]; then
+                [ -f sdkconfig.matrix.seed ] || { echo "[esp32-diag] 需要 --esp32 先生成默认配置"; exit 1; }
+                { cat sdkconfig.matrix.seed; echo "CONFIG_TCS_DIAG=y"; } > sdkconfig.matrix.diagbase
+                esp32 diag sdkconfig.matrix.diagbase || exit 1
+                rm -f sdkconfig.matrix.diagbase
             fi
             if [ "$DO_SITE" = 1 ]; then
                 [ -f sdkconfig.site ] || { echo "[esp32-site] FAIL：esp32/sdkconfig.site 不存在"; exit 1; }
-                rm -rf build-matrix-site
-                echo "=== [esp32-site] 从零构建（sdkconfig.site）"
-                idf.py -B build-matrix-site -D SDKCONFIG=sdkconfig.site set-target esp32s3 > build-matrix-site.settarget.log 2>&1 && \
-                    idf.py -B build-matrix-site -D SDKCONFIG=sdkconfig.site build > build-matrix-site.build.log 2>&1
-                rc=$?
-                echo "[esp32-site] exit=$rc error=$(grep -acE ' error:|FAILED:' build-matrix-site.build.log) warning=$(grep -acE 'warning:' build-matrix-site.build.log)"
-                [ "$rc" -ne 0 ] && exit 1
+                esp32 site sdkconfig.site || exit 1
             fi
+            # 干净核对：默认档不得含台架命令；诊断档必须全含（证明查得出来）；
+            # 现场档（SIM）只含 linkmute / linkloop / webtest 这三条 SIM 也有的。
+            V=../project_tcs/tools/site/verify_prod_clean.py
+            export PYTHONUTF8=1
+            python "$V" --esp32 "build-matrix-default/$APP" || { echo "[esp32-default] 干净核对 FAIL"; exit 1; }
+            if [ -f "build-matrix-diag/$APP" ]; then
+                python "$V" --esp32 "build-matrix-diag/$APP" --esp32-expect-all || { echo "[esp32-diag] 台架命令不全"; exit 1; }
+            fi
+            if [ -f "build-matrix-site/$APP" ]; then
+                python "$V" --esp32 "build-matrix-site/$APP" --esp32-expect linkmute --esp32-expect linkloop \
+                    --esp32-expect webtest || { echo "[esp32-site] 命令集与现场档不符"; exit 1; }
+            fi
+            echo "[esp32] 干净核对 PASS（默认档无台架命令；诊断档 / 现场档命令集相符）"
             exit 0
         ) || FAIL=1
-        ESP_NOTE="见上（日志在 esp32/build-matrix*.log）"
+        ESP_NOTE="见上（日志在 esp32/build-matrix-*.log）"
     fi
 fi
 
@@ -154,11 +201,12 @@ fi
 
 if [ "$CLEAN" = 1 ]; then
     rm -rf "$OUT"
-    rm -f ../esp32/build-matrix*.log
+    rm -f ../esp32/build-matrix*.log ../esp32/sdkconfig.matrix.*
 fi
 
 echo "================ build_matrix 汇总 ================"
 echo "可复现构建：$REPRO_NOTE"
+echo "交付档干净核对：$CLEAN_NOTE"
 echo "ESP32：$ESP_NOTE"
 if [ "$FAIL" -ne 0 ]; then
     echo "build_matrix: FAIL"

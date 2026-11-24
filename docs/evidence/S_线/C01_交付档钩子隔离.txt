@@ -1,0 +1,142 @@
+S 线 C01 — 交付档（PROD）剔除调试/测试钩子 — 证据
+生成：2026-11-24。下面各节是核对命令的原样输出，不是手抄的数字（复现命令见文末）。
+只有第一节用的是隔离前的产物（集成分支 4ab2bda 的 PROD），其余全部取自本提交的树。
+规则：往 RAM 写一个数就能改变行为的（注入触摸 / 冻结渲染 / 耗尽内存 / 丢帧 / 走查命令 / 诊断页 /
+      波形采集 / RX 环）只进台架与仿真档（TCS_PROFILE >= 1）；只读遥测三档都留。
+
+一、符号与命令：隔离前
+$ verify_prod_clean.py --elf <集成分支 4ab2bda 的 PROD ELF>
+[prod-clean] FAIL（交付（PROD）档产物不得含调试/台架钩子）
+  [走查命令 g_ui_cmd（M03-F-12）] 符号 g_ui_cmd：在
+  [诊断页 tui_diag（M03-F-12）] 符号 tui_diag_build：在
+  [诊断页 tui_diag（M03-F-12）] 符号 g_diag_stat：在
+  [走查钩子函数] 符号 tui_step_param：在
+  [走查钩子函数] 符号 tui_sel_next：在
+  [走查钩子函数] 符号 tui_slider_center：在
+  [G4 测试钩子变量] 符号 g_lvgl_freeze：在
+  [G4 测试钩子变量] 符号 g_lvgl_drain：在
+  [G4 测试钩子变量] 符号 g_tap_inject：在
+  [G4 测试钩子变量] 符号 g_tap_drop：在
+  [G4 测试钩子变量] 符号 g_estop_calls：在
+  [G4 测试钩子变量] 符号 g_estop_dbg：在
+  [接收字节环（rxraw 用）] 符号 g_dbg_rx_ring：在
+  [接收字节环（rxraw 用）] 符号 g_dbg_rx_pos：在
+exit=1
+
+二、符号与命令：隔离后（交付档必须通过；三个台架/仿真档必须"钩子齐全"）
+$ verify_prod_clean.py --elf build-matrix/PROD/tcs_main.elf
+[prod-clean] PASS（交付（PROD）档产物不得含调试/台架钩子）
+exit=0
+$ verify_prod_clean.py --elf build-matrix/BENCH/tcs_main.elf --expect-hooks
+[prod-clean] PASS（台架档产物必须含钩子）
+exit=0
+$ verify_prod_clean.py --elf build-matrix/SIM/tcs_main.elf --expect-hooks
+[prod-clean] PASS（台架档产物必须含钩子）
+exit=0
+$ verify_prod_clean.py --elf build-matrix/SIMWG/tcs_main.elf --expect-hooks
+[prod-clean] PASS（台架档产物必须含钩子）
+exit=0
+
+三、判别性：把交付档当成台架档去核对，必须报红（证明"通过"不是因为查不出来）
+$ verify_prod_clean.py --elf build-matrix/PROD/tcs_main.elf --expect-hooks
+[prod-clean] FAIL（台架档产物必须含钩子）
+  [走查命令 g_ui_cmd（M03-F-12）] 符号 g_ui_cmd：不在
+  [诊断页 tui_diag（M03-F-12）] 符号 tui_diag_build：不在
+  [诊断页 tui_diag（M03-F-12）] 符号 g_diag_stat：不在
+  [走查钩子函数] 符号 tui_step_param：不在
+  [走查钩子函数] 符号 tui_sel_next：不在
+…（共 29 行输出）
+
+四、ESP32：三档命令集（默认配置 = 交付档；诊断档 CONFIG_TCS_DIAG=y；现场档 CONFIG_TCS_SIM=y）
+$ --esp32 build-matrix-default/tcs_wireless.bin
+[prod-clean] PASS（交付（PROD）档产物不得含调试/台架钩子；ESP32 命令集=无台架命令）
+exit=0
+$ --esp32 build-matrix-diag/tcs_wireless.bin --esp32-expect-all
+[prod-clean] PASS（交付（PROD）档产物不得含调试/台架钩子；ESP32 命令集=全部台架命令）
+exit=0
+$ --esp32 build-matrix-site/tcs_wireless.bin --esp32-expect linkmute --esp32-expect linkloop --esp32-expect webtest
+[prod-clean] PASS（交付（PROD）档产物不得含调试/台架钩子；ESP32 命令集含 linkloop,linkmute,webtest）
+exit=0
+$ 判别性：把诊断档当成默认档核对，必须报红
+[prod-clean] FAIL（交付（PROD）档产物不得含调试/台架钩子；ESP32 命令集=无台架命令）
+  [ESP32 linkmute（链路静默；SIM 或 DIAG 档）]：在
+  [ESP32 linkloop（TX→RX 回环；SIM 或 DIAG 档）]：在
+  [ESP32 webtest（网页端点自检；SIM 或 DIAG 档）]：在
+exit=1
+
+五、体积（arm-none-eabi-size；同一棵集成树，隔离前 = 4ab2bda，隔离后 = 本提交）
+隔离前 PROD : text 448632  data 3932  bss 295448
+隔离后 PROD : text 442412  data 3920  bss 294848
+隔离后 BENCH: text 458428  data 3920  bss 298344
+分段 隔离前 PROD : .text=332504 .rodata=115456 .bss=80252 
+分段 隔离后 PROD : .text=328656 .rodata=113072 .bss=79652 
+
+六、链接器段权限（.init_array / .fini_array 标 READONLY 前 / 后；.bin 的 md5 相同 = 镜像内容没变）
+改前：ld 警告 1 条（tcs_main.elf has a LOAD segment with RWX permissions）；第一个 LOAD 段标志 RWE；.bin md5 de40457c10dc
+改后：
+  ld 警告数 = 0（0 = 没有）
+  LOAD 段标志：
+    0x08000000 R E
+    0x20000000 RW 0x1000
+    0x20014674 RW 0x1000
+    0x20014690 RW 0x1000
+    0x24000000 RW 0x1000
+  .bin md5 = de40457c10dc
+
+七、构建矩阵（tools/build_matrix.sh --twice --esp32 --diag --site 的汇总行）
+[PROD] exit=0 error=0 warning=4 FLASH: 446372 2; DTCMRAM: 92816 128; AXIRAM: 205952 320
+[BENCH] exit=0 error=0 warning=4 FLASH: 462388 2; DTCMRAM: 96312 128; AXIRAM: 205952 320
+[SIM] exit=0 error=0 warning=4 FLASH: 462388 2; DTCMRAM: 96312 128; AXIRAM: 205952 320
+[SIMWG] exit=0 error=0 warning=4 FLASH: 501524 2; DTCMRAM: 96360 128; AXIRAM: 205952 320
+[prod-clean] PASS（交付（PROD）档产物不得含调试/台架钩子）
+[prod-clean] PASS（台架档产物必须含钩子）
+[prod-clean] PASS（台架档产物必须含钩子）
+[prod-clean] PASS（台架档产物必须含钩子）
+[esp32-default] exit=0 error=0 warning=0
+[esp32-diag] exit=0 error=0 warning=0
+[esp32-site] exit=0 error=0 warning=0
+[prod-clean] PASS（交付（PROD）档产物不得含调试/台架钩子；ESP32 命令集=无台架命令）
+[prod-clean] PASS（交付（PROD）档产物不得含调试/台架钩子；ESP32 命令集=全部台架命令）
+[prod-clean] PASS（交付（PROD）档产物不得含调试/台架钩子；ESP32 命令集含 linkloop,linkmute,webtest）
+可复现构建：剔除 .comment 与调试信息后 md5 de40457c10dc43cb6353123881cd1a43 / de40457c10dc43cb6353123881cd1a43 → 相同；原始 bin md5 相同
+交付档干净核对：PASS
+build_matrix: PASS
+告警基线（tools/build_matrix_baseline.txt）：PROD 4 BENCH 4 SIM 4 SIMWG 4 
+余下 4 条告警的出处（四档相同）：
+        1 qrcodegen.c:211 comparison is always true due to limited range of data type [-Wtype-limits]
+        1 qrcodegen.c:299 comparison is always true due to limited range of data type [-Wtype-limits]
+        2 qrcodegen.h:359 "/*" within comment [-Wcomment]
+
+八、tools/mb_console.py 的板上固件身份核对（离线自测）
+PROD ELF vs PROD 镜像      采样点 3，不相等 0
+PROD ELF vs BENCH 镜像     采样点 3，不相等 3
+BENCH ELF vs PROD 镜像     采样点 3，不相等 3
+BENCH ELF vs BENCH 镜像    采样点 3，不相等 0
+自测：PASS（同源 0 处不符；异源至少 1 处不符）
+nm_addr 缺钩子时的提示正确（提到烧台架档）
+exit=0
+
+九、主机单测
+run_all: ALL GREEN；通过项 24 个
+
+九之二、CMake 的 TCS_LVGL_SCENE 开关（三种错误用法必须被拒绝；正常用法能从零构建且 demos 进镜像）
+[scene-foo] 按预期被拒绝（exit=1）：  TCS_LVGL_SCENE 只能是空、BENCH 或 HELLO（收到 'FOO'）
+[scene-prod] 按预期被拒绝（exit=1）：  LVGL 调试场景不能配交付档：加 -DTCS_PROFILE=BENCH 或 SIM
+[scene-flags] 按预期被拒绝（exit=1）：  LVGL 场景变体请用 -DTCS_LVGL_SCENE=BENCH 或 HELLO 指定（写进
+[scene-bench] BENCH + LVGL_SCENE=BENCH 从零构建 exit=0 error=0 warning=5
+  lv_demo_benchmark 符号：2（>0 = demos 进了镜像）
+[prod-clean] FAIL（交付（PROD）档产物不得含调试/台架钩子）
+  [G4 测试钩子变量] 符号 g_lvgl_freeze：在
+  [G4 测试钩子变量] 符号 g_lvgl_drain：在
+（最后一行起的 FAIL 是把台架场景构建当成品核对时的预期结果：它本来就带钩子）
+
+十、没有做 / 待设备空闲再补（如实）
+  1. 真机上"固件身份核对"的正反两个方向（板上是 A、ELF 是 B → 拒写；一致 → 放行）还没有在设备上演示，只有离线自测。
+  2. 隔离后的交付固件还没有上过设备（C03 冒烟待设备空闲）；急停入口矩阵等真机证据是在隔离前的
+     "带钩子的交付档"上取的，需要在台架档上重做一遍才算隔离后的证据。
+  3. M08-F-11（gedge 忙等）的关单条件是"`gedge 5000` 不再触发 TWDT"——需要真机；现在只做到编译通过与代码走查。
+  4. ESP32 的 linkmute（合并后的一条命令）与 linkloop 没有上过设备。
+
+复现命令（仓库根，先 source ESP-IDF）：
+  cd project_tcs && bash tools/build_matrix.sh --twice --esp32 --diag --site
+  bash tests/run_all.sh

@@ -23,19 +23,27 @@
 | PC 单测 | `bash tests/run_all.sh`（含 font_audit 字库门禁，必须全绿才能提交） |
 | 字库重生成 | 改 UI/注册表文案后：`python tools/gen_font_ui.py && python tools/font_audit_lvgl.py`（`run_all.sh` 已含字库门禁）|
 | 活性体检 | `bash tools/wp_check.sh`（reset→loop_passes 增长判定） |
-| 构建矩阵 | `bash tools/build_matrix.sh [--esp32] [--site] [--twice]`（H743 PROD/BENCH/SIM/SIMWG 从零构建 + 告警基线核对；`--twice` 比对可复现 md5；约 3 分钟）|
-| 夜间回归 | `bash tools/nightly.sh`（先 source IDF：构建矩阵含 ESP32 两档与可复现比对 + PC 单测；约 5 分钟）|
+| 构建矩阵 | `bash tools/build_matrix.sh [--esp32] [--diag] [--site] [--twice]`（H743 PROD/BENCH/SIM/SIMWG 从零构建 + 告警基线核对 + **交付档干净核对**；`--esp32 --diag --site` 再做 ESP32 三档；`--twice` 比对可复现 md5；约 6 分钟）|
+| 夜间回归 | `bash tools/nightly.sh`（先 source IDF：构建矩阵全部档位与核对 + PC 单测；约 6 分钟）|
 | 答辩彩排 | `python tools/rehearsal.py <遍数>`（附录 A 20 项自动评分，板上 sim 固件）|
 | 台架一键 | `bash tools/bench.sh [--device]`（PROD 增量构建→单测；`--device` 才烧录→回读校验→活性→体检）|
 | 烧录脚本 | `bash tools/flash_lvgl.sh [ELF] [--check-only]`（probe-rs 下载→多点回读校验→复位→核对版本串与主循环计数）|
+| 台架档构建 | `bash tools/build_bench.sh`（构建 BENCH 到 `build-bench/` 并核对钩子齐全——现场探针工具要烧这一档）|
 | 现场工具 | `python project_tcs/tools/site/<脚本>.py`（串口桥、点击注入、急停入口矩阵、调参页重建检查、网页服务端检查等，见该目录 README）|
 | ESP32 | `source ~/.claude/skills/embedded-dev-loop/platforms/esp32/scripts/activate_idf.sh && cd esp32 && bash .../esp_loop.sh all` |
 
-> **构建档位（2026-11-15 起）**：H743 用 `-DTCS_PROFILE=PROD|BENCH|SIM`（默认 **PROD**）。
-> 交付/日常 = PROD：不含 `pindrv/pinrel/pinscan/wdttest/wave/txwave/rxraw`、`mode/tec/fan`、`m207 send`；
-> 台架/诊断 = BENCH（`cmake ... -DTCS_PROFILE=BENCH`）。ESP32 的 `m207 raw` 需 `CONFIG_TCS_DIAG=y`，
-> 注入 `body` 需 `CONFIG_TCS_SIM=y`，演示模式需 `CONFIG_TCS_DEMO=y`（三者默认 n，menuconfig 里开）。
+> **构建档位（2026-11-15 起；2026-11-24 补齐钩子隔离）**：H743 用 `-DTCS_PROFILE=PROD|BENCH|SIM`（默认 **PROD**）。
+> 交付/日常 = PROD：不含 `pindrv/pinrel/pinscan/wdttest/wave/txwave/rxraw`、`mode/tec/fan`、`m207 send`，
+> **也不含调试/测试钩子**（`g_ui_cmd` 走查命令、`tui_diag` 诊断页、`g_tap_inject`/`g_tap_drop` 合成触摸与丢帧、
+> `g_lvgl_freeze`/`g_lvgl_drain`、`g_estop_calls`/`g_estop_dbg`、屏链波形采集、`g_dbg_rx_ring`）和 LVGL demos。
+> 台架/诊断 = BENCH（`cmake ... -DTCS_PROFILE=BENCH`，或直接 `bash tools/build_bench.sh`）。
+> 只读遥测（`g_lvgl_guard`、`g_tl8`、`g_budget`、`g_dbg_snap_gap_*`）三档都留。
+> **交付档里没有什么是靠产物核对证明的**：`python project_tcs/tools/site/verify_prod_clean.py --elf build/tcs_main.elf`，
+> 构建矩阵每次都跑。ESP32 同理：`m207 raw`、`mode/tec/fan`、`linkrepin`、`gedge`、`ltx` 需 `CONFIG_TCS_DIAG=y`；
+> `linkmute`/`linkloop`/`webtest` 需 `CONFIG_TCS_DIAG` 或 `CONFIG_TCS_SIM`；注入 `body` 需 `CONFIG_TCS_SIM=y`；
+> 演示模式需 `CONFIG_TCS_DEMO=y`（三者默认 n，menuconfig 里开）。
 > **照本文档的台架命令操作前先确认档位，否则会得到 `unknown command`。**
+> 条件编译的代码必须在让它生效的那一档上编译验证（2026-11-24 教训：默认档 0 告警、SIM/DIAG 档编译失败）。
 
 ## 硬性纪律
 

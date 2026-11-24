@@ -104,12 +104,25 @@ def main():
     if args.update_manifest:
         # W5 红队发现 1：覆写前保留既有 '#' SOP 注释行（读写两端对称，防刷新自毁）
         keep = []
+        # U 线 2026-11-24：清单里"枚举树之外"的条目（protocol/、tools/ …）磁盘上还在就必须保留——
+        # 原来直接用枚举结果覆写，刷新一次就把它们删掉，下一次五桶清点判"未归类"假红。
+        extra = []
         if os.path.isfile(manifest_path):
             with open(manifest_path, encoding='utf-8') as f:
-                keep = [l.rstrip('\r\n') for l in f if l.strip().startswith('#')]
+                for l in f:
+                    s = l.rstrip('\r\n')
+                    if not s.strip():
+                        continue
+                    if s.strip().startswith('#'):
+                        keep.append(s)
+                    else:
+                        p = s.strip().replace(chr(92), '/')
+                        if p not in files and os.path.isfile(p):
+                            extra.append(p)
         with open(manifest_path, 'w', encoding='utf-8', newline='\n') as f:
-            f.write('\n'.join(keep + files) + '\n')
-        print('manifest updated: %d files (%d SOP lines kept)' % (len(files), len(keep)))
+            f.write('\n'.join(keep + files + extra) + '\n')
+        print('manifest updated: %d files (%d SOP lines kept, %d outside enumerated roots kept)'
+              % (len(files), len(keep), len(extra)))
 
     covered = set()
     if os.path.isfile(manifest_path):
@@ -119,7 +132,8 @@ def main():
                        if l.strip() and not l.strip().startswith('#')}
 
     missing = [f for f in files if f not in covered]
-    stale = [f for f in covered if f not in files]
+    # "过期"只指磁盘上已经不存在的；枚举树之外但还在的条目（protocol/ 等）不算过期
+    stale = [f for f in covered if f not in files and not os.path.isfile(f)]
 
     lines.append('## 文件覆盖（完整性机器证明）')
     lines.append('- 枚举文件数: %d' % len(files))
@@ -169,6 +183,9 @@ def main():
     for dirpath, dirnames, filenames in os.walk('.'):
         dirnames[:] = [d for d in dirnames if not skip_re.search('/' + d + '/')]
         for fn in filenames:
+            # git 工作树里 .git 是一个文件而不是目录：上面的目录过滤拦不住它，别判成"未归类"
+            if fn == '.git':
+                continue
             f = os.path.join(dirpath, fn).replace(chr(92), '/')
             if f.startswith('./'):
                 f = f[2:]

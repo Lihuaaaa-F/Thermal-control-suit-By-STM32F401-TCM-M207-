@@ -1,0 +1,5 @@
+# 网页静态资源按原字节入库、检出不做换行转换：固件内嵌的 .gz 是对源文件逐字节压缩的，
+# 检出时一旦被 autocrlf 转成 CRLF，web_gz 门禁就报"与源文件不一致"，固件里的页面也和仓库里的不是同一份。
+esp32/components/tcs_web/web_files/** -text
+*.gz binary
+*.png binary

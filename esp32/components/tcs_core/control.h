@@ -59,6 +59,9 @@ void  control_init(const control_ops_t *ops);
  * 频率由 control.c 限在 500ms。*/
 void  control_poll(uint32_t now_ms);
 ctrl_state_t control_state(void);
+/* 微秒计时 → 毫秒时间戳（control_poll 的 now_ms 由它来）。必须走 64 位除：
+ * 先截成 int32 再除，开机 35 分 47 秒后时间戳会倒跳 71 分钟。*/
+uint32_t control_ms_from_us(int64_t us);
 
 /* 手动直控（UI/网页/CLI 同一入口；SAFE/急停期 TEC 拒绝、风扇拒绝关）*/
 void  control_manual_tec(uint8_t ch, uint8_t on);
@@ -73,8 +76,10 @@ uint8_t tcs_alarm_active(uint16_t bit);
  * 仅当报警源已恢复（传感器 ok、M207 online、tc1_act≤硬阈值、非急停自持）才清位。 */
 void  tcs_alarm_ack(void);
 
-/* 急停（屏弹窗确认 / 0x15 cmd=8 / KEY0 / console estop 同一入口）：
- * 双通道 TCSW=0 + 风扇开 + mode=手动 + ALM_ESTOP + 广播 */
+/* 急停（屏弹窗确认 / 网页 / 0x15 cmd=8 / console estop 同一入口；ESP32 侧没有物理急停键）：
+ * 双通道 TCSW=0 + 风扇开 + mode=手动 + ALM_ESTOP + 广播。
+ * _src 版本记下是谁按的（PARAM_SRC_*，进事件日志）；无参版本按"控制台"记。*/
+void  tcs_emergency_stop_src(uint8_t src);
 void  tcs_emergency_stop(void);
 
 /* ====== 安全锁存读侧（R1 修复；console/网页/诊断用）====== */
@@ -84,9 +89,18 @@ void    control_safety_trip(uint8_t bit);
 
 /* 统一命令执行端（网页 WS 与屏幕 0x15 共用一份语义，避免两处 switch 漂移）。
  * 覆盖 cmd 1..9（TEC1/2 开/关、风扇切换、自动/手动、急停、确认）；
- * 返回 0=执行成功，-1=未知命令，-2=被安全态拒绝（SAFE 下的手动执行器命令）。
- * 10（保存到模块）依赖 tcs_m207，由调用方处理。*/
+ * 返回 0=执行成功，-1=未知命令，-2=被拒绝（SAFE 下的手动执行器命令，或急停/超温锁存期间
+ * 切自动）。
+ * 10（保存到模块）依赖 tcs_m207，由调用方处理；11（屏侧观测到超温的停机请求）只给屏链路用，
+ * 网页不得下发（websocket.c 只放行 1..10）。
+ * _src 版本由调用方说明命令来自哪里（PARAM_SRC_*），改模式与急停时原样带进参数表；
+ * 无参版本按"控制台"（台架自测、单测）。*/
+int control_apply_cmd_src(uint8_t cmd, uint8_t src);
 int control_apply_cmd(uint8_t cmd);
+
+/* 参数写入前的安全校验：接到 param_hooks_t.on_check。返回 0 放行，-2 拒绝。
+ * 现有规则：急停/超温锁存期间不得切到自动模式（急停复位后不得自动重启）。*/
+int  control_param_check(uint16_t id, float v);
 
 #ifdef TCS_UNIT_TEST
 /* 测试专用：不经过 poll 直接置锁存，用于验证"锁存门控"独立于状态机（R1 复核 R-14）。

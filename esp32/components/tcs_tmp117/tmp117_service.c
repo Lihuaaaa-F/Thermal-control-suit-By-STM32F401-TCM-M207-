@@ -144,9 +144,10 @@ static void tmp117_task(void *arg)
             /* 掉线沿：真值已由上句统一写，这里只补一条日志 */
             ESP_LOGW(TAG, "LOST (data flow stopped; alarm raised by control)");
         } else if (!ok_before && s_health.ok) {
-            /* 恢复沿（报警位保持，需人工 ack）*/
+            /* 恢复沿：数据流回来了。通信类故障的锁存由 control 在源连续健康 2s 后自动清
+             * （U 线），不需要人工确认；急停/超温才需要。*/
             s_recover_edges++;
-            ESP_LOGW(TAG, "RECOVERED (data flow; alarm stays until ack)");
+            ESP_LOGW(TAG, "RECOVERED (data flow back; control auto-recovers after 2s healthy)");
         }
         int32_t dt = (int32_t)esp_timer_get_time() - t0;
         if (dt > 0 && (uint32_t)dt > s_tick_max_us) s_tick_max_us = (uint32_t)dt;

@@ -1,9 +1,11 @@
 /**
  * control_service.h — control FSM 服务任务（R1e；任务书 v11.3 第十一章）
  *
- * 核 1，500ms 节拍 control_poll（R1e perf 预算 ≤0.1ms）；同任务 100ms 步进 H6
- * 布防三态机（H743 post_poll 同语义；post_pass:=双源健康——ESP32 无全量 POST 电池，
- * 偏差已记录 R1.md）；esp_task_wdt 3s 订阅+喂狗（间隙 500ms <1s，F3/F12）。
+ * 核 1，100ms 节拍（U 线 E1，原 500ms）：每拍 control_poll + 一次布防步进，每 5 拍参数落盘
+ * 冲洗（R1e perf 预算 ≤0.1ms）。自动模式的状态机迁移间隔与锁存期重申间隔由 control.c
+ * 自己限制，不随本节拍变密。同任务步进 H6 布防三态机（H743 post_poll 同语义；
+ * post_pass:=双源健康——ESP32 无全量 POST 电池，偏差已记录 R1.md）；
+ * esp_task_wdt 3s 订阅+喂狗（间隙 100ms <1s，F3/F12）。
  */
 #ifndef TCS_CONTROL_SERVICE_H
 #define TCS_CONTROL_SERVICE_H

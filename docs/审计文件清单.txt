@@ -32,6 +32,8 @@ esp32/components/tcs_web/http_server.c
 esp32/components/tcs_web/include/http_server.h
 esp32/components/tcs_web/include/web_status.h
 esp32/components/tcs_web/include/websocket.h
+esp32/components/tcs_web/web_selftest.c
+esp32/components/tcs_web/web_selftest_ws.c
 esp32/components/tcs_web/web_status.c
 esp32/components/tcs_web/websocket.c
 esp32/components/tcs_wifi/include/softap.h
@@ -44,6 +46,7 @@ esp32/main/tcs_console.h
 esp32/main/tcs_snap.c
 esp32/main/tcs_snap.h
 esp32/tests/mutation_control.py
+esp32/tests/mutation_web.py
 esp32/tests/test_control_esp32.c
 esp32/tests/test_m207_golden.c
 esp32/tests/test_m207_proto.c
@@ -183,6 +186,7 @@ project_tcs/tools/vision_audit.py
 project_tcs/tools/vl2_token_audit.py
 project_tcs/tools/vl4_aa_check.py
 project_tcs/tools/web_gz_check.py
+esp32/tools/chart_test.js
 protocol/proto_layout.h
 protocol/tcs_proto.h
 tools/proto_sync.py

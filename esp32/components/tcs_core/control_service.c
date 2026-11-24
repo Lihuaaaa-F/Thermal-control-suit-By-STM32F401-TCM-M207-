@@ -34,11 +34,18 @@ static post_arm_ctx_t s_arm_ctx;    /* H6 布防三态机上下文 */
  * 之后还要再等一整拍才退出 SAFE。*/
 #define CTRL_TICK_MS        100u
 #define CTRL_PERSIST_DIV    5u      /* 落盘冲洗：每 5 拍 = 500ms */
+/* 布防步进的最小间隔（半拍）：正常拍间隔有 ±1 个系统 tick 的抖动，按整拍闸会误吞正常的拍 */
+#define CTRL_ARM_STEP_MIN_MS 50u
 
 /* post 步进（H743 post_poll 272-288 行同语义；无 UI 角标——屏角标 R2 起）*/
 static void post_step(uint32_t now)
 {
-    (void)now;
+    /* 最小间隔闸：任务被拖慢后 vTaskDelayUntil 会连着补跑错过的拍，不闸的话
+     * "10 个健康样本 = 1s"会被压缩（m207_service 对同类问题也是这么处理的）。*/
+    static uint32_t s_last_ms;
+    if (now - s_last_ms < CTRL_ARM_STEP_MIN_MS) return;
+    s_last_ms = now;
+
     /* 健康/已确认都要把"探头开路"算进去：M207 在线但温度不可用不算健康 */
     uint8_t healthy = (g_tcs.body_sensor_ok && g_tcs.m207_online
                        && !g_tcs.m207_sensor_open) ? 1u : 0u;
@@ -66,15 +73,15 @@ static void control_task(void *arg)
     esp_task_wdt_add(NULL);         /* 订阅 TWDT（3s；F3/F12）*/
     for (;;) {
         vTaskDelayUntil(&last_wake, pdMS_TO_TICKS(CTRL_TICK_MS));
-        int32_t t0 = (int32_t)esp_timer_get_time();
-        uint32_t now_ms = (uint32_t)(t0 / 1000);
+        int64_t t0_us = esp_timer_get_time();
+        uint32_t now_ms = control_ms_from_us(t0_us);
         control_poll(now_ms);
         post_step(now_ms);
         if (++div >= CTRL_PERSIST_DIV) {
             div = 0;
             param_persist_flush(now_ms);   /* H743 同款 2s 防抖落盘 */
         }
-        int32_t dt = (int32_t)esp_timer_get_time() - t0;
+        int32_t dt = (int32_t)(esp_timer_get_time() - t0_us);
         if (dt > 0 && (uint32_t)dt > s_poll_max_us) s_poll_max_us = (uint32_t)dt;
         s_polls++;
         if (!s_hang_test) esp_task_wdt_reset();   /* 100ms 间隙 <1s 铁律；E-20 停喂 */

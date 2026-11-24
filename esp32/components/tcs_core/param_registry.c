@@ -265,6 +265,9 @@ int param_set(uint16_t id, float v, uint8_t src)
     /* 跨参数约束：body_cold < body_hot（写任一侧校验另一侧，违反拒写）*/
     if (p->id == PARAM_ID_BODY_HOT && c <= param_get(PARAM_ID_BODY_COLD)) return -2;
     if (p->id == PARAM_ID_BODY_COLD && c >= param_get(PARAM_ID_BODY_HOT)) return -2;
+    /* 板级写前校验（如：急停/超温锁存期间不得切自动）。所有写路径都经过这里——
+     * 网页、屏幕、控制台、链路镜像，谁都不能绕过。*/
+    if (s_hooks.on_check && s_hooks.on_check(p->id, c) != 0) return -2;
 
     p->value = c;
     side_effects(p);

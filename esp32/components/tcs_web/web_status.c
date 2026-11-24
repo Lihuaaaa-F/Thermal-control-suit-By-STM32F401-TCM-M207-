@@ -6,6 +6,7 @@
 #include "control.h"       /* SAFETY_BIT_*、CTRL_SAFE（HAL 无关的枚举/宏）*/
 #include <string.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <stdarg.h>
 #include <math.h>
 
@@ -64,15 +65,16 @@ int web_status_fill_json(const web_status_t *s, cJSON *root)
 int web_status_changed(const web_status_t *a, const web_status_t *b)
 {
     if (!a || !b) return 1;
-    return (a->tc1_act != b->tc1_act || a->tc2_act != b->tc2_act || a->body != b->body ||
-            a->age_ms != b->age_ms ||
+    /* 水温/体温按发出去的两位小数比：原始 float 的末位抖动不算变化。
+     * age_ms 与 up_s 不参与：它们本来就在走，算进去等于每拍都"变了"。*/
+    return (r2(a->tc1_act) != r2(b->tc1_act) || r2(a->tc2_act) != r2(b->tc2_act) ||
+            r2(a->body) != r2(b->body) ||
             a->tc1_set != b->tc1_set || a->tc2_set != b->tc2_set ||
             a->tec1 != b->tec1 || a->tec2 != b->tec2 || a->fan != b->fan ||
             a->mode != b->mode || a->state != b->state ||
             a->alarm != b->alarm || a->latch != b->latch || a->armed != b->armed ||
             a->m207 != b->m207 || a->body_ok != b->body_ok ||
-            a->sens_open != b->sens_open || a->screen != b->screen ||
-            a->up_s != b->up_s);
+            a->sens_open != b->sens_open || a->screen != b->screen);
 }
 
 /* ============ 事件日志 ============ */
@@ -156,6 +158,14 @@ int web_log_get(uint32_t abs_idx, web_log_t *out)
     return rv;
 }
 
+int web_log_last(web_log_t *out)
+{
+    WEB_LOCK();
+    uint32_t total = s_total;
+    WEB_UNLOCK();
+    return total ? web_log_get(total - 1u, out) : -1;
+}
+
 /* ---- 差分 → 事件 ---- */
 
 /* 0→1 记一条 lvl 级事件，1→0 记一条 info 级"恢复"事件。返回新增条数。*/
@@ -234,21 +244,126 @@ size_t web_log_json(uint32_t from, uint32_t to, char *buf, size_t cap)
             !cJSON_AddItemToObject(root, "list", arr)) break;
         for (uint32_t k = from; k < to; k++) {
             web_log_t e;
-            if (web_log_get(k, &e) != 0) break;     /* 极小概率：构建期间被新事件挤出环 */
+            /* 极小概率：构建期间被新事件挤出环。区间不完整就不能当成功发出去——
+             * 调用方据此不推进游标，下一拍重来（独立复核 P2-4）。*/
+            if (web_log_get(k, &e) != 0) break;
             cJSON *it = cJSON_CreateObject();
-            if (!it) { out = 0; break; }
-            cJSON_AddNumberToObject(it, "ts", e.ts_ms);
-            cJSON_AddStringToObject(it, "lvl", lvl_name(e.lvl));
-            cJSON_AddStringToObject(it, "ev", e.ev);
-            cJSON_AddStringToObject(it, "msg", e.msg);
-            cJSON_AddItemToArray(arr, it);
+            /* 任何一步分配失败都整体作废：缺了字段的半条、少了几条的半包都不能发 */
+            if (!it || !cJSON_AddNumberToObject(it, "ts", e.ts_ms) ||
+                !cJSON_AddStringToObject(it, "lvl", lvl_name(e.lvl)) ||
+                !cJSON_AddStringToObject(it, "ev", e.ev) ||
+                !cJSON_AddStringToObject(it, "msg", e.msg) ||
+                !cJSON_AddItemToArray(arr, it)) {
+                cJSON_Delete(it);
+                break;
+            }
         }
+        if (cJSON_GetArraySize(arr) != (int)(to - from)) break;   /* 上面任何一处 break 都走到这 */
         char *j = cJSON_PrintBuffered(root, 64u + (size_t)(to - from) * WEB_LOG_ENTRY_MAX, 0);
         if (!j) break;
         size_t len = strlen(j);
-        if (len < cap) { memcpy(buf, j, len); out = len; }
+        if (len < cap) { memcpy(buf, j, len + 1); out = len; }   /* 连结尾 NUL 一起拷 */
         cJSON_free(j);
     } while (0);
+    cJSON_Delete(root);
+    return out;
+}
+
+/* ---- 屏链路统计 + 热点凭据 → JSON ---- */
+
+const char *const web_link_keys[WEB_LINK_N] = {
+    "rx_bytes", "rx_frames", "crc_err", "len_err", "gap_resets", "dup",
+    "retry", "txq_drop", "uart_txdrop", "echo_drop", "pending_evict", "proto_mismatch",
+};
+
+size_t web_link_json(const uint32_t cnt[WEB_LINK_N], const char *ssid, const char *pass,
+                     const char *url, char *buf, size_t cap)
+{
+    if (!buf || cap == 0 || !cnt || !ssid || !pass || !url) return 0;
+    cJSON *root = cJSON_CreateObject();
+    if (!root) return 0;
+    size_t out = 0;
+    do {
+        if (!cJSON_AddStringToObject(root, "t", "link")) break;
+        size_t k;
+        for (k = 0; k < WEB_LINK_N; k++)
+            if (!cJSON_AddNumberToObject(root, web_link_keys[k], (double)cnt[k])) break;
+        if (k != WEB_LINK_N) break;
+        if (!cJSON_AddStringToObject(root, "ssid", ssid) ||
+            !cJSON_AddStringToObject(root, "pass", pass) ||
+            !cJSON_AddStringToObject(root, "url", url)) break;
+        char *j = cJSON_PrintBuffered(root, (int)cap, 0);
+        if (!j) break;
+        size_t len = strlen(j);
+        if (len < cap) { memcpy(buf, j, len + 1); out = len; }   /* 装不下（含结尾 NUL）就回 0，不回半包 */
+        cJSON_free(j);
+    } while (0);
+    cJSON_Delete(root);
+    return out;
+}
+
+/* ---- 参数表 → reg 消息 ---- */
+
+double web_num_short(float v)
+{
+    /* 依次试 1..9 位有效数字，取第一个能还原成同一个 float 的写法：
+     *   0.1f（作为 double 是 0.100000001490116…）→ "0.1"；25.0f → "25"；1234567.0f → "1234567"。
+     * 固定位数不行：%.6g 会把 1234567 写成 1.23457e+06，%g 不限位又会带出 float32 的尾数。*/
+    if (!isfinite((double)v)) return 0.0;          /* 与 st 的口径一致：非有限数一律 0 */
+    char b[32];
+    for (int p = 1; p <= 9; p++) {
+        snprintf(b, sizeof b, "%.*g", p, (double)v);
+        if ((float)strtod(b, NULL) == v) break;
+    }
+    return strtod(b, NULL);
+}
+
+int web_registry_fill_json(const param_desc_t *const *ps, int n, cJSON *root)
+{
+    if (!ps || n < 0 || !root) return -1;
+    cJSON *arr = cJSON_CreateArray();
+    if (!arr) return -1;
+    /* 挂到 root 上之后 arr 归 root 所有（调用方删 root 时一起释放）；没挂上去才由这里释放 */
+    if (cJSON_AddStringToObject(root, "t", "reg") == NULL ||
+        cJSON_AddItemToObject(root, "list", arr) == 0) {
+        cJSON_Delete(arr);
+        return -1;
+    }
+    for (int i = 0; i < n; i++) {
+        const param_desc_t *p = ps[i];
+        if (!p) continue;                           /* 调用方给了空位：跳过，不出空对象 */
+        cJSON *it = cJSON_CreateObject();
+        if (!it) return -1;
+        int ok = cJSON_AddNumberToObject(it, "id",    p->id) != NULL &&
+                 cJSON_AddNumberToObject(it, "type",  p->type) != NULL &&
+                 cJSON_AddNumberToObject(it, "flags", p->flags) != NULL &&
+                 cJSON_AddNumberToObject(it, "min",   web_num_short(p->min)) != NULL &&
+                 cJSON_AddNumberToObject(it, "max",   web_num_short(p->max)) != NULL &&
+                 cJSON_AddNumberToObject(it, "step",  web_num_short(p->step)) != NULL &&
+                 cJSON_AddNumberToObject(it, "def",   web_num_short(p->value)) != NULL &&   /* 当前值 */
+                 cJSON_AddStringToObject(it, "key",  p->key  ? p->key  : "") != NULL &&
+                 cJSON_AddStringToObject(it, "name", p->name ? p->name : "") != NULL &&
+                 cJSON_AddStringToObject(it, "unit", p->unit ? p->unit : "") != NULL;
+        if (ok) ok = (cJSON_AddItemToArray(arr, it) != 0);   /* 进了 arr 之后 it 归 arr 所有 */
+        if (!ok) { cJSON_Delete(it); return -1; }            /* 没进 arr：由这里释放 */
+    }
+    return 0;
+}
+
+size_t web_registry_json(const param_desc_t *const *ps, int n, char *buf, size_t cap)
+{
+    if (!buf || cap == 0) return 0;
+    cJSON *root = cJSON_CreateObject();
+    if (!root) return 0;
+    size_t out = 0;
+    if (web_registry_fill_json(ps, n, root) == 0) {
+        char *j = cJSON_PrintBuffered(root, (int)(cap < 16384u ? cap : 16384u), 0);
+        if (j) {
+            size_t len = strlen(j);
+            if (len < cap) { memcpy(buf, j, len + 1); out = len; }
+            cJSON_free(j);
+        }
+    }
     cJSON_Delete(root);
     return out;
 }

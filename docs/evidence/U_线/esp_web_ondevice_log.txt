@@ -1,0 +1,59 @@
+# ESP32 真机日志摘录（现场档 1.3.0-rc1，2026-11-24 夜，最终固件）
+# 来源：串口桥 esp_out.log；只删去了周期性的 M207/TMP117/快照统计行。
+
+## webtest：HTTP 端点 + WebSocket 回环（固件自己当 WS 客户端连自己）
+>>> webtest
+webtest
+webtest base=http://192.168.4.1
+  /              HTTP 200  2668 bytes  OK
+  /index.html    HTTP 200  2668 bytes  OK
+  /style.css     HTTP 200  3486 bytes  OK
+  /app.js        HTTP 200  14856 bytes  OK
+  /chart.js      HTTP 200  4101 bytes  OK
+  /api/status    HTTP 200  283 bytes  OK
+  /api/registry  HTTP 200  6578 bytes  OK
+  /api/log       HTTP 200  305 bytes  OK
+  /api/linkstats HTTP 200  247 bytes  OK
+webtest: 9/9 PASS (HTTP)
+  ws loopback 192.168.4.1:80
+    handshake: 101 Switching Protocols             OK
+    reg numbers carry no float32 tail              OK
+    first frames in order: reg, log, st            OK
+    current hyst / body_cold read back from reg    OK
+    ping -> pong carries ref                       OK
+    set (same value) -> pv ok=1 with my ref        OK
+    set (rejected by constraint) -> pv ok=0 err=-2 OK
+    set id=65537 -> err bad_set (not truncated)    OK
+    cmd 11 (screen-only) -> err bad_cmd            OK
+    cmd 9 (ack, nothing latched) -> ack with ref   OK
+    CLOSE -> server answers CLOSE                  OK
+    client table empty after CLOSE                 OK
+    plain GET /ws -> 400 (not registered as a WS client) OK
+    clients 1..3 handshakes accepted               OK
+    client table lists all three                   OK
+    client table empty after abrupt disconnects    OK
+  ws loopback: 16/16 PASS
+webtest: HTTP 9/9, WS 16/16 -> ALL PASS
+
+## 急停锁存期间切自动被拒 / 解除 / 通信类故障 2s 自愈时序
+>>> estop
+ESTOP: TCSW x0 + fan on + mode=manual + ALM_ESTOP (ack to clear)
+>>> p set mode 1
+p set mode 1
+p set 0x0006 = 0.000 -> rc=-2 (0=ok 1=clamped -1=bad -2=constraint)
+>>> status
+tc1=19.88 tc2=24.92 body=37.40(ok=1) fan=100% mode=0 m207=1 alarm=0x0004 armed=1 state=3 sim=1 latch=0x08 heap=8423324 up=118s rst=11
+>>> ack
+ack: alarm=0x0000 armed=1 state=3
+>>> status
+tc1=19.86 tc2=24.92 body=37.40(ok=1) fan=0% mode=0 m207=1 alarm=0x0000 armed=1 state=0 sim=1 latch=0x00 heap=8423324 up=122s rst=11
+>>> body off
+tcs W (126815) TMP117: LOST (10 err-run) -> ALM_BODY_SENSOR (sticky)
+W (126815) TMP117: LOST (data flow stopped; alarm raised by control)
+I (126855) CTRL: arm ARMED->LOST (source lost)
+>>> body 37.4
+W (134015) TMP117: RECOVERED (data flow back; control auto-recovers after 2s healthy)
+W (136055) ctrl: comm fault auto-recovered (2000ms healthy; estop/overtemp stay manual)
+I (136055) CTRL: arm LOST->ARMED (10 healthy samples = 1s)
+>>> status
+tc1=19.80 tc2=24.86 body=37.40(ok=1) fan=0% mode=0 m207=1 alarm=0x0000 armed=1 state=0 sim=1 latch=0x00 heap=8423324 up=137s rst=11

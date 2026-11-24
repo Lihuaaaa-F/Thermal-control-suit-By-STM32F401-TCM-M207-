@@ -373,7 +373,7 @@ static void m207_handle_line(const char *line)
         s_open_cnt[r.module] = 0;
         if (r.module == 1) {
         g_tcs.tc1_act = r.value;
-        /* N-01：超温切断不得只依赖 control 任务的 500ms 采样。设备服务层解析到超温
+        /* N-01：超温切断不得只依赖 control 任务的周期采样（现为 100ms）。设备服务层解析到超温
          * 就立刻置锁存（门控 out_tec_sw 的"开"），并直接下发 TCSW=0。
          * 这样即使 control 任务创建失败/卡死，TEC 仍会被关。*/
         if (r.value > ALM_OVERTEMP_HARD_C) {

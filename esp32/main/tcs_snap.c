@@ -18,7 +18,6 @@
 #include "esp_log.h"
 #include "esp_task_wdt.h"
 #include "esp_netif.h"
-#include "esp_ip.h"
 #include "esp_app_desc.h"
 #include "softap.h"
 
@@ -75,10 +74,27 @@ static void build_delta_src(tcs_delta_src_t *d, const snap_cycle_t *c)
     d->badge   = c->badge;
 }
 
+/* 现场取证（见 tcs_snap.h 的 tcs_snap_mute）：静默期内 snap_send 一帧都不发。
+ * 截止时刻只有一个自然对齐的 32 位量，命令任务写、快照任务读，各自只访问一次，不用加锁。*/
+static volatile uint32_t s_mute_until_ms;   /* 0 = 不静默 */
+
+static int snap_muted(void)
+{
+    return s_mute_until_ms &&
+           (int32_t)(s_mute_until_ms - (uint32_t)(esp_timer_get_time() / 1000)) > 0;
+}
+
+int tcs_snap_mute(uint32_t seconds)
+{
+    s_mute_until_ms = seconds ? (uint32_t)(esp_timer_get_time() / 1000) + seconds * 1000u : 0u;
+    return 0;
+}
+
 /* M08-F-06：以前 `link_send_frame_mt(...); cnt++;` 把失败也记成发出去了，
  * 断链/组帧失败在日志里看不出来。这里按返回值分账：成功才计发送数。*/
 static void snap_send(uint8_t mt, const uint8_t *pl, size_t n, uint32_t *ok)
 {
+    if (snap_muted()) { s_send_skip++; return; }   /* 取证静默：按预期内抑制计数 */
     if (!n) { s_send_drop++; return; }             /* 载荷编码失败 */
     int rv = link_send_frame_mt(mt, pl, n);
     if (rv == 0)      (*ok)++;
@@ -99,7 +115,7 @@ static void push_info(void)
     const char *vals[] = { ssid, pass, url, esp_app_get_description()->version };
     uint8_t pl[TCS_INFO_MAX_LEN + 1];
     size_t n = tcs_pl_info((char *)pl, sizeof pl, keys, vals, 4);
-    if (n) (void)link_send_info(pl, n);
+    if (n && !snap_muted()) (void)link_send_info(pl, n);
 }
 
 static void snap_task(void *arg)

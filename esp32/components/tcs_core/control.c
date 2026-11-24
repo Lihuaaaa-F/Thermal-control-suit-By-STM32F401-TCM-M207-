@@ -7,7 +7,9 @@
  *   COOL : body < body_hot−hyst → TCSW=0 + 风扇关 → IDLE
  *   HEAT : body > body_cold+hyst → TCSW=0 + 风扇关 → IDLE
  *   任意 : 传感器丢失 / M207 失联 → SAFE（TCSW=0 + 风扇开 + ALM）
- *   SAFE : 双恢复 + 人工确认 → 清报警 → IDLE
+ *   SAFE : 通信类故障（体温/M207/探头）源健康 2s → 自动退出；急停/超温 → 人工确认后退出
+ *   退出 : 手动模式复原故障前的风扇；仅"体温传感器一个源、且是 2s 自愈退出"时复原手动 TEC2；
+ *          自动模式不复原，输出当拍由状态机按体温重新定（见 leave_safe）
  * 滞回算例（默认参数 37.5/36.5/0.2）：>37.7 进制冷、<37.3 退制冷；
  *   <36.3 进制热、>36.7 退制热（单测向量 ±0.001）。
  */
@@ -49,6 +51,7 @@ static uint8_t  s_fan_before_safe;     /* 进 SAFE 前的风扇 */
 static uint8_t  s_tec2_before_safe;    /* 进 SAFE 前的 TEC2 */
 static uint8_t  s_auto_before_safe;    /* 进 SAFE 前是自动模式 */
 static uint8_t  s_restore_tec2_ok;     /* 本轮 SAFE 只因体温传感器引起，可复原 TEC2 */
+static uint8_t  s_exit_by_recover;     /* 本轮锁存是被"2s 自愈"清空的（人工确认退出时为 0）*/
 static uint32_t s_safe_assert_ms;      /* 上次重申安全输出的时刻 */
 
 /* 安全锁存：位含义见 control.h。上电默认"源全恢复"，由 control_poll 每拍刷新。
@@ -103,6 +106,10 @@ static void safety_trip(uint8_t bit)
     changed = (uint8_t)((s_safety_latch & bit) == 0);
     s_safety_latch |= bit;
     SAFETY_UNLOCK();
+    /* 除体温传感器之外的任何危险源（急停 / 超温 / 模块）一置位，模块侧状态就不再可信：
+     * 本轮 SAFE 不得复原 TEC2。在这里统一作废，调用方（poll、cmd 8/11、M207 任务里的
+     * 超温置位）不必各自记，也不必等到下一拍。*/
+    if (bit & (uint8_t)~SAFETY_BIT_BODY_LOST) s_restore_tec2_ok = 0;
     if (changed) safety_persist_now();   /* 锁外取最新值落盘（N-04） */
 }
 
@@ -173,6 +180,7 @@ void control_init(const control_ops_t *ops)
     s_tec2_before_safe = 0;
     s_auto_before_safe = 0;
     s_restore_tec2_ok = 0;
+    s_exit_by_recover = 0;
     s_safe_assert_ms = 0;
     g_tcs.alarm_bits = 0;
     /* N-04：落盘串行化用 mutex（只在首次 init 时创建；失败则退化为不加锁）*/
@@ -222,9 +230,13 @@ static void alarm_clear_bits(uint16_t mask)
 
 /* ====== 安全态进入/退出 ======
  * SAFE 期间记下故障前的输出，退出时复原（U 线 B3）：
- *   - 风扇：故障前开着，自愈/解除后不该被关掉（原来一律 out_fan(0)）；
- *   - TEC2（手动通道）：只有"体温传感器"一个危险源、且模块全程在线时才复原——
- *     模块通信/探头类故障期间模块侧状态未知，TEC 不自动重开；
+ *   - 手动模式的风扇：故障前开着，解除后不该被关掉（原来一律 out_fan(0)）；
+ *   - 自动模式不复原：故障前的风扇是状态机按体温开的，而退出后状态机从 IDLE 重新起步，
+ *     若这时体温已回到滞回带内，就没有谁再去关它（2026-11-24 独立复核 P1-1：风扇常开）。
+ *     所以退出当拍直接评估一次，输出由状态机按当前体温定；
+ *   - TEC2（手动通道）：只有"体温传感器"一个危险源、模块全程在线、并且是 2s 自愈退出时
+ *     才复原。模块通信/探头类故障期间模块侧状态未知；人工确认退出只说明"此刻源是好的"
+ *     （最短 3 个好样本≈0.3s），不够格让 TEC 自动重开；
  *   - 急停会把自动切成手动：故障前的风扇是状态机开的而不是人选的，这时不复原。
  * 上电恢复的锁存没有"故障前"可言（s_state 在 control_init 里直接置 SAFE，
  * 不经 enter_safe），以上记忆量保持 0 → 退出后输出全关。*/
@@ -243,6 +255,7 @@ static void safe_remember_outputs(void)
     s_tec2_before_safe = g_tcs.tec2_on;
     s_auto_before_safe = (uint8_t)(g_tcs.mode != 0);
     s_restore_tec2_ok  = (uint8_t)((s_safety_latch & (uint8_t)~SAFETY_BIT_BODY_LOST) == 0);
+    s_exit_by_recover  = 0;
 }
 
 static void enter_safe(void)
@@ -251,15 +264,23 @@ static void enter_safe(void)
     safe_outputs();
 }
 
+static void auto_evaluate(uint32_t now_ms);
+
 static void leave_safe(uint32_t now_ms)
 {
-    uint8_t estop_forced_manual = (uint8_t)(s_auto_before_safe && g_tcs.mode == 0);
-    out_fan(estop_forced_manual ? 0u : s_fan_before_safe);
-    if (s_restore_tec2_ok) out_tec_sw(2, s_tec2_before_safe);
+    uint8_t auto_now = (uint8_t)(g_tcs.mode != 0);
+    if (auto_now) {
+        out_fan(0);                 /* 风扇归状态机管：先归零，本函数末尾当拍评估 */
+    } else {
+        /* 故障前是自动、现在是手动 = 急停把设备切成了手动：不复原风扇 */
+        out_fan((s_auto_before_safe && !auto_now) ? 0u : s_fan_before_safe);
+    }
+    if (s_restore_tec2_ok && s_exit_by_recover) out_tec_sw(2, s_tec2_before_safe);
     s_restore_tec2_ok = 0;
-    /* 自动模式：下一拍立刻评估，不等 500ms（风扇随即由状态机定夺）*/
-    s_last_eval = now_ms - CTRL_EVAL_MS;
+    s_exit_by_recover = 0;
+    s_last_eval = now_ms - CTRL_EVAL_MS;      /* 让评估节拍闸放行：当拍就评估 */
     goto_state(CTRL_IDLE);
+    if (auto_now) auto_evaluate(now_ms);
 }
 
 static uint8_t safe_sources_recovered(void)
@@ -303,17 +324,33 @@ void tcs_alarm_ack(void)
     ALM_UNLOCK();
 }
 
-void tcs_emergency_stop(void)
+void tcs_emergency_stop_src(uint8_t src)
 {
     s_estop_latch = 1;
     safety_trip(SAFETY_BIT_ESTOP);          /* P0-04：置锁存后，在途状态机的"开"被 out_tec_sw 压成 0 */
     tcs_alarm_raise(ALM_ESTOP);
     /* 故障前输出要在切手动**之前**记（记忆量里有"当时是不是自动模式"）*/
     if (s_state != CTRL_SAFE) safe_remember_outputs();
-    s_restore_tec2_ok = 0;                  /* 急停不复原 TEC */
-    /* mode=手动（经 param_set 同一数据源路径，自动广播 0x11）*/
-    (void)param_set(PARAM_ID_MODE, 0.0f, PARAM_SRC_CONSOLE);
+    s_restore_tec2_ok = 0;                  /* 急停不复原 TEC（safety_trip 已作废，这里再写一次表明意图）*/
+    s_exit_by_recover = 0;
+    /* mode=手动（经 param_set 同一数据源路径，自动广播 0x11）。来源照实记：事件日志要能
+     * 分清是网页、屏幕还是控制台按的急停（原先一律记成"控制台：控制模式 改为 0"）。*/
+    (void)param_set(PARAM_ID_MODE, 0.0f, src);
     safe_outputs();
+}
+
+void tcs_emergency_stop(void) { tcs_emergency_stop_src(PARAM_SRC_CONSOLE); }
+
+/* 参数写入前的安全校验（main 把它接进 param_hooks_t.on_check，所有写路径都会经过）：
+ * 急停或超温锁存期间不得切到自动模式。
+ * "急停复位后不得自动重启"：锁存期间先把模式切成自动，解除的那一拍状态机就会重新开 TEC，
+ * 等于绕过了"复位后要单独下启动指令"。所以"切自动"被挡在锁存之外——解除之后必须再明确切一次。
+ * 通信类故障（体温/模块）的锁存不在此列：那是会自己好的故障，自动模式恢复后按体温接管。*/
+int control_param_check(uint16_t id, float v)
+{
+    if (id == PARAM_ID_MODE && v != 0.0f
+        && (s_safety_latch & (uint8_t)(SAFETY_BIT_ESTOP | SAFETY_BIT_OVERTEMP))) return -2;
+    return 0;
 }
 
 /* ====== 手动直控 ====== */
@@ -329,7 +366,7 @@ void control_manual_fan(uint8_t on)
     out_fan(on);
 }
 
-int control_apply_cmd(uint8_t cmd)
+int control_apply_cmd_src(uint8_t cmd, uint8_t src)
 {
     /* 复核 D1：SAFE 下手动执行器命令会被 control_manual_* 静默吞掉，原来仍回 0
      * → 网页/屏幕都显示"成功"。这里显式拒绝（-2），由调用方映射成 BUSY。*/
@@ -339,15 +376,18 @@ int control_apply_cmd(uint8_t cmd)
             || cmd == TCS_CMD_FAN_TOGGLE)) {
         return -2;
     }
+    int rv;
     switch (cmd) {
     case TCS_CMD_TEC1_ON:       control_manual_tec(1, 1); return 0;
     case TCS_CMD_TEC1_OFF:      control_manual_tec(1, 0); return 0;
     case TCS_CMD_TEC2_ON:       control_manual_tec(2, 1); return 0;
     case TCS_CMD_TEC2_OFF:      control_manual_tec(2, 0); return 0;
     case TCS_CMD_FAN_TOGGLE:    control_manual_fan(g_tcs.fan_on ? 0 : 1); return 0;
-    case TCS_CMD_MODE_AUTO:     return (param_set(PARAM_ID_MODE, 1.0f, PARAM_SRC_WEB) < 0) ? -1 : 0;
-    case TCS_CMD_MODE_MANUAL:   return (param_set(PARAM_ID_MODE, 0.0f, PARAM_SRC_WEB) < 0) ? -1 : 0;
-    case TCS_CMD_ESTOP:         tcs_emergency_stop(); return 0;
+    /* 改模式：来源原样带进参数表（事件日志据此写"网页/屏幕/控制台"）；被安全校验拒绝
+     * （急停/超温锁存期间切自动）时 param_set 返回 -2，这里如实往上带 */
+    case TCS_CMD_MODE_AUTO:     rv = param_set(PARAM_ID_MODE, 1.0f, src); return rv < 0 ? rv : 0;
+    case TCS_CMD_MODE_MANUAL:   rv = param_set(PARAM_ID_MODE, 0.0f, src); return rv < 0 ? rv : 0;
+    case TCS_CMD_ESTOP:         tcs_emergency_stop_src(src); return 0;
     case TCS_CMD_ALARM_ACK:     tcs_alarm_ack(); return 0;
     case TCS_CMD_OVERTEMP_STOP:
         /* R2-N-01：屏观测到超温 → 请求停机。只锁 OVERTEMP + 停两条 TCSW，
@@ -363,6 +403,8 @@ int control_apply_cmd(uint8_t cmd)
     }
 }
 
+int control_apply_cmd(uint8_t cmd) { return control_apply_cmd_src(cmd, PARAM_SRC_CONSOLE); }
+
 void control_on_mode_change(uint8_t m)
 {
     (void)m;   /* 手动进出不强制改输出；自动评估在下一拍 control_poll 接管 */
@@ -377,7 +419,55 @@ static uint8_t commissioned(void)
     return post_armed();
 }
 
-/* ====== 500ms 评估 ====== */
+/* 自动模式的状态机迁移，按 CTRL_EVAL_MS 节拍（任务本身的节拍见 control_service.c，比这密）。
+ * control_poll 每拍调用；leave_safe 退出当拍也调一次，输出不必等到下一个评估周期。*/
+static void auto_evaluate(uint32_t now_ms)
+{
+    if (now_ms - s_last_eval < CTRL_EVAL_MS) return;
+    /* R1 修复 M09-F-04：固定节拍累加（原来直接赋 now_ms，499ms 早醒会跳掉一整拍 → 实际 1000ms）*/
+    s_last_eval += CTRL_EVAL_MS;
+    if (now_ms - s_last_eval >= CTRL_EVAL_MS) s_last_eval = now_ms;   /* 长时间停摆后重新对齐 */
+
+    float body  = g_tcs.body_temp;
+    float hot   = param_get(PARAM_ID_BODY_HOT);
+    float cold  = param_get(PARAM_ID_BODY_COLD);
+    float hyst  = param_get(PARAM_ID_HYST);
+
+    switch (s_state) {
+    case CTRL_IDLE:
+        if (body > hot + hyst) {
+            out_tec_temp(1, TEC_COOL_TARGET_C);
+            out_tec_sw(1, 1);
+            out_fan(1);
+            goto_state(CTRL_COOL);
+        } else if (body < cold - hyst) {
+            out_tec_temp(1, TEC_HEAT_TARGET_C);
+            out_tec_sw(1, 1);
+            out_fan(1);
+            goto_state(CTRL_HEAT);
+        }
+        break;
+    case CTRL_COOL:
+        if (body < hot - hyst) {
+            out_tec_sw(1, 0);
+            out_fan(0);
+            goto_state(CTRL_IDLE);
+        }
+        break;
+    case CTRL_HEAT:
+        if (body > cold + hyst) {
+            out_tec_sw(1, 0);
+            out_fan(0);
+            goto_state(CTRL_IDLE);
+        }
+        break;
+    default:
+        s_state = CTRL_IDLE;
+        break;
+    }
+}
+
+/* ====== 每拍评估（任务每 100ms 调一次，见 control_service.c）====== */
 void control_poll(uint32_t now_ms)
 {
     if (!s_boot_ms_base_set) {
@@ -399,7 +489,7 @@ void control_poll(uint32_t now_ms)
         safety_set_ok(SAFETY_BIT_OVERTEMP, 1);
     }
 
-    /* 锁存期间：任何模式都不再评估，直接停在 SAFE，并每拍重申 TCSW=0（在线时 500ms 一次）。
+    /* 锁存期间：任何模式都不再评估，直接停在 SAFE，并按 CTRL_SAFE_REASSERT_MS 重申 TCSW=0。
      * R-18：M207 离线时 m207_tec 直接返回 -2（不入队），本处重发并不产生帧；
      * 离线期的兜底是复联重同步（m207_go_online 里补发 TCSW=0）。P1-09 的彻底修法
      * （m207_tec_force 强制归零通道）仍在待办，勿据本注释认为离线已被覆盖。*/
@@ -418,12 +508,16 @@ void control_poll(uint32_t now_ms)
             } else if (!s_comm_ok_since) {
                 s_comm_ok_since = now_ms;
             } else if ((uint32_t)(now_ms - s_comm_ok_since) >= COMM_AUTO_RECOVER_MS) {
+                uint8_t emptied;          /* 这次自愈把锁存清空了（没有急停/超温留着）*/
                 SAFETY_LOCK();
                 s_safety_latch &= (uint8_t)~SAFETY_COMM_MASK;
+                emptied = (uint8_t)(s_safety_latch == 0);
                 SAFETY_UNLOCK();
                 alarm_clear_bits((uint16_t)(ALM_M207 | ALM_BODY_SENSOR | ALM_SENSOR_OPEN));
                 safety_persist_now();
                 s_comm_ok_since = 0;
+                /* 清空后本拍就会走到 leave_safe：只有这种"自愈退出"才允许复原 TEC2 */
+                s_exit_by_recover = emptied;
 #ifdef ESP_PLATFORM
                 ESP_LOGW("ctrl", "comm fault auto-recovered (%ums healthy; estop/overtemp stay manual)",
                          (unsigned)COMM_AUTO_RECOVER_MS);
@@ -512,51 +606,19 @@ void control_poll(uint32_t now_ms)
         return;
     }
 
-    if (now_ms - s_last_eval < CTRL_EVAL_MS) return;
-    /* R1 修复 M09-F-04：固定节拍累加（原来直接赋 now_ms，499ms 早醒会跳掉一整拍 → 实际 1000ms）*/
-    s_last_eval += CTRL_EVAL_MS;
-    if (now_ms - s_last_eval >= CTRL_EVAL_MS) s_last_eval = now_ms;   /* 长时间停摆后重新对齐 */
-
-    float body  = g_tcs.body_temp;
-    float hot   = param_get(PARAM_ID_BODY_HOT);
-    float cold  = param_get(PARAM_ID_BODY_COLD);
-    float hyst  = param_get(PARAM_ID_HYST);
-
-    switch (s_state) {
-    case CTRL_IDLE:
-        if (body > hot + hyst) {
-            out_tec_temp(1, TEC_COOL_TARGET_C);
-            out_tec_sw(1, 1);
-            out_fan(1);
-            goto_state(CTRL_COOL);
-        } else if (body < cold - hyst) {
-            out_tec_temp(1, TEC_HEAT_TARGET_C);
-            out_tec_sw(1, 1);
-            out_fan(1);
-            goto_state(CTRL_HEAT);
-        }
-        break;
-    case CTRL_COOL:
-        if (body < hot - hyst) {
-            out_tec_sw(1, 0);
-            out_fan(0);
-            goto_state(CTRL_IDLE);
-        }
-        break;
-    case CTRL_HEAT:
-        if (body > cold + hyst) {
-            out_tec_sw(1, 0);
-            out_fan(0);
-            goto_state(CTRL_IDLE);
-        }
-        break;
-    default:
-        s_state = CTRL_IDLE;
-        break;
-    }
+    auto_evaluate(now_ms);
 }
 
 ctrl_state_t control_state(void) { return s_state; }
+
+uint32_t control_ms_from_us(int64_t us)
+{
+    /* 先把微秒截成 int32 再除是错的：开机 35 分 47 秒（2^31 µs）后它变成负数，毫秒时间戳
+     * 从 2147483 直接跳到 4292789813——相当于倒退 71 分钟，此后回跳前记的时间戳做无符号
+     * 差值全都"早已到期"（2s 自愈、5s 上电宽限立即成立）。必须用 64 位除。
+     * （独立复核 P1-2，2026-11-24；原先写在 control_service.c 里，主机测不到。）*/
+    return (uint32_t)((uint64_t)us / 1000u);
+}
 
 /* ====== 安全锁存/急停投递读侧（console/网页/诊断）====== */
 uint8_t control_safety_latched(void) { return s_safety_latch; }

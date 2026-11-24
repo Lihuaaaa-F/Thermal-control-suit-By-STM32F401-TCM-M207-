@@ -30,6 +30,9 @@ ui_link_view_t ui_link_view(const ui_in_t *in)
 
 /* ====== 状态胶囊 ====== */
 
+/* 主控断开这么久之后，"秒"改说"分钟"（状态胶囊与横幅共用）*/
+#define UI_DOWN_MIN_S  100u
+
 void ui_status_ctrl(const ui_link_view_t *lv, char *text, size_t cap, ui_led_t *led)
 {
     switch (lv->link) {
@@ -43,7 +46,7 @@ void ui_status_ctrl(const ui_link_view_t *lv, char *text, size_t cap, ui_led_t *
             break;
         default: {
             uint32_t s = lv->down_ms / 1000u;
-            if (s < 100u) snprintf(text, cap, "主控断开 %us", (unsigned)s);
+            if (s < UI_DOWN_MIN_S) snprintf(text, cap, "主控断开 %us", (unsigned)s);
             else          snprintf(text, cap, "主控断开 %u分", (unsigned)(s / 60u));
             *led = UI_LED_RED;
             break;
@@ -94,14 +97,28 @@ void ui_banner_select(const ui_in_t *in, const ui_link_view_t *lv, ui_banner_t *
 {
     memset(out, 0, sizeof *out);
     if (lv->link != UI_LINK_UP) {
-        char detail[64];
-        if (lv->link == UI_LINK_NEVER_SEEN)
+        char detail[80];
+        /* 屏端已经记下急停、却还没送到主控：这是此刻最要紧的一件事，压过"连接中断"本身。
+         * 屏端会在链路恢复后自动重发急停意图（main.c），所以文案说"连上后立即送达"。
+         * 第二行要放进 390px 宽的横幅里：比这更长会顶到右边的状态胶囊。*/
+        if (in->estop_local) {
+            if (lv->link == UI_LINK_NEVER_SEEN)
+                snprintf(detail, sizeof detail, "连上后立即送达 · 正在等待主控");
+            else
+                snprintf(detail, sizeof detail, "连上后立即送达 · 数据停在 %us 前",
+                         (unsigned)(lv->down_ms / 1000u));
+            set_banner(out, UI_BN_ESTOP_UNSENT, 1, UI_BN_TAP_HINT, "急停尚未送达主控", detail, 0);
+            return;
+        }
+        if (lv->link == UI_LINK_NEVER_SEEN) {
             snprintf(detail, sizeof detail, "正在等待主控 · 连上后自动刷新");
-        else {
+        } else {
+            /* 满 UI_DOWN_MIN_S 秒改说"分钟"，与状态胶囊（ui_status_ctrl）同一口径 */
             uint32_t s = lv->down_ms / 1000u;
-            if (s < 100u) snprintf(detail, sizeof detail, "数据停在 %us 前 · 自动重连中", (unsigned)s);
-            else          snprintf(detail, sizeof detail, "数据已过期 %u分 · 自动重连中",
-                                    (unsigned)(s / 60u));
+            if (s < UI_DOWN_MIN_S)
+                snprintf(detail, sizeof detail, "数据停在 %us 前 · 自动重连中", (unsigned)s);
+            else
+                snprintf(detail, sizeof detail, "数据停在 %u 分钟前 · 自动重连中", (unsigned)(s / 60u));
         }
         /* 此时屏上的报警位也是陈旧的：不拿它画横幅，等链路回来再按真值显示 */
         set_banner(out, UI_BN_LINK_LOST, 1, UI_BN_TAP_HINT, "主控连接中断", detail, 0);
@@ -110,8 +127,19 @@ void ui_banner_select(const ui_in_t *in, const ui_link_view_t *lv, ui_banner_t *
 
     uint16_t a = in->alarm;
     if (a & ALM_ESTOP) {
-        set_banner(out, UI_BN_ESTOP, 1, UI_BN_TAP_ACK, "急停已触发",
-                   "TEC 已停 · 风扇全速 · 点击解除", (uint8_t)(alarm_count(a) - 1u));
+        /* "TEC 已停 · 风扇全速"是主控快照里的事实，不是屏端按了键就能替它说的话：
+         * 只有主控快照带了急停位、且执行器状态确实如此，才这么写。
+         * 否则只说"指令已发出，等待确认"（独立复核 P1-1，2026-11-24）。*/
+        uint8_t extra = (uint8_t)(alarm_count(a) - 1u);
+        if (in->estop_peer && !in->tec1 && !in->tec2 && in->fan)
+            set_banner(out, UI_BN_ESTOP, 1, UI_BN_TAP_ACK, "急停已触发",
+                       "TEC 已停 · 风扇全速 · 点击解除", extra);
+        else if (in->estop_peer)
+            set_banner(out, UI_BN_ESTOP, 1, UI_BN_TAP_ACK, "急停已触发",
+                       "主控已执行急停 · 点击解除", extra);
+        else
+            set_banner(out, UI_BN_ESTOP_PENDING, 1, UI_BN_TAP_HINT, "急停指令已发出",
+                       "等待主控确认 · 确认后可点此解除", extra);
         return;
     }
     if (a & ALM_OVERTEMP) {
@@ -150,7 +178,9 @@ const char *ui_banner_tap_hint(const ui_banner_t *b)
     switch (b->tap) {
         case UI_BN_TAP_ACK:   return NULL;             /* 由确认反馈（ui_ack_*）出提示 */
         case UI_BN_TAP_HINT:
-            if (b->kind == UI_BN_LINK_LOST) return "正在重新连接主控，连上后会自动刷新";
+            if (b->kind == UI_BN_LINK_LOST)    return "正在重新连接主控，连上后会自动刷新";
+            if (b->kind == UI_BN_ESTOP_UNSENT) return "急停指令已记下，主控连上后立即送达";
+            if (b->kind == UI_BN_ESTOP_PENDING) return "主控确认执行后才能解除";
             return "接好后会自动恢复，不需要点确认";
         default:              return NULL;
     }
@@ -163,16 +193,28 @@ void ui_ack_start(ui_ack_t *a, const ui_in_t *in)
     a->waiting = 1;
     a->sent_ms = in->now_ms;
     a->seq_at_send = in->snap_seq;
-    a->alarm_at_send = in->alarm;
+}
+
+void ui_ack_cancel(ui_ack_t *a)
+{
+    a->waiting = 0;
 }
 
 ui_ack_result_t ui_ack_poll(ui_ack_t *a, const ui_in_t *in, uint16_t *still)
 {
     if (!a->waiting) return UI_ACK_WAIT;
     if (still) *still = 0;
-    /* 先静置一段时间再下结论：点击后第一帧"新快照"往往是命令还在路上时发出的，
-     * 它上面的报警位还是旧的——据此判"没解除"是误报（2026-11-24 真机）。*/
+    /* 先静置一段时间再下结论。点击那一刻已经现读了快照序号（tui.c 在 ui_ack_start 前调
+     * input_refresh），所以"点击前到的那一帧"不会被当成回话；静置是为了跳过**点击之后**
+     * 才发出、但主控还没处理完确认的那一两帧旧快照（快照 200ms 一帧）。
+     * 真机（2026-11-24）：静置 450ms 时，点确认到出提示 530ms。*/
     if ((uint32_t)(in->now_ms - a->sent_ms) < UI_ACK_SETTLE_MS) return UI_ACK_WAIT;
+    /* 点击之后链路断了：屏上残留的报警位是断开那一刻的旧值，说明不了"没解除"，
+     * 结论只能是"主控没回话"（独立复核 P2-3）。*/
+    if (in->snap_age_ms > UI_LINK_STALE_MS) {
+        a->waiting = 0;
+        return UI_ACK_NO_REPLY;
+    }
     uint8_t new_snap = (uint8_t)(in->snap_seq != a->seq_at_send);
     if (!new_snap) {
         if ((uint32_t)(in->now_ms - a->sent_ms) < UI_ACK_TIMEOUT_MS) return UI_ACK_WAIT;
@@ -210,14 +252,15 @@ void ui_home_state(const ui_in_t *in, const ui_link_view_t *lv, ui_home_t *out)
     out->link = lv->link;
     out->module = lv->module;
     out->body = lv->body;
-    /* 主控不在时，执行器/模式/急停位都是陈旧值：保持 0，屏幕按"未知"画，不做乐观显示 */
+    /* 急停键：只要屏端记下了急停（哪怕主控断了、还没送到）就是灰的——再点也不会有别的
+     * 动作（意图已在，链路恢复后自动重发），红键反而像"还没急停"。*/
+    out->estop = in->estop_local ? 1u : 0u;
+    /* 主控不在时，执行器/模式都是陈旧值：保持 0，屏幕按"未知"画，不做乐观显示 */
     if (lv->link != UI_LINK_UP) return;
     out->mode = in->mode ? 1u : 0u;
     out->fan = in->fan ? 1u : 0u;
     out->tec1 = in->tec1 ? 1u : 0u;
     out->tec2 = in->tec2 ? 1u : 0u;
-    out->estop = (in->alarm & ALM_ESTOP) ? 1u : 0u;
-    out->safe = (in->alarm != 0) ? 1u : 0u;
 }
 
 uint32_t ui_home_diff(const ui_home_t *was, const ui_home_t *now)
@@ -231,6 +274,5 @@ uint32_t ui_home_diff(const ui_home_t *was, const ui_home_t *now)
     if (was->tec1 != now->tec1)   m |= UI_H_TEC1;
     if (was->tec2 != now->tec2)   m |= UI_H_TEC2;
     if (was->estop != now->estop) m |= UI_H_ESTOP;
-    if (was->safe != now->safe)   m |= UI_H_SAFE;
     return m;
 }

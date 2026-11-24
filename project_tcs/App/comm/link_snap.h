@@ -15,6 +15,9 @@ extern "C" {
  * have=0 表示上电后还没收到过（此时 age_ms/seq 无意义）。*/
 void tcs_link_snap_info(uint32_t *age_ms, uint32_t *seq, uint8_t *have);
 
+/* 最近一帧快照里有急停位 = 主控已执行急停（区别于屏端自己置的本地自持位）。没收到过快照 → 0。*/
+uint8_t tcs_link_snap_peer_estop(void);
+
 #ifdef __cplusplus
 }
 #endif

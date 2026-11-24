@@ -335,6 +335,14 @@ void tcs_link_snap_info(uint32_t *age_ms, uint32_t *seq, uint8_t *have)
     *age_ms = s_snap_have ? (uint32_t)(g_tick_ms - s_snap_ms) : 0u;
 }
 
+/* 最近一帧主控快照的报警位里有没有急停位 = 主控已执行急停。
+ * g_tcs.alarm_bits 里的那一位可能是屏端自己置的（本地自持），不能拿它判断"主控执行了没有"
+ * （U 线独立复核 P1-1：横幅不能在主控确认前就说"TEC 已停"）。没收到过快照 → 0。*/
+uint8_t tcs_link_snap_peer_estop(void)
+{
+    return (uint8_t)((s_snap_have && (s_last_snap.alarm & ALM_ESTOP)) ? 1u : 0u);
+}
+
 /* 快照/增量应用：显示字段直写 g_tcs；设定值经 param_link_sync 静默回灌本地注册表
  * （不触发广播/下发，防 0x11/0x12 成环）。*/
 static void snap_apply(const tcs_snap_pl_t *s)

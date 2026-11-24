@@ -17,6 +17,7 @@
 
 static uint32_t s_gen_at_build;
 static uint8_t  s_built;
+static lv_obj_t *s_body;             /* 内容容器：有横幅时整体下移（tui_p3_set_banner_room）*/
 
 static void clk_back(lv_event_t *e) { LV_UNUSED(e); tui_request(TUI_HOME); }
 
@@ -76,6 +77,8 @@ static void draw_qr(lv_obj_t *scr)
     lv_obj_set_clickable(img, false);
 }
 
+/* 顶栏（返回 + 标题）直接画在屏幕上不动；二维码与各信息行画在容器 s_body 里，
+ * 有横幅时容器整体下移。坐标一律按屏幕绝对位置写（容器在 (0,0)）。*/
 void tui_p3_build(lv_obj_t *scr)
 {
     const tcs_link_info_t *li = link_info();
@@ -88,19 +91,23 @@ void tui_p3_build(lv_obj_t *scr)
     ui_button(scr, 24, 8, 120, 40, "‹ 返回", UI_BTN_GHOST, &tcs_font_lv24, clk_back, NULL);
     ui_text32(scr, 176, 16, "连接", TKS_TX);      /* 32px 字库只有既有的字：新文案一律走 24px */
 
-    draw_qr(scr);
+    s_body = ui_box(scr, 0, 0, 1024, 600, TKS_BG, 0);
+    lv_obj_set_style_bg_opa(s_body, LV_OPA_TRANSP, 0);
+    lv_obj_t *body = s_body;
+    draw_qr(body);
     {
-        /* 说明居中写在二维码正下方 */
-        const char *cap = "手机扫码连接热点";
-        ui_text24(scr, QR_BOX_X + (QR_BOX - ui_text24_w(cap)) / 2, QR_BOX_Y + QR_BOX + 20, cap, TKS_TX2);
+        /* 说明居中写在二维码正下方。没收到主控的 INFO 时二维码编的是默认网址，
+         * 这时不能说"扫码连热点"——照实说。*/
+        const char *cap = li->valid ? "手机扫码连接热点" : "手机扫码打开控制页";
+        ui_text24(body, QR_BOX_X + (QR_BOX - ui_text24_w(cap)) / 2, QR_BOX_Y + QR_BOX + 20, cap, TKS_TX2);
     }
 
-    info_row(scr, 112, "热点名称", or_none(li->valid ? li->ssid : NULL));
-    info_row(scr, 176, "热点密码", or_none(li->valid ? li->pass : NULL));
-    info_row(scr, 240, "控制页",   or_none(li->valid ? li->url  : NULL));
-    info_row(scr, 304, "屏幕固件", fw_screen);
-    info_row(scr, 368, "主控固件", or_none(li->valid ? li->fw   : NULL));
-    ui_text24(scr, COL_LX, 452, "连上热点后，用手机浏览器打开控制页", TKS_TX2);
+    info_row(body, 112, "热点名称", or_none(li->valid ? li->ssid : NULL));
+    info_row(body, 176, "热点密码", or_none(li->valid ? li->pass : NULL));
+    info_row(body, 240, "控制页",   or_none(li->valid ? li->url  : NULL));
+    info_row(body, 304, "屏幕固件", fw_screen);
+    info_row(body, 368, "主控固件", or_none(li->valid ? li->fw   : NULL));
+    ui_text24(body, COL_LX, 452, "连上热点后，用手机浏览器打开控制页", TKS_TX2);
 
     s_gen_at_build = link_info_gen();
     s_built = 1;
@@ -111,4 +118,11 @@ int tui_p3_update(void)
 {
     if (!s_built) return 1;
     return (link_info_gen() != s_gen_at_build) ? 1 : 0;
+}
+
+/* 二级页的横幅占 y 64..120：内容整体下移 72px 让开（最下面一行文字到 554）。
+ * 只动容器，不重建任何对象。*/
+void tui_p3_set_banner_room(int room)
+{
+    if (s_body) lv_obj_set_y(s_body, room ? 72 : 0);
 }

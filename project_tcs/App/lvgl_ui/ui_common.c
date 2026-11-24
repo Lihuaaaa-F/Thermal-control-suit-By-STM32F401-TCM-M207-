@@ -39,6 +39,7 @@ static lv_obj_t * mk_img(lv_obj_t *p, int x, int y, int w, int h,
     if (img == NULL) { lv_free(buf); lv_free(a); return NULL; }
     lv_image_set_src(img, &a->dsc);
     lv_obj_set_pos(img, x, y);
+    lv_obj_set_clickable(img, false);   /* 基类对象默认可点击：不关掉的话图标是一块点击死区 */
     lv_obj_add_event_cb(img, spr_delete_cb, LV_EVENT_DELETE, a);
     return img;
 }
@@ -72,12 +73,6 @@ lv_obj_t *ui_box(lv_obj_t *p, int x, int y, int w, int h, lv_color_t c, int r)
     lv_obj_set_scrollable(o, false);
     lv_obj_set_clickable(o, false);
     return o;
-}
-
-lv_obj_t *ui_rrect(lv_obj_t *p, int x, int y, int w, int h, int r, lv_color_t fill, lv_color_t bg)
-{
-    LV_UNUSED(bg);
-    return ui_box(p, x, y, w, h, fill, r);
 }
 
 void ui_hline(lv_obj_t *p, int x0, int x1, int y, lv_color_t c)
@@ -179,7 +174,6 @@ static btn_look_t btn_look(int style)
         case UI_BTN_PRIMARY:  k.bd = TKS_BLUE;   k.tx = TKS_BLUE;  break;
         case UI_BTN_DISABLED: k.tx = TKS_GRAY;   k.bg_press = TKS_CARD; break;
         case UI_BTN_DANGER:   k.bg = TKS_RED;    k.bd = TKS_RED;   k.tx = TKS_WHITE; k.bg_press = TKS_REDDK; break;
-        case UI_BTN_REDDK:    k.bg = TKS_REDDK;  k.bd = TKS_REDDK; k.tx = TKS_WHITE; k.bg_press = TKS_REDDK; break;
         case UI_BTN_GHOST:    k.bd = TKS_BORDER; k.tx = TKS_TX2;   break;
         case UI_BTN_LATCHED:  k.bg = TKS_GRAY;   k.bd = TKS_GRAY;  k.tx = TKS_WHITE; k.bg_press = TKS_GRAY; break;
         case UI_BTN_CARD:     k.bd = TKS_BORDER; k.tx = TKS_TX;    break;

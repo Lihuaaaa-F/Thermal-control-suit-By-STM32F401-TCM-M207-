@@ -102,9 +102,15 @@ def main():
     (FONTS / "tcs_font_lv_ext_cp.txt").write_text(
         "\n".join("%04X" % c for c in cps) + "\n", encoding="utf-8")
     print(f"[regen] ext24 重生成：{len(cps)} 字（新增 {len(missing)}）")
-    # U 线 S1：新生成的是全角等宽表，接着跑度量补丁，否则其中的 ASCII/符号会被撑开
-    subprocess.run([sys.executable, str(FIRMWARE / "tools" / "font_metrics_patch.py"),
-                    "tcs_font_lv_ext.c"], check=False)
+    # U 线 S1：新生成的是全角等宽表，接着跑度量补丁，否则其中的 ASCII/符号会被撑开。
+    # 补丁失败必须让本脚本也失败：不然会留下一张没打补丁的字表，还报"重生成成功"。
+    r = subprocess.run([sys.executable, str(FIRMWARE / "tools" / "font_metrics_patch.py"),
+                        "tcs_font_lv_ext.c"], capture_output=True, text=True, encoding="utf-8",
+                       errors="replace")
+    sys.stdout.write(r.stdout)
+    if r.returncode != 0:
+        sys.stderr.write(r.stderr)
+        raise SystemExit("[regen] 度量补丁失败（rc=%d），ext24 已生成但未收窄，不要提交" % r.returncode)
     sync_charset(cps)
     return 0
 

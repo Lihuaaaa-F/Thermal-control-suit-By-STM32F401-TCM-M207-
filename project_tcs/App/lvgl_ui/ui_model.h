@@ -31,6 +31,8 @@ typedef struct {
     uint8_t  mode;                       /* 0 手动 / 1 自动 */
     uint8_t  fan, tec1, tec2;            /* 执行器开关（同样只在主控在线时有意义）*/
     float    tc1_act, tc2_act, body;    /* 两路水温与体温读数 */
+    uint8_t  estop_local;               /* 屏端已记下急停（本地锁存，或报警位里有——含主控回传的）*/
+    uint8_t  estop_peer;                /* 最近一帧主控快照里有急停位 = 主控已执行 */
 } ui_in_t;
 
 /* ====== 连接视图 ====== */
@@ -57,7 +59,9 @@ void ui_status_module(const ui_link_view_t *lv, char *text, size_t cap, ui_led_t
 typedef enum {
     UI_BN_NONE = 0,
     UI_BN_LINK_LOST,     /* 主控连接中断：本地判定，压过一切（其余状态都不可信）*/
-    UI_BN_ESTOP,         /* 急停：必须人工解除 */
+    UI_BN_ESTOP_UNSENT,  /* 急停已记下但没送到主控（链路断着）：比"连接中断"本身更要紧 */
+    UI_BN_ESTOP,         /* 急停：主控已执行，必须人工解除 */
+    UI_BN_ESTOP_PENDING, /* 急停指令已发出，主控快照里还没有这一位 */
     UI_BN_OVERTEMP,      /* 超温：必须人工解除 */
     UI_BN_AUTO,          /* 体温 / 模块 / 探头：源恢复后自动恢复 */
     UI_BN_INFO,          /* 提示级：未布防时传感器不在、参数校验失败 */
@@ -87,7 +91,6 @@ typedef struct {
     uint8_t  waiting;
     uint32_t sent_ms;
     uint32_t seq_at_send;        /* 发送时的快照序号：变了才说明"主控处理过了"*/
-    uint16_t alarm_at_send;
 } ui_ack_t;
 
 typedef enum {
@@ -99,6 +102,8 @@ typedef enum {
 
 void            ui_ack_start(ui_ack_t *a, const ui_in_t *in);
 ui_ack_result_t ui_ack_poll(ui_ack_t *a, const ui_in_t *in, uint16_t *still);
+/* 放弃等待（切页、关弹窗时）：之后不再出任何提示 */
+void            ui_ack_cancel(ui_ack_t *a);
 /* 没解除的报警位 → 人话原因（"体温传感器仍失联"）；没有可解释的位返回 NULL */
 const char *ui_ack_reason(uint16_t still, const ui_link_view_t *lv);
 
@@ -111,8 +116,7 @@ typedef struct {
     uint8_t   fan;
     uint8_t   tec1;
     uint8_t   tec2;
-    uint8_t   estop;             /* 急停锁存：急停键变灰 */
-    uint8_t   safe;              /* 处于安全态（任何报警）：数值/状态按安全态画 */
+    uint8_t   estop;             /* 急停已记下（主控断了也算）：急停键变灰 */
 } ui_home_t;
 
 #define UI_H_LINK   (1u << 0)   /* 顶栏状态条（主控 / 模块两枚胶囊一起重画）*/
@@ -123,7 +127,6 @@ typedef struct {
 #define UI_H_TEC1   (1u << 5)
 #define UI_H_TEC2   (1u << 6)
 #define UI_H_ESTOP  (1u << 7)
-#define UI_H_SAFE   (1u << 8)
 
 void     ui_home_state(const ui_in_t *in, const ui_link_view_t *lv, ui_home_t *out);
 uint32_t ui_home_diff(const ui_home_t *was, const ui_home_t *now);   /* 位或：UI_H_* */

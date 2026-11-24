@@ -108,6 +108,7 @@ int main(void)
         in.snap_age_ms = UI_LINK_NEVER;
         v = ui_link_view(&in); ui_status_ctrl(&v, text, sizeof text, &led);
         STREQ(text, "主控未连接", "B 从未连上");
+        CHECK(led == UI_LED_RED, "B 从未连上是红灯（不是绿灯）");
 
         in = in_up(1000u, 1u);
         in.m207_online = 0;
@@ -144,13 +145,42 @@ int main(void)
         CHECK(b.kind == UI_BN_LINK_LOST && strstr(b.detail, "等待主控") != NULL,
               "C 从未连上：提示正在等待");
 
+        /* 屏端已记下急停、却没送到主控（链路断着）：比"连接中断"本身更要紧，单独一种横幅。
+         * 这时点它不能发确认——确认只会把屏端自己的记号清掉。*/
+        in = in_up(1000u, 3u);
+        in.snap_age_ms = 5000u;
+        in.alarm = ALM_ESTOP;              /* 这一位是屏端自己置的本地自持，不是主控说的 */
+        in.estop_local = 1u;
+        v = ui_link_view(&in);
+        ui_banner_select(&in, &v, &b);
+        CHECK(b.kind == UI_BN_ESTOP_UNSENT && b.red == 1 && b.tap == UI_BN_TAP_HINT,
+              "C 急停没送到主控：红色、点击只给提示（不发确认）");
+        STREQ(b.title, "急停尚未送达主控", "C 急停没送达标题");
+        CHECK(strstr(b.detail, "立即送达") != NULL && strstr(b.detail, "5s 前") != NULL,
+              "C 急停没送达：说明连上后会送达，并带数据龄");
+        {   /* 提示语可能为空：先判空再用，别让测试靠崩溃变红 */
+            const char *hint = ui_banner_tap_hint(&b);
+            CHECK(hint != NULL && strstr(hint, "立即送达") != NULL, "C 急停没送达的点击提示");
+        }
+        in.snap_age_ms = UI_LINK_NEVER;
+        v = ui_link_view(&in); ui_banner_select(&in, &v, &b);
+        CHECK(b.kind == UI_BN_ESTOP_UNSENT && strstr(b.detail, "等待主控") != NULL,
+              "C 从未连上 + 急停没送达");
+
+        /* 急停：主控快照带了急停位、且执行器状态确实是"TEC 全关 + 风扇开"，才说"TEC 已停"。
+         * "TEC 已停"是主控快照里的事实，不是屏端按了键就能替它说的话（独立复核 P1-1）。*/
         in = in_up(1000u, 3u);
         in.alarm = ALM_ESTOP;
+        in.estop_local = 1u;
+        in.estop_peer = 1u;
+        in.fan = 1u;
         v = ui_link_view(&in);
         ui_banner_select(&in, &v, &b);
         CHECK(b.kind == UI_BN_ESTOP && b.red == 1 && b.tap == UI_BN_TAP_ACK, "C 急停：红、需点击解除");
         STREQ(b.title, "急停已触发", "C 急停标题");
-        CHECK(strstr(b.detail, "点击解除") != NULL, "C 急停第二行写明点击解除");
+        CHECK(strstr(b.detail, "TEC 已停") != NULL && strstr(b.detail, "风扇全速") != NULL
+              && strstr(b.detail, "点击解除") != NULL,
+              "C 急停第二行：主控确认、状态相符后才说 TEC 已停、风扇全速");
         CHECK(b.extra == 0, "C 只有一条报警时 extra=0");
         CHECK(ui_banner_tap_hint(&b) == NULL, "C 需点击解除的横幅没有\"自动恢复\"提示");
 
@@ -158,10 +188,56 @@ int main(void)
         ui_banner_select(&in, &v, &b);
         CHECK(b.kind == UI_BN_ESTOP && b.extra == 2, "C 急停优先，另计还有 2 条");
 
+        /* 主控快照里还没有急停位（指令还在路上，或主控没执行）：不能替它说"TEC 已停" */
+        in.alarm = ALM_ESTOP;
+        in.estop_peer = 0u;
+        v = ui_link_view(&in);
+        ui_banner_select(&in, &v, &b);
+        CHECK(b.kind == UI_BN_ESTOP_PENDING && b.red == 1 && b.tap == UI_BN_TAP_HINT,
+              "C 急停已发出、主控未确认：红，点击只给提示");
+        STREQ(b.title, "急停指令已发出", "C 急停未确认标题");
+        CHECK(strstr(b.detail, "TEC 已停") == NULL && strstr(b.detail, "等待主控确认") != NULL,
+              "C 急停未确认：不说 TEC 已停");
+        {   const char *hint = ui_banner_tap_hint(&b);
+            CHECK(hint != NULL && strstr(hint, "确认") != NULL, "C 急停未确认的点击提示");
+        }
+
+        /* 主控报了急停位，但快照里的执行器状态还不是"全关 + 风扇开"：不写"TEC 已停" */
+        in.estop_peer = 1u;
+        in.fan = 0u;
+        v = ui_link_view(&in);
+        ui_banner_select(&in, &v, &b);
+        CHECK(b.kind == UI_BN_ESTOP && b.tap == UI_BN_TAP_ACK
+              && strstr(b.detail, "TEC 已停") == NULL
+              && strstr(b.detail, "主控已执行急停") != NULL && strstr(b.detail, "点击解除") != NULL,
+              "C 主控报了急停但风扇没开：不说风扇全速，仍可点击解除");
+        in.fan = 1u; in.tec2 = 1u;
+        v = ui_link_view(&in); ui_banner_select(&in, &v, &b);
+        CHECK(b.kind == UI_BN_ESTOP && strstr(b.detail, "TEC 已停") == NULL,
+              "C 主控报了急停但 TEC2 还开着：不说 TEC 已停");
+        in.tec2 = 0u;
+        v = ui_link_view(&in);
+
         in.alarm = ALM_OVERTEMP;
         ui_banner_select(&in, &v, &b);
         CHECK(b.kind == UI_BN_OVERTEMP && b.red == 1 && b.tap == UI_BN_TAP_ACK, "C 超温：红、需点击解除");
         STREQ(b.title, "水温过高", "C 超温标题");
+        in.alarm = ALM_OVERTEMP | ALM_BODY_SENSOR;
+        ui_banner_select(&in, &v, &b);
+        CHECK(b.kind == UI_BN_OVERTEMP && b.extra == 1, "C 超温优先，另计还有 1 条");
+
+        /* 断开满 100s：改说"N 分钟前"（与状态胶囊同一口径）*/
+        in = in_up(1000u, 3u);
+        in.snap_age_ms = 125000u;
+        v = ui_link_view(&in); ui_banner_select(&in, &v, &b);
+        CHECK(b.kind == UI_BN_LINK_LOST && strstr(b.detail, "2 分钟前") != NULL
+              && strstr(b.detail, "已过期") == NULL, "C 断开满 100s 改说\"N 分钟前\"");
+        in = in_up(1000u, 3u);
+        in.snap_age_ms = 99000u;
+        v = ui_link_view(&in); ui_banner_select(&in, &v, &b);
+        CHECK(strstr(b.detail, "99s 前") != NULL, "C 断开 99s 仍说秒");
+        in = in_up(1000u, 3u);
+        v = ui_link_view(&in);
 
         in.alarm = ALM_M207;
         ui_banner_select(&in, &v, &b);
@@ -280,6 +356,26 @@ int main(void)
         in.snap_age_ms += UI_ACK_TIMEOUT_MS;
         CHECK(ui_ack_poll(&a, &in, &still) == UI_ACK_NO_REPLY, "D 主控断开时点击：如实报没回话");
 
+        /* 点击前刚到过一帧新快照、点击后链路断了：屏上残留的报警位说明不了"没解除"，
+         * 结论只能是"主控没回话"（独立复核 P2-3：原先报成"急停仍未解除，请再点一次"）*/
+        in = in_up(7000u, 30u);
+        in.alarm = ALM_ESTOP;
+        ui_ack_start(&a, &in);
+        in.snap_seq = 31u;                       /* 来了一帧"新"快照 */
+        in.now_ms += UI_ACK_SETTLE_MS;
+        in.snap_age_ms = 900u;                   /* 但链路已经断了 */
+        still = 0xFFFF;
+        CHECK(ui_ack_poll(&a, &in, &still) == UI_ACK_NO_REPLY && still == 0,
+              "D 点击后断链：报没回话，不拿陈旧报警位报\"未解除\"");
+
+        /* 放弃等待（切页 / 开弹窗时调用）：之后不再出任何结果 */
+        in = in_up(8000u, 40u);
+        ui_ack_start(&a, &in);
+        ui_ack_cancel(&a);
+        in.now_ms += UI_ACK_SETTLE_MS + UI_ACK_TIMEOUT_MS;
+        CHECK(a.waiting == 0 && ui_ack_poll(&a, &in, &still) == UI_ACK_WAIT,
+              "D ui_ack_cancel 之后不再出结果");
+
         /* 残留原因 */
         ui_in_t one = in_up(1u, 1u);
         ui_link_view_t v = ui_link_view(&one);
@@ -310,7 +406,7 @@ int main(void)
         ui_home_t h0, h1;
         ui_home_state(&in, &v, &h0);
         CHECK(h0.link == UI_LINK_UP && h0.module == UI_SRC_OK && h0.body == UI_SRC_OK, "E 在线态");
-        CHECK(h0.safe == 0 && h0.estop == 0 && h0.mode == 0 && h0.fan == 0, "E 默认输出全关");
+        CHECK(h0.estop == 0 && h0.mode == 0 && h0.fan == 0, "E 默认输出全关");
         ui_home_state(&in, &v, &h1);
         CHECK(ui_home_diff(&h0, &h1) == 0, "E 没变化 → 0");
 
@@ -319,7 +415,6 @@ int main(void)
         h1 = h0; h1.tec1 ^= 1u;              CHECK(ui_home_diff(&h0, &h1) == UI_H_TEC1, "E TEC1 位");
         h1 = h0; h1.tec2 ^= 1u;              CHECK(ui_home_diff(&h0, &h1) == UI_H_TEC2, "E TEC2 位");
         h1 = h0; h1.estop ^= 1u;             CHECK(ui_home_diff(&h0, &h1) == UI_H_ESTOP, "E 急停位");
-        h1 = h0; h1.safe ^= 1u;              CHECK(ui_home_diff(&h0, &h1) == UI_H_SAFE, "E 安全态位");
         h1 = h0; h1.body = UI_SRC_LOST;      CHECK(ui_home_diff(&h0, &h1) == UI_H_BODY, "E 体温位");
         h1 = h0; h1.module = UI_SRC_LOST;
         CHECK(ui_home_diff(&h0, &h1) == (UI_H_MODULE | UI_H_LINK), "E 模块位（同时刷状态条）");
@@ -330,13 +425,21 @@ int main(void)
         ui_home_state(&in, &v, &h1);
         CHECK(h1.fan == 1 && h1.tec2 == 1 && h1.tec1 == 0 && h1.mode == 1, "E 执行器状态取自输入");
 
-        /* 主控断开：执行器/模式/急停一律归零（陈旧值不能上屏当实时）*/
-        in.alarm = ALM_ESTOP;
+        /* 主控在线、屏端记下了急停：急停键变灰 */
+        in.estop_local = 1u;
+        v = ui_link_view(&in);
+        ui_home_state(&in, &v, &h1);
+        CHECK(h1.estop == 1, "E 急停已记下：急停位 = 1（键变灰）");
+
+        /* 主控断开：执行器/模式归零（陈旧值不能上屏当实时）；急停键看屏端自己记没记 */
         in.snap_age_ms = 4000u;
         v = ui_link_view(&in);
         ui_home_state(&in, &v, &h1);
-        CHECK(h1.link == UI_LINK_DOWN && h1.fan == 0 && h1.tec2 == 0 && h1.mode == 0 && h1.estop == 0,
-              "E 主控断开：输出/模式/急停归零");
+        CHECK(h1.link == UI_LINK_DOWN && h1.fan == 0 && h1.tec2 == 0 && h1.mode == 0 && h1.estop == 1,
+              "E 主控断开：输出/模式归零；已记下的急停保持（指令还没送到，键仍灰）");
+        in.estop_local = 0u;
+        ui_home_state(&in, &v, &h1);
+        CHECK(h1.estop == 0, "E 主控断开且没记下急停：急停键是红的（急停必须一直可点）");
     }
 
     printf("test_ui_model: PASS=%d FAIL=%d\n", g_pass, g_fail);

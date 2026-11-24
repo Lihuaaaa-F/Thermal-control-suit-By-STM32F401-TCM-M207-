@@ -27,8 +27,6 @@ lv_obj_t *ui_box(lv_obj_t *p, int x, int y, int w, int h, lv_color_t c, int r);
 void ui_hline(lv_obj_t *p, int x0, int x1, int y, lv_color_t c);
 void ui_vline(lv_obj_t *p, int x, int y0, int y1, lv_color_t c);
 void ui_outline(lv_obj_t *p, int x0, int y0, int x1, int y1, lv_color_t c);
-/* 圆角矩形（bg 参数已无意义，保留只为兼容旧调用）*/
-lv_obj_t *ui_rrect(lv_obj_t *p, int x, int y, int w, int h, int r, lv_color_t fill, lv_color_t bg);
 /* 卡片：圆角 8 + 1px 全包络描边 + 2px 底饰线 */
 lv_obj_t *ui_card(lv_obj_t *p, int x, int y, int w, int h, lv_color_t base, lv_color_t bd);
 
@@ -53,9 +51,8 @@ lv_obj_t *ui_text_center(lv_obj_t *parent, const lv_font_t *f, lv_color_t c, con
 
 /* ---- 按钮：一个可点对象 = 底 + 居中文字，自带按下态 ---- */
 #define UI_BTN_PRIMARY  0     /* 白底蓝边蓝字（常规操作）*/
-#define UI_BTN_DISABLED 1     /* 灰边灰字，不可点 */
+#define UI_BTN_DISABLED 1     /* 灰边灰字，不可点（主控断了时的模式键 / 风扇卡）*/
 #define UI_BTN_DANGER   2     /* 红底白字（急停）*/
-#define UI_BTN_REDDK    3     /* 暗红底白字 */
 #define UI_BTN_GHOST    5     /* 白底灰边次级字（返回 / 取消）*/
 #define UI_BTN_LATCHED  6     /* 灰底白字：急停已锁存，解除后回红 */
 #define UI_BTN_CARD     7     /* 卡片外观的整块可点区（按下变浅蓝底）*/

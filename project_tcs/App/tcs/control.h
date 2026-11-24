@@ -68,12 +68,14 @@ uint8_t tcs_alarm_active(uint16_t bit);
 void  tcs_alarm_ack(void);
 
 #if TCS_USE_LVGL
-/* G5：60 点×30s 温度环形（P2 数据源） */
+/* G5：60 点×30s 温度环形（P2 数据源）。链路不在的格子是 NaN（曲线在此断开）；
+ * tcs_hist_count 是开机以来的格子总数（只增），页面据此判断"来没来新点"。 */
 void tcs_hist_tick(uint32_t now_ms);
 void tcs_hist_snapshot(float out1[60], float out2[60], uint32_t * n);
+uint32_t tcs_hist_count(void);
 #endif
 
-/* 急停（屏弹窗确认 / 0x15 cmd=8 / KEY0 / console estop 同一入口）：
+/* 急停（屏弹窗确认 / 0x15 cmd=8 / 板载 KEY0 / console estop 同一入口）：
  * 双通道 TCSW=0 + 风扇开 + mode=手动 + ALM_ESTOP + 广播 */
 void  tcs_emergency_stop(void);
 

@@ -34,8 +34,8 @@ MUTATIONS = [
      "v.stale = (uint8_t)(v.link != UI_LINK_UP);",
      "v.stale = 0;"),
     ("M04 链路断开的横幅不再压过陈旧报警位",
-     "    if (lv->link != UI_LINK_UP) {\n        char detail[64];",
-     "    if (0) {\n        char detail[64];"),
+     "    if (lv->link != UI_LINK_UP) {\n        char detail[80];",
+     "    if (0) {\n        char detail[80];"),
     ("M05 通信类横幅画成红色",
      'set_banner(out, UI_BN_AUTO, 0, UI_BN_TAP_HINT, auto_title,',
      'set_banner(out, UI_BN_AUTO, 1, UI_BN_TAP_HINT, auto_title,'),
@@ -43,8 +43,8 @@ MUTATIONS = [
      'set_banner(out, UI_BN_AUTO, 0, UI_BN_TAP_HINT, auto_title,',
      'set_banner(out, UI_BN_AUTO, 0, UI_BN_TAP_ACK, auto_title,'),
     ("M07 急停横幅的\"还有 N 条\"多算自己",
-     '"TEC 已停 · 风扇全速 · 点击解除", (uint8_t)(alarm_count(a) - 1u));',
-     '"TEC 已停 · 风扇全速 · 点击解除", (uint8_t)(alarm_count(a)));'),
+     '"TEC 已停 · 风扇全速 · 点击解除", extra);',
+     '"TEC 已停 · 风扇全速 · 点击解除", (uint8_t)(extra + 1u));'),
     ("M08 通信类横幅的优先级错位（探头压过体温）",
      'if (a & ALM_BODY_SENSOR)      auto_title = "体温传感器失联";',
      'if (0)      auto_title = "体温传感器失联";'),
@@ -72,6 +72,52 @@ MUTATIONS = [
     ("M16 去掉确认后的静置期（拿在途旧帧下结论）",
      "if ((uint32_t)(in->now_ms - a->sent_ms) < UI_ACK_SETTLE_MS) return UI_ACK_WAIT;",
      "if (0) return UI_ACK_WAIT;"),
+    # ---- 2026-11-24 独立复核后补：急停文案须经主控确认；复核抽查出的存活变异 ----
+    ("M17 急停位恒 0（急停键永远不变灰）",
+     "    out->estop = in->estop_local ? 1u : 0u;",
+     "    out->estop = 0;"),
+    ("M18 主控断开时急停位归零（没送到也显示成红键）",
+     "    out->estop = in->estop_local ? 1u : 0u;\n"
+     "    /* 主控不在时，执行器/模式都是陈旧值：保持 0，屏幕按\"未知\"画，不做乐观显示 */\n"
+     "    if (lv->link != UI_LINK_UP) return;",
+     "    /* 主控不在时，执行器/模式都是陈旧值：保持 0，屏幕按\"未知\"画，不做乐观显示 */\n"
+     "    if (lv->link != UI_LINK_UP) return;\n"
+     "    out->estop = in->estop_local ? 1u : 0u;"),
+    ("M19 急停没送到主控时不出专门横幅（被“连接中断”盖掉）",
+     "        if (in->estop_local) {",
+     "        if (0) {"),
+    ("M20 主控没确认急停时也说“TEC 已停”",
+     "        if (in->estop_peer && !in->tec1 && !in->tec2 && in->fan)",
+     "        if (1)"),
+    ("M21 不看快照里的风扇状态就写“风扇全速”",
+     "        if (in->estop_peer && !in->tec1 && !in->tec2 && in->fan)",
+     "        if (in->estop_peer)"),
+    ("M22 TEC2 还开着也说“TEC 已停”",
+     "        if (in->estop_peer && !in->tec1 && !in->tec2 && in->fan)",
+     "        if (in->estop_peer && !in->tec1 && in->fan)"),
+    ("M23 急停未确认的横幅点击去发确认",
+     'set_banner(out, UI_BN_ESTOP_PENDING, 1, UI_BN_TAP_HINT, "急停指令已发出",',
+     'set_banner(out, UI_BN_ESTOP_PENDING, 1, UI_BN_TAP_ACK, "急停指令已发出",'),
+    ("M24 急停没送达的横幅点击去发确认",
+     'set_banner(out, UI_BN_ESTOP_UNSENT, 1, UI_BN_TAP_HINT, "急停尚未送达主控", detail, 0);',
+     'set_banner(out, UI_BN_ESTOP_UNSENT, 1, UI_BN_TAP_ACK, "急停尚未送达主控", detail, 0);'),
+    ("M25 断开多久都只说秒（分钟分支不可达）",
+     '            if (s < UI_DOWN_MIN_S)\n'
+     '                snprintf(detail, sizeof detail, "数据停在 %us 前 · 自动重连中", (unsigned)s);',
+     '            if (1)\n'
+     '                snprintf(detail, sizeof detail, "数据停在 %us 前 · 自动重连中", (unsigned)s);'),
+    ("M26 超温横幅的“还有 N 条”不算别的报警",
+     '"已停止加热 · 降下来后点击解除", (uint8_t)(alarm_count(a) - 1u));',
+     '"已停止加热 · 降下来后点击解除", 0);'),
+    ("M27 点击后断链仍拿陈旧报警位下结论",
+     "    if (in->snap_age_ms > UI_LINK_STALE_MS) {",
+     "    if (0) {"),
+    ("M28 放弃等待后仍在等",
+     "void ui_ack_cancel(ui_ack_t *a)\n{\n    a->waiting = 0;",
+     "void ui_ack_cancel(ui_ack_t *a)\n{\n    a->waiting = 1;"),
+    ("M29 “主控未连接”的灯是绿",
+     '            snprintf(text, cap, "主控未连接");\n            *led = UI_LED_RED;',
+     '            snprintf(text, cap, "主控未连接");\n            *led = UI_LED_GREEN;'),
 ]
 
 
@@ -99,7 +145,8 @@ def compile_run(src_text):
 
 
 def fails_of(out):
-    return re.findall(r"^FAIL: (.+?) \(?line", out, flags=re.M)
+    """测试打印的每个失败项：CHECK 的"名称 (line N)"与 STREQ 的"名称 (line N): 得到 …"都算"""
+    return [x.strip() for x in re.findall(r"^FAIL: (.+)$", out, flags=re.M)]
 
 
 def main():

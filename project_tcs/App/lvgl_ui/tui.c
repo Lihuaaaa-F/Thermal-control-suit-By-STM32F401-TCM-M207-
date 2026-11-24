@@ -10,6 +10,8 @@
 /* 主循环在"快照带来状态变化"时写（ms）：用来量"状态变化 → 上屏"的真实延迟 */
 volatile uint32_t g_ui_state_change_ms;
 volatile uint32_t g_ui_state_change_seq;
+volatile uint32_t g_ui_bn_built_ms;    /* 取证：横幅最近一次整条构建的时刻 */
+volatile uint32_t g_ui_ack_sent_ms;    /* 取证：点横幅发确认的时刻 */
 volatile uint32_t g_ui_stat[8];
 volatile uint32_t g_ui_probe[80];
 
@@ -17,11 +19,14 @@ static tui_page_t s_page = TUI_HOME;
 static int        s_diag_mode;
 static lv_obj_t * s_scr;
 static lv_obj_t * s_mask;               /* 模态遮罩（弹窗在场时暂停刷新）*/
+static tui_dlg_kind_t s_dlg;            /* 当前开着的弹窗是哪一个 */
 static int        s_pending = -2;       /* -2 无 / -1 重建当前 / >=0 切页 */
 static int        s_rebuilt;
 static uint32_t   s_last_tick;
 static ui_in_t    s_in;
 static ui_link_view_t s_lv;
+
+static void input_refresh(void);
 
 /* ---- 横幅 ---- */
 #define BN_X      208
@@ -34,7 +39,7 @@ static lv_obj_t *  s_bn_detail;   /* 横幅第二行：主控断开时每秒只�
 static ui_ack_t    s_ack;
 static ui_bn_kind_t s_ack_kind;
 
-/* ---- 顶栏状态条（每一页都在）---- */
+/* ---- 顶栏状态条（每一页都在；诊断页除外——它整屏自绘）---- */
 static ui_pill_t s_pctrl, s_pmod;
 static char      s_pctrl_text[24], s_pmod_text[24];
 static uint8_t   s_strip_valid;
@@ -56,6 +61,15 @@ void tui_input(const ui_in_t **in, const ui_link_view_t **lv)
 
 /* ================= 提示条 ================= */
 
+/* 提示条（高 56）的竖向中心：落在横幅槽位的正下方——首页横幅在 8..64，二级页在 64..120。
+ * 两个位置都够不着底栏急停键。*/
+static int toast_center_y(void) { return (s_page == TUI_HOME) ? 100 : 164; }
+
+static void toast_hide(void)
+{
+    if (s_toast_box) lv_obj_set_hidden(s_toast_box, true);
+}
+
 void ui_toast(const char *text)
 {
     if (!text || !*text) return;
@@ -64,12 +78,12 @@ void ui_toast(const char *text)
         s_toast_label = ui_text_center(s_toast_box, &tcs_font_lv24, TKS_WHITE, "");
     }
     lv_obj_set_width(s_toast_box, ui_text_w(&tcs_font_lv24, text) + 48);
-    /* 横幅槽位（8..64）正下方：不挡横幅，更够不着底栏急停键 */
-    lv_obj_align(s_toast_box, LV_ALIGN_CENTER, 0, 100 - 300);
+    lv_obj_align(s_toast_box, LV_ALIGN_CENTER, 0, toast_center_y() - 300);
     ui_lab_set(s_toast_label, text);
     lv_obj_set_hidden(s_toast_box, false);
     s_toast_until = lv_tick_get() + UI_TOAST_MS;
     g_ui_stat[4]++;
+    g_ui_stat[7] = lv_tick_get();      /* 出现时刻：减去发确认的时刻 = 确认→出提示的延迟 */
 }
 
 static void toast_tick(uint32_t now)
@@ -94,6 +108,7 @@ static void led_colors(ui_led_t led, lv_color_t *bg, lv_color_t *fg, lv_color_t 
 
 static void strip_update(int force)
 {
+    if (!s_pctrl.obj || !s_pmod.obj) return;   /* 诊断页没有状态条 */
     char a[24], b[24];
     ui_led_t la, lb;
     ui_status_ctrl(&s_lv, a, sizeof a, &la);
@@ -125,7 +140,27 @@ static void strip_build(void)
     strip_update(1);
 }
 
+static void strip_drop(void)
+{
+    /* 诊断页不建状态条，但旧句柄已随整屏清掉：不置空的话下一拍 strip_update 会往已释放的
+     * 内存里写样式（独立复核 P2-2）。*/
+    s_pctrl.obj = s_pctrl.dot = s_pctrl.label = NULL;
+    s_pmod.obj = s_pmod.dot = s_pmod.label = NULL;
+    s_strip_valid = 0;
+}
+
 /* ================= 报警横幅 ================= */
+
+/* 横幅出现/消失时让二级页把内容挪开/挪回（横幅占 y 64..120，会压住第一行）*/
+static void page_banner_room(int room)
+{
+    switch (s_page) {
+        case TUI_TUNE:  tui_p1_set_banner_room(room); break;
+        case TUI_CHART: tui_p2_set_banner_room(room); break;
+        case TUI_CONN:  tui_p3_set_banner_room(room); break;
+        default: break;
+    }
+}
 
 static void banner_tap(lv_event_t *e)
 {
@@ -133,8 +168,12 @@ static void banner_tap(lv_event_t *e)
     if (!s_bn_have) return;
     g_ui_stat[3]++;
     if (s_bn.tap == UI_BN_TAP_ACK) {
-        /* 发确认；结果由下一帧主控快照给出（ui_ack_poll），这里不抢先清屏上的报警 */
+        /* 发确认；结果由之后的主控快照给出（ui_ack_poll），这里不抢先清屏上的报警。
+         * 先现读一次链路状态：s_in 是上一拍刷新的，拿它的快照序号当"点击时的"，
+         * 会把点击前刚到的那一帧当成"主控已经回话"（独立复核 P2-3）。*/
+        input_refresh();
         s_ack_kind = s_bn.kind;
+        g_ui_ack_sent_ms = lv_tick_get();
         tcs_alarm_ack();
         ui_ack_start(&s_ack, &s_in);
     } else {
@@ -178,9 +217,13 @@ static void banner_sync(void)
      * 主控处理完才真正消失——不冻结的话横幅会"消失→回来→消失"闪一下（2026-11-24 真机）。*/
     if (s_ack.waiting && s_bn_have) return;
     if (want.kind == UI_BN_NONE) {
-        if (s_bn_layer) { lv_obj_delete(s_bn_layer); s_bn_layer = NULL; }
-        s_bn_have = 0;
+        if (s_bn_layer) lv_obj_delete(s_bn_layer);
+        s_bn_layer = NULL;
         s_bn_detail = NULL;
+        if (s_bn_have) {
+            s_bn_have = 0;
+            page_banner_room(0);
+        }
         return;
     }
     if (s_bn_have && want.kind == s_bn.kind && want.red == s_bn.red &&
@@ -196,9 +239,12 @@ static void banner_sync(void)
     if (s_bn_layer) lv_obj_delete(s_bn_layer);
     s_bn_detail = NULL;
     s_bn = want;
+    uint8_t was_there = s_bn_have;
     s_bn_have = 1;
     banner_build(&s_bn);
     g_ui_stat[2]++;
+    g_ui_bn_built_ms = lv_tick_get();
+    if (!was_there) page_banner_room(1);
 }
 
 static void ack_poll(void)
@@ -208,9 +254,14 @@ static void ack_poll(void)
     if (r == UI_ACK_WAIT) return;
     switch (r) {
         case UI_ACK_ALL_CLEAR:
-            /* 急停会把设备切到手动：如实告诉使用者下一步（急停复位后不自动重启）*/
-            if (s_ack_kind == UI_BN_ESTOP)
-                ui_toast("急停已解除 · 现在是手动模式，点 切自动 恢复自动温控");
+            /* 急停会把设备切到手动：如实告诉使用者下一步（急停复位后不自动重启）。
+             * 文案跟着主控快照里的模式走，不写死"手动"。*/
+            if (s_ack_kind == UI_BN_ESTOP) {
+                if (s_lv.link == UI_LINK_UP && s_in.mode)
+                    ui_toast("急停已解除 · 已恢复自动温控");
+                else
+                    ui_toast("急停已解除 · 现在是手动模式，点 切自动 恢复自动温控");
+            }
             else if (s_ack_kind == UI_BN_OVERTEMP)
                 ui_toast("超温已解除，可以继续使用");
             else
@@ -231,21 +282,25 @@ static void ack_poll(void)
 
 /* ================= 弹窗 ================= */
 
-static void mask_click_cb(lv_event_t *e) { LV_UNUSED(e); }
-
 void tui_dlg_close(void)
 {
     if (s_mask) { lv_obj_delete(s_mask); s_mask = NULL; }
+    s_dlg = TUI_DLG_NONE;
 }
 
-int tui_dlg_active(void) { return s_mask != NULL; }
+tui_dlg_kind_t tui_dlg_kind(void) { return s_mask ? s_dlg : TUI_DLG_NONE; }
 
 static void dlg_estop_ok(lv_event_t *e)
 {
     LV_UNUSED(e);
+    input_refresh();                   /* 链路状态要此刻的，不用上一拍留下的 */
+    uint8_t up = (uint8_t)(s_lv.link == UI_LINK_UP);
     tcs_emergency_stop();
     tui_dlg_close();
-    ui_toast("已急停：TEC 全停、风扇全速");
+    /* 此刻只是"指令已发出"：执行器有没有停，要等主控的快照来说（横幅随后会写明）。
+     * 主控断着：屏端已记下急停意图，链路恢复后由 main.c 自动重发。*/
+    if (up) ui_toast("急停指令已发出 · 等待主控确认");
+    else    ui_toast("主控连接中断 · 急停指令已记下，连上后立即送达");
 }
 
 static void dlg_cancel(lv_event_t *e)
@@ -254,17 +309,21 @@ static void dlg_cancel(lv_event_t *e)
     tui_dlg_close();
 }
 
-/* 标题 + 正文 + 两个键（确认键随 danger 取红/蓝，取消键统一幽灵样式）*/
-static void build_dialog(const char *title, const char *body, const char *ok,
-                         int danger, lv_event_cb_t ok_cb)
+/* 标题 + 正文 + 两个键（确认键随 danger 取红/蓝，取消键统一幽灵样式）。
+ * 遮罩是一个可点击的整屏对象：它把点击吃掉，后面的页面收不到（不需要回调）。*/
+static void build_dialog(tui_dlg_kind_t kind, const char *title, const char *body,
+                         const char *ok, int danger, lv_event_cb_t ok_cb)
 {
     if (s_mask) return;
+    s_dlg = kind;
+    /* 确认反馈等到一半时开了弹窗：弹窗期间不跑 ack_poll，关窗后才会冒出一条过时的提示。
+     * 开窗就放弃这次等待（独立复核 P3-5）。*/
+    ui_ack_cancel(&s_ack);
     s_mask = lv_obj_create(lv_screen_active());
     lv_obj_remove_style_all(s_mask);
     lv_obj_set_size(s_mask, 1024, 600);
     lv_obj_set_pos(s_mask, 0, 0);
     lv_obj_set_style_bg_opa(s_mask, LV_OPA_TRANSP, 0);
-    lv_obj_add_event_cb(s_mask, mask_click_cb, LV_EVENT_CLICKED, NULL);
     ui_mask_dots(s_mask);
 
     ui_card(s_mask, 256, 136, 512, 320, TKS_WHITE, TKS_BORDER);
@@ -277,19 +336,24 @@ static void build_dialog(const char *title, const char *body, const char *ok,
 
 void tui_dlg_estop(void)
 {
-    build_dialog("确认急停？", "TEC 将全部停止，风扇全开。", "确认急停", 1, dlg_estop_ok);
+    build_dialog(TUI_DLG_ESTOP, "确认急停？", "TEC 将全部停止，风扇全开。", "确认急停", 1, dlg_estop_ok);
 }
 
 static void dlg_mode_ok(lv_event_t *e)
 {
     LV_UNUSED(e);
-    (void)param_set(PARAM_ID_MODE, 1.0f, PARAM_SRC_TOUCH);
+    input_refresh();
+    uint8_t up = (uint8_t)(s_lv.link == UI_LINK_UP);
     tui_dlg_close();
+    /* 主控断了就别改：屏端注册表只是镜像，帧发不出去时本地模式会被下一次镜像泵打回去 */
+    if (!up) { ui_toast("主控连接中断，现在不能切换模式"); return; }
+    if (param_set(PARAM_ID_MODE, 1.0f, PARAM_SRC_TOUCH) < 0)
+        ui_toast("没有改成：这个参数现在不能修改");
 }
 
 void tui_dlg_mode(void)
 {
-    build_dialog("切换到自动模式？", "自动模式按体温闭环控制制冷。", "切换", 0, dlg_mode_ok);
+    build_dialog(TUI_DLG_MODE, "切换到自动模式？", "按体温闭环控制制冷和制热。", "切换", 0, dlg_mode_ok);
 }
 
 /* ================= 页管理 ================= */
@@ -298,6 +362,8 @@ void tui_goto(tui_page_t p)
 {
     s_page = p;
     tui_dlg_close();
+    toast_hide();                      /* 提示是说刚才能那一页的事，换了页就不再挂着 */
+    ui_ack_cancel(&s_ack);
     lv_obj_clean(s_scr);
     /* 旧横幅随整屏清掉；状态条与页面内容由下面的构建重建 */
     s_bn_layer = NULL;
@@ -312,6 +378,7 @@ void tui_goto(tui_page_t p)
         default: break;
     }
     if (p != TUI_DIAG) strip_build();
+    else               strip_drop();
     s_rebuilt = 1;
     g_ui_stat[0]++;
 }
@@ -365,7 +432,7 @@ static void input_refresh(void)
     /* 屏端 g_tcs 就是最近一帧快照的镜像（snap_apply / snap_reassert 维护）*/
     s_in.m207_online = g_tcs.m207_online;
     s_in.body_ok = g_tcs.body_sensor_ok;
-    s_in.sensor_open = (g_tcs.alarm_bits & ALM_SENSOR_OPEN) ? 1u : 0u;
+    s_in.sensor_open = (g_tcs.alarm_bits & ALM_SENSOR_OPEN) ? 1u : 0;
     s_in.alarm = g_tcs.alarm_bits;
     s_in.mode = g_tcs.mode;
     s_in.fan = g_tcs.fan_on;
@@ -374,6 +441,10 @@ static void input_refresh(void)
     s_in.tc1_act = g_tcs.tc1_act;
     s_in.tc2_act = g_tcs.tc2_act;
     s_in.body = g_tcs.body_temp;
+    /* 急停：屏端记下的（本地自持，或报警位里有）与"主控已执行"（最近一帧快照里才有）
+     * 是两件事，横幅文案据此区分"已发出/已执行/没送到"。*/
+    s_in.estop_local = (control_estop_latched() || (g_tcs.alarm_bits & ALM_ESTOP)) ? 1u : 0u;
+    s_in.estop_peer = tcs_link_snap_peer_estop();
     s_lv = ui_link_view(&s_in);
 }
 
@@ -403,6 +474,12 @@ void tui_tick(void)
         if (p < 0) tui_goto(s_page);
         else       tui_goto((tui_page_t)p);
     }
+    /* ①b 确认在途：每圈都看一眼（主循环约 10ms 一圈），结果一出就提示，不等下一个 200ms 节拍。
+     * 只读链路状态和报警位，不画东西；真正出结果的那一下才弹提示条。*/
+    if (s_ack.waiting && !s_mask) {
+        input_refresh();
+        ack_poll();
+    }
     /* ② 周期刷新 */
     uint32_t now = lv_tick_get();
     if (now - s_last_tick < UI_TICK_MS) return;
@@ -410,9 +487,10 @@ void tui_tick(void)
     input_refresh();
     strip_update(0);
     if (!s_mask) {
-        if (page_update()) tui_goto(s_page);
+        /* 确认在途时页面状态冻结不到半秒：本地确认会先清报警位、约 10ms 后又被快照回灌，
+         * 赶上这个空档的一拍会让急停键灰、红、灰、红闪一下（独立复核 P3-5）。*/
+        if (!s_ack.waiting && page_update()) tui_goto(s_page);
         banner_sync();
-        ack_poll();
     }
     toast_tick(now);
 }

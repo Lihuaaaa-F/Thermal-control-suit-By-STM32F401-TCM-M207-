@@ -171,7 +171,13 @@ def main():
     for ln in r.stdout.splitlines():
         print("      " + ln)
     if r.returncode != 0:
-        fails.append(("D", ["字形度量不是比例步进：重跑 python tools/font_metrics_patch.py"]))
+        # 两类失败分开报：度量没打补丁（重跑即可）与检查工具自己出错（先修工具，
+        # 否则码点表错位之类的问题会被误报成"重跑补丁"）。
+        if "font_metrics: FAIL" in r.stdout and not r.stderr.strip():
+            fails.append(("D", ["字形度量不是比例步进：重跑 python tools/font_metrics_patch.py"]))
+        else:
+            fails.append(("D", ["font_metrics_patch.py --check 异常退出（rc=%d）：%s"
+                                % (r.returncode, (r.stderr or r.stdout).strip()[-300:])]))
 
     print()
     if fails:

@@ -228,7 +228,7 @@ void tcs_lvgl_poll(void)
     g_lvgl_beat++;
     lv_timer_handler();
 #if !defined(TCS_LVGL_SCENE_BENCH) && !defined(TCS_LVGL_SCENE_HELLO)
-    tui_tick();   /* 延后导航/500ms 数据刷新（LVGL 回调上下文外） */
+    tui_tick();   /* 延后导航/200ms 数据刷新（LVGL 回调上下文外） */
 #endif
     uint32_t cyc = DWT->CYCCNT - cy0;
 #if !defined(TCS_LVGL_SCENE_BENCH) && !defined(TCS_LVGL_SCENE_HELLO)
@@ -294,14 +294,17 @@ void tcs_lvgl_estop_watch(void)
         y = ev.y;
     }
 
-    /* D-L7② 屏入口兜底：热区=底栏急停键（768,472,216,112），主循环节拍判定，不依赖 LVGL。
+    /* D-L7② 屏入口兜底：热区 = 底栏急停键（矩形见 tui.h 的 TUI_ESTOP_*，现在 768,464,216,112），
+     * 主循环节拍判定，不依赖 LVGL。
      * 2026-11-23 现场修正边界：规范是"急停二次确认（弹窗）"（UI 规范 §、规格书
      * "屏弹窗"），正常路径由 LVGL 弹"确认急停？"。原实现不分情况先触发 → 一按就急停，
      * 弹窗反而在急停之后才弹出，还把红色横幅挡住（现场实测）。现在：
      *   - LVGL 心跳停了（卡死/低水位跳过 handler）→ 按下后下一个节拍直接急停（兜底本职）；
-     *   - LVGL 活着 → 交给弹窗确认；按住 ≥TCS_ESTOP_FORCE_HOLD_MS 仍无弹窗（半死）→ 直接急停，
-     *     且只在首页生效（用户 2026-11-24 确认保留长按直接急停）——其它页面这块区域是别的控件
-     *     （调参页的 + 键就在这里），不能触发。
+     *   - LVGL 活着 → 交给弹窗确认；按住 ≥TCS_ESTOP_FORCE_HOLD_MS 仍无弹窗（半死）→ 直接急停。
+     * 两条都只在首页生效（用户 2026-11-24 确认保留长按直接急停）——其它页面这块区域是别的
+     * 控件（调参页的 + 键就在这里），不能触发。
+     * 开着的弹窗如果是"确认急停？"，长按也让位（那本身就是确认入口）；是别的弹窗
+     * （比如"切自动"）则照样直接急停并把它关掉——急停不该被任何弹窗挡住（独立复核 P2-8）。
      * 每次按压只触发一次：重发由主循环 200ms pending 块负责（R-15），本机动作幂等。*/
     if (!pressed || x < TUI_ESTOP_X || x >= TUI_ESTOP_X + TUI_ESTOP_W ||
         y < TUI_ESTOP_Y || y >= TUI_ESTOP_Y + TUI_ESTOP_H) {
@@ -315,10 +318,12 @@ void tcs_lvgl_estop_watch(void)
         s_beat0 = g_lvgl_beat;
     }
     if (s_fired || (uint32_t)(now - s_since) < TCS_ESTOP_GRACE_MS) return;
+    if (tui_current() != TUI_HOME) return;
     uint8_t lvgl_alive = (g_lvgl_beat != s_beat0);
     uint8_t held = ((uint32_t)(now - s_since) >= TCS_ESTOP_FORCE_HOLD_MS);
-    if (!lvgl_alive || (held && !tui_dlg_active() && tui_current() == TUI_HOME)) {
+    if (!lvgl_alive || (held && tui_dlg_kind() != TUI_DLG_ESTOP)) {
         s_fired = 1;
+        if (lvgl_alive) tui_dlg_close();
         tcs_emergency_stop();
     }
 }

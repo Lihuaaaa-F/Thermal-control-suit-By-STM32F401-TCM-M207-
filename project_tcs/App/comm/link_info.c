@@ -70,6 +70,13 @@ int link_info_store(const char *pl, size_t len)
     fw[0] = 0;
     (void)tcs_info_get(pl, len, "url", url, sizeof url);
     (void)tcs_info_get(pl, len, "fw",  fw,  sizeof fw);
+    /* 内容没变就不换号：主控每 3.2s 推一次同样的 INFO，帧帧都换号的话连接页会每 3.2s
+     * 整页重建一次（重编码二维码、重画位图），重建瞬间落下的"返回"点击还会丢
+     * （独立复核 P2-1）。页面只在内容真的变了（热点被改名、固件升级）时重建。*/
+    if (s_info.valid &&
+        strcmp(s_info.ssid, ssid) == 0 && strcmp(s_info.pass, pass) == 0 &&
+        strcmp(s_info.url, url) == 0 && strcmp(s_info.fw, fw) == 0)
+        return 0;
     strcpy(s_info.ssid, ssid);
     strcpy(s_info.pass, pass);
     strcpy(s_info.url, url);

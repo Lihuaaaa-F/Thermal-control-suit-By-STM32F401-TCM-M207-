@@ -44,7 +44,11 @@ typedef struct {
 
 static row_t     s_row[4];
 static float     s_shown[4];         /* 每行上次画上去的值（与注册表比对，变了才重画）*/
-static lv_obj_t *s_scr;
+static lv_obj_t *s_scr;              /* 四行的父对象（= s_rows）*/
+static lv_obj_t *s_rows;             /* 四行容器：有横幅时整体下移（tui_p1_set_banner_room）*/
+static lv_obj_t *s_hint;             /* 顶栏那句用法/禁用提示 */
+static uint8_t   s_hint_off;         /* s_hint 当前写的是"主控断了不能调参" */
+static uint8_t   s_room;             /* 当前是否给横幅让了位 */
 static int       s_sel;
 static float     s_step = 0.1f;
 static uint8_t   s_built;
@@ -120,10 +124,25 @@ static void select_paint(void)
 
 /* ============ 落值 ============ */
 
+#define HINT_ON  "拖滑条或按加减键，改动立即生效"
+#define HINT_OFF "主控连接中断，现在不能调参"
+
+/* 主控在线才能改参：屏端注册表只是镜像，帧发不出去时 param_set 照样返回 0，本地值
+ * 会在下一次镜像泵时被主控打回去——使用者看到的是"改了又自己变回去"。
+ * 所以主控断了就明说现在不能改，而不是让他白点。（独立复核 P2-4）*/
+static int link_up(void)
+{
+    const ui_in_t *in;
+    const ui_link_view_t *lv;
+    tui_input(&in, &lv);
+    return lv->link == UI_LINK_UP;
+}
+
 static void apply_value(int i, float v)
 {
     const param_desc_t *p = pd(i);
     if (!p) return;
+    if (!link_up()) { ui_toast(HINT_OFF); return; }
     int rv = param_set(s_ids[i], quantize(p, v), PARAM_SRC_TOUCH);
     if (rv == -2) ui_toast("没有改成：过冷阈值必须低于过热阈值");
     else if (rv < 0) ui_toast("这个参数现在不能修改");
@@ -269,37 +288,63 @@ static void build_row(int i)
     row_refresh(i);
 }
 
+/* 顶栏（返回 + 标题 + 提示）直接画在屏幕上不动；四行画在容器 s_rows 里，底栏画在 s_body 上。
+ * 坐标一律按屏幕绝对位置写（容器都在 (0,0)）。*/
 void tui_p1_build(lv_obj_t *scr)
 {
-    s_scr = scr;
     memset(s_row, 0, sizeof s_row);
     for (int i = 0; i < 4; i++) s_shown[i] = NAN;
     if (s_sel < 0 || s_sel > 3) s_sel = 0;
     s_drag_row = -1;
     s_built = 0;
+    s_room = 0;
 
     /* 顶栏：返回 + 标题 + 一句用法（右边是常驻状态条）*/
     ui_button(scr, 24, 8, 120, 40, "‹ 返回", UI_BTN_GHOST, &tcs_font_lv24, clk_back, NULL);
     ui_text32(scr, 176, 16, "调参", TKS_TX);
-    ui_text24(scr, 280, 22, "拖滑条或按加减键，改动立即生效", TKS_TX2);
+    s_hint_off = 0xFF;
+    s_hint = ui_text24(scr, 280, 22, HINT_ON, TKS_TX2);
+
+    lv_obj_t *body = ui_box(scr, 0, 0, 1024, 600, TKS_BG, 0);
+    lv_obj_set_style_bg_opa(body, LV_OPA_TRANSP, 0);
+    s_rows = ui_box(body, 0, 0, 1024, 600, TKS_BG, 0);
+    lv_obj_set_style_bg_opa(s_rows, LV_OPA_TRANSP, 0);
+    s_scr = s_rows;
 
     for (int i = 0; i < 4; i++) build_row(i);
     select_paint();
 
     /* 底栏：对"选中行"生效的大 − ＋ 与步进切换 */
     lv_obj_t *sym[2];
-    s_big_minus = ui_button(scr, 32, 472, 96, 96, "", UI_BTN_PRIMARY, &tcs_font_lv32,
+    s_big_minus = ui_button(body, 32, 472, 96, 96, "", UI_BTN_PRIMARY, &tcs_font_lv32,
                             clk_big, (void *)(intptr_t)-1);
     make_symbol(s_big_minus.obj, 0, 36, 5, sym);
-    s_big_plus = ui_button(scr, 896, 472, 96, 96, "", UI_BTN_PRIMARY, &tcs_font_lv32,
+    s_big_plus = ui_button(body, 896, 472, 96, 96, "", UI_BTN_PRIMARY, &tcs_font_lv32,
                            clk_big, (void *)(intptr_t)1);
     make_symbol(s_big_plus.obj, 1, 36, 5, sym);
-    s_step_btn = ui_button(scr, 160, 488, 180, 64, "", UI_BTN_PRIMARY, &tcs_font_lv24, clk_step, NULL);
+    s_step_btn = ui_button(body, 160, 488, 180, 64, "", UI_BTN_PRIMARY, &tcs_font_lv24, clk_step, NULL);
     step_button_text();
     s_built = 1;
+    (void)tui_p1_update();
 }
 
-/* 别处（网页 / 控制台 / 镜像）改了参数：只重画值变了的行 */
+/* 二级页的横幅占 y 64..120（会盖住第一行的滑条）。有横幅时：四行整体下移 72px（从 128 起，
+ * 末行到 528），底栏压扁挪到最底下（532..588）；没有横幅时回到原位。
+ * 只改位置和尺寸，不重建任何对象——就地更新手里的句柄全部照旧有效。*/
+void tui_p1_set_banner_room(int room)
+{
+    if (!s_built || (uint8_t)(room ? 1 : 0) == s_room) return;
+    s_room = (uint8_t)(room ? 1 : 0);
+    lv_obj_set_y(s_rows, room ? 72 : 0);
+    lv_obj_set_pos(s_big_minus.obj, 32, room ? 532 : 472);
+    lv_obj_set_height(s_big_minus.obj, room ? 56 : 96);
+    lv_obj_set_pos(s_big_plus.obj, 896, room ? 532 : 472);
+    lv_obj_set_height(s_big_plus.obj, room ? 56 : 96);
+    lv_obj_set_pos(s_step_btn.obj, 160, room ? 536 : 488);
+    lv_obj_set_size(s_step_btn.obj, 180, room ? 48 : 64);
+}
+
+/* 别处（网页 / 控制台 / 镜像）改了参数：只重画值变了的行；顶栏提示跟着链路状态走 */
 int tui_p1_update(void)
 {
     if (!s_built) return 1;
@@ -308,12 +353,20 @@ int tui_p1_update(void)
         const param_desc_t *p = pd(i);
         if (p && p->value != s_shown[i]) row_refresh(i);
     }
+    uint8_t off = link_up() ? 0u : 1u;
+    if (off != s_hint_off) {
+        s_hint_off = off;
+        ui_lab_set(s_hint, off ? HINT_OFF : HINT_ON);
+        lv_obj_set_style_text_color(s_hint, off ? TKS_RED : TKS_TX2, 0);
+    }
     return 0;
 }
 
-/* ---- 走查钩子（g_ui_cmd 9..14；与真实触摸走同一套 apply_value）---- */
+/* ---- 走查钩子（g_ui_cmd 9..14；与真实触摸走同一套 apply_value）----
+ * 只在本页时有效：别的页上 s_row 里的对象早已被删，不能碰。*/
 void tui_step_param(int dir)
 {
+    if (!s_built || tui_current() != TUI_TUNE) return;
     const param_desc_t *p = pd(s_sel);
     if (!p) return;
     float step = (p->step > 0.0f) ? p->step : 0.1f;
@@ -321,12 +374,13 @@ void tui_step_param(int dir)
     apply_value(s_sel, p->value + (float)dir * step);
 }
 
-void tui_step_toggle(void) { s_step = (s_step < 0.5f) ? 1.0f : 0.1f; }
-void tui_sel_next(void)    { s_sel = (s_sel + 1) % 4; if (s_built) select_paint(); }
+void tui_step_toggle(void) { if (s_built && tui_current() == TUI_TUNE) s_step = (s_step < 0.5f) ? 1.0f : 0.1f; }
+void tui_sel_next(void)    { if (!s_built || tui_current() != TUI_TUNE) return; s_sel = (s_sel + 1) % 4; select_paint(); }
 uint16_t tui_sel_param_id(void) { return s_ids[s_sel]; }
 
 void tui_slider_center(void)
 {
+    if (!s_built || tui_current() != TUI_TUNE) return;
     const param_desc_t *p = pd(s_sel);
     if (p) apply_value(s_sel, p->min + (p->max - p->min) * 0.5f);
 }

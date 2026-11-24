@@ -74,8 +74,12 @@ def parse_font(text):
     if "LV_FONT_FMT_TXT_CMAP_SPARSE_TINY" not in text:
         raise SystemExit("只支持 SPARSE_TINY 字符映射（本仓库四张表都是）")
     base = int(rs.group(1))
+    lh = re.search(r"\.line_height\s*=\s*(\d+)", text)
+    if not lh:
+        raise SystemExit("找不到 .line_height（字号以它为准，不能拿第 1 个字形的位图宽凑）")
     return {
         "range_start": base,
+        "line_height": int(lh.group(1)),      # 字号（em）：字表自己声明的行高
         # SPARSE_TINY：第 k 个码点 = range_start + unicode_list_0[k]，对应字形下标 k+1
         "cps": [base + v for v in parse_int_list(text, "unicode_list_0")],
         "bitmap": parse_int_list(text, "glyph_bitmap"),
@@ -107,7 +111,7 @@ def target_metrics(font):
     cps, dsc = font["cps"], font["dsc"]
     if len(cps) + 1 != len(dsc):
         raise SystemExit("码点数 %d 与字形数 %d 对不上（下标 0 是空字形）" % (len(cps), len(dsc) - 1))
-    em = dsc[1][2] if dsc[1][2] > 0 else dsc[1][1] // 16
+    em = font["line_height"]
     pad = max(1, em // 24)
     ink = [ink_of(font, r) for r in dsc]
     widths = [0 if i is None else i[1] - i[0] for i in ink]
@@ -150,7 +154,7 @@ def target_metrics(font):
     return out
 
 
-def apply(text, targets):
+def apply(path, text, targets):
     """按出现顺序把新度量写回 glyph_dsc（第 n 个匹配 = dsc 下标 n）。"""
     n = -1
     def sub(m):
@@ -181,10 +185,10 @@ def process(path, check):
     sample = lambda s: sum(want.get(1 + cps.index(ord(c)), (font["dsc"][1 + cps.index(ord(c))][1],))[0]
                            for c in s if ord(c) in cps) / 16.0
     print("%-22s 字号 %2d  收窄 %3d 字  \"25.0\"=%5.1fpx \"°C\"=%5.1fpx \"M207\"=%5.1fpx  %s"
-          % (path.name, font["dsc"][1][2], len(want), sample("25.0"), sample("°C"), sample("M207"),
+          % (path.name, font["line_height"], len(want), sample("25.0"), sample("°C"), sample("M207"),
              "已是期望" if not diff else ("需改 %d 字" % len(diff))))
     if diff and not check:
-        path.write_text(apply(text, want), encoding="utf-8", newline="\n")
+        path.write_text(apply(path, text, want), encoding="utf-8", newline="\n")
     return not diff
 
 

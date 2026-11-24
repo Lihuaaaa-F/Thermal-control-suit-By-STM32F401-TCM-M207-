@@ -30,12 +30,14 @@ int         tui_last_was_rebuild(void);  /* 读取并清零"上一拍做过整�
 /* 当前输入与连接视图（tui_tick 每拍刷新一次；页面 update() 从这里取）*/
 void tui_input(const ui_in_t **in, const ui_link_view_t **lv);
 
-/* ---- 页面接口（各页文件实现）---- */
+/* ---- 页面接口（各页文件实现）----
+ * 二级页另有 set_banner_room(room)：横幅占 y 64..120，会压住页面内容；room=1 时页面把内容
+ * 挪开（只改位置，不重建对象），room=0 时挪回。由 tui.c 在横幅出现/消失时调用。*/
 void tui_p0_build(lv_obj_t *scr);   int tui_p0_update(void);   /* 主页 */
-void tui_p1_build(lv_obj_t *scr);   int tui_p1_update(void);   /* 调参 */
-void tui_p2_build(lv_obj_t *scr);   int tui_p2_update(void);   /* 曲线 */
-void tui_p3_build(lv_obj_t *scr);   int tui_p3_update(void);   /* 连接 */
-void tui_diag_build(lv_obj_t *scr, int mode);                   /* 诊断页（只走查用）*/
+void tui_p1_build(lv_obj_t *scr);   int tui_p1_update(void);   void tui_p1_set_banner_room(int room);
+void tui_p2_build(lv_obj_t *scr);   int tui_p2_update(void);   void tui_p2_set_banner_room(int room);
+void tui_p3_build(lv_obj_t *scr);   int tui_p3_update(void);   void tui_p3_set_banner_room(int room);
+void tui_diag_build(lv_obj_t *scr, int mode);                                /* 诊断页（只走查用）*/
 void tui_diag_set_mode(int mode);
 
 /* ---- 底栏急停键的屏幕矩形：主页按钮、按下态兜底（tcs_lvgl.c）共用这一处，防两处漂移 ---- */
@@ -45,9 +47,12 @@ void tui_diag_set_mode(int mode);
 #define TUI_ESTOP_H  112
 
 /* ---- 弹窗 ---- */
+typedef enum { TUI_DLG_NONE = 0, TUI_DLG_ESTOP, TUI_DLG_MODE } tui_dlg_kind_t;
 void tui_dlg_estop(void);            /* 急停二次确认 */
 void tui_dlg_mode(void);             /* 切自动二次确认 */
-int  tui_dlg_active(void);
+/* 当前开的是哪个弹窗（没有 = TUI_DLG_NONE）。屏上急停的长按直触发只在"急停确认框"开着时
+ * 才让位：开着的是别的弹窗时，按住急停键照样直接急停（独立复核 P2-8）。*/
+tui_dlg_kind_t tui_dlg_kind(void);
 void tui_dlg_close(void);
 
 /* ---- 提示条：顶部居中浮动 3.5s，不挡横幅与底栏急停键 ---- */
@@ -65,11 +70,16 @@ void tui_slider_center(void);
 uint16_t tui_sel_param_id(void);
 
 /* 运行统计（probe 直读）：[0] 整页重建 [1] 就地更新 [2] 横幅重建 [3] 横幅点击
- * [4] 提示条次数 [5] 状态变化→上屏 最大延迟 ms [6] 最近一次延迟 ms [7] 保留 */
+ * [4] 提示条次数 [5] 状态变化→上屏 最大延迟 ms [6] 最近一次延迟 ms
+ * [7] 最近一次提示条出现的时刻 ms（减 g_ui_ack_sent_ms = 点确认→出提示的延迟）*/
 extern volatile uint32_t g_ui_stat[8];
 extern volatile uint32_t g_ui_probe[80];
 /* main.c 在"快照带来状态变化"时写入（ms），用于量状态上屏延迟 */
 extern volatile uint32_t g_ui_state_change_ms;
 extern volatile uint32_t g_ui_state_change_seq;   /* 每记一次 +1 */
+/* 取证用时间戳（ms）：横幅最近一次整条构建的时刻（减 main.c 的 s_snap_ms = 断链→横幅上屏
+ * 的延迟，含 500ms 判定窗）；点横幅发出确认的时刻。只写不读，不影响任何行为。*/
+extern volatile uint32_t g_ui_bn_built_ms;
+extern volatile uint32_t g_ui_ack_sent_ms;
 
 #endif

@@ -45,7 +45,11 @@ int main(void)
     STREQ(li->pass, "12345678", "pass");
     STREQ(li->url, "http://192.168.4.1", "url");
     STREQ(li->fw, "1.2.0", "fw");
-    CHECK(link_info_gen() == g0 + 1u, "generation +1 per stored frame");
+    CHECK(link_info_gen() == g0 + 1u, "generation +1 when content changes");
+    /* 主控每 3.2s 重发一次内容相同的 INFO：不能帧帧换号，否则连接页会每 3.2s 整页重建一次
+     * （重编码二维码、重画位图，重建瞬间的"返回"点击还会丢；独立复核 P2-1）。*/
+    CHECK(link_info_store(pl, strlen(pl)) == 0 && link_info_gen() == g0 + 1u,
+          "same INFO again: generation unchanged");
 
     n = link_info_wifi_qr(qr, sizeof qr);
     CHECK(n == strlen(qr), "wifi qr: length matches return value");

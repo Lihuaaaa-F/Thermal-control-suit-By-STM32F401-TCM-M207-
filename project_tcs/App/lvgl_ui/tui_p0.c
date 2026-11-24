@@ -52,11 +52,15 @@ static struct {
     lv_obj_t *body_card, *body_val, *body_unit;
     ui_pill_t body_badge;
     lv_obj_t *fan_state, *fan_track, *fan_knob, *fan_word;
-    ui_button_t b_mode, b_estop;
+    ui_button_t b_mode, b_estop, b_fan;
     ui_home_t  st;             /* 上次画上去的状态（diff 的基准）*/
-    uint32_t   note_seq;      /* 上次据此算过延迟的"快照变化号" */
     uint8_t   built, grayed;   /* grayed：当前是否处于"主控断开、数值转灰"的样子 */
 } H;
+
+/* 上次据此算过延迟的"快照变化号"。放在 H 外面：H 每次建页都清零，而变化号只增——
+ * 放在里面的话，离开首页再回来后的第一次状态变化会拿"上一次快照变化"的时刻当起点，
+ * 60 秒以内都被计成延迟（独立复核 P3-3）。初值 0 = 还没为任何一次变化算过。*/
+static uint32_t s_note_seq;
 
 /* ================= 点击 ================= */
 
@@ -68,8 +72,14 @@ static void clk_fan(lv_event_t *e)   { LV_UNUSED(e); control_fan_toggle(); }   /
 static void clk_mode(lv_event_t *e)
 {
     LV_UNUSED(e);
-    if (g_tcs.mode) (void)param_set(PARAM_ID_MODE, 0.0f, PARAM_SRC_TOUCH);   /* 切手动=即时 */
-    else            tui_dlg_mode();                                          /* 切自动=二次确认 */
+    const ui_in_t *in;
+    const ui_link_view_t *lv;
+    tui_input(&in, &lv);
+    /* 按模型快照里的模式分支，不读 g_tcs.mode：主控断了以后 g_tcs.mode 是断开那一刻的旧值，
+     * 会和键上的文字对不上（写着"切自动"却去切手动）。主控断着时这个键是灰的，这里只是兜底。*/
+    if (lv->link != UI_LINK_UP) { ui_toast("主控连接中断，现在不能切换模式"); return; }
+    if (in->mode) (void)param_set(PARAM_ID_MODE, 0.0f, PARAM_SRC_TOUCH);   /* 切手动=即时 */
+    else          tui_dlg_mode();                                          /* 切自动=二次确认 */
 }
 
 static void clk_estop(lv_event_t *e)
@@ -108,12 +118,15 @@ static void paint_mode(uint8_t online, uint8_t mode)
     if (online) ui_pill_set(&H.mode, mode ? "自动" : "手动", TKS_CARD, TKS_TX, UI_PILL_DOT_R,
                             mode ? TKS_GREEN : TKS_GRAY);
     else        ui_pill_set(&H.mode, "离线", TKS_CARD, TKS_TX2, UI_PILL_DOT_R, TKS_GRAY);
-    /* 链路断了模式未知：键上的文字保持上一次的，链路回来再改 */
+    /* 主控断了：模式键变灰不可点。帧发不出去，本地模式会被下一次镜像泵打回去，
+     * 让人白点一次（独立复核 P2-4）。键上的文字保持上一次的，链路回来再改。*/
+    ui_button_set_style(&H.b_mode, online ? UI_BTN_PRIMARY : UI_BTN_DISABLED);
     if (online) ui_button_set_text(&H.b_mode, mode ? "切手动" : "切自动");
 }
 
 static void paint_fan(uint8_t online, uint8_t fan)
 {
+    ui_button_set_style(&H.b_fan, online ? UI_BTN_CARD : UI_BTN_DISABLED);   /* 同上：断了就不可点 */
     if (online) {
         ui_lab_set(H.fan_state, fan ? "运行中" : "已停止");
         lv_obj_set_style_text_color(H.fan_state, fan ? TKS_GREEN : TKS_TX2, 0);
@@ -129,7 +142,8 @@ static void paint_fan(uint8_t online, uint8_t fan)
     }
 }
 
-/* 急停后按钮变灰（用户 2026-11-24 确认），解除后回红。链路断了也保持红：急停必须一直可点。*/
+/* 急停后按钮变灰（用户 2026-11-24 确认），解除后回红。屏端没记下急停时它永远是红的：
+ * 急停必须一直可点，主控断了也一样（横幅会说明指令还没送到）。*/
 static void paint_estop(uint8_t estop)
 {
     ui_button_set_style(&H.b_estop, estop ? UI_BTN_LATCHED : UI_BTN_DANGER);
@@ -143,7 +157,7 @@ static void paint_all_state(const ui_home_t *s)
     paint_body(online ? s->body : UI_SRC_UNKNOWN);
     paint_mode(online, s->mode);
     paint_fan(online, s->fan);
-    paint_estop(online ? s->estop : 0u);
+    paint_estop(s->estop);           /* 主控断了也按屏端自己的急停记号画（见 ui_home_state）*/
 }
 
 static void set_value_color(lv_obj_t *o, lv_color_t c)
@@ -225,7 +239,7 @@ void tui_p0_build(lv_obj_t *scr)
     H.body_badge = ui_pill(scr, CARD1_X + CARD_W - CARD_PAD - bw, 380, 40, &tcs_font_lv24);
 
     /* 第二行右：风扇（整卡可点=切换）*/
-    ui_button(s_scr, CARD2_X, ROW2_Y, CARD_W, ROW2_H, "", UI_BTN_CARD, &tcs_font_lv24, clk_fan, NULL);
+    H.b_fan = ui_button(s_scr, CARD2_X, ROW2_Y, CARD_W, ROW2_H, "", UI_BTN_CARD, &tcs_font_lv24, clk_fan, NULL);
     ui_box(s_scr, CARD2_X + 1, ROW2_Y + ROW2_H - 3, CARD_W - 2, 2, TKS_CLINE, 0);
     ui_text24(s_scr, CARD2_X + CARD_PAD, 364, "风扇", TKS_TX);
     H.fan_state = ui_text24(s_scr, CARD2_X + CARD_PAD, 402, "", TKS_TX2);
@@ -280,8 +294,8 @@ int tui_p0_update(void)
         /* "状态变化 → 上屏"的真实延迟（主循环在快照带来变化时记 g_ui_state_change_ms）*/
         /* 只给"主控快照带来的变化"算延迟：急停这类是屏幕本地先置位，不来自快照，
          * 拿上一次快照变化的时刻当起点会算出几十秒的假数（2026-11-24 真机读到 22981ms）。*/
-        if (g_ui_state_change_seq != H.note_seq) {
-            H.note_seq = g_ui_state_change_seq;
+        if (g_ui_state_change_seq != s_note_seq) {
+            s_note_seq = g_ui_state_change_seq;
             uint32_t dt = in->now_ms - g_ui_state_change_ms;
             if (dt < 60000u) {
                 g_ui_stat[6] = dt;

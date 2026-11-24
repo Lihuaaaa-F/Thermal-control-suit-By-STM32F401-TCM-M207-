@@ -44,22 +44,27 @@ void control_estop_clear(void)
 #if TCS_USE_LVGL
 /* G5：60 点×30s 温度环形（P2 曲线数据源；UI 只读） */
 #include <string.h>
+#include <math.h>
 static float s_hist_tc1[60], s_hist_tc2[60];
-static uint32_t s_hist_head, s_hist_n, s_hist_last;
+static uint32_t s_hist_head, s_hist_n, s_hist_last, s_hist_total;
 void tcs_hist_tick(uint32_t now_ms)
 {
     if (s_hist_last && now_ms - s_hist_last < 30000u) return;
     s_hist_last = now_ms ? now_ms : 1u;
+    uint8_t live = 1u;
 #if TCS_H743_LINK_ONLY
-    /* PROD：屏上数据来自主控快照。链路不在（含上电第一拍、还没收到任何快照）时
-     * g_tcs 里是零值/陈旧值，不采——曲线上留缺口，不画一个假的 0°C。
-     * 节拍照常推进，所以缺口前后仍是 30s 一点。（2026-11-24 真机：曲线开头有一段 0°C）*/
-    if (!g_tcs.esp_link_ok) return;
+    /* PROD：屏上数据来自主控快照。链路不在（含上电第一拍、还没收到任何快照）时 g_tcs 里
+     * 是零值/陈旧值，不能当成样本——这一格记 NaN，曲线在这里断开，不画一个假的 0°C。
+     * 格子照常推进，所以缺口前后的点仍然各占 30s。
+     * （2026-11-24 真机：曲线开头有一段 0°C。独立复核指出原先在这里直接 return，
+     * 头指针不动，"留缺口"并不成立：缺口前后两个点被画成了相邻。）*/
+    live = g_tcs.esp_link_ok;
 #endif
-    s_hist_tc1[s_hist_head] = g_tcs.tc1_act;
-    s_hist_tc2[s_hist_head] = g_tcs.tc2_act;
+    s_hist_tc1[s_hist_head] = live ? g_tcs.tc1_act : NAN;
+    s_hist_tc2[s_hist_head] = live ? g_tcs.tc2_act : NAN;
     s_hist_head = (s_hist_head + 1u) % 60u;
     if (s_hist_n < 60u) s_hist_n++;
+    s_hist_total++;                       /* 开机以来的格子总数：只增，曲线页据此判断"来没来新点" */
 }
 void tcs_hist_snapshot(float out1[60], float out2[60], uint32_t * n)
 {
@@ -71,6 +76,7 @@ void tcs_hist_snapshot(float out1[60], float out2[60], uint32_t * n)
     }
     *n = cnt;
 }
+uint32_t tcs_hist_count(void) { return s_hist_total; }
 #endif
 
 /* ====== 内部输出封装（同步 g_tcs 快照 + 钩子）====== */

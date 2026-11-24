@@ -33,21 +33,21 @@ COMM = A_BODY | A_M207 | A_OPEN
 FAULTS = ("body_lost", "m207_off", "sens_open", "screen", "stall", "overtemp")
 KEYS = ("tec1", "tec2", "fan", "mode", "state", "alarm", "latch", "armed",     # st 中"变化即推"的离散字段
         "m207", "body_ok", "sens_open", "screen")
-# 状态沿日志表 key: (ev_on, msg_on, lvl_on, ev_off, msg_off)
+# 状态沿日志表 key: (ev_on, msg_on, lvl_on, ev_off, msg_off)。**逐条照抄固件 web_status.c 的
+# web_status_diff_log**（事件码、文案、级别）：模拟器自己编一套的话，页面上看到的日志和真机对不上，
+# 之前的浏览器实测就是这么被带偏的（2026-11-24 独立复核）。固件不发 cool_on/heat_on。
 LOG = {
-    "tec0": ("tec1_on", "贴身 TEC 开", "info", "tec1_off", "贴身 TEC 关"),
-    "tec1": ("tec2_on", "环境 TEC 开", "info", "tec2_off", "环境 TEC 关"),
+    "tec0": ("tec1_on", "贴身水箱 TEC 开", "info", "tec1_off", "贴身水箱 TEC 关"),
+    "tec1": ("tec2_on", "环境水箱 TEC 开", "info", "tec2_off", "环境水箱 TEC 关"),
     "fan": ("fan_on", "风扇 开", "info", "fan_off", "风扇 关"),
-    "mode": ("mode_auto", "切换到自动模式", "info", "mode_manual", "切换到手动模式"),
-    "safe": ("safe_on", "进入安全态：TEC 全停、风扇全速", "alarm", "safe_off", "退出安全态"),
-    "cool": ("cool_on", "自动制冷启动：体温偏高", "info", "cool_off", "自动制冷停止"),
-    "heat": ("heat_on", "自动制热启动：体温偏低", "info", "heat_off", "自动制热停止"),
-    "estop": ("estop_on", "急停触发：TEC 全停、风扇全速", "alarm", "estop_off", "急停解除"),
-    "ot": ("overtemp_on", "水温过高（>48°C），已停止温控", "alarm", "overtemp_off", "水温回落到 48°C 以下"),
-    "body_lost": ("body_lost", "体温传感器失联", "alarm", "body_ok", "体温传感器恢复"),
-    "m207_off": ("m207_off", "温控模块离线", "alarm", "m207_on", "温控模块回线"),
-    "sens_open": ("sens_open", "水温探头断线", "alarm", "sens_ok", "水温探头恢复"),
-    "scr": ("screen_off", "屏幕断开", "warn", "screen_on", "屏幕连接"),
+    "mode": ("mode", "切换到自动模式", "info", "mode", "切换到手动模式"),
+    "safe": ("safe_in", "进入安全态", "alarm", "safe_out", "退出安全态"),
+    "estop": ("estop_on", "急停触发：TEC 全部停止，风扇全速", "alarm", "estop_off", "急停已解除"),
+    "ot": ("overtemp_on", "水温过高：已停止加热", "alarm", "overtemp_off", "水温回落，超温已解除"),
+    "body_lost": ("body_lost", "体温传感器失联", "warn", "body_ok", "体温传感器恢复"),
+    "m207_off": ("m207_offline", "温控模块通信中断", "warn", "m207_online", "温控模块回线"),
+    "sens_open": ("sens_open", "水温探头断线", "warn", "sens_closed", "水温探头恢复"),
+    "scr": ("screen_down", "屏幕链路断开（主控继续独立运行）", "warn", "screen_up", "屏幕已连接"),
 }
 
 def _extract_registry():
@@ -255,7 +255,8 @@ class Sim:
         elif c == 5:
             self._fan(1 - self.fan)                   # 风扇切换
         elif c in (6, 7):                             # 切自动 / 切手动（与固件同走参数 6）
-            self.set_param(6, float(7 - c), "web", 0)
+            if not self.set_param(6, float(7 - c), "web", 0) and c == 6:
+                return -2                             # 急停/超温锁存期间不得切自动（control_param_check）
         elif c == 8:                                  # 急停：TEC 全停 + 风扇全速 + 切手动 + 锁存
             self._edge("estop", True)
             self.alarm |= A_ESTOP
@@ -292,8 +293,11 @@ class Sim:
             self._edge("estop", False)
         self.alarm &= ~A_EEP                          # 存储校验报警仅提示性
 
-    def set_param(self, pid, v, src, ref):
-        """镜像 param_set：钳制 → 步进取整 → 跨参约束；推 pv（回显 ref）与变化后的 reg。"""
+    def set_param(self, pid, v, src, ref, sock=None):
+        """镜像 param_set：钳制 → 步进取整 → 跨参约束 → 板级安全校验；**必回一帧 pv**。
+        与固件同一口径（websocket.c handle_set / ws_param_changed）：
+          - 带 ref 的 pv 只回给请求者；别的在线页面收到 ref=0 的副本（它们的 ref 从 1 数起，会撞号）；
+          - 不重推整张 reg（固件只推 pv；以前这里改一次推一次 7KB，掩盖了前端"忘了把 pv 应用到 reg"的回归）。"""
         p, ok, err, clamped, c = self.pid.get(pid), 0, 0, 0, 0.0
         if p is None or not p["flags"] & 0x01:
             err = -1                                  # 未知 id / 只读
@@ -305,17 +309,27 @@ class Sim:
             c = round(p["min"] + round((c - p["min"]) / p["step"]) * p["step"], 6)
             if p["type"] in (1, 2):
                 c = float(int(c))
-            err = -2 if pid == 3 and c <= self.pv(4) or pid == 4 and c >= self.pv(3) else 0
-            ok = 0 if err else 1                       # -2 = 过冷阈值必须小于过热阈值
+            err = -2 if pid == 3 and c <= self.pv(4) or pid == 4 and c >= self.pv(3) else 0   # 过冷阈值必须小于过热阈值
+            # control_param_check：急停/超温锁存期间不得切到自动
+            if not err and pid == 6 and c != 0 and self.latch & (L_OT | L_ESTOP):
+                err = -2
+            ok = 0 if err else 1
         if not ok:
             c = p["def"] if p else 0.0
-        changed = ok and c != p["def"]
-        if changed:
+        if ok and c != p["def"]:
             p["def"] = c
-            self._log("param_set", "参数变更：%s → %g%s" % (p["name"], c, p["unit"]))
-        push({"t": "pv", "id": pid, "v": c, "src": src, "clamped": clamped, "ref": ref, "ok": ok, "err": err})
-        if changed:
-            push({"t": "reg", "list": self.params})
+            self._log("param", "%s：%s 改为 %g%s" % ({"web": "网页"}.get(src, "系统"), p["name"], c, p["unit"]))
+            if sock is not None:
+                push({"t": "pv", "id": pid, "v": c, "src": src, "clamped": clamped, "ref": ref, "ok": ok, "err": err}, sock)
+                others = [x for x in CLIENTS if x is not sock]
+                for x in others:
+                    push({"t": "pv", "id": pid, "v": c, "src": src, "clamped": clamped, "ref": 0, "ok": ok, "err": err}, x)
+            else:
+                push({"t": "pv", "id": pid, "v": c, "src": src, "clamped": clamped, "ref": ref, "ok": ok, "err": err})
+        else:
+            # 值没变 / 被拒绝：固件在这里补发回执（handle_set 末尾的 !s_web_seen 分支）
+            push({"t": "pv", "id": pid, "v": c, "src": src, "clamped": clamped, "ref": ref, "ok": ok, "err": err},
+                 sock if sock is not None else None)
         return ok
 
 # ====== WS 帧收发（服务端帧不掩码；客户端帧带掩码）======
@@ -381,12 +395,13 @@ def _json(obj):
     return json.dumps(obj, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
 
 def broadcast(force=False):
-    """日志增量即推；st 在离散字段相对上次推送有变化（或 force）时推；stall 注入时不推 st。"""
+    """日志增量即推；st 在业务字段（含两位小数的水温/体温）相对上次推送有变化、或 force 时推；
+    stall 注入时不推 st。与固件 web_status_changed 同口径：age/运行时长不算变化。"""
     if SIM.log_total > SIM.log_sent:
         push({"t": "log", "list": SIM.log[-(SIM.log_total - SIM.log_sent):]})
         SIM.log_sent = SIM.log_total
     st = SIM.status()
-    disc = [st[k] for k in KEYS]
+    disc = [st[k] for k in KEYS] + [round(st.get(k, 0) or 0, 2) for k in ("tc1", "tc2", "body", "tc1_set", "tc2_set")]
     if SIM.fault["stall"] or not (force or disc != SIM.last_disc):
         return
     SIM.last_disc, SIM.seq = disc, SIM.seq + 1
@@ -394,29 +409,44 @@ def broadcast(force=False):
     push(st)
 
 def _num(x):
-    """JSON 数值校验：非数字（含布尔/字符串）抛 ValueError，调用方回 bad_json（与固件 cJSON_IsNumber 一致）。"""
+    """JSON 数值校验：非数字（含布尔/字符串）抛 ValueError，调用方回 err（与固件 cJSON_IsNumber 一致）。"""
     if isinstance(x, bool) or not isinstance(x, (int, float)):
         raise ValueError("not a number: %r" % (x,))
     return x
 
+def _int(x, lo, hi):
+    """固件 json_int_range：必须是整数且落在 [lo, hi]，否则 ValueError。"""
+    if x != int(x) or not lo <= x <= hi:
+        raise ValueError("not an integer in [%d, %d]: %r" % (lo, hi, x))
+    return int(x)
+
 def on_frame(text, sock):
-    """处理一条客户端→服务端文本帧（调用方持 SIM.lock）。残缺/类型错误的帧回 err。"""
+    """处理一条客户端→服务端文本帧（调用方持 SIM.lock）。错误码与固件一致：
+    bad_set / bad_cmd / unknown_type / bad_json。"""
     FRAMES.append(text)
+    code = "bad_json"
     try:
         msg = json.loads(text)
         if msg["t"] == "set":
-            SIM.set_param(int(_num(msg["id"])), float(_num(msg["v"])), "web", int(_num(msg.get("ref", 0))))
+            code = "bad_set"
+            pid = _int(_num(msg["id"]), 1, 65535)
+            ref = _int(_num(msg.get("ref", 0)), 0, 4294967295)
+            v = _num(msg["v"])
+            SIM.set_param(pid, v, "web", ref, sock)
             SIM.settle()
         elif msg["t"] == "cmd":
-            c = int(_num(msg["c"]))
-            push({"t": "ack", "c": c, "rv": SIM.cmd(c), "ref": int(_num(msg.get("ref", 0)))}, sock)
+            code = "bad_cmd"
+            c = _int(_num(msg["c"]), 1, 10)            # 网页只放行 1..10（11 是屏链路的内部命令）
+            push({"t": "ack", "c": c, "rv": SIM.cmd(c), "ref": _int(_num(msg.get("ref", 0)), 0, 4294967295)}, sock)
         elif msg["t"] == "ping":
-            push({"t": "pong", "ts": SIM.ms()}, sock)
+            ref = _int(_num(msg.get("ref", 0)), 0, 4294967295) if "ref" in msg else 0
+            push({"t": "pong", "ts": SIM.ms(), "ref": ref}, sock)
             return
         else:
+            code = "unknown_type"
             raise ValueError("unknown t")
     except (ValueError, TypeError, KeyError, AttributeError) as e:   # JSON 语法错 / 非对象 / 字段缺失或类型不符
-        push({"t": "err", "code": "bad_json", "msg": str(e)[:80]}, sock)
+        push({"t": "err", "code": code, "msg": str(e)[:80]}, sock)
     broadcast()
 
 def drop_all():
@@ -439,6 +469,8 @@ def ws_serve(sock):
                 CLIENTS.append(sock)
             push({"t": "reg", "list": SIM.params}, sock)   # 连上即推注册表 + 日志全量
             push({"t": "log", "list": SIM.log}, sock)
+            SIM.log_sent = SIM.log_total                   # 全量已覆盖积压事件：游标抬到此刻（与固件一致），否则增量会重发
+            SIM._log("ws_open", "网页已连接")              # 固件在全量推完之后才记：下一拍的增量把它带到
         while True:
             try:
                 raw = ws_recv(sock)
@@ -460,11 +492,11 @@ class Handler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
     timeout = 30                                      # 空闲 keep-alive 连接的回收时间
 
-    def reply(self, code, body, ctype="application/json; charset=utf-8"):
+    def reply(self, code, body, ctype="application/json; charset=utf-8", cache="no-store"):
         self.send_response(code)
         self.send_header("Content-Type", ctype)
         self.send_header("Content-Length", str(len(body)))
-        self.send_header("Cache-Control", "no-store")
+        self.send_header("Cache-Control", cache)
         self.end_headers()
         self.wfile.write(body)
 
@@ -487,7 +519,7 @@ class Handler(BaseHTTPRequestHandler):
             return self.reply(200, _json(obj))
         fn = os.path.join(WEB, name)                  # 每次读盘：改前端文件无需重启
         if name in STATIC and os.path.isfile(fn):
-            self.reply(200, open(fn, "rb").read(), MIME[os.path.splitext(name)[1]])
+            self.reply(200, open(fn, "rb").read(), MIME[os.path.splitext(name)[1]], "no-cache")   # 与固件一致：资源 no-cache，接口 no-store
         else:
             self.reply(204 if name == "favicon.ico" else 404, b"" if name == "favicon.ico" else b'{"err":"not found"}')
 

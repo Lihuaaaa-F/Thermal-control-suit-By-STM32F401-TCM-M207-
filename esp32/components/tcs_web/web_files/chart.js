@@ -9,7 +9,7 @@
   'use strict';
 
   const PAD = [46, 12, 10, 22];                     // plot margins (CSS px): left, right, top, bottom
-  const GAP = 2500;                                 // a step wider than this (ms) breaks the line
+  const GAP = 2500;                                 // a step wider than this between neighbouring raw points breaks the line
   const DASH = [[], [8, 4], [2, 3]];                // line style per series, same as the legend swatches
   const MIN = [1, 2, 5, 10, 15, 30];                // x tick candidates (minutes)
   const C = { s: ['#2563EB', '#44506B', '#D97706'], grid: '#E3E7EC', text: '#44506B', tip: '#FFFFFF', bd: '#D8DEE6', cross: '#1F2937' };
@@ -45,9 +45,8 @@
     const ctx = canvas.getContext('2d');
     const S = { series: [], hidden: {}, win: 300000, hover: null, hold: false, w: 0, h: 0, dpr: 1 };
 
-    function render(now) {
-      if (!S.w) return;                             // not laid out yet (its tab is hidden)
-      now = now || Date.now();
+    /* everything the drawing helpers need about this frame's geometry */
+    function geometry(now) {
       const x0 = PAD[0], x1 = S.w - PAD[1], y0 = PAD[2], y1 = S.h - PAD[3], t0 = now - S.win;
       const vis = S.series.filter((s) => !S.hidden[s.id]);
       let lo = Infinity, hi = -Infinity;
@@ -62,84 +61,110 @@
       const step = nice(Math.max(hi - lo, 0.5) * 1.2, 4), pad = (hi - lo) * 0.1;
       lo = Math.floor((lo - pad) / step) * step;    // snapped to ticks: the axis does not jitter as samples enter or leave
       hi = Math.ceil((hi + pad) / step) * step;
-      const X = (t) => x0 + (t - t0) * (x1 - x0) / S.win, Y = (v) => y1 - (v - lo) * (y1 - y0) / (hi - lo);
-      ctx.setTransform(S.dpr, 0, 0, S.dpr, 0, 0);
-      ctx.clearRect(0, 0, S.w, S.h);
+      if (hi - lo < step * 1e-6) { lo -= step; hi += step; }   // a flat line sitting exactly on a tick: give it a band
+      return {
+        x0, x1, y0, y1, t0, now, vis, empty, step, lo, hi,
+        X: (t) => x0 + (t - t0) * (x1 - x0) / S.win,
+        Y: (v) => y1 - (v - lo) * (y1 - y0) / (hi - lo)
+      };
+    }
 
-      /* axes and grid: y at the nice step, x on whole minutes */
-      const ms = (MIN.find((m) => S.win / 60000 / m <= 6) || 30) * 60000, dec = (String(step).split('.')[1] || '').length;
+    /* axes and grid: y at the nice step, x on whole minutes */
+    function drawAxes(G) {
+      const ms = (MIN.find((m) => S.win / 60000 / m <= 6) || 30) * 60000, dec = (String(G.step).split('.')[1] || '').length;
       ctx.font = FONT; ctx.lineWidth = 1; ctx.strokeStyle = C.grid; ctx.fillStyle = C.text;
       ctx.textAlign = 'right'; ctx.textBaseline = 'middle';
-      for (let v = Math.ceil(lo / step) * step; v <= hi + step * 1e-6; v += step) {
-        const y = Math.round(Y(v)) + 0.5;
-        ctx.beginPath(); ctx.moveTo(x0, y); ctx.lineTo(x1, y); ctx.stroke();
-        ctx.fillText(v.toFixed(dec), x0 - 6, y);
+      for (let v = G.lo; v <= G.hi + G.step * 1e-6; v += G.step) {
+        const y = Math.round(G.Y(v)) + 0.5;
+        ctx.beginPath(); ctx.moveTo(G.x0, y); ctx.lineTo(G.x1, y); ctx.stroke();
+        ctx.fillText(v.toFixed(dec), G.x0 - 6, y);
       }
       ctx.textAlign = 'center'; ctx.textBaseline = 'top';
-      for (let t = Math.ceil(t0 / ms) * ms; t <= now; t += ms) {
-        const x = Math.round(X(t)) + 0.5;
-        ctx.beginPath(); ctx.moveTo(x, y0); ctx.lineTo(x, y1); ctx.stroke();
-        ctx.fillText(clock(t), Math.min(Math.max(x, x0 + 18), x1 - 18), y1 + 6);
+      for (let t = Math.ceil(G.t0 / ms) * ms; t <= G.now; t += ms) {
+        const x = Math.round(G.X(t)) + 0.5;
+        ctx.beginPath(); ctx.moveTo(x, G.y0); ctx.lineTo(x, G.y1); ctx.stroke();
+        ctx.fillText(clock(t), Math.min(Math.max(x, G.x0 + 18), G.x1 - 18), G.y1 + 6);
       }
+    }
 
-      /* series: points outside the window are skipped; at most about one point per pixel */
+    /* series: points outside the window are skipped; at most about one point per pixel */
+    function drawSeries(G) {
       ctx.lineWidth = 2; ctx.lineJoin = 'round';
-      vis.forEach((s, n) => {
-        const pts = s.points, len = pts.length, from = Math.max(0, lower(pts, t0) - 1);
-        const stride = Math.max(1, Math.ceil((len - from) / Math.max(1, x1 - x0)));
-        let px = null;
-        const plot = (p) => {
-          if (!isFinite(p[1]) || (px !== null && p[0] - px > GAP)) { px = null; return; }
-          if (px === null) ctx.moveTo(X(p[0]), Y(p[1])); else ctx.lineTo(X(p[0]), Y(p[1]));
+      G.vis.forEach((s) => {
+        // colour and dash follow the series itself. By position among the visible ones, hiding one used to
+        // recolour all the others (the legend no longer matched the lines).
+        const k = Math.max(0, S.series.indexOf(s));
+        const pts = s.points, len = pts.length, from = Math.max(0, lower(pts, G.t0) - 1);
+        const stride = Math.max(1, Math.ceil((len - from) / Math.max(1, G.x1 - G.x0)));
+        let px = null, prevT = null;
+        const plot = (p, keep) => {
+          // A gap is judged between NEIGHBOURING RAW points, never between the thinned ones: with a stride of 3
+          // or more (30 min view on a phone) the thinned points are >= 3 s apart, wider than GAP, and every
+          // segment came out "broken" — a blank chart.
+          const gap = prevT !== null && p[0] - prevT > GAP;
+          prevT = p[0];
+          if (!keep) return;                         // thinned out: only its time matters (for the gap test)
+          if (!isFinite(p[1]) || gap) { px = null; return; }   // no value, or a gap before this point: restart
+          if (px === null) ctx.moveTo(G.X(p[0]), G.Y(p[1])); else ctx.lineTo(G.X(p[0]), G.Y(p[1]));
           px = p[0];
         };
-        ctx.strokeStyle = C.s[n % 3]; ctx.setLineDash(DASH[n % 3]);
+        ctx.strokeStyle = C.s[k % 3]; ctx.setLineDash(DASH[k % 3]);
         ctx.beginPath();
-        for (let i = from; i < len; i += stride) {
-          plot(pts[i]);
-          if (i + stride >= len && i < len - 1) plot(pts[len - 1]);
-        }
+        for (let i = from; i < len; i++) plot(pts[i], (i - from) % stride === 0 || i === len - 1);
         ctx.stroke();
       });
       ctx.setLineDash([]);
-      if (empty) {
-        ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.fillStyle = C.text;
-        ctx.fillText('暂无数据', (x0 + x1) / 2, (y0 + y1) / 2);
-        return;
-      }
+    }
 
-      /* crosshair and value box */
-      if (!S.hover) return;
-      const t = t0 + (Math.min(Math.max(S.hover, x0), x1) - x0) * S.win / (x1 - x0), x = Math.round(X(t)) + 0.5;
+    /* crosshair and value box at S.hover */
+    function drawCrosshair(G) {
+      if (S.hover === null) return;
+      const t = G.t0 + (Math.min(Math.max(S.hover, G.x0), G.x1) - G.x0) * S.win / (G.x1 - G.x0), x = Math.round(G.X(t)) + 0.5;
       let ref = null;
-      vis.forEach((s) => { if (!ref) ref = near(s.points, t); });
+      G.vis.forEach((s) => { if (!ref) ref = near(s.points, t); });
       if (!ref) return;
       const rows = [clock(ref[0], 1)], marks = [];
       let w = ctx.measureText(rows[0]).width;
-      vis.forEach((s, n) => {
+      G.vis.forEach((s) => {
         const q = near(s.points, ref[0]);
         if (q && isFinite(q[1])) {
           rows.push(s.name + '  ' + q[1].toFixed(2));
           w = Math.max(w, ctx.measureText(rows[rows.length - 1]).width);
-          marks.push([Y(q[1]), n]);
+          marks.push([G.Y(q[1]), Math.max(0, S.series.indexOf(s))]);
         }
       });
-      const bw = w + 16, bh = rows.length * 16 + 10, bx = x + 12 + bw > x1 ? x - 12 - bw : x + 12;
+      const bw = w + 16, bh = rows.length * 16 + 10, bx = x + 12 + bw > G.x1 ? x - 12 - bw : x + 12;
       ctx.setLineDash([4, 3]); ctx.strokeStyle = C.cross;
-      ctx.beginPath(); ctx.moveTo(x, y0); ctx.lineTo(x, y1); ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(x, G.y0); ctx.lineTo(x, G.y1); ctx.stroke();
       ctx.setLineDash([]);
       marks.forEach((m) => {
         ctx.beginPath(); ctx.arc(x, m[0], 4, 0, 7);
         ctx.fillStyle = C.s[m[1] % 3]; ctx.fill();
         ctx.strokeStyle = C.tip; ctx.lineWidth = 1.5; ctx.stroke();
       });
-      ctx.fillStyle = C.tip; ctx.fillRect(bx, y0, bw, bh);
-      ctx.strokeStyle = C.bd; ctx.lineWidth = 1; ctx.strokeRect(bx + 0.5, y0 + 0.5, bw - 1, bh - 1);
+      ctx.fillStyle = C.tip; ctx.fillRect(bx, G.y0, bw, bh);
+      ctx.strokeStyle = C.bd; ctx.lineWidth = 1; ctx.strokeRect(bx + 0.5, G.y0 + 0.5, bw - 1, bh - 1);
       ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
       rows.forEach((r, i) => {
         ctx.fillStyle = i ? C.s[marks[i - 1][1] % 3] : C.text;
-        ctx.fillText(r, bx + 8, y0 + 13 + i * 16);
+        ctx.fillText(r, bx + 8, G.y0 + 13 + i * 16);
       });
+    }
+
+    function render(now) {
+      if (!S.w) return;                             // not laid out yet (its tab is hidden)
+      now = now || Date.now();
+      const G = geometry(now);
+      ctx.setTransform(S.dpr, 0, 0, S.dpr, 0, 0);
+      ctx.clearRect(0, 0, S.w, S.h);
+      drawAxes(G);
+      if (G.empty) {
+        ctx.font = FONT; ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.fillStyle = C.text;
+        ctx.fillText('暂无数据', (G.x0 + G.x1) / 2, (G.y0 + G.y1) / 2);
+        return;
+      }
+      drawSeries(G);
+      drawCrosshair(G);
     }
 
     /* bitmap = CSS size x devicePixelRatio; drawing stays in CSS px */

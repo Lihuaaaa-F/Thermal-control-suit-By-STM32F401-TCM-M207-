@@ -2,14 +2,29 @@
  * store is the single state source. handleMessage(msg) is the single entry for WS frames and HTTP
  * snapshots and dispatches on msg.t. render*() read the store and patch text nodes only.
  * WS: reconnect after 1/2/4/8/10 s with a countdown; no st for 2 s => data marked stale; no frame
- * for 10 s => drop the socket. set/cmd carry a client ref and count as done only on their pv/ack.
+ * of any kind for 10 s => the socket is treated as dead and a new one is opened. set/cmd carry a
+ * client ref and count as done only on their pv/ack.
  */
 (function () {
   'use strict';
 
   const VERSION = '2.0.0', TABS = ['overview', 'params', 'device', 'log'], BACKOFF = [1, 2, 4, 8, 10];
+  // every timing/limit in one place, with where it comes from
+  const T = {
+    ackMs: 1500,        // set/cmd: no pv/ack with our ref by then => "未确认" (ARQ on the device side is 0.5 s x 3)
+    staleMs: 2000,      // no st for this long while "open" => mark the data stale (the device pushes every 0.5 s)
+    silentMs: 10000,    // no frame at all for this long => the socket is dead (the device answers a ping within 1 s)
+    tickMs: 500,        // housekeeping interval
+    pingMs: 5000,       // ping interval, measures the round-trip time
+    toastMs: 2500,      // one toast stays this long
+    keepMs: 1860000,    // chart history: 31 min (the 30 min window needs a point just before its left edge)
+    sampleMs: 1000,     // one chart sample per second (about 1800 per 30 min)
+    hardCutC: 48,       // over-temperature hard cut-off (control.h ALM_OVERTEMP_HARD_C)
+    rttWarnMs: 100, rttBadMs: 400
+  };
   const CMD = { 1: '贴身 TEC 开', 2: '贴身 TEC 关', 3: '环境 TEC 开', 4: '环境 TEC 关', 5: '风扇切换', 6: '切到自动', 7: '切到手动', 8: '急停', 9: '解除报警', 10: '保存到模块' };
   const SW_CMD = { tec1: [2, 1], tec2: [4, 3], fan: [5, 5], mode: [7, 6] };
+  // parameters shown as labelled segments instead of a number: id => label per value
   const ENUM = { 6: ['手动', '自动'], 8: ['自动', '强制布防', '强制不布防'] };
   const GROUPS = [[0x100, 0x102, 'PID（贴身）'], [0x110, 0x112, 'PID（环境）'], [0x103, 0x10A, '保护（贴身）'], [0x113, 0x11A, '保护（环境）'],
     [0x10B, 0x10F, '输出/温度选项（贴身）'], [0x11B, 0x11F, '输出/温度选项（环境）'], [0x120, 0x126, '系统/PCB']];
@@ -24,7 +39,6 @@
     [8, 'overtemp', '水温过高', () => '水温超过 48 °C，已停止温控。等水温回落到 48 °C 以下再点「解除」。', 1],
     [16, 'eeprom', '参数存储校验失败', () => '已恢复默认参数。请重新核对各参数后点「确认恢复」。', 1],
     [32, 'probe', '水温探头断线', (z) => stopped(z) + '请检查水温探头接线；接好后自动恢复。', 0]];
-  const LATCHED = 28;
   const LEVELS = { info: '● ', warn: '■ ', alarm: '▲ ' };
   const store = {
     conn: 'wait', retry: 0, nextAt: 0, ever: false, reconn: 0, timer: 0,
@@ -46,6 +60,20 @@
   const set = (n, v) => { v = Array.isArray(v) ? v : ['', v]; n.dataset.s = v[0]; txt(n, v[1]); };
   const hms = (ms) => new Date(ms).toTimeString().slice(0, 8);
   const nameOf = (p) => (p && (p.name || p.key)) || '参数';
+  // shortest decimal that is still the same float32: 0.10000000149011612 -> 0.1, 1234567 -> 1234567.
+  // The device's parameter table is float; a number sent with float32 noise would give the inputs 17 decimals.
+  const fshort = (v) => {
+    const f = Math.fround(num(v, NaN));
+    if (!isFinite(f)) return f;
+    for (let p = 1; p <= 9; p++) { const s = f.toPrecision(p); if (Math.fround(+s) === f) return +s; }
+    return f;
+  };
+  // strict number entry: optional sign, digits with at most one dot. Full-width digits and dot are accepted;
+  // everything else ("0x1F", "25,3", "abc") is NaN instead of parseFloat's "take the prefix" ("0x1F" -> 0).
+  const parseNum = (text) => {
+    const s = String(text).replace(/[０-９]/g, (c) => String.fromCharCode(c.charCodeAt(0) - 0xFEE0)).replace(/．/g, '.');
+    return /^\s*[+-]?(\d+\.?\d*|\.\d+)\s*$/.test(s) ? +s : NaN;
+  };
 
   // toast: one at a time, up to 3 queued, 2.5 s each
   const tq = [];
@@ -63,7 +91,7 @@
     if (!t) return;
     txt(n, t.msg);
     n.dataset.kind = t.kind;
-    setTimeout(() => { vis(n, false); setTimeout(nextToast, 200); }, 2500);
+    setTimeout(() => { vis(n, false); setTimeout(nextToast, 200); }, T.toastMs);
   }
 
   // confirmation sheet: non-blocking (data behind it keeps updating), resolves to the choice
@@ -99,7 +127,7 @@
     ws.send(JSON.stringify(obj));
     if (!tracked) return 1;
     store.pending.set(p.ref, p);
-    p.timer = setTimeout(() => unconfirmed(p, ''), 1500);
+    p.timer = setTimeout(() => unconfirmed(p, ''), T.ackMs);
     if (node) node.classList.add('pending');
     return p.ref;
   }
@@ -135,16 +163,19 @@
 
   function onStatus(s, http) {
     const c = store.st;
-    if (http && c && num(s.seq) < num(c.seq) && num(s.ts) >= num(c.ts)) return;   // late HTTP snapshot: keep the newer WS frame
+    // an HTTP snapshot is never ahead of a frame we already hold: keep the WS frame unless its seq is older.
+    // (The old condition also compared ts, which let a snapshot with a SMALLER seq through when its ts was
+    // older too — exactly the stale one; a switch then flickered back to its old state for a moment.)
+    if (http && c && num(s.seq) <= num(c.seq)) return;
     store.st = s;
     store.stAt = Date.now();
     store.boot = store.stAt - num(s.ts);
-    if (store.stAt - store.last >= 1000) {          // one chart sample per second (about 1800 per 30 min)
+    if (store.stAt - store.last >= T.sampleMs) {
       store.last = store.stAt;
       [s.m207 ? s.tc1 : NaN, s.m207 ? s.tc2 : NaN, s.body_ok ? s.body : NaN].forEach((v, i) => {
         const pts = store.series[i].points;
         pts.push([store.last, num(v, NaN)]);
-        while (pts.length && pts[0][0] < store.last - 1860000) pts.shift();
+        while (pts.length && pts[0][0] < store.last - T.keepMs) pts.shift();
       });
       renderChart();
     }
@@ -152,11 +183,13 @@
   }
 
   function onPv(m) {
-    const id = num(m.id), p = store.reg.get(id), v = num(m.v, NaN), pend = store.pending.get(m.ref);
+    const id = num(m.id), p = store.reg.get(id), v = num(m.v, NaN), ref = num(m.ref, 0), got = store.pending.get(ref);
+    const pend = got && got.id === id ? got : null;    // a pv for another parameter is never my receipt
     if (pend) {
       drop(pend);
       const nm = '「' + nameOf(p) + '」';
-      if (m.ok === 0) toast(nm + (m.err === -1 ? '只读，未修改' : m.err === -2 ? '未修改：过冷阈值必须小于过热阈值' : '修改被拒绝'), 'error');
+      const constraint = id === 6 ? '急停或超温未解除，不能切到自动' : '过冷阈值必须小于过热阈值';
+      if (m.ok === 0) toast(nm + (m.err === -1 ? '只读，未修改' : m.err === -2 ? '未修改：' + constraint : '修改被拒绝'), 'error');
       else if (m.clamped) toast(nm + '超出范围，已按 ' + fmt(p, v) + ' 生效', 'warn');
     }
     if (p && isFinite(v)) p.def = v;
@@ -165,21 +198,28 @@
   }
 
   function onAck(m) {
-    const p = store.pending.get(m.ref);
+    const p = store.pending.get(num(m.ref, 0));
     if (!p) return;
     drop(p);
     const rv = num(m.rv);
-    if (rv === -2) toast(p.c === 10 ? '温控模块离线，未保存' : '安全态下不可操作，请先解除报警', 'error');
+    if (rv === -2) toast(p.c === 10 ? '温控模块离线，未保存' : p.c === 6 ? '急停或超温未解除，不能切到自动' : '安全态下不可操作，请先解除报警', 'error');
     else if (rv < 0) toast('设备不支持「' + p.label + '」', 'error');
     else if (p.c === 8) toast('急停已执行：TEC 全停、风扇全速', 'error');
     else if (p.c === 9) setTimeout(released, 700);
-    else if (p.c === 10) toast('已保存到模块（' + rv + ' 条），掉电保持');
+    // rv is the number of parameters handed to the module for saving — not a confirmation that it stored them
+    else if (p.c === 10) toast('已把 ' + rv + ' 条参数下发给温控模块保存');
   }
   function released() {
     const s = store.st, a = s ? num(s.alarm) : 0;
     if (!a) return;                                   // everything cleared: nothing to warn about
-    // 急停要等其余故障都恢复才能解除，所以说清是哪一项挡着（与设备屏幕同一口径）
-    const why = a & 1 ? '体温传感器仍失联' : a & 32 ? '水温探头仍断线' : a & 2 ? '温控模块仍失联' : a & 8 ? '水温仍高于 48 °C' : a & 4 ? '' : '仍有故障未恢复';
+    // 急停要等其余故障都恢复才能解除，所以说清是哪一项挡着（与设备屏幕同一口径）。
+    // 先看各源此刻健不健康：急停锁存期间设备不会为通信类故障再置报警位，只看报警位会误报"请再点一次"。
+    const why = s.body_ok === 0 ? '体温传感器仍失联'
+      : s.m207 === 0 ? '温控模块仍失联'
+      : s.sens_open ? '水温探头仍断线'
+      : num(s.tc1) > T.hardCutC ? '水温仍高于 48 °C'
+      : a & 1 ? '体温传感器仍失联' : a & 32 ? '水温探头仍断线' : a & 2 ? '温控模块仍失联'
+      : a & 8 ? '水温仍高于 48 °C' : '';
     toast(why ? '未解除：' + why + (a & 4 ? '（急停要等其余故障都恢复后才能解除）' : '') : '急停仍未解除，请再点一次', 'warn');
   }
 
@@ -203,14 +243,18 @@
       b.setAttribute('aria-pressed', !!w[1]);
       txt(b.lastElementChild, (w[1] ? '● ' : '○ ') + (w[0] === 'mode' ? (w[1] ? '自动' : '手动') : lock ? (w[0] === 'fan' ? '全速' : '强制关') : (w[1] ? '开' : '关')));
     });
-    const key = [s.alarm, s.latch, s.body_ok, s.m207, s.sens_open, num(s.tc1) > 48, num(s.state) === 3, store.stale].join();
+    const key = [s.alarm, s.latch, s.body_ok, s.m207, s.sens_open, num(s.tc1) > T.hardCutC, num(s.state) === 3, store.stale].join();
     if (key !== almKey) { almKey = key; renderAlarms(); }
   }
 
   function buildAlarms() {
-    $('alarms').innerHTML = ALARMS.map((a) => '<div class="alarm' + (a[4] ? '' : ' auto') + '" data-testid="alarm-' + a[1] + '"><div class="alarm-head">' + a[2] +
-      '</span></div><div class="alarm-act">' + a[3](false) + '</div><div class="alarm-foot">' + (a[4] ? '<button type="button" class="btn primary" data-ack="1">' + (a[1] === 'eeprom' ? '确认恢复' : '解除') +
-      '</button>' : '<span class="tag">将自动恢复</span>') + '</div></div>').join('');
+    $('alarms').innerHTML = ALARMS.map((a) => {
+      const head = '<div class="alarm' + (a[4] ? '' : ' auto') + '" data-testid="alarm-' + a[1] + '"><div class="alarm-head">' + a[2] + '</div>';
+      const act = '<div class="alarm-act">' + a[3](false) + '</div>';
+      const foot = '<div class="alarm-foot">' + (a[4] ? '<button type="button" class="btn primary" data-ack="1">' + (a[1] === 'eeprom' ? '确认恢复' : '解除') + '</button>'
+        : '<span class="tag">将自动恢复</span>') + '</div>';
+      return head + act + foot + '</div>';
+    }).join('');
   }
   function renderAlarms() {
     const alm = num(store.st && store.st.alarm), safe = num(store.st && store.st.state) === 3, cards = $('alarms').children;
@@ -233,15 +277,18 @@
     if (store.tab === 'overview') chart.render();
   }
   function exportCsv() {
-    const pts = store.series.map((sr) => sr.points), out = ['time,tc1_c,tc2_c,body_c'], d = new Date();
+    // what the chart shows right now: the selected time window. Hidden series stay in the file (the header names them).
+    const since = Date.now() - store.win, pts = store.series.map((sr) => sr.points.filter((p) => p[0] >= since)), out = ['time,tc1_c,tc2_c,body_c'];
+    const d = new Date(), p2 = (n) => ('0' + n).slice(-2);
     pts[0].forEach((p, i) => {
       d.setTime(p[0]);
-      out.push(d.getFullYear() + '-' + ('0' + (d.getMonth() + 1)).slice(-2) + '-' + ('0' + d.getDate()).slice(-2) + ' ' + hms(p[0]) + ',' +
+      out.push(d.getFullYear() + '-' + p2(d.getMonth() + 1) + '-' + p2(d.getDate()) + ' ' + hms(p[0]) + ',' +
         pts.map((s) => (s[i] && isFinite(s[i][1])) ? s[i][1].toFixed(2) : '').join(','));
     });
     const a = document.createElement('a'), url = URL.createObjectURL(new Blob([out.join('\n')], { type: 'text/csv' }));
+    d.setTime(Date.now());
     a.href = url;
-    a.download = 'tcs_' + hms(Date.now()).replace(/\D/g, '') + '.csv';
+    a.download = 'tcs_' + d.getFullYear() + p2(d.getMonth() + 1) + p2(d.getDate()) + '_' + hms(d.getTime()).replace(/\D/g, '') + '.csv';
     document.body.appendChild(a).click();
     a.remove();
     setTimeout(() => URL.revokeObjectURL(url), 1000);
@@ -254,13 +301,17 @@
   const val = (id, d) => { const p = store.reg.get(id); return p ? num(p.def, d) : d; };
   const pendOf = (id) => { let v; store.pending.forEach((p) => { if (p.id === id) v = p; }); return v; };
   const shownVal = (id) => { const p = pendOf(id); return p ? p.v : val(id, NaN); };
+  const fn = (v, d) => { const n = num(v, NaN); return isFinite(n) ? fshort(n) : d; };
 
   function onReg(msg) {
     const list = (Array.isArray(msg.list) ? msg.list : []).filter((p) => p && isFinite(num(p.id))), next = new Map();
     if (!list.length) return;                       // an empty registry would wipe the parameter page until the next push
-    const sig = list.map((p) => [p.id, p.type, p.flags, p.min, p.max, p.step, p.key, p.name, p.unit].join('|')).join();
+    const sig = list.map((p) => [p.id, p.type, p.flags, p.min, p.max, p.step, p.key, p.name, p.unit].join('|')).join;
     list.forEach((p) => {
-      p.id = num(p.id); p.min = num(p.min, 0); p.max = num(p.max, 0); p.step = num(p.step, 1) || 1; p.def = num(p.def, NaN);
+      // numbers go through fshort: the device's table is float, and a step arriving as 0.10000000149011612
+      // (older firmware) would otherwise give every input 17 decimals
+      p.id = num(p.id); p.min = fn(p.min, 0); p.max = fn(p.max, 0); p.step = fn(p.step, 1) || 1; p.def = fn(p.def, NaN);
+      p.key = String(p.key || ''); p.name = String(p.name || ''); p.unit = String(p.unit || '');
       next.set(p.id, p);
     });
     store.reg = next;
@@ -273,11 +324,18 @@
     const id = p.id, t = (s) => ' data-testid="param-' + id + (s ? '-' + s : '') + '"';
     const head = '<div class="prow" data-id="' + id + '"' + t() + '><label>' + esc(nameOf(p)) + (p.flags & 32 ? '<span class="tag danger">保护类</span>' : '') + '</label>';
     if (ENUM[id]) {
-      return head + '<span class="prow-range"></span><div class="seg">' + ENUM[id].map((x, v) => '<button type="button" data-v="' + v + '"' + t('opt-' + v) + '>' + x + '</button>').join('') + '</div></div>';
+      return head + '<span class="prow-range"></span><div class="seg">' +
+        ENUM[id].map((x, v) => '<button type="button" data-v="' + v + '"' + t('opt-' + v) + '>' + x + '</button>').join('') + '</div></div>';
     }
-    return head + '<input class="num" type="text" inputmode="decimal"' + t('input') + '><span class="u">' + esc(p.unit || '') + '</span><span class="prow-range"></span>' +
-      '<div class="prow-body"><button type="button" class="step" data-d="-1"' + t('minus') + '>－</button><input type="range" min="' + p.min + '" max="' + p.max + '" step="' + p.step + '"' + t('slider') +
-      '><button type="button" class="step" data-d="1"' + t('plus') + '>＋</button></div></div>';
+    return head +
+      '<input class="num" type="text" inputmode="decimal"' + t('input') + '>' +
+      '<span class="u">' + esc(p.unit) + '</span>' +
+      '<span class="prow-range"></span>' +
+      '<div class="prow-body">' +
+        '<button type="button" class="step" data-d="-1"' + t('minus') + '>－</button>' +
+        '<input type="range" min="' + p.min + '" max="' + p.max + '" step="' + p.step + '"' + t('slider') + '>' +
+        '<button type="button" class="step" data-d="1"' + t('plus') + '>＋</button>' +
+      '</div></div>';
   }
 
   function buildParams() {
@@ -289,18 +347,32 @@
       else { const g = GROUPS.findIndex((gr) => p.id >= gr[0] && p.id <= gr[1]); (g < 0 ? other : adv[g]).push(p); }
     });
     $('params').innerHTML = basic.map(rowHtml).join('');
-    $('tele').innerHTML = tele.map((p) => '<span class="tele" data-id="' + p.id + '" data-testid="tele-' + p.id + '"><span>' + esc(nameOf(p)) + '</span><b></b></span>').join('');
-    $('adv').innerHTML = GROUPS.map((g, i) => [g[2], adv[i], i + 1]).concat([['其它', other, 'other']]).filter((g) => g[1].length)
-      .map((g) => '<details class="group" data-testid="group-' + g[2] + '"><summary><span>' + g[0] + '</span><span class="muted">' + g[1].length + ' 项' + (g[1].some((p) => p.flags & 32) ? ' · 含保护类' : '') +
-        '</span></summary>' + g[1].map(rowHtml).join('') + '</details>').join('');
+    $('tele').innerHTML = tele.map((p) =>
+      '<span class="tele" data-id="' + p.id + '" data-testid="tele-' + p.id + '"><span>' + esc(nameOf(p)) + '</span><b></b></span>').join('');
+    const groups = GROUPS.map((g, i) => [g[2], adv[i], i + 1]).concat([['其它', other, 'other']]).filter((g) => g[1].length);
+    $('adv').innerHTML = groups.map((g) => {
+      const prot = g[1].some((p) => p.flags & 32);
+      return '<details class="group" data-testid="group-' + g[2] + '"><summary><span>' + g[0] + '</span>' +
+        '<span class="muted">' + g[1].length + ' 项' + (prot ? ' · 含保护类' : '') + '</span></summary>' + g[1].map(rowHtml).join('') + '</details>';
+    }).join('');
     Array.from($('adv').children).forEach((d, i) => { d.open = !!open[i]; });
     rows.clear();
     ['params', 'adv'].forEach((k) => $(k).querySelectorAll('.prow').forEach((row) => {
       const q = (s) => row.querySelector(s);
-      rows.set(+row.dataset.id, { row: row, range: q('.prow-range'), slider: q('[type=range]'), input: q('[type=text]'), steps: row.querySelectorAll('.step'), segs: row.querySelectorAll('.seg button') });
+      rows.set(+row.dataset.id, {
+        row: row, range: q('.prow-range'), slider: q('[type=range]'), input: q('[type=text]'),
+        steps: row.querySelectorAll('.step'), segs: row.querySelectorAll('.seg button')
+      });
     }));
     $('tele').querySelectorAll('.tele').forEach((c) => rows.set(+c.dataset.id, { tele: c.lastElementChild }));
     store.reg.forEach((p) => renderParam(p.id));
+  }
+
+  // the hint under a parameter row: a short integer range lists its values; otherwise range + step
+  function rangeText(p) {
+    const unit = p.unit ? ' ' + p.unit : '';
+    if (p.step === 1 && p.max - p.min <= 8) return '取值 ' + Array.from({ length: p.max - p.min + 1 }, (v, i) => p.min + i).join(' / ') + unit;
+    return p.min + ' ~ ' + p.max + unit + ' · 步进 ' + p.step;
   }
 
   function renderParam(id) {
@@ -317,7 +389,9 @@
     }
     if (r.pending !== !!pd) {
       r.pending = !!pd;
-      r.range.innerHTML = pd ? '<span class="spin"></span> 写入中…' : p.min + ' ~ ' + p.max + (p.unit ? ' ' + p.unit : '') + ' · 步进 ' + p.step;
+      // built from text only (the device's strings are escaped like everywhere else) plus one spinner element
+      r.range.textContent = pd ? '写入中…' : rangeText(p);
+      if (pd) r.range.prepend(Object.assign(document.createElement('span'), { className: 'spin' }));
     }
   }
 
@@ -327,9 +401,15 @@
     const clamped = Math.min(p.max, Math.max(p.min, raw));
     const v = +((p.min + Math.round((clamped - p.min) / p.step) * p.step).toFixed(dec(p) + 1)), text = ENUM[id] ? ENUM[id][v] : fmt(p, v), name = '「' + nameOf(p) + '」', thr = val(7, 40);
     // thr = high-temperature confirmation threshold (parameter 7). Cancelled or interrupted => the control snaps back.
-    if ((id === 1 || id === 2) && v > thr && !(await confirmDialog('高温设定确认', '把' + name + '设为 ' + text + '？它超过了高温确认阈值 ' + thr + ' °C，可能烫伤皮肤。', '确认设为 ' + text, true)) ||
-        p.flags & 32 && !(await confirmDialog('修改保护类参数', name + '是保护/输出限制类参数，改错会影响安全。确认改为 ' + text + '？', '确认修改', true))) return renderParam(id);
-    if (v !== raw) toast(name + '超出范围，已按 ' + text + ' 设置', 'warn');
+    const hot = (id === 1 || id === 2) && v > thr &&
+      !(await confirmDialog('高温设定确认', '把' + name + '设为 ' + text + '？它超过了高温确认阈值 ' + thr + ' °C，可能烫伤皮肤。', '确认设为 ' + text, true));
+    if (hot) return renderParam(id);
+    const guarded = (p.flags & 32) &&
+      !(await confirmDialog('修改保护类参数', name + '是保护/输出限制类参数，改错会影响安全。确认改为 ' + text + '？', '确认修改', true));
+    if (guarded) return renderParam(id);
+    // out of range and "rounded to the step" are different things: say which one happened
+    if (clamped !== raw) toast(name + '超出范围，已按 ' + text + ' 设置', 'warn');
+    else if (v !== raw) toast(name + '按步进 ' + p.step + ' 取整为 ' + text);
     send({ t: 'set', id: id, v: v }, name, rows.get(id).row);
     renderParam(id);
   }
@@ -379,7 +459,7 @@
     ['体温传感器', (s) => [s.body_ok ? 'ok' : 'bad', '● ' + (s.body_ok ? '正常' : '失联')]],
     ['水温探头', (s) => [s.sens_open ? 'bad' : 'ok', '● ' + (s.sens_open ? '断线' : '正常')]],
     ['屏幕', (s) => [s.screen ? 'ok' : 'warn', s.screen ? '● 已连接' : '○ 未连接（设备照常独立控温）']],
-    ['往返延迟', () => { const r = store.rtt; return isFinite(r) ? [r <= 100 ? 'ok' : r <= 400 ? 'warn' : 'bad', r + ' ms'] : '—'; }],
+    ['往返延迟', () => { const r = store.rtt; return isFinite(r) ? [r <= T.rttWarnMs ? 'ok' : r <= T.rttBadMs ? 'warn' : 'bad', r + ' ms'] : '—'; }],
     ['水温采样龄', (s) => (num(s.age) >= 65535 || !s.m207 ? '离线 / 未知' : isFinite(num(s.age)) ? s.age + ' ms' : '—')],
     ['重连次数', () => store.reconn + ' 次']];
   function buildDevice() {
@@ -411,6 +491,7 @@
     if (store.tab === 'log') renderLog();
     else renderChart();
     if (store.tab === 'device') loadLink();
+    window.scrollTo(0, 0);                 // a new tab starts at its top, not wherever the last one was scrolled to
   }
 
   // connection: WS, backoff, staleness
@@ -421,19 +502,37 @@
     vis($('offline'), down);
     vis($('offline-sub'), down);
     txt($('offline-title'), store.ever ? '连接断开' : '无法连接设备');
+    $('btn-retry').disabled = store.conn === 'wait';   // one "retry" at a time: a second socket would only leak
   }
   function setStale(on) {
     store.stale = on;
     vis($('stale'), on);
     $('page').classList.toggle('stale', on);
   }
+  const ago = (ms) => (ms < 1000 ? '刚刚更新' : ms < 60000 ? Math.round(ms / 1000) + ' 秒前' : Math.round(ms / 60000) + ' 分钟前');
   function tick() {
-    const now = Date.now(), age = now - store.stAt, stale = store.conn === 'open' && !!store.st && age > 2000;
+    const now = Date.now(), age = now - store.stAt, stale = store.conn === 'open' && !!store.st && age > T.staleMs;
     if (store.conn === 'down') txt($('offline-count'), String(Math.max(1, Math.ceil((store.nextAt - now) / 1000))));
-    if (store.st) txt($('age'), age < 1000 ? '刚刚更新' : Math.round(age / 1000) + ' 秒前');
+    if (store.st) txt($('age'), ago(age));
     if (stale !== store.stale) setStale(stale);
     if (stale) renderChart();
-    if (store.conn === 'open' && now - store.rxAt > 10000) ws.close();   // silent socket: reconnect
+    // A socket that went silent (Wi-Fi dropped without a FIN) never fires onclose. Closing it and waiting for
+    // onclose left the page on "已连接 + 数据过期" without reconnecting; so the connection is declared
+    // dead right here and a new one is scheduled.
+    if (store.conn === 'open' && now - store.rxAt > T.silentMs) {
+      const dead = ws;
+      lost();
+      if (dead) dead.close();
+      reconnect();
+    }
+  }
+  // the connection is gone: nothing stays pending (least of all 急停) and nothing is shown as live any more.
+  // One function, used by onclose and by the silence detector in tick().
+  function lost() {
+    ws = null;
+    store.conn = 'down'; store.reconn++; store.rtt = null; store.pingAt = 0;
+    setStale(false);
+    Array.from(store.pending.values()).forEach((p) => unconfirmed(p, '连接断开：'));
   }
   function reconnect() {
     const wait = BACKOFF[Math.min(store.retry++, 4)];
@@ -443,10 +542,16 @@
   }
   function connect() {
     clearTimeout(store.timer);
+    // One socket at a time. Tapping "立即重试" three times used to open three connections and leave two
+    // of them open for good; the device keeps at most 4 WS clients, so two slots stayed taken.
+    if (ws) { const old = ws; lost(); old.close(); }
+    store.conn = 'wait';
+    renderConn();
     let sock;
     try { sock = new WebSocket((location.protocol === 'https:' ? 'wss:' : 'ws:') + '//' + location.host + '/ws'); } catch (e) { return reconnect(); }
     ws = sock;
     sock.onopen = () => {
+      if (ws !== sock) { sock.close(); return; }     // replaced while it was still connecting
       store.conn = 'open'; store.retry = 0; store.ever = true; store.rxAt = Date.now();
       store.logs.length = 0; store.logFrom = store.logTo = 0;   // the history comes again: start the list over
       if (store.tab === 'log') renderLog();
@@ -454,17 +559,15 @@
     };
     sock.onmessage = (ev) => { if (ws === sock) handleMessage(ev.data); };
     sock.onclose = () => {
-      if (ws !== sock) return;
-      ws = null;
-      store.conn = 'down'; store.reconn++; store.rtt = null;
-      setStale(false);
-      Array.from(store.pending.values()).forEach((p) => unconfirmed(p, '连接断开：'));   // nothing stays pending, least of all 急停
+      if (ws !== sock) return;                       // a socket this page already gave up on: not news
+      lost();
       reconnect();
     };
   }
 
   // wiring and start-up
   const cmd = (c, node, hint) => { closeModal(false); send({ t: 'cmd', c: c }, CMD[c], node, hint); };
+  const cmdPending = (c) => { let busy = false; store.pending.forEach((p) => { if (p.c === c) busy = true; }); return busy; };
   function init() {
     buildAlarms();
     buildDevice();
@@ -473,6 +576,7 @@
     TABS.forEach((t) => on('tab-' + t, 'click', () => setTab(t)));
     Object.keys(SW_CMD).forEach((k) => on('sw-' + k, 'click', () => {
       const c = SW_CMD[k][k !== 'fan' && store.st && store.st[k] ? 0 : 1];
+      if (cmdPending(c)) return;                     // still on its way: a second tap would toggle the device twice
       send({ t: 'cmd', c: c }, CMD[c], $('sw-' + k));
     }));
     /* 急停与设备屏幕同一口径：先确认再执行（手机在口袋里误触、小孩乱点都不该直接把设备停掉）。
@@ -503,10 +607,16 @@
         r.input.value = (+t.value).toFixed(dec(p));
         if (e.type === 'change') requestSet(p.id, +t.value);
       } else if (t.type === 'text' && e.type !== 'change') {
-        const v = parseFloat(t.value);
         if (e.key === 'Enter') t.blur();
         else if (e.key === 'Escape') { r.skip = true; t.blur(); }
-        else if (e.type === 'focusout') { if (r.skip) { r.skip = false; renderParam(p.id); } else if (isFinite(v) && v !== shownVal(p.id)) requestSet(p.id, v); else renderParam(p.id); }
+        else if (e.type === 'focusout') {
+          const raw = t.value.trim(), v = parseNum(raw);
+          if (r.skip) { r.skip = false; renderParam(p.id); }
+          // something was typed but is not a number ("0x1F", "25,3", "abc"): say so instead of silently undoing it
+          else if (raw && !isFinite(v)) { toast('无法识别的数字「' + raw + '」，已保持原值', 'error'); renderParam(p.id); }
+          else if (isFinite(v) && v !== shownVal(p.id)) requestSet(p.id, v);
+          else renderParam(p.id);
+        }
       }
     };
     ['click', 'input', 'change', 'focusout', 'keydown'].forEach((ev) => $('view-params').addEventListener(ev, onParam));
@@ -525,12 +635,14 @@
     }));
     setTab('overview');
     renderConn();
-    /* HTTP bootstrap: fill the page before the WS is up; snapshots go through the same handleMessage */
-    ['status', 'registry', 'log'].forEach((k) => fetch('/api/' + k, { cache: 'no-store' }).then((r) => r.json()).then((m) => handleMessage(m, true)).catch(() => {}));
+    /* HTTP bootstrap: fill the page before the WS is up; snapshots go through the same handleMessage.
+       The log is NOT fetched here: the WS sends the whole history when it opens, and fetching it as well
+       made every entry show up twice (or once, depending on which arrived first). */
+    ['status', 'registry'].forEach((k) => fetch('/api/' + k, { cache: 'no-store' }).then((r) => r.json()).then((m) => handleMessage(m, true)).catch(() => {}));
     connect();
-    setInterval(tick, 500);
-    setInterval(() => { if (send({ t: 'ping' })) store.pingAt = Date.now(); }, 5000);
-    setInterval(() => { if (store.tab === 'device') loadLink(); }, 5000);
+    setInterval(tick, T.tickMs);
+    setInterval(() => { if (send({ t: 'ping' })) store.pingAt = Date.now(); }, T.pingMs);
+    setInterval(() => { if (store.tab === 'device') loadLink(); }, T.pingMs);
   }
 
   window.TCS = {

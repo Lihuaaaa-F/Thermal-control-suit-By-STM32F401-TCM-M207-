@@ -197,6 +197,8 @@ def main():
                 b = 'E 工程/构建配置'
             elif '/qr/qrcodegen' in f:
                 b = 'B-vendor nayuki QR'
+            elif fn.endswith('_test.js'):
+                b = 'C 测试脚本(网页前端逻辑, node)'
             elif '/mock/' in f:
                 b = 'C 素材/mock'
             elif fn.endswith(('.ninja_deps', '.ninja_log', 'build.ninja', '.log',

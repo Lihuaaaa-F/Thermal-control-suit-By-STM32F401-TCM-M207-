@@ -141,7 +141,9 @@ project_tcs/Core/Src/stm32h7xx_hal_msp.c
 project_tcs/Core/Src/stm32h7xx_it.c
 project_tcs/Core/Src/syscalls_stub.c
 project_tcs/tests/fuzz_m207.c
+project_tcs/tests/mutation_ui_model.py
 project_tcs/tests/test_control.c
+project_tcs/tests/test_link_info.c
 project_tcs/tests/test_m207_adv.py
 project_tcs/tests/test_m207_golden.c
 project_tcs/tests/test_m207_parse.c
@@ -150,6 +152,7 @@ project_tcs/tests/test_post.c
 project_tcs/tests/test_proto_tcs.c
 project_tcs/tests/test_qr.c
 project_tcs/tests/test_touch_session.c
+project_tcs/tests/test_ui_model.c
 project_tcs/tests/test_ws_json_escape.c
 project_tcs/tools/colorblind_check.py
 project_tcs/tools/fb_dump.py

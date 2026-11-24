@@ -6,13 +6,13 @@ set -u
 cd "$(dirname "$0")/.." || exit 1
 FAIL=0
 
-IFLAGS="-IApp/tcs -IApp/proto -IApp/comm -ICore/Inc"
+IFLAGS="-IApp/tcs -IApp/proto -IApp/comm -IApp/lvgl_ui -ICore/Inc"
 INC_CL="/IApp\\tcs /IApp\\proto /IApp\\comm"
 VARS64="C:\\Program Files\\Microsoft Visual Studio\\2022\\Community\\VC\\Auxiliary\\Build\\vcvars64.bat"
 
 cl_run() {  # cl_run <out.exe> <src...> — bat 内 cd 到 build，产物/对象全落 build
     local out="$1"; shift
-    local cmd_line='cl /nologo /W4 /std:c11 /utf-8 /D_CRT_SECURE_NO_WARNINGS /DTCS_UNIT_TEST /DTCS_PROFILE=1 /I..\App\tcs /I..\App\proto /I..\App\comm /I..\Core\Inc'
+    local cmd_line='cl /nologo /W4 /std:c11 /utf-8 /D_CRT_SECURE_NO_WARNINGS /DTCS_UNIT_TEST /DTCS_PROFILE=1 /I..\App\tcs /I..\App\proto /I..\App\comm /I..\App\lvgl_ui /I..\Core\Inc'
     for s in "$@"; do
         cmd_line="$cmd_line \"$(cygpath -w "$PWD/$s")\""
     done
@@ -65,6 +65,10 @@ run fuzz        tests/fuzz_m207.c             App/tcs/m207.c
 
 run touchsession tests/test_touch_session.c   App/tcs/touch_session.c Core/Src/ft5446.c
 run qr          tests/test_qr.c               App/tcs/qr/qrcodegen.c
+
+# U 线 S2/W3：界面纯逻辑（连接视图 / 横幅选型 / 确认反馈 / 主页差分）与主控设备信息
+run uimodel     tests/test_ui_model.c        App/lvgl_ui/ui_model.c
+run linkinfo    tests/test_link_info.c       App/comm/link_info.c
 
 # H13 二维码解码回读（PC 出图 → zxing-cpp 解码比对）
 PYBIN=$(command -v python3 || command -v python)

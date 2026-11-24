@@ -216,8 +216,8 @@ void app_main(void)
     tmp117_service_start();
     /* R1d：风扇（GPIO48 低=开，LEDC 25kHz）。自测含两态电平回读。 */
     fan_lb_boottest();
-    /* R1e：control FSM 服务（ops→tcs_fan/tcs_m207；核 1 500ms 节拍+100ms 布防
-     * 步进+esp_task_wdt 3s 订阅）。console REPL（USB-Serial-JTAG，同口共存）。 */
+    /* R1e：control FSM 服务（ops→tcs_fan/tcs_m207；核 1 100ms 节拍，每拍控制评估 + 布防步进
+     * （U 线 E1，原 500ms）+esp_task_wdt 3s 订阅）。console REPL（USB-Serial-JTAG，同口共存）。 */
     control_init(&(control_ops_t){
         .fan_set = fan_set_on,
         .tec_sw = op_tec_sw,

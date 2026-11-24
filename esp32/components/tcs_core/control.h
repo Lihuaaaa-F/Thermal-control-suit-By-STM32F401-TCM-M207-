@@ -59,6 +59,9 @@ void  control_init(const control_ops_t *ops);
  * 频率由 control.c 限在 500ms。*/
 void  control_poll(uint32_t now_ms);
 ctrl_state_t control_state(void);
+/* 微秒计时 → 毫秒时间戳（control_poll 的 now_ms 由它来）。必须走 64 位除：
+ * 先截成 int32 再除，开机 35 分 47 秒后时间戳会倒跳 71 分钟。*/
+uint32_t control_ms_from_us(int64_t us);
 
 /* 手动直控（UI/网页/CLI 同一入口；SAFE/急停期 TEC 拒绝、风扇拒绝关）*/
 void  control_manual_tec(uint8_t ch, uint8_t on);
@@ -73,7 +76,7 @@ uint8_t tcs_alarm_active(uint16_t bit);
  * 仅当报警源已恢复（传感器 ok、M207 online、tc1_act≤硬阈值、非急停自持）才清位。 */
 void  tcs_alarm_ack(void);
 
-/* 急停（屏弹窗确认 / 0x15 cmd=8 / KEY0 / console estop 同一入口）：
+/* 急停（屏弹窗确认 / 网页 / 0x15 cmd=8 / console estop 同一入口；ESP32 侧没有物理急停键）：
  * 双通道 TCSW=0 + 风扇开 + mode=手动 + ALM_ESTOP + 广播 */
 void  tcs_emergency_stop(void);
 

@@ -3,16 +3,18 @@
 """mutation_control.py — control.c 判别性验证：旧实现 + 变异必须被单测抓红
 
 两种证明，缺一不可：
-  1. 旧实现：把**基线版本**的 control.c 配上现在的 tests/test_control_esp32.c 编译运行，
-     新增的 W2 用例必须失败（否则测试没有判别力，旧代码照样过 = 假绿）。
+  1. 旧实现：把**U 线基线版本**的 control.c 配上现在的 tests/test_control_esp32.c 编译运行，
+     新增的 W2 用例必须有足够多条失败（否则测试没有判别力，旧代码照样过 = 假绿）。
+     基线固定是 d061041（U 线开工前的最后一个提交）——它是这批 W2 用例的对照物，
+     以后不会随分支前进而变；要对照别的版本用 --old 指定路径。
   2. 变异：对现行 control.c 逐个施加"改坏一处"的变异（见 MUTATIONS），每个变异
-     都必须让单测变红；有变异没被抓住 = 该路径缺用例，或变异与别的防御等价（需在
-     表里注明"等价"）。
+     都必须让单测变红。没被抓住 = 该路径缺用例，或者这处代码与另一道防线等价。
+     等价的必须在表里以"等价"开头注明理由，并且配一个"把等价的几道防线一起删掉"的
+     变异（D 开头），后者必须被抓住——否则"等价"只是没测到的托词。
 
 用法（在 esp32/ 根目录）：python tests/mutation_control.py [--old <旧 control.c 路径>]
-  --old 缺省时用 `git show d061041:esp32/components/tcs_core/control.c`。
 编译器与 tests/run_m207_tests.sh 相同（MSVC cl + vcvars64）。
-退出码 0 = 全部按预期（旧实现红、每个变异红、原版绿）。
+退出码 0 = 全部按预期（旧实现红、每个非等价变异红、原版绿）。
 """
 import os
 import re
@@ -25,41 +27,75 @@ ESP = os.path.dirname(HERE)
 CORE = os.path.join(ESP, "components", "tcs_core")
 VARS64 = r"C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Auxiliary\Build\vcvars64.bat"
 TEST = os.path.join(HERE, "test_control_esp32.c")
+BASELINE = "d061041"
 
-# (名称, 文件内唯一原文, 替换文, 备注)。原文必须在文件里恰好出现一次。
+_A = "if (!g_tcs.m207_online || g_tcs.m207_sensor_open\n"
+_B = "            || (s_safety_latch & (uint8_t)~SAFETY_BIT_BODY_LOST)) {"
+_SAFE_CHECK = _A + _B                      # SAFE 期间逐拍检查（三条件）
+_RESTORE = "if (s_restore_tec2_ok && s_exit_by_recover) out_tec_sw(2, s_tec2_before_safe);"
+
+# 每项：(名称, [(原文, 替换文), ...], 备注)。每段原文必须在 control.c 里恰好出现一次。
+# 备注以"等价"开头 = 预期存活（与别的防御等价），否则必须被单测抓红。
 MUTATIONS = [
-    ("M01 退出 SAFE 风扇一律关",
-     "out_fan(estop_forced_manual ? 0u : s_fan_before_safe);",
-     "out_fan(0);"),
+    ("M01 手动模式退出 SAFE 风扇一律关",
+     [("out_fan((s_auto_before_safe && !auto_now) ? 0u : s_fan_before_safe);", "out_fan(0);")], ""),
     ("M02 退出 SAFE 不复原 TEC2",
-     "if (s_restore_tec2_ok) out_tec_sw(2, s_tec2_before_safe);",
-     ";"),
+     [(_RESTORE, ";")], ""),
     ("M03 模块掉线不作废 TEC2 复原",
-     "if (!g_tcs.m207_online || g_tcs.m207_sensor_open\n"
-     "            || (s_safety_latch & (uint8_t)~SAFETY_BIT_BODY_LOST)) {",
-     "if (g_tcs.m207_sensor_open\n"
-     "            || (s_safety_latch & (uint8_t)~SAFETY_BIT_BODY_LOST)) {"),
+     [(_SAFE_CHECK, "if (g_tcs.m207_sensor_open\n" + _B)], ""),
     ("M04 重申间隔跟节拍变密",
-     "(uint32_t)(now_ms - s_safe_assert_ms) >= CTRL_SAFE_REASSERT_MS) {",
-     "(uint32_t)(now_ms - s_safe_assert_ms) >= 100u) {"),
+     [("(uint32_t)(now_ms - s_safe_assert_ms) >= CTRL_SAFE_REASSERT_MS) {",
+       "(uint32_t)(now_ms - s_safe_assert_ms) >= 100u) {")], ""),
     ("M05 急停不再区分自动被切手动",
-     "uint8_t estop_forced_manual = (uint8_t)(s_auto_before_safe && g_tcs.mode == 0);",
-     "uint8_t estop_forced_manual = 0;"),
+     [("out_fan((s_auto_before_safe && !auto_now) ? 0u : s_fan_before_safe);",
+       "out_fan((0 && !auto_now) ? 0u : s_fan_before_safe);")], ""),
     ("M06 不记忆故障前模式",
-     "s_auto_before_safe = (uint8_t)(g_tcs.mode != 0);",
-     "s_auto_before_safe = 1;"),
+     [("s_auto_before_safe = (uint8_t)(g_tcs.mode != 0);", "s_auto_before_safe = 1;")], ""),
     ("M07 每次重申都重记故障前输出",
-     "    if (s_state != CTRL_SAFE) safe_remember_outputs();\n    safe_outputs();",
-     "    safe_remember_outputs();\n    safe_outputs();"),
-    ("M08 退出后不强制下一拍评估",
-     "    s_last_eval = now_ms - CTRL_EVAL_MS;\n    goto_state(CTRL_IDLE);",
-     "    goto_state(CTRL_IDLE);"),
+     [("    if (s_state != CTRL_SAFE) safe_remember_outputs();\n    safe_outputs();",
+       "    safe_remember_outputs();\n    safe_outputs();")], ""),
+    ("M08 退出后不强制当拍评估",
+     [("    s_last_eval = now_ms - CTRL_EVAL_MS;      /* 让评估节拍闸放行：当拍就评估 */\n    goto_state(CTRL_IDLE);",
+       "    goto_state(CTRL_IDLE);")], ""),
     ("M09 上电首拍不重申",
-     "        s_safe_assert_ms = now_ms - CTRL_SAFE_REASSERT_MS;",
-     "        s_safe_assert_ms = now_ms;"),
+     [("        s_safe_assert_ms = now_ms - CTRL_SAFE_REASSERT_MS;",
+       "        s_safe_assert_ms = now_ms;")], ""),
     ("M10 急停不记忆故障前输出（直接进 SAFE）",
-     "    if (s_state != CTRL_SAFE) safe_remember_outputs();\n    s_restore_tec2_ok = 0;",
-     "    s_restore_tec2_ok = 0;"),
+     [("    if (s_state != CTRL_SAFE) safe_remember_outputs();\n    s_restore_tec2_ok = 0;",
+       "    s_restore_tec2_ok = 0;")], ""),
+    ("M11 自动模式退出 SAFE 复原故障前风扇（P1-1 回归）",
+     [("        out_fan(0);                 /* 风扇归状态机管：先归零，本函数末尾当拍评估 */",
+       "        out_fan(s_fan_before_safe);")], ""),
+    ("M12 自动模式退出 SAFE 不当拍评估",
+     [("    if (auto_now) auto_evaluate(now_ms);", "    ;")], ""),
+    ("M13 人工确认退出也复原 TEC2（P1-3）",
+     [(_RESTORE, "if (s_restore_tec2_ok) out_tec_sw(2, s_tec2_before_safe);")], ""),
+    ("M14 TEC2 复原恒为开",
+     [(_RESTORE, "if (s_restore_tec2_ok && s_exit_by_recover) out_tec_sw(2, 1);")], ""),
+    ("M15 TEC2 故障前值采样恒为开",
+     [("s_tec2_before_safe = g_tcs.tec2_on;", "s_tec2_before_safe = 1;")], ""),
+    ("M16 SAFE 期间探头断线不作废 TEC2 复原",
+     [(_SAFE_CHECK, "if (!g_tcs.m207_online\n" + _B)], ""),
+    ("M17 自愈时间 2000ms 改 1900ms",
+     [("#define COMM_AUTO_RECOVER_MS   2000u", "#define COMM_AUTO_RECOVER_MS   1900u")], ""),
+    ("M18 自愈时间 2000ms 改 2100ms",
+     [("#define COMM_AUTO_RECOVER_MS   2000u", "#define COMM_AUTO_RECOVER_MS   2100u")], ""),
+    ("M19 毫秒换算回到 32 位截断（P1-2）",
+     [("return (uint32_t)((uint64_t)us / 1000u);",
+       "return (uint32_t)((int32_t)us / 1000);")], ""),
+    # ---- 以下三处各有两道防线，单删一处与另一处等价；D01 把两道一起删，必须被抓住 ----
+    ("M20 置位时统一作废 TEC2 复原资格",
+     [("    if (bit & (uint8_t)~SAFETY_BIT_BODY_LOST) s_restore_tec2_ok = 0;", "    ;")],
+     "等价：SAFE 期间的逐拍检查（M21 的那段）还会作废；两道一起删见 D01"),
+    ("M21 SAFE 期间逐拍检查不再看\"别的锁存位\"",
+     [(_SAFE_CHECK, "if (!g_tcs.m207_online || g_tcs.m207_sensor_open) {")],
+     "等价：safety_trip 置位时已统一作废（M20 的那段）；两道一起删见 D01"),
+    ("M22 急停路径不再显式作废 TEC2 复原",
+     [("    s_restore_tec2_ok = 0;                  /* 急停不复原 TEC（safety_trip 已作废，这里再写一次表明意图）*/\n", "")],
+     "等价：tcs_emergency_stop 先调 safety_trip(ESTOP)，那里已作废"),
+    ("D01 置位不作废 + 逐拍检查不看别的锁存位（两道防线一起删）",
+     [("    if (bit & (uint8_t)~SAFETY_BIT_BODY_LOST) s_restore_tec2_ok = 0;", "    ;"),
+      (_SAFE_CHECK, "if (!g_tcs.m207_online || g_tcs.m207_sensor_open) {")], ""),
 ]
 
 
@@ -98,13 +134,12 @@ def run_cl(work, control_c):
     return True, rp.stdout + rp.stderr, rp.returncode
 
 
-def compile_run(control_src_text, tag):
+def compile_run(control_src_text):
     d = tempfile.mkdtemp(prefix="tcs_mut_")
     c = os.path.join(d, "control.c")
     with open(c, "w", encoding="utf-8", newline="\n") as f:
         f.write(control_src_text)
-    ok, out, rc = run_cl(d, c)
-    return ok, out, rc
+    return run_cl(d, c)
 
 
 def fails_of(out):
@@ -119,7 +154,7 @@ def main():
     bad = 0
 
     # 0) 原版必须绿
-    ok, out, rc = compile_run(cur, "current")
+    ok, out, rc = compile_run(cur)
     if not ok or rc != 0:
         print("[current] NOT GREEN (compile_ok=%s rc=%s)" % (ok, rc))
         print(out[-2000:])
@@ -136,9 +171,14 @@ def main():
             old = f.read()
     else:
         old = subprocess.run(["git", "-C", ESP, "show",
-                              "d061041:esp32/components/tcs_core/control.c"],
+                              BASELINE + ":esp32/components/tcs_core/control.c"],
                              capture_output=True, text=True, encoding="utf-8").stdout
-    ok, out, rc = compile_run(old, "old")
+    # 基线里没有 control_ms_from_us（U 线复核后新增的纯函数）：补上它的正确实现只为让测试
+    # 链接得过——W2-21 测的是这个函数本身，不是基线里有的行为，所以它在旧实现上绿是正常的。
+    if "control_ms_from_us" not in old:
+        old += ("\n/* mutation_control.py: 基线没有这个函数，为链接补上 */\n"
+                "uint32_t control_ms_from_us(int64_t us) { return (uint32_t)((uint64_t)us / 1000u); }\n")
+    ok, out, rc = compile_run(old)
     if ok:
         fl = fails_of(out)
         m = re.search(r"PASS=(\d+) FAIL=(\d+)", out)
@@ -154,22 +194,37 @@ def main():
         print(out[-1500:])
         bad += 1
 
-    # 2) 变异必须红
-    for name, a, b in MUTATIONS:
-        n = cur.count(a)
-        if n != 1:
-            print("[mut] %-34s SKIP: 原文出现 %d 次（变异表过期）" % (name, n))
+    # 2) 变异必须红（注明"等价"的允许存活）
+    for name, edits, note in MUTATIONS:
+        mutated = cur
+        stale = None
+        for a, b in edits:
+            n = mutated.count(a)
+            if n != 1:
+                stale = (a, n)
+                break
+            mutated = mutated.replace(a, b)
+        if stale:
+            print("[mut] %-44s SKIP: 原文出现 %d 次（变异表过期）: %r" % (name, stale[1], stale[0][:50]))
             bad += 1
             continue
-        ok, out, rc = compile_run(cur.replace(a, b), "mut")
+        ok, out, rc = compile_run(mutated)
+        verbose = bool(os.environ.get("MUT_VERBOSE"))
+        equivalent = note.startswith("等价")
         if ok and rc != 0:
             fl = fails_of(out)
-            print("[mut] %-34s CAUGHT by %d checks, e.g. %s" % (name, len(fl), fl[0] if fl else "?"))
+            print("[mut] %-44s CAUGHT by %d checks, e.g. %s" % (name, len(fl), fl[0] if fl else "?"))
+            if verbose:
+                print(out[-800:])
         elif ok:
-            print("[mut] %-34s SURVIVED —— 没有任何用例抓到" % name)
-            bad += 1
+            if equivalent:
+                print("[mut] %-44s survives as expected (%s)" % (name, note))
+            else:
+                print("[mut] %-44s SURVIVED —— 没有任何用例抓到" % name)
+                bad += 1
         else:
-            print("[mut] %-34s COMPILE FAIL" % name)
+            print("[mut] %-44s COMPILE FAIL" % name)
+            print(out[-800:])
             bad += 1
 
     print("mutation_control: %s" % ("ALL AS EXPECTED" if not bad else "HAS PROBLEMS (%d)" % bad))

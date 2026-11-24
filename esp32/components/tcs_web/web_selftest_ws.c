@@ -6,9 +6,11 @@
  * 把服务端的行为在真机上验一遍：
  *   握手 → 首推顺序（reg、log、st）→ ping/pong 带 ref → set 必回执（含"值没变"与"被拒绝"）
  *   → cmd 白名单 → ack 带 ref → CLOSE 之后会话表清空 → 不带 Upgrade 的 GET /ws 回 400
- *   → 第 5 个客户端被拒（上限 4）→ 全部断开后会话表回到 0。
+ *   → 三个客户端同时登记、不打招呼就断开后表清空（上限 4 的拒绝路径在回环里造不出来，
+ *      见 G 段注释，由代码审读覆盖）。
  * 不改任何参数：set 用的是"与当前值相同"的值和"必然被约束拒绝"的值。
  * 生产档（两个开关都关）整段不编译。
+ * `webtest dump`：另把收到的每一帧原文转储到控制台（ws_dump），供电脑端回放进真实浏览器。
  */
 #include "websocket.h"
 #include <stdio.h>
@@ -32,6 +34,63 @@ static void chk(int ok, const char *what)
     s_total++;
     if (ok) s_pass++;
     printf("    %-46s %s\r\n", what, ok ? "OK" : "FAIL");
+}
+
+/* ---- 原文转储（`webtest dump`）----
+ * 开发机连不上设备热点，但可以把真机发出的**原始字节**录下来，回放进真实浏览器里的真实前端
+ * （esp32/tools/web_replay.py），证明"真固件发的帧，页面能正确解析和显示"。
+ * 行格式（整行一次写出；别的任务的日志只会插在行与行之间，解析时跳过即可）：
+ *   WSD <tag> <块序号> <总块数> <crc32 八位十六进制> <base64>
+ * tag：WS 帧是帧号 F0001…，HTTP 响应体是 H<路径>。每帧整段算 CRC，接收端据此发现丢字节。*/
+#define DUMP_CHUNK 120u                 /* 120 字节 → base64 恰好 160 字符，无补位 */
+static int s_dump;
+static unsigned s_dump_no;
+
+static uint32_t crc32_of(const uint8_t *p, size_t n)
+{
+    uint32_t c = 0xFFFFFFFFu;
+    for (size_t i = 0; i < n; i++) {
+        c ^= p[i];
+        for (int k = 0; k < 8; k++) c = (c >> 1) ^ (0xEDB88320u & (uint32_t)(0u - (c & 1u)));
+    }
+    return ~c;
+}
+
+void ws_dump(const char *tag, const uint8_t *data, size_t len)
+{
+    static const char b64[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    size_t nch = (len + DUMP_CHUNK - 1) / DUMP_CHUNK;
+    if (nch == 0) nch = 1;
+    uint32_t crc = crc32_of(data, len);
+    for (size_t i = 0; i < nch; i++) {
+        size_t off = i * DUMP_CHUNK;
+        size_t k = (len - off < DUMP_CHUNK) ? len - off : DUMP_CHUNK;
+        char line[64 + DUMP_CHUNK / 3u * 4u];
+        int o = snprintf(line, sizeof line, "WSD %s %u %u %08lx ", tag,
+                         (unsigned)i, (unsigned)nch, (unsigned long)crc);
+        for (size_t j = 0; j < k; j += 3) {
+            uint32_t v = (uint32_t)data[off + j] << 16;
+            size_t r = k - j;
+            if (r > 1) v |= (uint32_t)data[off + j + 1] << 8;
+            if (r > 2) v |= data[off + j + 2];
+            line[o++] = b64[(v >> 18) & 63u];
+            line[o++] = b64[(v >> 12) & 63u];
+            line[o++] = (r > 1) ? b64[(v >> 6) & 63u] : '=';
+            line[o++] = (r > 2) ? b64[v & 63u] : '=';
+        }
+        line[o++] = '\r';
+        line[o++] = '\n';
+        line[o] = 0;
+        fputs(line, stdout);             /* 一次写出整行：不与其它任务的日志交错在行内 */
+        usleep(3000);                    /* USB 串口发送缓冲很小：一行一停，别灌满了丢字节 */
+    }
+}
+
+static void dump_text_frame(const uint8_t *pl, size_t len)
+{
+    char tag[12];
+    snprintf(tag, sizeof tag, "F%04u", ++s_dump_no);
+    ws_dump(tag, pl, len);
 }
 
 /* ---- 最小 TCP / WS 客户端 ---- */
@@ -105,6 +164,8 @@ static int ws_handshake(int fd, const char *ip, int port, int upgrade)
 /* 读一个服务端帧。载荷的前 cap 字节留在 pl（更长的部分读走丢弃）。返回 opcode，失败 -1 */
 static int ws_frame(int fd, uint8_t *pl, size_t cap, size_t *len)
 {
+    static uint8_t whole[WS_REG_BUF];     /* 仅 dump 用：整帧原文（调用方只拿到截断副本）*/
+    size_t whole_len = 0;
     uint8_t h[2];
     if (rx_exact(fd, h, 2) != 0) return -1;
     int op = h[0] & 0x0F;
@@ -129,8 +190,10 @@ static int ws_frame(int fd, uint8_t *pl, size_t cap, size_t *len)
         if (mask[0] | mask[1] | mask[2] | mask[3])
             for (size_t i = 0; i < k; i++) tmp[i] ^= mask[(*len + i) & 3u];
         if (*len + k <= cap) { memcpy(pl + *len, tmp, k); *len += k; }
+        if (whole_len + k <= sizeof whole) { memcpy(whole + whole_len, tmp, k); whole_len += k; }
         n -= k;
     }
+    if (s_dump && op == OP_TEXT) dump_text_frame(whole, whole_len);
     return op;
 }
 
@@ -182,9 +245,11 @@ static int ws_client_count_after_ms(int ms)
     return -1;
 }
 
-int ws_selftest_ws(const char *ip, int port, int *pass, int *total)
+int ws_selftest_ws(const char *ip, int port, int *pass, int *total, int dump)
 {
     s_pass = s_total = 0;
+    s_dump = dump;
+    s_dump_no = 0;
     char b[320];
     printf("  ws loopback %s:%d\r\n", ip, port);
 
@@ -328,10 +393,15 @@ tail:
 
 #else /* 生产档 */
 
-int ws_selftest_ws(const char *ip, int port, int *pass, int *total)
+int ws_selftest_ws(const char *ip, int port, int *pass, int *total, int dump)
 {
-    (void)ip; (void)port; (void)pass; (void)total;
+    (void)ip; (void)port; (void)pass; (void)total; (void)dump;
     return -1;
+}
+
+void ws_dump(const char *tag, const uint8_t *data, size_t len)
+{
+    (void)tag; (void)data; (void)len;
 }
 
 #endif /* CONFIG_TCS_DIAG || CONFIG_TCS_SIM */

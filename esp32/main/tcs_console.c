@@ -136,8 +136,9 @@ static int cmd_ack(int argc, char **argv)
 #if CONFIG_TCS_DIAG || CONFIG_TCS_SIM
 static int cmd_webtest(int argc, char **argv)
 {
-    (void)argc; (void)argv;
-    return ws_selftest();
+    /* `webtest dump`：另把 /api/ 各接口的响应体和收到的 WS 帧原文转储到控制台（电脑端回放进浏览器用）*/
+    int dump = (argc >= 2 && strcmp(argv[1], "dump") == 0);
+    return ws_selftest(dump);
 }
 
 static int cmd_linkmute(int argc, char **argv)
@@ -365,7 +366,7 @@ int tcs_console_start(void)
         { .command="status", .help="状态一行", .hint=NULL,
           .func=cmd_status, .argtable=NULL },
 #if CONFIG_TCS_DIAG || CONFIG_TCS_SIM
-        { .command="webtest", .help="网页端点自检：回环 GET 9 个端点并打印状态码/字节数（台架/现场档）", .hint=NULL,
+        { .command="webtest", .help="网页端点自检：回环 GET 9 个端点 + WebSocket 回环自检；webtest dump 另把 /api/ 各接口的响应体与收到的帧原文转储到控制台（台架/现场档）", .hint="[dump]",
           .func=cmd_webtest, .argtable=NULL },
         { .command="linkmute", .help="linkmute <s>：s 秒内不给屏发快照/设备信息（取证屏幕断链显示；0=恢复）", .hint="<s>",
           .func=cmd_linkmute, .argtable=NULL },

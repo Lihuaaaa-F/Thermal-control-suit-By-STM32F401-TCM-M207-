@@ -57,3 +57,52 @@ W (136055) ctrl: comm fault auto-recovered (2000ms healthy; estop/overtemp stay 
 I (136055) CTRL: arm LOST->ARMED (10 healthy samples = 1s)
 >>> status
 tc1=19.80 tc2=24.86 body=37.40(ok=1) fan=0% mode=0 m207=1 alarm=0x0000 armed=1 state=0 sim=1 latch=0x00 heap=8423324 up=137s rst=11
+
+## webtest dump：转储真机响应体与 WS 帧原文（2026-11-25 02:27，现场档，固件含 dump 功能）
+>>> webtest dump
+webtest base=http://192.168.4.1 (dump)
+  /              HTTP 200  2668 bytes  OK
+  /index.html    HTTP 200  2668 bytes  OK
+  /style.css     HTTP 200  3486 bytes  OK
+  /app.js        HTTP 200  14856 bytes  OK
+  /chart.js      HTTP 200  4101 bytes  OK
+  /api/status    HTTP 200  280 bytes  OK
+  /api/registry  HTTP 200  6578 bytes  OK
+  /api/log       HTTP 200  234 bytes  OK
+  /api/linkstats HTTP 200  248 bytes  OK
+webtest: 9/9 PASS (HTTP)
+  ws loopback 192.168.4.1:80
+I (60615) tcs_ws: ws client fd=58
+    handshake: 101 Switching Protocols             OK
+    reg numbers carry no float32 tail              OK
+    first frames in order: reg, log, st            OK
+    current hyst / body_cold read back from reg    OK
+    ping -> pong carries ref                       OK
+I (61095) tcs_ws: ws set id=0x05 v=0.200 rv=0 -> 0.200
+    set (same value) -> pv ok=1 with my ref        OK
+I (61345) tcs_ws: ws set id=0x03 v=36.500 rv=-2 -> 37.500
+    set (rejected by constraint) -> pv ok=0 err=-2 OK
+    set id=65537 -> err bad_set (not truncated)    OK
+    cmd 11 (screen-only) -> err bad_cmd            OK
+I (61845) tcs_ws: ws cmd=9 rv=0 -> state=0 alarm=0x0000
+    cmd 9 (ack, nothing latched) -> ack with ref   OK
+    CLOSE -> server answers CLOSE                  OK
+    client table empty after CLOSE                 OK
+W (62235) httpd_uri: httpd_uri: uri handler execution failed
+    plain GET /ws -> 400 (not registered as a WS client) OK
+I (62245) tcs_ws: ws client fd=58
+I (62265) tcs_ws: ws client fd=60
+I (62275) tcs_ws: ws client fd=62
+    clients 1..3 handshakes accepted               OK
+    client table lists all three                   OK
+W (62295) httpd_txrx: httpd_sock_err: error in recv : 104
+W (62295) httpd_ws: httpd_ws_get_frame_type: Failed to read header byte (socket FD invalid), closing socket now
+W (62295) httpd_txrx: httpd_sock_err: error in recv : 104
+W (62295) httpd_ws: httpd_ws_get_frame_type: Failed to read header byte (socket FD invalid), closing socket now
+W (62305) httpd_txrx: httpd_sock_err: error in recv : 104
+W (62305) httpd_ws: httpd_ws_get_frame_type: Failed to read header byte (socket FD invalid), closing socket now
+    client table empty after abrupt disconnects    OK
+  ws loopback: 16/16 PASS
+webtest: HTTP 9/9, WS 16/16 -> ALL PASS
+tcs I (64715) SNAP: [SNAPP] enc_max=445us (budget 500) snap=300 delta=0 drop=0 skip=0
+I (71115) M207: [M207P] tick_max=267ous (fsm_max=99ous; budget 1000/300) tx=88 rxline=88 perr=0 nak=0 vok=0 rsend=0 off=0 qdrop=0 wdrop=0 stk=1232W

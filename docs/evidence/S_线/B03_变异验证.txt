@@ -1,3 +1,7 @@
+【2026-11-24 晚补注】本文件是规则 v1 的变异记录（19 个变异体，针对当时的 estop_gate.c 与旧测试名）。
+  规则 v2 的变异验证已做成仓库工具 tests/mutation_estop_gate.py（20 个变异体，run_all.sh 每次都跑），
+  记录见 B11_急停入口规则合一.txt。本文件保留作历史。
+
 B03 变异验证 — estop_gate.c / estop_gate.h / ui_page_state.c
 基线（未变异）：test_site_logic: PASS=118 FAIL=0
 变异总数：19；被测试抓红：19；未抓到：0

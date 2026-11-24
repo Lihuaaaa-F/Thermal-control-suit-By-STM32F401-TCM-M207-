@@ -1,0 +1,61 @@
+S 线 B11 — 急停屏入口判定规则：两条线各写一版之后合一 — 证据
+生成：2026-11-24 晚。以下各节是命令的原样输出。真机部分还没有做（设备被另一个会话占用），见文末。
+
+一、两线的分歧与取舍
+  S 线（fed89c8，纯函数 estop_gate.c）：LVGL 卡死 → 任何页面按下即急停；任何弹窗开着时长按都让位。
+  U 线（2580fdb，在 tcs_lvgl.c 里内联）：两条都只在首页生效；只有"确认急停"弹窗开着时长按才让位，
+                                        别的弹窗挡不住急停（独立复核 P2-8）。
+  合一后的规则（App/tcs/estop_gate.h）：
+    A 首页 + LVGL 卡死 → 立即触发。                                   （取 S 线；U 线同）
+    B 首页 + 活着 + 按住 600ms → 触发；"确认急停"弹窗开着时让位；       （取 U 线的弹窗种类规则）
+      别的弹窗挡不住（触发并把它关掉）
+    C 其它页面：界面在处理这次按压 → 绝不触发；                        （两线同）
+      界面没在处理这次按压（心跳停了，或触摸读回调没报告过按下）+ 按住 600ms → 触发。
+                                                                       （两线不同：U 线是一律不触发）
+  C 的理由：界面冻在别的页面上时用户既回不了首页也按不了任何东西，屏幕上的急停不能因此够不着，
+  直到断电重启；要求按住 600ms 是为了不让一下误碰就停机。这一条是按用户"其余按默认自主完成"的授权
+  做的取舍，已写进 S 线结果文档 §4（D7），用户可以改。
+  实现保留 S 线的纯函数（主机可测），U 线内联的那份不进代码库。
+
+二、主机单测（tests/test_site_logic.c）
+test_site_logic: PASS=119 FAIL=0
+
+三、变异验证（tests/mutation_estop_gate.py：把 estop_gate.[ch] 逐个改坏，单测必须变红）
+未变异：PASS（test_site_logic: PASS=119 FAIL=0）
+  G1   被杀  所有页面都按首页规则（去掉 on_home 条件）  ← other page, handled: hold 5s no fire (line 91)
+  G2   被杀  首页也按其它页面规则（on_home 恒假）  ← hold=600 fires on home (line 72)
+  G3   被杀  首页卡死不立即触发（去掉 !lvgl_alive 分支）  ← home dead: held 5 fires (line 174)
+  G4   被杀  卡死判据取反（心跳推进了才算卡死）  ← hold<600 idle (line 70)
+  G5   被杀  首页长按不看"确认急停"弹窗  ← estop dialog open: hold 5s no fire (line 191)
+  G6   被杀  首页长按门限 >= 改成 >  ← hold=600 fires on home (line 72)
+  G7   被杀  首页分支落进其它页面逻辑（去掉首页的 return）  ← home + estop dialog + indev half-dead: hold 5s no fire (line 202)
+  G8   被杀  其它页面："在处理"不再要求界面活着  ← other page dead + reads changing: hold 600 fires (line 156)
+  G9   被杀  其它页面：读次数判据取反  ← other page, handled: hold 5s no fire (line 91)
+  G10  被杀  其它页面：不看读次数（界面活着就算在处理）  ← other page, unseen: hold 600 fires (line 101)
+  G11  被杀  其它页面：没在处理就立即触发（去掉按住 600ms）  ← other page, unseen: hold 500 no fire (line 100)
+  G12  被杀  其它页面长按门限 >= 改成 >  ← other page, unseen: hold 600 fires (line 101)
+  G13  被杀  登记时不记读次数基准  ← other page, unseen: hold 600 fires (line 101)
+  G14  被杀  登记时不清自锁（再按不能触发）  ← re-press fires again (line 258)
+  G15  被杀  去掉自锁（一次按压反复触发）  ← after fire idle (line 73)
+  G16  被杀  宽限期 5ms 改成 0  ← press registered idle (line 67)
+  G17  被杀  宽限期 5ms 改成 50  ← home dead: held 5 fires (line 174)
+  G18  被杀  离开热区不复位  ← re-press fires again (line 258)
+  G19  被杀  按住时长不按起点算  ← press registered idle (line 67)
+  G20  被杀  松手不处理（热区状态不随松手清）  ← no press not in zone (line 60)
+mutation_estop_gate: 20 个变异体，0 个异常（活下来 / 编译失败 / 锚点过期）
+
+四、四档从零构建 + 交付档干净核对（tools/build_matrix.sh --twice）
+[PROD] exit=0 error=0 warning=4 FLASH: 449260 2; DTCMRAM: 92864 128; AXIRAM: 205952 320
+[BENCH] exit=0 error=0 warning=4 FLASH: 465340 2; DTCMRAM: 96360 128; AXIRAM: 205952 320
+[SIM] exit=0 error=0 warning=4 FLASH: 465340 2; DTCMRAM: 96360 128; AXIRAM: 205952 320
+[SIMWG] exit=0 error=0 warning=4 FLASH: 504476 2; DTCMRAM: 96408 128; AXIRAM: 205952 320
+可复现构建：md5 f7f8e0efe21d… / f7f8e0efe21d… → 相同；原始 bin md5 相同
+build_matrix: PASS
+交付档干净核对：4 项 PASS / 0 项 FAIL
+
+五、没有做（如实）
+  1. 规则 v2 还没有上过设备。真机矩阵脚本 tools/site/estop_matrix.py 已按 v2 更新（19 项），待设备空闲时
+     在台架档固件上跑；之前 B01_B02_急停入口真机矩阵.txt 的 12/12 是规则 v1、隔离前固件上的证据。
+  2. "别的页面 + 触摸没送进 LVGL"（规则 C 的第二种）在真机上只能用测试钩子 g_tap_drop 模拟；
+     真实出现这种状态的原因还没有在设备上复现过。
+  3. 调用方（tcs_lvgl.c 的 estop_zone_step：弹窗种类、触发后关弹窗）不在主机单测范围内，只能靠真机矩阵。

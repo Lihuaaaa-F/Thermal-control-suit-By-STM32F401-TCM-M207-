@@ -91,6 +91,13 @@ run linkinfo    tests/test_link_info.c       App/comm/link_info.c
 PYBIN=$(pick_pybin) || PYBIN=""
 # S 线 D02：现场网页检查脚本自带的 WebSocket 客户端自测（本机回环，不需要设备）
 if [ -n "$PYBIN" ] && "$PYBIN" tools/site/test_ws_client.py; then :; else echo "[ws_client_selftest] FAIL"; FAIL=1; fi
+# S 线（2026-11-24 晚）：急停屏入口判定的变异验证——把 estop_gate.[ch] 逐个改坏，上面的单测必须每次都变红。
+# 这是安全路径上唯一的判定逻辑；"全绿"不说明测试有没有牙。
+if [ -n "$PYBIN" ] && PYTHONUTF8=1 "$PYBIN" tests/mutation_estop_gate.py > build/mut_estop.log 2>&1; then
+    echo "[mut-estop] PASS（$(tail -1 build/mut_estop.log)）"
+else
+    echo "[mut-estop] FAIL"; grep -a "活下来\|编译失败\|锚点\|FAIL" build/mut_estop.log | head -12; FAIL=1
+fi
 if [ -n "$PYBIN" ]; then
     # 2026-11-23：原来失败不打印（"静默红"）——shell 里先 source 过 IDF 环境时，
     # python 指向 IDF 自带解释器（无 Pillow）→ 本步 import 失败却看不到原因。

@@ -147,6 +147,7 @@ project_tcs/Core/Src/stm32h7xx_hal_msp.c
 project_tcs/Core/Src/stm32h7xx_it.c
 project_tcs/Core/Src/syscalls_stub.c
 project_tcs/tests/fuzz_m207.c
+project_tcs/tests/mutation_estop_gate.py
 project_tcs/tests/mutation_ui_model.py
 project_tcs/tests/test_control.c
 project_tcs/tests/test_link_info.c

@@ -6,16 +6,30 @@
  *   g_tap_drop      = 1 时 read_cb 恒返回 RELEASED（TL-13 indev 丢帧注入）
  * 正常运行时 g_tap_inject[0] 恒 0、g_tap_drop 恒 0，路径与原来一致。
  * 2026-11-24（S 线 C01）：这两个钩子只在台架/仿真档（TCS_PROFILE >= 1）编译；
- * 交付档的 read_cb 里只有真实触摸这一条路。 */
+ * 交付档的 read_cb 里只有真实触摸这一条路。
+ * 2026-11-24 晚：每向 LVGL 报告一次"按下"给 g_indev_pressed_reads 加 1。急停屏入口判定
+ * （estop_gate.c 规则 C）在别的页面上靠"按住期间这个数有没有变"区分"界面在处理这次按压"
+ * 和"触摸没送进 LVGL"。计的是读的次数而不是按压的次数：只要手指还按着它就一直变，
+ * 不受 watch 与 LVGL 读回调谁先谁后的影响。 */
 #include "lv_port_indev.h"
 #include "tcs_lvgl.h"
 #include "ft5446.h"
+
+volatile uint32_t g_indev_pressed_reads;
 
 #if TCS_PROFILE >= 1
 static uint32_t s_seq;
 static uint32_t s_end_ms;      /* 合成按压截止时刻（0=无） */
 static int32_t  s_x, s_y;
 #endif
+
+static void report_pressed(lv_indev_data_t * data, int32_t x, int32_t y)
+{
+    data->state = LV_INDEV_STATE_PRESSED;
+    data->point.x = (lv_coord_t)x;
+    data->point.y = (lv_coord_t)y;
+    g_indev_pressed_reads++;
+}
 
 static void touch_read_cb(lv_indev_t * indev, lv_indev_data_t * data)
 {
@@ -38,15 +52,11 @@ static void touch_read_cb(lv_indev_t * indev, lv_indev_data_t * data)
     }
     if (g_tap_inject[1] == 2) {
         /* 持续按住：直到外部把 mode 改回 0（sim touchr）*/
-        data->state = LV_INDEV_STATE_PRESSED;
-        data->point.x = s_x;
-        data->point.y = s_y;
+        report_pressed(data, s_x, s_y);
         return;
     }
     if (s_end_ms && (int32_t)(s_end_ms - lv_tick_get()) > 0) {
-        data->state = LV_INDEV_STATE_PRESSED;
-        data->point.x = s_x;
-        data->point.y = s_y;
+        report_pressed(data, s_x, s_y);
         return;
     }
     s_end_ms = 0;
@@ -55,11 +65,7 @@ static void touch_read_cb(lv_indev_t * indev, lv_indev_data_t * data)
     touch_event_t ev;
     if(ft5446_read(&ev) != 0) return;
     if(!ev.valid) return;
-    if(ev.touched) {
-        data->state = LV_INDEV_STATE_PRESSED;
-        data->point.x = ev.x;
-        data->point.y = ev.y;
-    }
+    if(ev.touched) report_pressed(data, ev.x, ev.y);
 }
 
 void lv_port_indev_init(void)

@@ -280,18 +280,17 @@ void tcs_lvgl_poll(void)
 }
 
 /* 急停屏入口兜底（D-L7②）：热区 = 首页底栏"急停"键，主循环节拍判定，不依赖 LVGL。
- * 判定逻辑在 estop_gate.c（纯函数，单测 tests/test_site_logic.c），这里只负责取触摸坐标。
- * 2026-11-23/24 现场修正边界：
- *   - 规范是"急停二次确认（弹窗）"：LVGL 活着时，正常路径由它弹"确认急停？"。
- *   - LVGL 心跳停了（卡死 / 低水位跳过 handler）→ 任何页面，按下后下一个节拍直接急停。
- *   - LVGL 活着但按住 ≥600ms 仍无弹窗（indev 半死）→ 只在首页直接急停
- *     （用户 2026-11-24 确认保留长按直接急停）。其它页面这块区域放的是别的控件
- *     （调参页的"+"就在这里），不能触发——2026-11-24 复查抓到。
+ * 判定逻辑在 estop_gate.c（纯函数；单测 tests/test_site_logic.c + 变异验证 tests/mutation_estop_gate.py），
+ * 这里只负责取触摸坐标、取弹窗种类、在触发时收尾。规则见 estop_gate.h：
+ *   A 首页 + LVGL 卡死 → 立即；
+ *   B 首页 + 活着 + 按住 ≥600ms + 没有"确认急停"弹窗（别的弹窗挡不住）；
+ *   C 其它页面 + "界面没有在处理这次按压"（心跳停了 / 读回调没报告过按下）+ 按住 ≥600ms。
+ * 2026-11-24 晚：两条线各写了一版判定之后合一，来龙去脉见 estop_gate.h。
  * 每次按压只触发一次；合成触摸（probe/console 注入）与真实触摸走同一条判定。*/
 
 #if TCS_PROFILE >= 1
 /* 探针直读的计时记录（诊断钩子）。[0]=magic 0x45535047（最后写） [1]=按压起始 ms
- * [2]=触发 ms [3]=按压到触发 ms [4]=原因（1=LVGL 卡死 2=首页长按）
+ * [2]=触发 ms [3]=按压到触发 ms [4]=原因 = estop_gate_fire_t（1=首页卡死 2=首页长按 3=其它页面·界面没在处理）
  * [5]=按压时心跳 [6]=触发时心跳 [7]=触发时页码
  * 只在台架/仿真档：tools/site/estop_matrix.py 靠它取"按下到触发"的毫秒数。*/
 #define ESTOP_DBG_MAGIC 0x45535047u
@@ -302,20 +301,24 @@ static void estop_zone_step(uint8_t in_zone)
 {
     static estop_gate_state_t s_gate;
     uint32_t now = HAL_GetTick();
-    estop_gate_fire_t r = estop_gate_step(&s_gate, in_zone, (uint8_t)(tui_dlg_kind() != TUI_DLG_NONE),
-                                          (uint8_t)(tui_current() == TUI_HOME), now, g_lvgl_beat);
+    estop_gate_fire_t r = estop_gate_step(&s_gate, in_zone, (uint8_t)(tui_dlg_kind() == TUI_DLG_ESTOP),
+                                          (uint8_t)(tui_current() == TUI_HOME), now, g_lvgl_beat,
+                                          g_indev_pressed_reads);
     if (r == ESTOP_GATE_IDLE) return;
 #if TCS_PROFILE >= 1
     uint32_t since = s_gate.since, beat0 = s_gate.beat0;
     g_estop_dbg[1] = since;
     g_estop_dbg[2] = now;
     g_estop_dbg[3] = now - since;
-    g_estop_dbg[4] = (r == ESTOP_GATE_FIRE_DEAD) ? 1u : 2u;
+    g_estop_dbg[4] = (uint32_t)r;
     g_estop_dbg[5] = beat0;
     g_estop_dbg[6] = g_lvgl_beat;
     g_estop_dbg[7] = (uint32_t)tui_current();
     g_estop_dbg[0] = ESTOP_DBG_MAGIC;
 #endif
+    /* 走到这里的若是长按，LVGL 还活着，开着的弹窗一定是别的弹窗（"确认急停"开着时长按让位）：
+     * 关掉它，急停不该被任何弹窗挡住。LVGL 卡死时不动对象（它已经不跑了）。*/
+    if (r != ESTOP_GATE_FIRE_DEAD && tui_dlg_kind() != TUI_DLG_NONE) tui_dlg_close();
     tcs_emergency_stop();
 }
 

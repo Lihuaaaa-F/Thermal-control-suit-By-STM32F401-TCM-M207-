@@ -13,4 +13,4 @@ __pycache__/
 # S 线 C02：tools/build_matrix.sh 的 ESP32 独立配置与构建目录（2026-11-24）
 sdkconfig.matrix
 sdkconfig*.old
-build-matrix*/
+build-*/

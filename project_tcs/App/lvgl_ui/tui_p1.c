@@ -1,6 +1,7 @@
 /* tui_p1.c — G5 实时调参页（4 参 SCR1：TC1_SET/TC2_SET/BODY_HOT/BODY_COLD；编辑即生效） */
 #include "tui.h"
 #include "ui_common.h"
+#include "ui_page_state.h"
 #include <math.h>
 #include <string.h>
 #include <stdio.h>
@@ -18,9 +19,19 @@ static const uint16_t s_ids[4] = {
 };
 static int s_sel;
 static float s_step = 0.1f;
-static lv_obj_t * s_vals[4];
-static lv_obj_t * s_thumb[4], * s_fill[4];
-static lv_obj_t * s_step_btn_lbl;
+/* 建页时的状态快照。2026-11-24 全页面排查：本页的数值文字、单位位置、滑条填充与拇指位置
+ * 都取自参数值/选中行/步进，但原来的刷新只改数值文字——外部（网页/镜像）改参后文字变了、
+ * 滑条不动；数值位数变化（5.0→40.1）后单位压到末位数字上。现在任何一项变了就整页重建。*/
+static ui_p1_state_t s_st1;
+
+static ui_p1_state_t p1_state_now(void)
+{
+    ui_p1_state_t s;
+    s.sel  = (uint8_t)s_sel;
+    s.step = s_step;
+    for (int i = 0; i < 4; i++) s.val[i] = param_get(s_ids[i]);
+    return s;
+}
 
 static int row_y(int i) { return ROW_Y0 + i * (ROW_H + ROW_GAP); }
 
@@ -105,7 +116,6 @@ static void build_row(lv_obj_t * scr, int i)
     lv_obj_set_style_bg_opa(vl, LV_OPA_COVER, 0);
     ui_lab_set(vl, vs);
     lv_obj_set_pos(vl, ROW_X + 24, y + 44);
-    s_vals[i] = vl;
     if (p->unit[0]) ui_aux20(scr, ROW_X + 24 + 32 * (int)strlen(vs) + 4, y + 52, p->unit, TKS_TX2);
 
     /* 滑条（方形轨道；拇指 80 圆硬边） */
@@ -130,6 +140,7 @@ static void build_row(lv_obj_t * scr, int i)
 
 void tui_p1_build(lv_obj_t * scr)
 {
+    s_st1 = p1_state_now();
     ui_btn(scr, 24, 8, 120, 40, "‹返回", 5, 24);
     click_zone(scr, 24, 0, 120, 56, clk_back, NULL);   /* 命中区扩整列（规范 #6） */
 
@@ -147,8 +158,6 @@ void tui_p1_build(lv_obj_t * scr)
     char sl[24];
     snprintf(sl, sizeof(sl), "步进%.1f", (double)s_step);
     ui_btn(scr, 160, 488, 180, 64, sl, 0, 24);
-    s_step_btn_lbl = NULL;
-    LV_UNUSED(s_step_btn_lbl);
     click_zone(scr, 32, 472, 96, 96, clk_key, (void *)(intptr_t)-1);
     click_zone(scr, 896, 472, 96, 96, clk_key, (void *)(intptr_t)1);
     click_zone(scr, 160, 488, 180, 64, clk_step, NULL);
@@ -177,13 +186,8 @@ void tui_slider_center(void)
 
 void tui_p1_refresh(void)
 {
-    for (int i = 0; i < 4; i++) {
-        const param_desc_t * p = param_find(s_ids[i]);
-        if (!p || !s_vals[i]) continue;
-        char vs[24];
-        snprintf(vs, sizeof(vs), "%.1f", (double)p->value);
-        ui_lab_set(s_vals[i], vs);
-    }
-    LV_UNUSED(s_thumb);
-    LV_UNUSED(s_fill);
+    /* 选中行 / 步进 / 任一参数值与建页时不同 → 整页重建（单位位置与滑条一起重画）。
+     * 判定在 ui_page_state.c（纯函数，单测 tests/test_site_logic.c）。*/
+    ui_p1_state_t now = p1_state_now();
+    if (ui_p1_state_changed(&s_st1, &now)) tui_request_rebuild();
 }

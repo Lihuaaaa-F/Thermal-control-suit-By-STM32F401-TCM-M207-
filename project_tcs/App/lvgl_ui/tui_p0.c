@@ -2,17 +2,29 @@
 #include "tui.h"
 #include "ui_common.h"
 #include "control.h"
+#include "ui_page_state.h"
+#include "estop_gate.h"
 #include <stdio.h>
 
 static lv_obj_t * s_v1, * s_v2, * s_set1, * s_set2, * s_body;
 static lv_obj_t * s_u1, * s_u2, * s_ub;   /* 单位「°C」label（随数值宽度重定位）*/
 static void place_unit(lv_obj_t * val, lv_obj_t * unit, const lv_font_t * f, int base_x, int gap);
 
-static uint8_t s_st_mode, s_st_fan, s_st_tec1, s_st_tec2, s_st_estop, s_st_alm;
-/* 体温 / M207 在线态。2026-11-24 现场：这两项决定体温卡样式（黄框/灰字/"失联"角标）
- * 和水箱 "--.-"，但原来不参与"要不要重建"的判断——未布防时传感器掉线/恢复不置
- * 报警位，没人触发重建，结果 sensor=1、无报警的主页仍挂着红色"失联"角标。*/
-static uint8_t s_st_body, s_st_m207;
+static ui_p0_state_t s_st;   /* 建页时的状态快照；刷新时与当前值逐字段比较（ui_page_state.c）*/
+
+static ui_p0_state_t p0_state_now(void)
+{
+    ui_p0_state_t s;
+    s.mode  = (uint8_t)(g_tcs.mode != 0);
+    s.fan   = g_tcs.fan_on;
+    s.tec1  = g_tcs.tec1_on;
+    s.tec2  = g_tcs.tec2_on;
+    s.estop = (uint8_t)((g_tcs.alarm_bits & ALM_ESTOP) ? 1 : 0);
+    s.alm   = (uint8_t)(g_tcs.alarm_bits != 0);
+    s.body  = (uint8_t)(g_tcs.body_sensor_ok ? 1 : 0);
+    s.m207  = (uint8_t)(g_tcs.m207_online ? 1 : 0);
+    return s;
+}
 
 static void clk_tune(lv_event_t * e)  { LV_UNUSED(e); tui_request(TUI_TUNE); }
 static void clk_chart(lv_event_t * e) { LV_UNUSED(e); tui_request(TUI_CHART); }
@@ -105,14 +117,7 @@ static void tc_card(lv_obj_t * p, int cx, const char * title, uint8_t tec_on,
 
 void tui_p0_build(lv_obj_t * scr)
 {
-    s_st_mode = (uint8_t)(g_tcs.mode != 0);
-    s_st_fan = g_tcs.fan_on;
-    s_st_tec1 = g_tcs.tec1_on;
-    s_st_tec2 = g_tcs.tec2_on;
-    s_st_estop = (uint8_t)((g_tcs.alarm_bits & ALM_ESTOP) ? 1 : 0);
-    s_st_alm = (uint8_t)(g_tcs.alarm_bits != 0);
-    s_st_body = (uint8_t)(g_tcs.body_sensor_ok ? 1 : 0);
-    s_st_m207 = (uint8_t)(g_tcs.m207_online ? 1 : 0);
+    s_st = p0_state_now();
 
     /* 顶栏 */
     ui_rrect(scr, 24, 16, 160, 40, 20, TKS_CARD, TKS_BG);
@@ -166,22 +171,20 @@ void tui_p0_build(lv_obj_t * scr)
     ui_btn(scr, 40, 472, 208, 96, "调参", 0, 32);
     ui_btn(scr, 272, 472, 208, 96, g_tcs.mode ? "切手动" : "切自动", 0, 32);
     ui_btn(scr, 504, 472, 208, 96, "连接", 0, 32);
-    ui_btn(scr, 768, 472, 216, 112, "急停", 2, 32);
+    /* 急停后按钮变灰（用户 2026-11-24）：已急停时再点它不弹窗，画成禁用态；恢复后回红。*/
+    ui_btn(scr, TCS_ESTOP_ZONE_X, TCS_ESTOP_ZONE_Y, TCS_ESTOP_ZONE_W, TCS_ESTOP_ZONE_H, "急停",
+           (g_tcs.alarm_bits & ALM_ESTOP) ? 6 : 2, 32);
     click_zone(scr, 40, 472, 208, 96, clk_tune);
     click_zone(scr, 272, 472, 208, 96, clk_mode);
     click_zone(scr, 504, 472, 208, 96, clk_conn);
-    click_zone(scr, 768, 472, 216, 112, clk_estop);
+    click_zone(scr, TCS_ESTOP_ZONE_X, TCS_ESTOP_ZONE_Y, TCS_ESTOP_ZONE_W, TCS_ESTOP_ZONE_H, clk_estop);
 }
 
 void tui_p0_refresh(void)
 {
     /* 状态字段变化 → 整页重建（低频）；仅数值变化 → 原地改文本（无整页重绘） */
-    if (s_st_mode != (uint8_t)(g_tcs.mode != 0) || s_st_fan != g_tcs.fan_on ||
-        s_st_tec1 != g_tcs.tec1_on || s_st_tec2 != g_tcs.tec2_on ||
-        s_st_estop != (uint8_t)((g_tcs.alarm_bits & ALM_ESTOP) ? 1 : 0) ||
-        s_st_alm != (uint8_t)(g_tcs.alarm_bits != 0) ||
-        s_st_body != (uint8_t)(g_tcs.body_sensor_ok ? 1 : 0) ||
-        s_st_m207 != (uint8_t)(g_tcs.m207_online ? 1 : 0)) {
+    ui_p0_state_t now_st = p0_state_now();
+    if (ui_p0_state_changed(&s_st, &now_st)) {
         tui_request_rebuild();
         return;
     }

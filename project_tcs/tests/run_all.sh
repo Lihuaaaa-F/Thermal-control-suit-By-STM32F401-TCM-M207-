@@ -75,6 +75,8 @@ run m207golden  tests/test_m207_golden.c      App/tcs/m207.c
 run registry    tests/test_param_registry.c   App/tcs/param_registry.c App/proto/proto.c
 run control     tests/test_control.c          App/tcs/control.c App/tcs/param_registry.c App/tcs/post.c App/proto/proto.c
 run post        tests/test_post.c             App/tcs/post.c App/tcs/param_registry.c App/proto/proto.c
+# S 线（2026-11-24）：现场抽出的纯逻辑——急停屏入口兜底判定、首页重建判据
+run site_logic  tests/test_site_logic.c       App/tcs/estop_gate.c App/tcs/ui_page_state.c
 run proto_comm  tests/test_proto_tcs.c        App/proto/proto.c App/comm/comm.c
 run fuzz        tests/fuzz_m207.c             App/tcs/m207.c
 

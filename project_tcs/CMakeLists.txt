@@ -73,6 +73,8 @@ set(APP_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/App/tcs/m207.c
     ${CMAKE_CURRENT_SOURCE_DIR}/App/tcs/tmp117.c
     ${CMAKE_CURRENT_SOURCE_DIR}/App/tcs/control.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/App/tcs/estop_gate.c      # 急停屏入口兜底判定（纯函数）
+    ${CMAKE_CURRENT_SOURCE_DIR}/App/tcs/ui_page_state.c   # 页面重建判据（纯函数）
     ${CMAKE_CURRENT_SOURCE_DIR}/App/tcs/post.c
     ${CMAKE_CURRENT_SOURCE_DIR}/App/tcs/qr/qrcodegen.c
     ${CMAKE_CURRENT_SOURCE_DIR}/App/tcs/console.c

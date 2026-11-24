@@ -115,6 +115,7 @@ void ui_btn(lv_obj_t * p, int x, int y, int w, int h, const char * label,
         case 3: bg = TKS_REDDK; bd = TKS_REDDK;  tx = TKS_WHITE; break;
         case 4: bg = TKS_PRESS; bd = TKS_BLUE;   tx = TKS_BLUE;  break;
         case 5: bg = TKS_CARD;  bd = TKS_BORDER; tx = TKS_TX2;   break;
+        case 6: bg = TKS_GRAY;  bd = TKS_GRAY;   tx = TKS_WHITE; break;   /* 禁用态：已急停 */
         default: bg = TKS_CARD; bd = TKS_BLUE;   tx = TKS_BLUE;  break;
     }
     lv_obj_t * o = ui_box(p, x, y, w, h, bg, 8);

@@ -1,11 +1,14 @@
 #!/bin/bash
-# factory_reset.sh — H4 出厂复位一键（defaults + auto布防 + save）
-# 板上需烧 sim 或正式固件（均带邮箱控制台）。用法：bash tools/factory_reset.sh
-set -e
-cd "$(dirname "$0")/.." || exit 1
-export TCS_ELF="${TCS_ELF:-build-sim/tcs_main.elf}"
-echo "[factory] reset board ..."
-probe-rs reset --chip STM32H743II --probe 0d28:0204 >/dev/null 2>&1
-sleep 4
-python tools/mb_console.py "p defaults Y" "ack" "p list" "stat" 2>&1 | grep -vE "^\[MB\]" 
-echo "[factory] done: 参数=默认, 布防=auto(0x08=0), 已固化 EEPROM"
+# factory_reset.sh — 已退役（2026-11-24，S 线 D04）。保留这个文件只为给旧命令一个明确的回答。
+#
+# 旧版做什么：复位 H743，用邮箱控制台发 `p defaults Y`（把 H743 自己 EEPROM 里的参数恢复默认并固化）。
+# 为什么不能再这么用：
+#   1. v2 架构（2026-10-30 起）参数真值在 ESP32 的 NVS，H743 是纯显示终端；PROD 档的 H743 不读写参数存储，
+#      `p defaults` 只在台架档存在——对交付固件发这条命令得到的是 unknown command。
+#   2. 旧脚本默认用 build-sim 目录，该目录已随 v1 流程删除。
+# 现状：v2 还没有"恢复出厂参数"的入口（ESP32 控制台只有 p list / p set / p save，网页与屏上也没有）。
+#   这是一个已知缺口，记在 S 线计划与修复台账里（对应审查条目 M05-F-02 / M03-F-03），补上之后本脚本会重写成
+#   "经串口桥给 ESP32 发 p defaults Y → p save → 核对"。
+echo "factory_reset.sh 已退役：v2 的参数真值在 ESP32 NVS，当前固件还没有恢复出厂参数的入口。"
+echo "手动把某个参数改回去：ESP32 控制台  p set <id|key> <值>  然后  p save"
+exit 2

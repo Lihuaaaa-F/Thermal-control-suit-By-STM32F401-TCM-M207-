@@ -246,7 +246,40 @@ size_t web_log_json(uint32_t from, uint32_t to, char *buf, size_t cap)
         char *j = cJSON_PrintBuffered(root, 64u + (size_t)(to - from) * WEB_LOG_ENTRY_MAX, 0);
         if (!j) break;
         size_t len = strlen(j);
-        if (len < cap) { memcpy(buf, j, len); out = len; }
+        if (len < cap) { memcpy(buf, j, len + 1); out = len; }   /* 连结尾 NUL 一起拷 */
+        cJSON_free(j);
+    } while (0);
+    cJSON_Delete(root);
+    return out;
+}
+
+/* ---- 屏链路统计 + 热点凭据 → JSON ---- */
+
+const char *const web_link_keys[WEB_LINK_N] = {
+    "rx_bytes", "rx_frames", "crc_err", "len_err", "gap_resets", "dup",
+    "retry", "txq_drop", "uart_txdrop", "echo_drop", "pending_evict", "proto_mismatch",
+};
+
+size_t web_link_json(const uint32_t cnt[WEB_LINK_N], const char *ssid, const char *pass,
+                     const char *url, char *buf, size_t cap)
+{
+    if (!buf || cap == 0 || !cnt || !ssid || !pass || !url) return 0;
+    cJSON *root = cJSON_CreateObject();
+    if (!root) return 0;
+    size_t out = 0;
+    do {
+        if (!cJSON_AddStringToObject(root, "t", "link")) break;
+        size_t k;
+        for (k = 0; k < WEB_LINK_N; k++)
+            if (!cJSON_AddNumberToObject(root, web_link_keys[k], (double)cnt[k])) break;
+        if (k != WEB_LINK_N) break;
+        if (!cJSON_AddStringToObject(root, "ssid", ssid) ||
+            !cJSON_AddStringToObject(root, "pass", pass) ||
+            !cJSON_AddStringToObject(root, "url", url)) break;
+        char *j = cJSON_PrintBuffered(root, (int)cap, 0);
+        if (!j) break;
+        size_t len = strlen(j);
+        if (len < cap) { memcpy(buf, j, len + 1); out = len; }   /* 装不下（含结尾 NUL）就回 0，不回半包 */
         cJSON_free(j);
     } while (0);
     cJSON_Delete(root);

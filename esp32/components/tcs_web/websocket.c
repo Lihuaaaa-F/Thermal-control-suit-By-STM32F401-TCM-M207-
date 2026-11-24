@@ -281,17 +281,12 @@ size_t ws_linkstats_json(char *buf, size_t cap)
     esp_netif_ip_info_t ip;
     if (nf && esp_netif_get_ip_info(nf, &ip) == ESP_OK)
         snprintf(url, sizeof url, "http://" IPSTR, IP2STR(&ip.ip));
-    int n = snprintf(buf, cap,
-        "{\"t\":\"link\",\"rx_bytes\":%lu,\"rx_frames\":%lu,\"crc_err\":%lu,\"len_err\":%lu,"
-        "\"gap_resets\":%lu,\"dup\":%lu,\"retry\":%lu,\"txq_drop\":%lu,\"uart_txdrop\":%lu,"
-        "\"echo_drop\":%lu,\"pending_evict\":%lu,\"proto_mismatch\":%lu,"
-        "\"ssid\":\"%s\",\"pass\":\"%s\",\"url\":\"%s\"}",
-        (unsigned long)st.rx_bytes, (unsigned long)st.rx_frames, (unsigned long)st.crc_err,
-        (unsigned long)st.len_err, (unsigned long)st.gap_resets, (unsigned long)st.dup,
-        (unsigned long)st.retry, (unsigned long)st.txq_drop, (unsigned long)st.uart_txdrop,
-        (unsigned long)st.echo_drop, (unsigned long)st.pending_evict,
-        (unsigned long)st.proto_mismatch, ssid, pass, url);
-    return (n > 0 && (size_t)n < cap) ? (size_t)n : 0;
+    /* 顺序即 web_link_keys；序列化与转义在 web_link_json（纯逻辑，主机有单测）*/
+    const uint32_t cnt[WEB_LINK_N] = {
+        st.rx_bytes, st.rx_frames, st.crc_err, st.len_err, st.gap_resets, st.dup,
+        st.retry, st.txq_drop, st.uart_txdrop, st.echo_drop, st.pending_evict, st.proto_mismatch,
+    };
+    return web_link_json(cnt, ssid, pass, url, buf, cap);
 }
 
 /* ====== pv / ack ====== */

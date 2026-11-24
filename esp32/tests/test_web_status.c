@@ -1,8 +1,9 @@
-/* test_web_status.c — 网页控制台状态/事件日志的契约测试（WS_PROTOCOL.md v2）
- * 用**真实 cJSON**（与固件同库）编译 web_status.c：固件发出来的 st / log 消息
+/* test_web_status.c — 网页控制台状态/事件日志/link 消息的契约测试（WS_PROTOCOL.md v2）
+ * 用**真实 cJSON**（与固件同库）编译 web_status.c：固件发出来的 st / log / link 消息
  * 必须与前端、tools/web_mock.py 期望的字段名、类型、取值逐项一致。
- * 判别性：删掉 web_status_fill_json 里任何一个字段、改错事件码或级别、
- * 把环回绕的边界写错，这里都会红（见 tests/mutation_web.py 的变异清单）。
+ * 判别性（tests/mutation_web.py 逐条验证）：删掉 web_status_fill_json 里任何一个字段、
+ * 改错事件码或级别、把环回绕的边界写错、两位小数舍入改截断、link 消息的热点名不转义，
+ * 这里都会红。
  */
 #include <stdio.h>
 #include <string.h>
@@ -12,9 +13,10 @@
 #include "control.h"       /* SAFETY_BIT_*、ctrl_state_t（事件用例）*/
 
 static int g_pass, g_fail;
+/* 失败行立刻落盘：后面某个断言把进程带崩时，前面的失败清单也不丢（输出重定向时 stdout 是全缓冲的）*/
 #define CHECK(cond, name) do { \
     if (cond) { g_pass++; } \
-    else { g_fail++; printf("FAIL: %s (line %d)\n", name, __LINE__); } \
+    else { g_fail++; printf("FAIL: %s (line %d)\n", name, __LINE__); fflush(stdout); } \
 } while (0)
 
 /* 取数值字段并断言其类型与取值（容差 1e-9）。字段缺失 / 非数值 / 取值不符都算失败。*/
@@ -27,7 +29,7 @@ static int num_is(cJSON *o, const char *key, double want)
 static cJSON *parse(const char *s)
 {
     cJSON *o = cJSON_Parse(s);
-    if (!o) printf("FAIL: JSON 解析失败: %.120s\n", s);
+    if (!o) { printf("FAIL: JSON 解析失败: %.120s\n", s); fflush(stdout); }
     return o;
 }
 
@@ -166,6 +168,12 @@ int main(void)
         b.ts_ms = 1000;
         CHECK(web_status_diff_log(&a, &b) == 0, "C 首份只建基线");
         CHECK(web_log_total() == 0, "C 首份不产生事件");
+        /* 首份即使带着故障（例如上电时急停锁存还在）也只建基线：不能当成"刚刚触发"记一条 */
+        web_status_t f0 = demo_status(0);
+        web_status_t f1 = demo_status(1000);
+        f1.latch |= SAFETY_BIT_ESTOP; f1.state = (uint8_t)CTRL_SAFE; f1.fan = 1;
+        CHECK(web_status_diff_log(&f0, &f1) == 0 && web_log_total() == 0,
+              "C 首份带着故障也只建基线");
 
         /* 故障沿：急停(+安全态) → 体温失联 → 模块离线 → 探头断线 → 屏幕断 → TEC/风扇/模式 */
         web_status_t n = b;
@@ -242,6 +250,12 @@ int main(void)
                   "D from 自动抬到最旧");
         }
         cJSON_Delete(o);
+        /* from 落在"已被覆盖"的范围内（最旧一条的前一个）：同样抬到最旧，不能回空包 */
+        size_t n9 = web_log_json(9, 60, buf, sizeof(buf));
+        cJSON *o9 = parse(buf);
+        CHECK(n9 > 0 && o9 && cJSON_GetArraySize(cJSON_GetObjectItem(o9, "list")) == 50,
+              "D from=9（早于最旧一条）也抬到最旧");
+        cJSON_Delete(o9);
     }
 
     /* ====== E. UTF-8 截断：不劈汉字、串合法、长度受控 ====== */
@@ -279,31 +293,39 @@ int main(void)
         CHECK(web_log_get(0, &e) == 0 && e.ev[0] == '\0' && e.msg[0] == '\0', "E 空指针写空串");
         web_log_add(5, 'i', "k", "\xe6\xb0");      /* "温" 缺最后一个字节 */
         CHECK(web_log_get(1, &e) == 0 && e.msg[0] == '\0', "E 残缺尾部被丢弃");
+        web_log_add(6, 0, "lvl0", "x");                  /* 级别传 0：按 info */
+        CHECK(web_log_get(2, &e) == 0 && e.lvl == 'i', "E 级别传 0 时按 info");
     }
 
     /* ====== F. log 消息 JSON ====== */
     {
         set_ring();                                    /* 3 条：info / warn / alarm */
+        memset(buf, 'X', 64);
         size_t n = web_log_json(0, 3, buf, sizeof(buf));
         CHECK(n > 0 && n < sizeof(buf), "F log JSON 生成");
+        CHECK(buf[n] == '\0', "F 结尾带 NUL");
         cJSON *o = parse(buf);
         if (o) {
-            CHECK(strcmp(cJSON_GetObjectItem(o, "t")->valuestring, "log") == 0, "F t=log");
+            cJSON *tj = cJSON_GetObjectItem(o, "t");
+            CHECK(cJSON_IsString(tj) && strcmp(tj->valuestring, "log") == 0, "F t=log");
             cJSON *list = cJSON_GetObjectItem(o, "list");
             CHECK(cJSON_IsArray(list) && cJSON_GetArraySize(list) == 3, "F list 3 条，旧→新");
             static const char *want_lvl[] = { "info", "warn", "alarm" };
             static const double want_ts[] = { 1000, 2000, 3000 };
             for (int i = 0; i < 3; i++) {
-                cJSON *it = cJSON_GetArrayItem(list, i);
-                if (strcmp(cJSON_GetObjectItem(it, "lvl")->valuestring, want_lvl[i]) != 0 ||
-                    cJSON_GetObjectItem(it, "ts")->valuedouble != want_ts[i]) {
-                    g_fail++; printf("FAIL: F 第 %d 条级别/时间戳不对\n", i);
-                } else g_pass++;
-                CHECK(cJSON_GetObjectItem(it, "ev") && cJSON_GetObjectItem(it, "msg"),
+                cJSON *it = cJSON_GetArrayItem(list, i);       /* 条数不对时为 NULL：下面逐层判空 */
+                cJSON *lv = it ? cJSON_GetObjectItem(it, "lvl") : NULL;
+                cJSON *ts = it ? cJSON_GetObjectItem(it, "ts") : NULL;
+                int ok = cJSON_IsString(lv) && cJSON_IsNumber(ts) &&
+                         strcmp(lv->valuestring, want_lvl[i]) == 0 && ts->valuedouble == want_ts[i];
+                CHECK(ok, "F 每条的级别/时间戳");
+                CHECK(it && cJSON_GetObjectItem(it, "ev") && cJSON_GetObjectItem(it, "msg"),
                       "F 每条都有 ev 与 msg");
             }
-            CHECK(strcmp(cJSON_GetObjectItem(cJSON_GetArrayItem(list, 2), "ev")->valuestring,
-                         "estop_on") == 0, "F 最新一条在最末");
+            cJSON *last = cJSON_GetArrayItem(list, 2);
+            CHECK(last && cJSON_GetObjectItem(last, "ev") &&
+                  strcmp(cJSON_GetObjectItem(last, "ev")->valuestring, "estop_on") == 0,
+                  "F 最新一条在最末");
         }
         cJSON_Delete(o);
 
@@ -318,6 +340,68 @@ int main(void)
         CHECK(web_log_json(5, 9, buf, sizeof(buf)) == 0, "F 超出已写条数返回 0");
         CHECK(web_log_json(0, 3, buf, 16) == 0, "F 容量不足返回 0");
         CHECK(web_log_json(0, 3, NULL, 100) == 0, "F 空指针返回 0");
+    }
+
+    /* ====== G. link 消息（GET /api/linkstats）：12 个计数 + 热点名/密码/网址 ======
+     * 热点名/密码是使用者可改的自由文本：含引号/反斜杠/控制字符/汉字时也必须是合法 JSON，
+     * 且原样还原（手拼 "%s" 遇到第一个引号就废）。*/
+    {
+        uint32_t cnt[WEB_LINK_N];
+        for (uint32_t i = 0; i < WEB_LINK_N; i++) cnt[i] = 1000u + i;
+        cnt[0] = 3000000000u;                      /* 超过 INT_MAX：仍要是精确整数 */
+        size_t n = web_link_json(cnt, "TCS-A8A1", "12345678", "http://192.168.4.1",
+                                 buf, sizeof(buf));
+        CHECK(n > 0, "G link JSON 生成");
+        cJSON *o = parse(buf);
+        if (o) {
+            CHECK(strcmp(cJSON_GetObjectItem(o, "t")->valuestring, "link") == 0, "G t=link");
+            CHECK(cJSON_GetArraySize(o) == (int)WEB_LINK_N + 4, "G 12 个计数 + t/ssid/pass/url");
+            for (uint32_t i = 0; i < WEB_LINK_N; i++)
+                CHECK(num_is(o, web_link_keys[i], (double)cnt[i]), web_link_keys[i]);
+            CHECK(num_is(o, "rx_bytes", 3000000000.0), "G 超过 INT_MAX 的计数仍精确");
+            cJSON *s = cJSON_GetObjectItem(o, "ssid");
+            cJSON *p = cJSON_GetObjectItem(o, "pass");
+            cJSON *u = cJSON_GetObjectItem(o, "url");
+            CHECK(cJSON_IsString(s) && strcmp(s->valuestring, "TCS-A8A1") == 0, "G ssid");
+            CHECK(cJSON_IsString(p) && strcmp(p->valuestring, "12345678") == 0, "G pass");
+            CHECK(cJSON_IsString(u) && strcmp(u->valuestring, "http://192.168.4.1") == 0, "G url");
+        } else {
+            g_fail++; printf("FAIL: G link JSON 解析失败\n");
+        }
+        cJSON_Delete(o);
+
+        const char *ssid = "调温服\"A\"\\B";
+        const char *pass = "p\"a\\b\x01\x1f\x7f\n\t";
+        n = web_link_json(cnt, ssid, pass, "http://192.168.4.1", buf, sizeof(buf));
+        CHECK(n > 0, "G 含特殊字符也能生成");
+        o = parse(buf);
+        if (o) {
+            cJSON *s = cJSON_GetObjectItem(o, "ssid");
+            cJSON *p = cJSON_GetObjectItem(o, "pass");
+            CHECK(cJSON_IsString(s) && strcmp(s->valuestring, ssid) == 0,
+                  "G 引号/反斜杠/汉字原样还原");
+            CHECK(cJSON_IsString(p) && strcmp(p->valuestring, pass) == 0,
+                  "G 控制字符原样还原");
+            CHECK(cJSON_GetArraySize(o) == (int)WEB_LINK_N + 4,
+                  "G 特殊字符没有多出/少掉字段（不能借引号注入）");
+        } else {
+            g_fail++; printf("FAIL: G 特殊字符的 link JSON 解析失败: %.160s\n", buf);
+        }
+        cJSON_Delete(o);
+
+        /* 容量边界：cap 要放下"内容 + 结尾 NUL"——恰好多 1 → 成功；正好等于内容长度 → 0 */
+        n = web_link_json(cnt, "TCS-A8A1", "12345678", "http://192.168.4.1", buf, sizeof(buf));
+        CHECK(n > 0 && web_link_json(cnt, "TCS-A8A1", "12345678", "http://192.168.4.1",
+                                     buf, n + 1) == n, "G 恰好放得下内容+NUL → 成功");
+        CHECK(n > 0 && web_link_json(cnt, "TCS-A8A1", "12345678", "http://192.168.4.1",
+                                     buf, n) == 0, "G 只放得下内容、放不下 NUL → 0");
+        /* 写出来的是结尾带 NUL 的 C 串（测试与日志都能直接当字符串用）*/
+        memset(buf, 'X', 64);
+        n = web_link_json(cnt, "TCS-A8A1", "12345678", "http://192.168.4.1", buf, sizeof(buf));
+        CHECK(n > 0 && buf[n] == '\0', "G 结尾带 NUL");
+        CHECK(web_link_json(cnt, "a", "b", "c", NULL, 100) == 0, "G 空缓冲返回 0");
+        CHECK(web_link_json(NULL, "a", "b", "c", buf, sizeof(buf)) == 0, "G 计数空指针返回 0");
+        CHECK(web_link_json(cnt, NULL, "b", "c", buf, sizeof(buf)) == 0, "G ssid 空指针返回 0");
     }
 
     printf("test_web_status: PASS=%d FAIL=%d\n", g_pass, g_fail);

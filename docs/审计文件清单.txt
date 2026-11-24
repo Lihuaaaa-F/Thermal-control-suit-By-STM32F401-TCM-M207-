@@ -45,6 +45,7 @@ esp32/main/tcs_console.h
 esp32/main/tcs_snap.c
 esp32/main/tcs_snap.h
 esp32/tests/mutation_control.py
+esp32/tests/mutation_web.py
 esp32/tests/test_control_esp32.c
 esp32/tests/test_m207_golden.c
 esp32/tests/test_m207_proto.c

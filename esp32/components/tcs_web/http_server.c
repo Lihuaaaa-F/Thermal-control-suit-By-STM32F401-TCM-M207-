@@ -85,7 +85,9 @@ static esp_err_t h_api_status(httpd_req_t *req)
 
 static esp_err_t h_api_linkstats(httpd_req_t *req)
 {
-    char buf[512];
+    /* 常态约 250 字节；上限按"热点名 32 + 密码 64 个字符全部是要 6 字节转义的字符"留：
+     * 1024 - 计数约 220 = 800 > 96 × 6 + 100 */
+    char buf[1024];
     size_t n = ws_linkstats_json(buf, sizeof buf);
     httpd_resp_set_type(req, "application/json");
     httpd_resp_set_hdr(req, "Cache-Control", "no-store");

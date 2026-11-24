@@ -11,9 +11,10 @@
 #include "post.h"
 
 static int g_pass, g_fail;
+/* 失败行立刻落盘：后面某个断言把进程带崩时，前面的失败清单也不丢（输出重定向时 stdout 是全缓冲的）*/
 #define CHECK(cond, name) do { \
     if (cond) { g_pass++; } \
-    else { g_fail++; printf("FAIL: %s (line %d)\n", name, __LINE__); } \
+    else { g_fail++; printf("FAIL: %s (line %d)\n", name, __LINE__); fflush(stdout); } \
 } while (0)
 
 /* param_load_eeprom 引用的 eeprom 桩（本测试不调用，仅满足链接）*/

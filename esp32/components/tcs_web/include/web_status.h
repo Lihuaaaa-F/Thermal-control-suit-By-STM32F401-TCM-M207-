@@ -78,8 +78,20 @@ unsigned web_status_diff_log(const web_status_t *prev, const web_status_t *now);
 
 /* 把绝对序号区间 [from, to) 的日志写成一条 log 消息：{"t":"log","list":[...]}。
  * from 早于环里最旧的一条时自动抬到最旧（调用方不必关心环是否回绕）。
- * 返回序列化后的字节数（不含结尾 NUL）；区间为空、cap 不够或分配失败返回 0。*/
+ * buf 里是结尾带 NUL 的 C 串；返回串长（不含 NUL）。区间为空、cap 放不下整串（含 NUL）
+ * 或分配失败返回 0。*/
 size_t web_log_json(uint32_t from, uint32_t to, char *buf, size_t cap);
+
+/* ====== link 消息（GET /api/linkstats 的回包）====== */
+#define WEB_LINK_N 12u
+/* 12 个屏链路计数的 JSON 键；顺序即 web_link_json 的 cnt[] 顺序 */
+extern const char *const web_link_keys[WEB_LINK_N];
+/* 写成一条 link 对象：{"t":"link",<12 个计数>,"ssid":..,"pass":..,"url":..}。
+ * 热点名/密码是使用者可改的自由文本，一律经 cJSON 转义（手拼遇到引号整包就废）。
+ * buf 里是结尾带 NUL 的 C 串；返回串长（不含 NUL）。cap 放不下整串、任一指针为空
+ * 或分配失败返回 0。*/
+size_t web_link_json(const uint32_t cnt[WEB_LINK_N], const char *ssid, const char *pass,
+                     const char *url, char *buf, size_t cap);
 
 #ifdef __cplusplus
 }

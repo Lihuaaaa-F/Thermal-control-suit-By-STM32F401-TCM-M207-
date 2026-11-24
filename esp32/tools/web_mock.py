@@ -4,8 +4,8 @@
 在本机复现 ESP32 tcs_web 的 HTTP + WS 行为，没有设备时用它开发/验证 web_files 前端；
 参数表直接解析固件 components/tcs_core/param_registry.c（与真机逐条一致）。
 
-用法（在 esp32 目录）：python tools/web_mock.py [端口]  →  浏览器打开 http://127.0.0.1:8124/（Ctrl-C 停止）
-    端口缺省 8124；若被系统保留而绑定失败（WinError 10013），换一个端口作参数即可，页面不依赖端口。
+用法（在 esp32 目录）：python tools/web_mock.py [端口]  →  浏览器打开启动后打印的网址（Ctrl-C 停止）
+    端口缺省 8124；被系统保留而绑定失败时自动顺延（18124/18125/18126），页面不依赖端口。
 
 测试控制（仅回环地址）：
   GET /__fault?body_lost=0&m207_off=0&sens_open=0&screen=1&stall=0[&overtemp=0]   写故障标志（可只给子集）
@@ -557,14 +557,28 @@ def ticker():
             broadcast(due)
 
 if __name__ == "__main__":
-    PORT = int(sys.argv[1]) if len(sys.argv) > 1 else PORT   # 可选端口参数（默认 8124）
+    # 8123/8124 在部分 Windows 机器上落在系统保留端口段里（WinError 10013，本开发机就是）：
+    # 指定端口绑不上就顺延到备选端口；实际端口以启动后打印出来的网址为准（页面不依赖端口）。
+    want = [PORT]
+    if len(sys.argv) > 1:
+        try:
+            want = [int(sys.argv[1])]
+        except ValueError:
+            raise SystemExit("web_mock: 端口必须是 0–65535 的整数，得到 %r" % sys.argv[1])
+    want += [p for p in (18124, 18125, 18126) if p not in want]
+    srv, errs = None, []
+    for p in want:
+        try:
+            srv = Server((HOST, p), Handler)
+            PORT = p
+            break
+        except (OSError, OverflowError, ValueError) as e:   # 保留端口 / 超出范围 都换下一个
+            errs.append("%d (%s)" % (p, e))
+    if srv is None:
+        raise SystemExit("web_mock: cannot bind %s on any port tried: %s. "
+                         "See 'netsh interface ipv4 show excludedportrange protocol=tcp', "
+                         "then run: python tools/web_mock.py <port>" % (HOST, "; ".join(errs)))
     threading.Thread(target=ticker, daemon=True).start()
-    try:
-        srv = Server((HOST, PORT), Handler)
-    except OSError as e:
-        raise SystemExit("web_mock: cannot bind %s:%d (%s). The port may be reserved by Windows - see "
-                         "'netsh interface ipv4 show excludedportrange protocol=tcp'. "
-                         "Retry with another port: python tools/web_mock.py <port>" % (HOST, PORT, e))
     print("web_mock: http://%s:%d/  (Ctrl-C to stop)  test: /__fault /__reset /__frames /__audit" % (HOST, PORT), flush=True)
     try:
         srv.serve_forever()

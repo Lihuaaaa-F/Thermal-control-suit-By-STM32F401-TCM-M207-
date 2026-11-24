@@ -326,4 +326,5 @@ void tcs_lvgl_estop_watch(void)
 void tcs_lvgl_note_state_change(void)
 {
     g_ui_state_change_ms = HAL_GetTick();
+    g_ui_state_change_seq++;        /* 每记一次换一个号：界面据此区分"快照带来的变化"与本地置位 */
 }

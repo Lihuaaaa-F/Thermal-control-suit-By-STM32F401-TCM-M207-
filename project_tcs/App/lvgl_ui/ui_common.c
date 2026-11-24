@@ -247,6 +247,7 @@ ui_pill_t ui_pill(lv_obj_t *p, int x, int y, int h, const lv_font_t *f)
     pp.obj = ui_box(p, x, y, 2 * UI_PILL_PAD, h, TKS_CARD, h / 2);
     pp.dot = ui_box(pp.obj, UI_PILL_PAD, (h - d) / 2, d, d, TKS_GREEN, UI_PILL_DOT_R);
     pp.label = ui_lab(pp.obj, UI_PILL_PAD, (h - ui_line_h(f)) / 2 + ui_text_dy(f), f, TKS_TX, "");
+    pp.h = h;          /* 高度记下来：布局是惰性刷新的，建完立刻问对象要高度会得到 0 */
     return pp;
 }
 
@@ -255,7 +256,9 @@ void ui_pill_set(ui_pill_t *pp, const char *text, lv_color_t bg, lv_color_t fg,
 {
     if (!pp || !pp->obj || !pp->dot || !pp->label) return;
     const lv_font_t *f = lv_obj_get_style_text_font(pp->label, 0);
-    int h = (int)lv_obj_get_height(pp->obj);
+    /* 用创建时记下的高度，不读 lv_obj_get_height：刚建完/刚改完尺寸时布局还没刷新，读到的是旧值
+     * （2026-11-24 真机：二级页顶栏胶囊里的文字被摆高 16px、上缘裁掉）。*/
+    int h = pp->h;
     lv_obj_set_style_bg_color(pp->obj, bg, 0);
     lv_obj_set_style_text_color(pp->label, fg, 0);
     ui_lab_set(pp->label, text);

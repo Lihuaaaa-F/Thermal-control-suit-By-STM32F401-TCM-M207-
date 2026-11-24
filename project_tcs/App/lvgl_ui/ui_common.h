@@ -69,7 +69,7 @@ void ui_button_set_text(ui_button_t *b, const char *text);
 void ui_button_set_style(ui_button_t *b, int style);
 
 /* ---- 状态胶囊：圆点 + 文字，整组居中；宽度随文字 ---- */
-typedef struct { lv_obj_t *obj; lv_obj_t *dot; lv_obj_t *label; } ui_pill_t;
+typedef struct { lv_obj_t *obj; lv_obj_t *dot; lv_obj_t *label; int h; } ui_pill_t;
 
 #define UI_PILL_DOT_R  5       /* 圆点半径 px */
 #define UI_PILL_PAD    12      /* 左右内边距 */

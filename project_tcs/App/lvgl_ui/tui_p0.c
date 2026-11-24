@@ -54,6 +54,7 @@ static struct {
     lv_obj_t *fan_state, *fan_track, *fan_knob, *fan_word;
     ui_button_t b_mode, b_estop;
     ui_home_t  st;             /* 上次画上去的状态（diff 的基准）*/
+    uint32_t   note_seq;      /* 上次据此算过延迟的"快照变化号" */
     uint8_t   built, grayed;   /* grayed：当前是否处于"主控断开、数值转灰"的样子 */
 } H;
 
@@ -277,10 +278,15 @@ int tui_p0_update(void)
         H.st = now;
         g_ui_stat[1]++;
         /* "状态变化 → 上屏"的真实延迟（主循环在快照带来变化时记 g_ui_state_change_ms）*/
-        if (g_ui_state_change_ms) {       /* 0 = 主循环还没记过（上电首帧不算"变化"）*/
+        /* 只给"主控快照带来的变化"算延迟：急停这类是屏幕本地先置位，不来自快照，
+         * 拿上一次快照变化的时刻当起点会算出几十秒的假数（2026-11-24 真机读到 22981ms）。*/
+        if (g_ui_state_change_seq != H.note_seq) {
+            H.note_seq = g_ui_state_change_seq;
             uint32_t dt = in->now_ms - g_ui_state_change_ms;
-            g_ui_stat[6] = dt;
-            if (dt < 60000u && dt > g_ui_stat[5]) g_ui_stat[5] = dt;
+            if (dt < 60000u) {
+                g_ui_stat[6] = dt;
+                if (dt > g_ui_stat[5]) g_ui_stat[5] = dt;
+            }
         }
     }
     paint_values(in, lv);

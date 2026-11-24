@@ -9,6 +9,7 @@
 
 /* 主循环在"快照带来状态变化"时写（ms）：用来量"状态变化 → 上屏"的真实延迟 */
 volatile uint32_t g_ui_state_change_ms;
+volatile uint32_t g_ui_state_change_seq;
 volatile uint32_t g_ui_stat[8];
 volatile uint32_t g_ui_probe[80];
 
@@ -29,6 +30,7 @@ static ui_link_view_t s_lv;
 static ui_banner_t s_bn;
 static uint8_t     s_bn_have;
 static lv_obj_t *  s_bn_layer;
+static lv_obj_t *  s_bn_detail;   /* 横幅第二行：主控断开时每秒只改它的文字，不重建横幅 */
 static ui_ack_t    s_ack;
 static ui_bn_kind_t s_ack_kind;
 
@@ -156,7 +158,7 @@ static void banner_build(const ui_banner_t *b)
     if (b->red) ui_icon_sq20(s_bn_layer, BN_X + 18, 26 + dy, tx);
     else        ui_icon_tri20(s_bn_layer, BN_X + 18, 26 + dy, tx, bg);
     ui_text24(s_bn_layer, BN_X + 50, 12 + dy, b->title, tx);
-    ui_text24(s_bn_layer, BN_X + 50, 38 + dy, b->detail, tx);
+    s_bn_detail = ui_text24(s_bn_layer, BN_X + 50, 38 + dy, b->detail, tx);
     if (b->extra) {
         /* "还有 N 条"：放第一行右端（标题都短，第二行留给说明）*/
         char cnt[24];
@@ -178,13 +180,21 @@ static void banner_sync(void)
     if (want.kind == UI_BN_NONE) {
         if (s_bn_layer) { lv_obj_delete(s_bn_layer); s_bn_layer = NULL; }
         s_bn_have = 0;
+        s_bn_detail = NULL;
         return;
     }
     if (s_bn_have && want.kind == s_bn.kind && want.red == s_bn.red &&
-        want.extra == s_bn.extra &&
-        strcmp(want.title, s_bn.title) == 0 && strcmp(want.detail, s_bn.detail) == 0)
+        want.extra == s_bn.extra && strcmp(want.title, s_bn.title) == 0) {
+        /* 只有第二行变了（主控断开时的"数据停在 N 秒前"每秒变一次）：只改这一行文字。
+         * 整条横幅删了重建会让那块区域每秒重画一次，看着一闪一闪。*/
+        if (strcmp(want.detail, s_bn.detail) != 0) {
+            snprintf(s_bn.detail, sizeof s_bn.detail, "%s", want.detail);
+            if (s_bn_detail) ui_lab_set(s_bn_detail, s_bn.detail);
+        }
         return;
+    }
     if (s_bn_layer) lv_obj_delete(s_bn_layer);
+    s_bn_detail = NULL;
     s_bn = want;
     s_bn_have = 1;
     banner_build(&s_bn);
@@ -291,6 +301,7 @@ void tui_goto(tui_page_t p)
     lv_obj_clean(s_scr);
     /* 旧横幅随整屏清掉；状态条与页面内容由下面的构建重建 */
     s_bn_layer = NULL;
+    s_bn_detail = NULL;
     s_bn_have = 0;
     switch (p) {
         case TUI_HOME:  tui_p0_build(s_scr); break;

@@ -70,5 +70,6 @@ extern volatile uint32_t g_ui_stat[8];
 extern volatile uint32_t g_ui_probe[80];
 /* main.c 在"快照带来状态变化"时写入（ms），用于量状态上屏延迟 */
 extern volatile uint32_t g_ui_state_change_ms;
+extern volatile uint32_t g_ui_state_change_seq;   /* 每记一次 +1 */
 
 #endif

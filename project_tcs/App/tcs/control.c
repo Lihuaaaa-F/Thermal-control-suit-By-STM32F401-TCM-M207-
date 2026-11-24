@@ -169,8 +169,8 @@ void tcs_alarm_ack(void)
 
 void tcs_emergency_stop(void)
 {
-#if TCS_USE_LVGL
-    /* E-04/TL-9b 取证计数（=1 构建才有；=0 产物保持字节恒等，TL-17） */
+#if TCS_USE_LVGL && TCS_PROFILE >= 1
+    /* E-04/TL-9b 取证计数（台架/仿真档才有；2026-11-24 S 线 C01 起交付档不定义这个钩子） */
     extern volatile uint32_t g_estop_calls;
     g_estop_calls++;
 #endif

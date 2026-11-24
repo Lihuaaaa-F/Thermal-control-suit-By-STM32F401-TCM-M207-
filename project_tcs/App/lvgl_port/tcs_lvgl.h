@@ -1,6 +1,7 @@
 #ifndef TCS_LVGL_H
 #define TCS_LVGL_H
 #include <stdint.h>
+#include "tcs_profile.h"   /* TCS_PROFILE：测试钩子只在台架/仿真档（缺省按交付档）*/
 void tcs_lvgl_init(void);
 void tcs_lvgl_poll(void);
 void tcs_lvgl_estop_watch(void);   /* D-L7② 屏入口兜底（原始坐标层，独立于 LVGL 存活） */
@@ -26,12 +27,17 @@ extern volatile tl8_t g_tl8;
 
 /* ====== G4 测试钩子（probe 直写；=1 构建常驻，正常路径零影响）======
  * 2026-10-29：这些符号此前只存在于临时构建变体，源码里没有 → 测试不可复现
- * （g4_e04_tl9b.py 在现行 ELF 上取不到符号）。现固化为源内符号。 */
+ * （g4_e04_tl9b.py 在现行 ELF 上取不到符号）。现固化为源内符号。
+ * 2026-11-24（S 线 C01）："=1 构建"现在是真的了——写进去就能改变行为，所以只在
+ * 台架/仿真档（TCS_PROFILE >= 1）定义；交付档里没有这些符号。
+ * 复现 E-04 / TL-9b / TL-13 要烧台架档固件（cmake -DTCS_PROFILE=BENCH）。 */
+#if TCS_PROFILE >= 1
 extern volatile uint32_t g_lvgl_freeze;     /* 1=停喂 lv_timer_handler（TL-9b 法1） */
 extern volatile uint32_t g_lvgl_drain;      /* 1=开始耗尽池，2=已到 NULL（TL-9b 法2），0=释放 */
 extern volatile uint32_t g_tap_inject[4];   /* {seq, touched, x, y} 合成触摸（触摸走查/边界点） */
 extern volatile uint32_t g_tap_drop;        /* 1=模拟 indev 读失败（TL-13 丢帧注入） */
 extern volatile uint32_t g_estop_calls;     /* tcs_emergency_stop 调用计数（E-04/TL-9b） */
+#endif
 
 /* 堆水位守卫统计（TL-9b 法2 修复的实证载体）：free 低于地板时跳过 handler，
  * 主循环继续跑 → 屏急停入口（独立原始坐标层）不被 LVGL 拖死。 */

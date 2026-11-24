@@ -33,6 +33,7 @@
 #include "eeprom.h"
 #include "iwdg.h"
 #include "post.h"
+#include "tcs_profile.h"   /* TCS_PROFILE：屏链波形采集与 RX 环只在台架/仿真档（S 线 C01，2026-11-24）*/
 #include <string.h>
 
 /* ====== 全局句柄 ====== */
@@ -114,7 +115,11 @@ void link_rx_cplt(void)
 
 /* TEMP-DIAG3（2026-10-30）：PA3 板载逻辑分析仪——临时切 GPIO 输入，
  * 记录最多 512 个边沿的 DWT 周期时间戳（50ms 窗口），供探针直读波形。
- * 结束后恢复 AF7+上拉并重启接收。*/
+ * 结束后恢复 AF7+上拉并重启接收。
+ * 2026-11-24（S 线 C01）：采集期间屏链 RX 引脚被切成普通输入、接收停摆，
+ * 只有台架命令 wave / txwave 会调用——所以整段（函数、引脚切换、2 KB 时间戳数组）
+ * 只在 TCS_PROFILE >= 1 编译，与调用它的命令同一个条件（AD-5：实现体也要进 #if）。*/
+#if TCS_PROFILE >= 1
 volatile uint32_t g_wave_ts[512];
 volatile uint16_t g_wave_n;
 volatile uint8_t  g_wave_lvl0;
@@ -156,6 +161,7 @@ void link_wave_capture(void)
     link_rx_pin_af();
     link_rx_rearm();
 }
+#endif /* TCS_PROFILE >= 1：link_wave_capture */
 
 void link_uart_error_recover(void)
 {
@@ -168,6 +174,7 @@ void link_uart_error_recover(void)
 /* TEMP-DIAG4（2026-10-30）：PD5(TX) 波形自证——中断发送 64B 0x55，
  * 同时以 GPIO 方式采样 PD5 边沿（须在起始后立即切输入，UART 仍会驱动
  * 已排队的最后几字节不成立，故改为：先 IT 发送，再立刻采样 8ms）。*/
+#if TCS_PROFILE >= 1
 volatile uint32_t g_txwave_n;
 void link_tx_wave_capture(void)
 {
@@ -186,11 +193,15 @@ void link_tx_wave_capture(void)
     uint32_t guard = SystemCoreClock / 100u;
     while (huart_link.gState != HAL_UART_STATE_READY && guard--) { }
 }
+#endif /* TCS_PROFILE >= 1：link_tx_wave_capture */
 
-/* TEMP-DIAG（2026-10-30）：屏链排障全局计数器（探针直读）*/
+/* TEMP-DIAG（2026-10-30）：屏链排障全局计数器（探针直读）。
+ * 只读遥测，三档都留：现场排障要靠 g_dbg_snap_gap_* 判断屏链实时性。*/
 volatile uint32_t g_dbg_lrx_total;
-volatile uint8_t  g_dbg_rx_ring[64];
+#if TCS_PROFILE >= 1
+volatile uint8_t  g_dbg_rx_ring[64];   /* 最近 64 个接收字节：只给台架命令 rxraw 用 */
 volatile uint32_t g_dbg_rx_pos;
+#endif
 
 volatile uint32_t g_dbg_snap;
 volatile uint32_t g_dbg_snap_gap_max;   /* 相邻 0x20 应用点最大间隔 ms（实时性）*/
@@ -223,8 +234,10 @@ static void link_rx_drain(void)
         uint8_t b = s_lrx[s_lrx_tail];
         s_lrx_tail = (uint16_t)((s_lrx_tail + 1u) & LINK_RX_MASK);
         g_dbg_lrx_total++;   /* 链路 RX 字节总量（屏链诊断/ltx 自检核对用）*/
+#if TCS_PROFILE >= 1
         g_dbg_rx_ring[g_dbg_rx_pos & 63u] = b;
         g_dbg_rx_pos++;
+#endif
         /* TEMP-DIAG2（2026-10-30）：原始首 8 字节 + 首 0xAA 帧 32 字节取证 */
         {
             static uint8_t raw8[8]; static int rn; static int rdone;

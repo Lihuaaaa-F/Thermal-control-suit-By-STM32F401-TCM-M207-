@@ -20,7 +20,8 @@ extern volatile uint32_t g_shown_fb;          /* ltdc.c：当前显示帧地址�
  * 共享带宽与已删除的旧 tcs_ui 直绘同量级；Z18 防御性 cache 清理对 SDRAM 同样保留。 */
 #define CHUNK_BUF ((uint16_t *)0xC0258000)       /* 两块 fb(2×1.2MB) 之后的 1.2MB 空闲 */
 #define CHUNK_LINES 600
-static uint16_t * s_hidden = LCD_BACK_BUF;       /* 隐藏帧（=非显示缓冲） */
+/* 2026-11-24（S 线 C01）：这里原有一个从未被使用的 static 指针 s_hidden（早期双帧方案的遗留），
+ * 是每档构建 1 条"未使用变量"告警的来源，删掉。显示帧地址一律以 g_shown_fb 为准。 */
 
 static void flush_cb(lv_display_t * disp, const lv_area_t * area, uint8_t * px_map)
 {

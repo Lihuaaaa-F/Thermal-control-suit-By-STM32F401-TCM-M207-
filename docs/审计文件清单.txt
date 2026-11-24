@@ -147,7 +147,6 @@ project_tcs/Core/Src/stm32h7xx_hal_msp.c
 project_tcs/Core/Src/stm32h7xx_it.c
 project_tcs/Core/Src/syscalls_stub.c
 project_tcs/tests/fuzz_m207.c
-project_tcs/tests/mutation_estop_gate.py
 project_tcs/tests/mutation_ui_model.py
 project_tcs/tests/test_control.c
 project_tcs/tests/test_link_info.c
@@ -193,10 +192,8 @@ project_tcs/tools/site/rtt_live.py
 project_tcs/tools/site/site_common.py
 project_tcs/tools/site/site_web_check.py
 project_tcs/tools/site/tap.py
-project_tcs/tools/site/test_mb_fwcheck.py
 project_tcs/tools/site/test_ws_client.py
 project_tcs/tools/site/tune_refresh_check.py
-project_tcs/tools/site/verify_prod_clean.py
 project_tcs/tools/site/wvar.py
 project_tcs/tools/src_byte_check.py
 project_tcs/tools/tl8_read.py

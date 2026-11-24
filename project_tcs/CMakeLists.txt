@@ -136,8 +136,31 @@ endif()
 set(TCS_LV_CONF "App/lvgl_port/lv_conf.h" CACHE STRING "lv_conf.h 相对路径（变体构建覆盖，如 DMA2D ON）")
 include(${CMAKE_CURRENT_SOURCE_DIR}/App/lvgl_port/lvgl_version_check.cmake)  # TL-16 版本锁
 file(GLOB_RECURSE LVGL_SRC ${CMAKE_CURRENT_SOURCE_DIR}/third_party/lvgl/src/*.c)
-file(GLOB_RECURSE LVGL_DEMO_SRC ${CMAKE_CURRENT_SOURCE_DIR}/third_party/lvgl/demos/*.c)
-target_sources(tcs_main.elf PRIVATE ${LVGL_SRC} ${LVGL_DEMO_SRC}
+# LVGL demos 只在显式要求调试场景时编译（2026-11-24 S 线 C01）。
+# 此前四档无条件编译 demos（84 个目标文件），但没有任何档位调用它们——唯一调用点在
+# TCS_LVGL_SCENE_BENCH 变体里，而那个宏从来不是由构建系统定义的；靠 --gc-sections 才没进镜像。
+# 白白多编译一遍，还给每档带来 lv_demo_benchmark.c 的 1 条 #warning（审查 X05-F-08"编译不链接"）。
+# 重跑 G4② 的 LVGL 基准场景：cmake -DTCS_PROFILE=BENCH -DTCS_LVGL_SCENE=BENCH ...
+set(TCS_LVGL_SCENE "" CACHE STRING "LVGL 调试场景变体：空=不编译 demos（默认）| BENCH | HELLO")
+if(CMAKE_C_FLAGS MATCHES "TCS_LVGL_SCENE_(BENCH|HELLO)")
+    message(FATAL_ERROR "LVGL 场景变体请用 -DTCS_LVGL_SCENE=BENCH 或 HELLO 指定"
+                        "（写进 CMAKE_C_FLAGS 的话 demos 不会被编译，链接会失败）")
+endif()
+if(TCS_LVGL_SCENE STREQUAL "BENCH")
+    file(GLOB_RECURSE LVGL_DEMO_SRC ${CMAKE_CURRENT_SOURCE_DIR}/third_party/lvgl/demos/*.c)
+    list(APPEND LVGL_SRC ${LVGL_DEMO_SRC})
+elseif(TCS_LVGL_SCENE STREQUAL "HELLO")
+    # 字体矩阵场景只用工程自己的字体，不需要 demos
+elseif(NOT TCS_LVGL_SCENE STREQUAL "")
+    message(FATAL_ERROR "TCS_LVGL_SCENE 只能是空、BENCH 或 HELLO（收到 '${TCS_LVGL_SCENE}'）")
+endif()
+if(NOT TCS_LVGL_SCENE STREQUAL "")
+    if(TCS_PROFILE_U STREQUAL "PROD")
+        message(FATAL_ERROR "LVGL 调试场景不能配交付档：加 -DTCS_PROFILE=BENCH 或 SIM")
+    endif()
+    target_compile_definitions(tcs_main.elf PRIVATE TCS_LVGL_SCENE_${TCS_LVGL_SCENE})
+endif()
+target_sources(tcs_main.elf PRIVATE ${LVGL_SRC}
     ${CMAKE_CURRENT_SOURCE_DIR}/App/lvgl_port/lv_port_disp.c
     ${CMAKE_CURRENT_SOURCE_DIR}/App/lvgl_port/lv_port_indev.c
     ${CMAKE_CURRENT_SOURCE_DIR}/App/lvgl_port/tcs_lvgl.c)

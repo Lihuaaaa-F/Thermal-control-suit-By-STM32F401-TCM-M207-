@@ -4,20 +4,25 @@
  *     mode 1 = 合成一次 150ms 按压（触摸走查/热区边界点）
  *     mode 2 = 持续按住（PRESSED 直到 mode 改 0；2026-11-15 UI 单栈后用于 sim touchh/r）
  *   g_tap_drop      = 1 时 read_cb 恒返回 RELEASED（TL-13 indev 丢帧注入）
- * 正常运行时 g_tap_inject[0] 恒 0、g_tap_drop 恒 0，路径与原来一致。 */
+ * 正常运行时 g_tap_inject[0] 恒 0、g_tap_drop 恒 0，路径与原来一致。
+ * 2026-11-24（S 线 C01）：这两个钩子只在台架/仿真档（TCS_PROFILE >= 1）编译；
+ * 交付档的 read_cb 里只有真实触摸这一条路。 */
 #include "lv_port_indev.h"
 #include "tcs_lvgl.h"
 #include "ft5446.h"
 
+#if TCS_PROFILE >= 1
 static uint32_t s_seq;
 static uint32_t s_end_ms;      /* 合成按压截止时刻（0=无） */
 static int32_t  s_x, s_y;
+#endif
 
 static void touch_read_cb(lv_indev_t * indev, lv_indev_data_t * data)
 {
     LV_UNUSED(indev);
     data->state = LV_INDEV_STATE_RELEASED;
 
+#if TCS_PROFILE >= 1
     if (g_tap_drop) return;    /* TL-13：整条链路丢帧 */
 
     uint32_t seq = g_tap_inject[0];
@@ -45,6 +50,7 @@ static void touch_read_cb(lv_indev_t * indev, lv_indev_data_t * data)
         return;
     }
     s_end_ms = 0;
+#endif
 
     touch_event_t ev;
     if(ft5446_read(&ev) != 0) return;

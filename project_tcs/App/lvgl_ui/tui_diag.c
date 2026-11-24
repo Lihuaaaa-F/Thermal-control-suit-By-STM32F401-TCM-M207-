@@ -3,7 +3,12 @@
  * 这些页面只在 g_ui_cmd 100..103 触发时构建（探针走查用），不进正常导航路径。
  * 机器判定载体：g_diag_stat[]（probe 直读）把"最长串宽度 / 卡片内宽 / 缺字数"
  * 这类结论变成可复算的数字，避免"看图说话"。
+ *
+ * 2026-11-24（S 线 C01，审查条目 M03-F-12）：整文件只在台架/仿真档（TCS_PROFILE >= 1）编译。
+ * 此前四档都编译，交付镜像里常驻一页只有探针能进的诊断页。要走查就烧台架档固件。
  */
+#include "tcs_profile.h"
+#if TCS_PROFILE >= 1
 #include "tui.h"
 #include "ui_common.h"
 #include "control.h"
@@ -241,3 +246,4 @@ void tui_diag_build(lv_obj_t * scr, int mode)
         default: break;
     }
 }
+#endif /* TCS_PROFILE >= 1：诊断页 */

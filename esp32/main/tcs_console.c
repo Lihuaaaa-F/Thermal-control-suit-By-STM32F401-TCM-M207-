@@ -281,23 +281,33 @@ static int cmd_linkstat(int argc, char **argv)
     return 0;
 }
 
+/* 屏链物理层台架命令 gedge / linkrepin / ltx：只进 DIAG 档（S 线 C01，2026-11-24）。
+ * 它们和 H743 的 pinscan / pinrel / txwave 是同一类东西——探引脚、重下发引脚映射、往屏链路
+ * 发测试码型。此前三档都编译，交付固件的 help 里就能看到；按 AD-5"两端同构三档"划到 DIAG。*/
+#if CONFIG_TCS_DIAG
 static int cmd_gedge(int argc, char **argv)
 {
     if (argc < 2) { printf("gedge <gpio> [ms]\n"); return 1; }
     int g = atoi(argv[1]);
     int ms = (argc > 2) ? atoi(argv[2]) : 1000;
-    if (g < 0 || g > 48 || ms < 1 || ms > 5000) { printf("range: gpio0-48 ms1-5000\n"); return 1; }
+    /* M08-F-11：原先 ms 上限 5000 且循环体纯忙等，同核 idle 任务饿死 3 s 就被任务看门狗
+     * （PANIC=y）复位。现在上限 2000，并且每轮让出 1 个 tick。
+     * 代价：轮询间隔 = 1 个 tick，只数得清比它慢的边沿；要数快边沿得改用 GPIO 中断。*/
+    if (g < 0 || g > 48 || ms < 1 || ms > 2000) { printf("range: gpio0-48 ms1-2000\n"); return 1; }
     int last = gpio_get_level(g);
     int n = 0;
     int64_t t0 = esp_timer_get_time();
     while (esp_timer_get_time() - t0 < (int64_t)ms * 1000) {
         int v = gpio_get_level(g);
         if (v != last) { n++; last = v; }
+        vTaskDelay(1);
     }
     printf("gedge gpio%d %dms edges=%d level=%d\n", g, ms, n, last);
     return 0;
 }
+#endif /* CONFIG_TCS_DIAG：gedge */
 
+/* linkbuf 是只读统计（发送队列有没有积压），三档都留。*/
 static int cmd_linkbuf(int argc, char **argv)
 {
     (void)argc; (void)argv;
@@ -308,6 +318,7 @@ static int cmd_linkbuf(int argc, char **argv)
     return 0;
 }
 
+#if CONFIG_TCS_DIAG
 static int cmd_linkrepin(int argc, char **argv)
 {
     (void)argc; (void)argv;
@@ -316,6 +327,7 @@ static int cmd_linkrepin(int argc, char **argv)
     printf("linkrepin set_pin=%d flushed\n", (int)r1);
     return 0;
 }
+#endif /* CONFIG_TCS_DIAG：gedge / linkrepin / ltx */
 
 #if CONFIG_TCS_SIM || CONFIG_TCS_DIAG
 static int cmd_linkloop(int argc, char **argv)
@@ -330,6 +342,7 @@ static int cmd_linkloop(int argc, char **argv)
 }
 #endif
 
+#if CONFIG_TCS_DIAG
 static int cmd_ltx(int argc, char **argv)
 {
     (void)argc; (void)argv;
@@ -339,6 +352,7 @@ static int cmd_ltx(int argc, char **argv)
     printf("ltx: wrote %d bytes 0x55 to UART1(GPIO17)\n", n);
     return 0;
 }
+#endif /* CONFIG_TCS_DIAG：ltx */
 
 static int cmd_reset(int argc, char **argv)
 {
@@ -412,12 +426,14 @@ int tcs_console_start(void)
       .func=cmd_linkstat, .argtable=NULL },
     { .command="linkbuf", .help="UART1 驱动缓冲字节数", .hint=NULL,
       .func=cmd_linkbuf, .argtable=NULL },
+#if CONFIG_TCS_DIAG
     { .command="linkrepin", .help="重下发 UART1 引脚映射并清 RX", .hint=NULL,
       .func=cmd_linkrepin, .argtable=NULL },
-    { .command="gedge", .help="gedge <gpio> [ms]（引脚边沿探测，不重配）", .hint="<gpio> [ms]",
+    { .command="gedge", .help="gedge <gpio> [ms]（引脚边沿探测，不重配；ms 上限 2000）", .hint="<gpio> [ms]",
       .func=cmd_gedge, .argtable=NULL },
     { .command="ltx", .help="屏链自检：UART1 连发 100B 0x55", .hint=NULL,
           .func=cmd_ltx, .argtable=NULL },
+#endif /* CONFIG_TCS_DIAG：linkrepin / gedge / ltx */
 #if CONFIG_TCS_SIM || CONFIG_TCS_DIAG
     { .command="linkloop", .help="linkloop <0|1>：芯片内部 TX→RX 回环（回声源，验证回声防护）", .hint="<0|1>",
           .func=cmd_linkloop, .argtable=NULL },

@@ -14,6 +14,7 @@
 #include "lvgl.h"
 #include "param_registry.h"
 #include "ui_model.h"
+#include "tcs_profile.h"   /* TCS_PROFILE：诊断页与走查钩子只在台架/仿真档（2026-11-24 S 线 C01）*/
 
 typedef enum { TUI_HOME = 0, TUI_TUNE, TUI_CHART, TUI_CONN, TUI_DIAG } tui_page_t;
 
@@ -37,8 +38,10 @@ void tui_p0_build(lv_obj_t *scr);   int tui_p0_update(void);   /* 主页 */
 void tui_p1_build(lv_obj_t *scr);   int tui_p1_update(void);   void tui_p1_set_banner_room(int room);
 void tui_p2_build(lv_obj_t *scr);   int tui_p2_update(void);   void tui_p2_set_banner_room(int room);
 void tui_p3_build(lv_obj_t *scr);   int tui_p3_update(void);   void tui_p3_set_banner_room(int room);
-void tui_diag_build(lv_obj_t *scr, int mode);                                /* 诊断页（只走查用）*/
+#if TCS_PROFILE >= 1
+void tui_diag_build(lv_obj_t *scr, int mode);                   /* 诊断页（只走查用；交付档不编译）*/
 void tui_diag_set_mode(int mode);
+#endif
 
 /* ---- 底栏急停键的屏幕矩形：主页按钮、按下态兜底（tcs_lvgl.c）共用这一处，防两处漂移 ---- */
 #define TUI_ESTOP_X  768
@@ -58,16 +61,20 @@ void tui_dlg_close(void);
 /* ---- 提示条：顶部居中浮动 3.5s，不挡横幅与底栏急停键 ---- */
 void ui_toast(const char *text);
 
-/* ---- 走查钩子（probe 写 g_ui_cmd；=1 only）----
+/* ---- 走查钩子（probe 写 g_ui_cmd；只在台架/仿真档，2026-11-24 S 线 C01）----
  * 1=dlg_estop 2=dlg_mode 3=goto 调参 4=goto 曲线 5=goto 连接 6=风扇切换 7=切手动
  * 8=点击横幅 9=TUNE +step 10=TUNE -step 11=TUNE 步进切换 12=TUNE 行选择+1 13=HOME
- * 14=TUNE 滑条中点 15=关弹窗 16=关旧弹窗→开急停弹窗 100..103=诊断页 */
+ * 14=TUNE 滑条中点 15=关弹窗 16=关旧弹窗→开急停弹窗 100..103=诊断页
+ * 审查条目 M03-F-12：g_ui_cmd 能开弹窗、切页、切风扇、切手动——交付档里没有这个变量，
+ * 也没有消费它的代码。tui_step_toggle 不在此列：调参页自己的步进按钮在用。 */
+#if TCS_PROFILE >= 1
 extern volatile uint32_t g_ui_cmd;
 void tui_step_param(int dir);
-void tui_step_toggle(void);
 void tui_sel_next(void);
 void tui_slider_center(void);
 uint16_t tui_sel_param_id(void);
+#endif
+void tui_step_toggle(void);
 
 /* 运行统计（probe 直读）：[0] 整页重建 [1] 就地更新 [2] 横幅重建 [3] 横幅点击
  * [4] 提示条次数 [5] 状态变化→上屏 最大延迟 ms [6] 最近一次延迟 ms

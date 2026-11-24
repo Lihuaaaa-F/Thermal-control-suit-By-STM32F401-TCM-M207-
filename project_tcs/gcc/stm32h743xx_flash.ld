@@ -85,14 +85,19 @@ SECTIONS
     __exidx_end = .;
   } >FLASH
 
-  .preinit_array :
+  /* 2026-11-24（S 线 C01）：三个 *init_array 标成 READONLY。
+   * GCC 把 .init_array / .fini_array 发成"可写"段（sh_flags 含 WRITE），它们又和代码同在 Flash 里，
+   * 链接器（binutils 2.39 起）因此报 "LOAD segment with RWX permissions"——交付镜像的程序头
+   * 把整片 Flash 描述成可读可写可执行。这两个数组启动时只被 __libc_init_array 读取，
+   * 运行期不改，标只读才是实情。段的位置和内容不变（改前改后 .bin 的 md5 相同）。 */
+  .preinit_array (READONLY) :
   {
     PROVIDE_HIDDEN(__preinit_array_start = .);
     KEEP(*(.preinit_array*))
     PROVIDE_HIDDEN(__preinit_array_end = .);
   } >FLASH
 
-  .init_array :
+  .init_array (READONLY) :
   {
     PROVIDE_HIDDEN(__init_array_start = .);
     KEEP(*(SORT(.init_array.*)))
@@ -100,7 +105,7 @@ SECTIONS
     PROVIDE_HIDDEN(__init_array_end = .);
   } >FLASH
 
-  .fini_array :
+  .fini_array (READONLY) :
   {
     PROVIDE_HIDDEN(__fini_array_start = .);
     KEEP(*(SORT(.fini_array.*)))

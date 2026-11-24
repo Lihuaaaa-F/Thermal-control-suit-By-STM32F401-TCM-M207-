@@ -16,7 +16,9 @@ volatile uint32_t g_ui_stat[8];
 volatile uint32_t g_ui_probe[80];
 
 static tui_page_t s_page = TUI_HOME;
+#if TCS_PROFILE >= 1
 static int        s_diag_mode;
+#endif
 static lv_obj_t * s_scr;
 static lv_obj_t * s_mask;               /* 模态遮罩（弹窗在场时暂停刷新）*/
 static tui_dlg_kind_t s_dlg;            /* 当前开着的弹窗是哪一个 */
@@ -49,7 +51,9 @@ static uint8_t   s_strip_valid;
 static lv_obj_t *s_toast_box, *s_toast_label;
 static uint32_t  s_toast_until;
 
+#if TCS_PROFILE >= 1
 void tui_diag_set_mode(int mode) { s_diag_mode = mode; }
+#endif
 tui_page_t tui_current(void) { return s_page; }
 int tui_last_was_rebuild(void) { int v = s_rebuilt; s_rebuilt = 0; return v; }
 
@@ -374,7 +378,9 @@ void tui_goto(tui_page_t p)
         case TUI_TUNE:  tui_p1_build(s_scr); break;
         case TUI_CHART: tui_p2_build(s_scr); break;
         case TUI_CONN:  tui_p3_build(s_scr); break;
-        case TUI_DIAG:  tui_diag_build(s_scr, s_diag_mode); break;
+#if TCS_PROFILE >= 1
+        case TUI_DIAG:  tui_diag_build(s_scr, s_diag_mode); break;   /* 诊断页：只走查用，交付档到不了这一页 */
+#endif
         default: break;
     }
     if (p != TUI_DIAG) strip_build();
@@ -386,8 +392,11 @@ void tui_goto(tui_page_t p)
 void tui_request(tui_page_t p) { s_pending = (int)p; }
 void tui_request_rebuild(void) { s_pending = -1; }
 
-/* ================= 走查命令 ================= */
-
+/* ================= 走查命令（probe 写 g_ui_cmd）=================
+ * 2026-11-24（S 线 C01，审查条目 M03-F-12）：整段只在台架/仿真档编译。
+ * 这些命令能开弹窗、切页、切风扇、切模式、改参数——交付固件里不该有一条
+ * "往 RAM 写个数就能做到这些"的路。 */
+#if TCS_PROFILE >= 1
 volatile uint32_t g_ui_cmd;
 
 static void ui_cmd_dispatch(uint32_t cmd)
@@ -417,6 +426,7 @@ static void ui_cmd_dispatch(uint32_t cmd)
         default: break;
     }
 }
+#endif /* TCS_PROFILE >= 1：走查命令 */
 
 /* ================= 节拍 ================= */
 
@@ -461,12 +471,14 @@ static int page_update(void)
 
 void tui_tick(void)
 {
-    /* ⓪ 走查命令消费（probe 写入）*/
+    /* ⓪ 走查命令消费（probe 写入；只在台架/仿真档）*/
+#if TCS_PROFILE >= 1
     if (g_ui_cmd) {
         uint32_t c = g_ui_cmd;
         g_ui_cmd = 0;
         ui_cmd_dispatch(c);
     }
+#endif
     /* ① 延后导航/重建：在 lv_timer_handler 之外的上下文执行（LVGL 回调里不能删/建屏）*/
     if (s_pending != -2 && !s_mask) {
         int p = s_pending;

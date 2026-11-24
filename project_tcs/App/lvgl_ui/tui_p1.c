@@ -363,7 +363,10 @@ int tui_p1_update(void)
 }
 
 /* ---- 走查钩子（g_ui_cmd 9..14；与真实触摸走同一套 apply_value）----
- * 只在本页时有效：别的页上 s_row 里的对象早已被删，不能碰。*/
+ * 2026-11-24（S 线 C01）：只有台架/仿真档编译。tui_step_toggle 不在此列——
+ * 调参页的步进按钮（上面）自己也在调它，三档都要。
+ * U 线 S7：只在本页时有效：别的页上 s_row 里的对象早已被删，不能碰。*/
+#if TCS_PROFILE >= 1
 void tui_step_param(int dir)
 {
     if (!s_built || tui_current() != TUI_TUNE) return;
@@ -374,7 +377,6 @@ void tui_step_param(int dir)
     apply_value(s_sel, p->value + (float)dir * step);
 }
 
-void tui_step_toggle(void) { if (s_built && tui_current() == TUI_TUNE) s_step = (s_step < 0.5f) ? 1.0f : 0.1f; }
 void tui_sel_next(void)    { if (!s_built || tui_current() != TUI_TUNE) return; s_sel = (s_sel + 1) % 4; select_paint(); }
 uint16_t tui_sel_param_id(void) { return s_ids[s_sel]; }
 
@@ -384,3 +386,6 @@ void tui_slider_center(void)
     const param_desc_t *p = pd(s_sel);
     if (p) apply_value(s_sel, p->min + (p->max - p->min) * 0.5f);
 }
+#endif /* TCS_PROFILE >= 1：走查钩子 */
+
+void tui_step_toggle(void) { if (s_built && tui_current() == TUI_TUNE) s_step = (s_step < 0.5f) ? 1.0f : 0.1f; }

@@ -18,12 +18,23 @@ volatile tl8_t g_tl8;   /* TL-8 采样块（probe-rs 经符号直读） */
 
 /* ====== G4 测试钩子（2026-10-29 源内固化）======
  * 此前 g_lvgl_freeze/g_lvgl_drain/g_tap_inject/g_estop_calls 只存在于临时构建变体，
- * 源码里没有 → g4_e04_tl9b.py 在现行 ELF 上取不到符号，测试不可复现。 */
+ * 源码里没有 → g4_e04_tl9b.py 在现行 ELF 上取不到符号，测试不可复现。
+ *
+ * 2026-11-24（S 线 C01，审查条目 M03-F-12 同类）：这些钩子往 RAM 里写一个数就能改变行为
+ * （冻结渲染 / 耗尽内存 / 合成触摸 / 丢帧），只进台架与仿真档（TCS_PROFILE >= 1）。
+ * 交付档（PROD）不定义、不编译——交付固件的符号表里查不到它们（tools/site/verify_prod_clean.py）。
+ * 只读遥测（g_lvgl_guard / g_budget / g_tl8 / g_lvgl_beat）不在此列，三档都留。 */
+#if TCS_PROFILE >= 1
 volatile uint32_t g_lvgl_freeze;
 volatile uint32_t g_lvgl_drain;
 volatile uint32_t g_tap_inject[4];
 volatile uint32_t g_tap_drop;
 volatile uint32_t g_estop_calls;
+/* 水位守卫里的"冻结"条件：台架档看钩子，交付档恒假（同一行源码，两档各自编译成常量）*/
+#define TCS_LVGL_FROZEN()   (g_lvgl_freeze != 0u)
+#else
+#define TCS_LVGL_FROZEN()   (0u)
+#endif
 
 /* U-6：M207 最近错误码（m207.c 在 =1 构建写入；UI 翻成人话） */
 volatile uint8_t g_m207_last_errcode;
@@ -34,10 +45,12 @@ volatile tcs_lvgl_guard_t g_lvgl_guard;
  * tcs_lvgl_estop_watch 用它判断"屏入口兜底"该不该抢在弹窗之前直接急停。*/
 volatile uint32_t g_lvgl_beat;
 
+#if TCS_PROFILE >= 1
 /* 耗尽注入分配块登记：drain 归 0 时全部释放，验证 UI 可恢复 */
 #define DRAIN_MAX 96
 static void * s_drain_ptr[DRAIN_MAX];
 static uint32_t s_drain_n;
+#endif
 static uint32_t s_blocked;   /* 水位守卫是否处于阻断态（统计恢复沿用） */
 
 #if defined(TCS_LVGL_SCENE_HELLO)
@@ -188,7 +201,8 @@ void tcs_lvgl_poll(void)
 {
     lv_mem_monitor_t mm;
 
-    /* ⓪ 内存耗尽注入（TL-9b 法2 用；正常运行为 0） */
+    /* ⓪ 内存耗尽注入（TL-9b 法2 用；正常运行为 0；交付档没有这一段） */
+#if TCS_PROFILE >= 1
     if (g_lvgl_drain == 1u) {
         while (s_drain_n < DRAIN_MAX) {
             void * p = lv_malloc(1024);
@@ -200,6 +214,7 @@ void tcs_lvgl_poll(void)
     } else if (g_lvgl_drain == 0u && s_drain_n) {
         while (s_drain_n) lv_free(s_drain_ptr[--s_drain_n]);
     }
+#endif
 
     /* ① 堆水位守卫（TL-9b 法2 修复）：free 低于地板时不再喂 handler。
      * 原行为：池完全耗尽后 lv_timer_handler 内部长时间阻塞 → 主循环停摆 →
@@ -215,7 +230,7 @@ void tcs_lvgl_poll(void)
     if (mm.free_size < g_lvgl_guard.min_free)
         g_lvgl_guard.min_free = mm.free_size;
 
-    if (g_lvgl_freeze || mm.free_size < TCS_LV_MEM_FLOOR_BYTES) {
+    if (TCS_LVGL_FROZEN() || mm.free_size < TCS_LV_MEM_FLOOR_BYTES) {
         g_lvgl_guard.skip++;
         s_blocked = 1;
         return;   /* 冻结/低水位：主循环继续（estop_watch 在其他调用点照常） */
@@ -274,11 +289,14 @@ void tcs_lvgl_poll(void)
  *     （调参页的"+"就在这里），不能触发——2026-11-24 复查抓到。
  * 每次按压只触发一次；合成触摸（probe/console 注入）与真实触摸走同一条判定。*/
 
+#if TCS_PROFILE >= 1
 /* 探针直读的计时记录（诊断钩子）。[0]=magic 0x45535047（最后写） [1]=按压起始 ms
  * [2]=触发 ms [3]=按压到触发 ms [4]=原因（1=LVGL 卡死 2=首页长按）
- * [5]=按压时心跳 [6]=触发时心跳 [7]=触发时页码 */
+ * [5]=按压时心跳 [6]=触发时心跳 [7]=触发时页码
+ * 只在台架/仿真档：tools/site/estop_matrix.py 靠它取"按下到触发"的毫秒数。*/
 #define ESTOP_DBG_MAGIC 0x45535047u
 volatile uint32_t g_estop_dbg[8];
+#endif
 
 static void estop_zone_step(uint8_t in_zone)
 {
@@ -287,6 +305,7 @@ static void estop_zone_step(uint8_t in_zone)
     estop_gate_fire_t r = estop_gate_step(&s_gate, in_zone, (uint8_t)(tui_dlg_kind() != TUI_DLG_NONE),
                                           (uint8_t)(tui_current() == TUI_HOME), now, g_lvgl_beat);
     if (r == ESTOP_GATE_IDLE) return;
+#if TCS_PROFILE >= 1
     uint32_t since = s_gate.since, beat0 = s_gate.beat0;
     g_estop_dbg[1] = since;
     g_estop_dbg[2] = now;
@@ -296,14 +315,19 @@ static void estop_zone_step(uint8_t in_zone)
     g_estop_dbg[6] = g_lvgl_beat;
     g_estop_dbg[7] = (uint32_t)tui_current();
     g_estop_dbg[0] = ESTOP_DBG_MAGIC;
+#endif
     tcs_emergency_stop();
 }
 
 void tcs_lvgl_estop_watch(void)
 {
     touch_event_t ev;
+    uint8_t pressed = 0;
+    uint32_t x = 0, y = 0;
+#if TCS_PROFILE >= 1
     /* 合成触摸（probe/console 注入；正常运行 g_tap_inject[0] 恒 0）：
-     * mode 1 = 150ms 按压；mode 2 = 持续按住直到 mode 改 0（与 lv_port_indev 口径一致）。*/
+     * mode 1 = 150ms 按压；mode 2 = 持续按住直到 mode 改 0（与 lv_port_indev 口径一致）。
+     * 只在台架/仿真档；交付档下面这段不存在，只有真实触摸这一条路。*/
     static uint32_t s_seq, s_synth_until;
     uint32_t now = HAL_GetTick();
     uint32_t seq = g_tap_inject[0];
@@ -311,13 +335,13 @@ void tcs_lvgl_estop_watch(void)
         s_seq = seq;
         s_synth_until = (g_tap_inject[1] == 1u) ? now + 150u : 0u;
     }
-    uint8_t pressed = 0;
-    uint32_t x = 0, y = 0;
     if (g_tap_inject[1] == 2u || (s_synth_until && (int32_t)(s_synth_until - now) > 0)) {
         pressed = 1;
         x = g_tap_inject[2];
         y = g_tap_inject[3];
-    } else if (ft5446_read(&ev) == 0 && ev.valid && ev.touched) {
+    } else
+#endif
+    if (ft5446_read(&ev) == 0 && ev.valid && ev.touched) {
         pressed = 1;
         x = ev.x;
         y = ev.y;

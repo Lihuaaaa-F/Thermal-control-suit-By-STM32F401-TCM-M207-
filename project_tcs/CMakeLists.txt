@@ -66,6 +66,7 @@ set(APP_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/Core/Src/keypad.c     # 只编译不初始化（PD5 冲突，见 main.c）
     ${CMAKE_CURRENT_SOURCE_DIR}/App/proto/proto.c
     ${CMAKE_CURRENT_SOURCE_DIR}/App/comm/comm.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/App/comm/link_info.c   # 主控设备信息（0x22 INFO）保存与查询
     ${CMAKE_CURRENT_SOURCE_DIR}/App/rtt/segger_rtt.c
     ${CMAKE_CURRENT_SOURCE_DIR}/App/iwdg/iwdg.c
     ${CMAKE_CURRENT_SOURCE_DIR}/App/eeprom/eeprom.c

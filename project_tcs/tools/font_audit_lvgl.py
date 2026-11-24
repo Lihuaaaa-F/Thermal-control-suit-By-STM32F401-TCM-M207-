@@ -49,6 +49,37 @@ def load_cp_list(p: Path):
     return set(out)
 
 
+def call_args(txt, fname):
+    """产出每个 fname(...) 调用的实参列表（已按最外层逗号切开；跳过字符串/字符字面量里的括号与逗号）"""
+    pos = 0
+    head = fname + "("
+    while True:
+        i = txt.find(head, pos)
+        if i < 0:
+            return
+        k, depth, start, args = i + len(head), 0, i + len(head), []
+        while k < len(txt):
+            c = txt[k]
+            if c == '"' or c == "'":
+                q = c
+                k += 1
+                while k < len(txt) and txt[k] != q:
+                    k += 2 if txt[k] == "\\" else 1
+            elif c == "(":
+                depth += 1
+            elif c == ")":
+                if depth == 0:
+                    args.append(txt[start:k])
+                    break
+                depth -= 1
+            elif c == "," and depth == 0:
+                args.append(txt[start:k])
+                start = k + 1
+            k += 1
+        yield args
+        pos = k
+
+
 def ui_literals():
     lits = []
     for f in sorted(UI.glob("*.c")):
@@ -105,16 +136,14 @@ def main():
     aux = set()
     for f in sorted(UI.glob("*.c")):
         txt = strip_comments(f.read_text(encoding="utf-8", errors="ignore"))
-        pos = 0
-        while True:
-            i = txt.find("ui_aux20(", pos)
-            if i < 0:
-                break
-            q1 = txt.find('"', i)
-            q2 = txt.find('"', q1 + 1) if q1 >= 0 else -1
-            if q1 >= 0 and q2 > q1:
-                aux |= set(txt[q1 + 1:q2])
-            pos = i + 9
+        # 按实参解析：只认第 4 个实参**本身是字符串字面量**的调用。
+        # （旧写法取"ui_aux20( 之后的第一对引号"——参数是变量时会误抓后面的无关字符串，
+        #   2026-11-24 U 线把 "45°C 阈值" 误判成 20px 缺字。）
+        for args in call_args(txt, "ui_aux20"):
+            if len(args) >= 4:
+                m = LIT_RE.match(args[3].strip())
+                if m:
+                    aux |= set(m.group(1))
     miss20 = sorted((c for c in aux if ord(c) > 0x20 and ord(c) not in sets["lv20"]),
                     key=lambda c: ord(c))
     print(f"[B] lv20（fallback=NULL）缺非 ASCII {len(miss20)} 个")

@@ -1,6 +1,6 @@
 /* tcs_lvgl.c — G4 LVGL 栈初始化/节拍/急停兜底
  * 急停兜底（D-L7②）：每 10ms 节拍在主循环上下文直接读 FT5446 原始坐标，
- * 热区命中（底栏急停键 768,472,216,112）→ 直接调 tcs_emergency_stop()。
+ * 热区命中（底栏急停键 TUI_ESTOP_*）→ 直接调 tcs_emergency_stop()。
  * 与 LVGL 事件循环零调用关系：lv_timer_handler 卡死/内存耗尽时本入口照常工作。 */
 #include "tcs_lvgl.h"
 #include "lvgl.h"
@@ -10,9 +10,7 @@
 #include "ft5446.h"
 #include "control.h"
 #include <string.h>
-#if !defined(TCS_LVGL_SCENE_BENCH)
-#include "tui.h"
-#endif
+#include "tui.h"           /* TUI_ESTOP_*（急停热区矩形，与主页按钮共用一处定义）*/
 #include "stm32h7xx_hal.h"
 
 volatile tl8_t g_tl8;   /* TL-8 采样块（probe-rs 经符号直读） */
@@ -301,9 +299,12 @@ void tcs_lvgl_estop_watch(void)
      * "屏弹窗"），正常路径由 LVGL 弹"确认急停？"。原实现不分情况先触发 → 一按就急停，
      * 弹窗反而在急停之后才弹出，还把红色横幅挡住（现场实测）。现在：
      *   - LVGL 心跳停了（卡死/低水位跳过 handler）→ 按下后下一个节拍直接急停（兜底本职）；
-     *   - LVGL 活着 → 交给弹窗确认；按住 ≥TCS_ESTOP_FORCE_HOLD_MS 仍无弹窗（半死）→ 直接急停。
+     *   - LVGL 活着 → 交给弹窗确认；按住 ≥TCS_ESTOP_FORCE_HOLD_MS 仍无弹窗（半死）→ 直接急停，
+     *     且只在首页生效（用户 2026-11-24 确认保留长按直接急停）——其它页面这块区域是别的控件
+     *     （调参页的 + 键就在这里），不能触发。
      * 每次按压只触发一次：重发由主循环 200ms pending 块负责（R-15），本机动作幂等。*/
-    if (!pressed || x < 768 || x >= 768 + 216 || y < 472 || y >= 472 + 112) {
+    if (!pressed || x < TUI_ESTOP_X || x >= TUI_ESTOP_X + TUI_ESTOP_W ||
+        y < TUI_ESTOP_Y || y >= TUI_ESTOP_Y + TUI_ESTOP_H) {
         s_in_zone = 0;
         return;
     }
@@ -316,8 +317,13 @@ void tcs_lvgl_estop_watch(void)
     if (s_fired || (uint32_t)(now - s_since) < TCS_ESTOP_GRACE_MS) return;
     uint8_t lvgl_alive = (g_lvgl_beat != s_beat0);
     uint8_t held = ((uint32_t)(now - s_since) >= TCS_ESTOP_FORCE_HOLD_MS);
-    if (!lvgl_alive || (held && !tui_dlg_active())) {
+    if (!lvgl_alive || (held && !tui_dlg_active() && tui_current() == TUI_HOME)) {
         s_fired = 1;
         tcs_emergency_stop();
     }
+}
+
+void tcs_lvgl_note_state_change(void)
+{
+    g_ui_state_change_ms = HAL_GetTick();
 }

@@ -4,6 +4,8 @@
 void tcs_lvgl_init(void);
 void tcs_lvgl_poll(void);
 void tcs_lvgl_estop_watch(void);   /* D-L7② 屏入口兜底（原始坐标层，独立于 LVGL 存活） */
+/* 主循环在"主控快照带来状态变化"时调用：界面据此量"状态变化 → 上屏"的真实延迟 */
+void tcs_lvgl_note_state_change(void);
 
 /* TL-8：lv_timer_handler 单次耗时直方图（DWT µs；符号 g_tl8 由 probe-rs 直读）
  * v2（2026-10-29 修正）：v1 末桶为开口 ≥975µs，用该表算 P99.9 无法分辨 4ms 门限

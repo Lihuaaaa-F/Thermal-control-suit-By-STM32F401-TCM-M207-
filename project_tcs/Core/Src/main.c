@@ -17,6 +17,7 @@
 #include "segger_rtt.h"
 #include "proto.h"
 #include "comm.h"
+#include "link_info.h"
 #include "tcs_proto.h"
 #include "ltdc.h"
 #include "ft5446.h"
@@ -326,6 +327,14 @@ static uint32_t s_snap_seq;     /* 最近快照 seq（去重键）*/
 static uint8_t  s_snap_have;
 static tcs_snap_pl_t s_last_snap;   /* v2：屏为纯显示终端，链路存活期内以它为准 */
 
+/* 界面只读的快照接收状态（U 线 S2：页面靠它区分"实时数据"与"陈旧数据"）*/
+void tcs_link_snap_info(uint32_t *age_ms, uint32_t *seq, uint8_t *have)
+{
+    *have = s_snap_have;
+    *seq = s_snap_have ? s_snap_seq : 0u;
+    *age_ms = s_snap_have ? (uint32_t)(g_tick_ms - s_snap_ms) : 0u;
+}
+
 /* 快照/增量应用：显示字段直写 g_tcs；设定值经 param_link_sync 静默回灌本地注册表
  * （不触发广播/下发，防 0x11/0x12 成环）。*/
 static void snap_apply(const tcs_snap_pl_t *s)
@@ -479,8 +488,24 @@ void on_frame(const uint8_t *payload, size_t len)
             }
             s_snap_ms = nowm;
         }
+        /* 去重键要真的记下来：这个变量此前从未被赋值（恒 0），上面的"seq 相等去重"一直是空转，
+         * 界面拿它判断"来没来新快照"也永远等不到（2026-11-24 真机：点确认后误报"主控没有响应"）。*/
+        s_snap_seq = s.seq;
+#ifdef ENABLE_LCD
+        /* 界面计时：这一帧带来了使用者看得见的状态变化（执行器/模式/报警/在线态）。
+         * 只看首帧之后的（首帧不算"变化"）。*/
+        if (s_snap_have && (s_last_snap.mode != s.mode || s_last_snap.fan != s.fan ||
+                            s_last_snap.tec1 != s.tec1 || s_last_snap.tec2 != s.tec2 ||
+                            s_last_snap.alarm != s.alarm || s_last_snap.online != s.online))
+            tcs_lvgl_note_state_change();
+#endif
         s_snap_have = 1;
         snap_apply(&s);
+        break;
+    }
+    case MT_TCS_INFO: {              /* U 线 W3：主控设备信息（热点名/密码/网址/固件版本）→ 连接页 */
+        if (link_info_store((const char *)body, blen) != 0)
+            tcs_log("[WARN]", "INFO frame rejected (%u bytes)", (unsigned)blen);
         break;
     }
     case MT_TCS_DELTA: {             /* R2：位图增量（设定值/teс/fan/mode/alarm/body/badge）*/

@@ -50,6 +50,12 @@ void tcs_hist_tick(uint32_t now_ms)
 {
     if (s_hist_last && now_ms - s_hist_last < 30000u) return;
     s_hist_last = now_ms ? now_ms : 1u;
+#if TCS_H743_LINK_ONLY
+    /* PROD：屏上数据来自主控快照。链路不在（含上电第一拍、还没收到任何快照）时
+     * g_tcs 里是零值/陈旧值，不采——曲线上留缺口，不画一个假的 0°C。
+     * 节拍照常推进，所以缺口前后仍是 30s 一点。（2026-11-24 真机：曲线开头有一段 0°C）*/
+    if (!g_tcs.esp_link_ok) return;
+#endif
     s_hist_tc1[s_hist_head] = g_tcs.tc1_act;
     s_hist_tc2[s_hist_head] = g_tcs.tc2_act;
     s_hist_head = (s_hist_head + 1u) % 60u;

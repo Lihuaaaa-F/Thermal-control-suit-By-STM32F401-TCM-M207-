@@ -105,7 +105,25 @@ def main():
     # U 线 S1：新生成的是全角等宽表，接着跑度量补丁，否则其中的 ASCII/符号会被撑开
     subprocess.run([sys.executable, str(FIRMWARE / "tools" / "font_metrics_patch.py"),
                     "tcs_font_lv_ext.c"], check=False)
+    sync_charset(cps)
     return 0
+
+
+def sync_charset(cps):
+    """诊断页 TL-18 的 CP24EXT 清单必须等于 ext24 字库的码点清单，否则"逐字查字形"漏查新字。
+    （U 线 2026-11-24：此前这份清单靠手工同步，ext24 从 99 字加到 138 字后没人更新。）"""
+    hdr = UI / "tui_charset_data.h"
+    t = hdr.read_text(encoding="utf-8")
+    m = re.search(r"static const uint16_t TUI_CP24EXT\[\] = \{.*?\n\};\n#define TUI_CP24EXT_N\s+\d+",
+                  t, flags=re.S)
+    if not m:
+        print("[WARN] tui_charset_data.h 里找不到 TUI_CP24EXT，未同步")
+        return
+    rows = [", ".join("0x%04X" % c for c in cps[i:i + 12]) for i in range(0, len(cps), 12)]
+    block = "static const uint16_t TUI_CP24EXT[] = {\n  " + ",\n  ".join(rows) + "\n};\n"
+    block += "#define TUI_CP24EXT_N  %d" % len(cps)
+    hdr.write_text(t[:m.start()] + block + t[m.end():], encoding="utf-8", newline="\n")
+    print(f"[regen] 诊断字符集 CP24EXT 同步：{len(cps)} 字")
 
 
 if __name__ == "__main__":

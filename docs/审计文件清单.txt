@@ -62,6 +62,9 @@ esp32/tools/web_e2e.py
 esp32/tools/web_mock.py
 project_tcs/App/comm/comm.c
 project_tcs/App/comm/comm.h
+project_tcs/App/comm/link_info.c
+project_tcs/App/comm/link_info.h
+project_tcs/App/comm/link_snap.h
 project_tcs/App/eeprom/eeprom.c
 project_tcs/App/eeprom/eeprom.h
 project_tcs/App/iwdg/iwdg.c
@@ -93,6 +96,8 @@ project_tcs/App/lvgl_ui/tui_p2.c
 project_tcs/App/lvgl_ui/tui_p3.c
 project_tcs/App/lvgl_ui/ui_common.c
 project_tcs/App/lvgl_ui/ui_common.h
+project_tcs/App/lvgl_ui/ui_model.c
+project_tcs/App/lvgl_ui/ui_model.h
 project_tcs/App/proto/proto.c
 project_tcs/App/proto/proto.h
 project_tcs/App/rtt/SEGGER_RTT_Conf.h

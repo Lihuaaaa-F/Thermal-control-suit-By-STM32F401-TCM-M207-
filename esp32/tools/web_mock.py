@@ -1,279 +1,574 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""web_mock.py — WP-F.2 前端全功能验证台（localhost:8080，协议与 ESP32 demo 同构）
+"""web_mock.py — 调温服网页控制台主机模拟台（WS_PROTOCOL.md v2；仅标准库，Python 3.8+）
+在本机复现 ESP32 tcs_web 的 HTTP + WS 行为，没有设备时用它开发/验证 web_files 前端；
+参数表直接解析固件 components/tcs_core/param_registry.c（与真机逐条一致）。
 
-本机 aTrust 拦截 PC→ESP32 AP 的 TCP（ICMP 通、TCP RST，企业零信任策略），
-PC 浏览器无法直开 192.168.4.1。本 mock 在 localhost:8080 用**同一份前端文件**
-+ 同协议 WS（st/pv/reg、set/cmd）复现 ESP32 demo 行为，验证前端全功能。
-真机服务端功能由串口日志 + 手机实操（用户）覆盖。
+用法（在 esp32 目录）：python tools/web_mock.py [端口]  →  浏览器打开 http://127.0.0.1:8124/（Ctrl-C 停止）
+    端口缺省 8124；若被系统保留而绑定失败（WinError 10013），换一个端口作参数即可，页面不依赖端口。
 
-用法：python tools/web_mock.py   （Ctrl-C 停止）
+测试控制（仅回环地址）：
+  GET /__fault?body_lost=0&m207_off=0&sens_open=0&screen=1&stall=0[&overtemp=0]   写故障标志（可只给子集）
+      stall=1：停止 st 推送但保持连接。overtemp=1：把贴身水温顶到 49.5°C（验证"水温过高"锁存），清掉后快速回落
+  GET /__reset   恢复默认（参数、故障、锁存、日志）并断开所有 WS 客户端，等同设备重启
+  GET /__frames  最近 300 条 客户端→服务端 帧的 JSON（frames = 原样文本）
+  GET /__audit   模拟器内部状态快照
 """
-import base64
-import hashlib
-import json
-import math
-import os
-import struct
-import threading
-import time
+import base64, collections, hashlib, json, math, os, socket, struct, sys, threading, time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from urllib.parse import parse_qs, urlparse
 
-ROOT = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)),
-                                     "..", "components", "tcs_web", "web_files"))
-PORT = 8123
+HOST, PORT, FW = "127.0.0.1", 8124, "1.2.0-mock"
+GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
+HERE = os.path.dirname(os.path.abspath(__file__))
+WEB = os.path.normpath(os.path.join(HERE, "..", "components", "tcs_web", "web_files"))
+REGISTRY_C = os.path.normpath(os.path.join(HERE, "..", "components", "tcs_core", "param_registry.c"))
+MIME = {".html": "text/html; charset=utf-8", ".css": "text/css; charset=utf-8",
+        ".js": "application/javascript; charset=utf-8"}
+STATIC = ("index.html", "style.css", "app.js", "chart.js")     # 允许提供的静态文件白名单
+# 报警位 / 锁存位（WS_PROTOCOL.md §3，与 tcs_core/control.h 同源）
+A_BODY, A_M207, A_ESTOP, A_OT, A_EEP, A_OPEN = 1, 2, 4, 8, 16, 32
+L_OT, L_BODY, L_M207, L_ESTOP = 1, 2, 4, 8
+COMM = A_BODY | A_M207 | A_OPEN
+FAULTS = ("body_lost", "m207_off", "sens_open", "screen", "stall", "overtemp")
+KEYS = ("tec1", "tec2", "fan", "mode", "state", "alarm", "latch", "armed",     # st 中"变化即推"的离散字段
+        "m207", "body_ok", "sens_open", "screen")
+# 状态沿日志表 key: (ev_on, msg_on, lvl_on, ev_off, msg_off)
+LOG = {
+    "tec0": ("tec1_on", "贴身 TEC 开", "info", "tec1_off", "贴身 TEC 关"),
+    "tec1": ("tec2_on", "环境 TEC 开", "info", "tec2_off", "环境 TEC 关"),
+    "fan": ("fan_on", "风扇 开", "info", "fan_off", "风扇 关"),
+    "mode": ("mode_auto", "切换到自动模式", "info", "mode_manual", "切换到手动模式"),
+    "safe": ("safe_on", "进入安全态：TEC 全停、风扇全速", "alarm", "safe_off", "退出安全态"),
+    "cool": ("cool_on", "自动制冷启动：体温偏高", "info", "cool_off", "自动制冷停止"),
+    "heat": ("heat_on", "自动制热启动：体温偏低", "info", "heat_off", "自动制热停止"),
+    "estop": ("estop_on", "急停触发：TEC 全停、风扇全速", "alarm", "estop_off", "急停解除"),
+    "ot": ("overtemp_on", "水温过高（>48°C），已停止温控", "alarm", "overtemp_off", "水温回落到 48°C 以下"),
+    "body_lost": ("body_lost", "体温传感器失联", "alarm", "body_ok", "体温传感器恢复"),
+    "m207_off": ("m207_off", "温控模块离线", "alarm", "m207_on", "温控模块回线"),
+    "sens_open": ("sens_open", "水温探头断线", "alarm", "sens_ok", "水温探头恢复"),
+    "scr": ("screen_off", "屏幕断开", "warn", "screen_on", "屏幕连接"),
+}
 
 def _extract_registry():
-    """WP-P3 golden：直接解析固件 param_registry.c 的 s_params 表——
-    mock 与固件注册表逐条一致（CDP 断言"字典行数=H10 表行数"的锚）。
-    纯字符串解析（无正则转义风险）：{ 0xID, "key", "name", "unit", TYPE,
-    FLAGS..., min, max, step, value, 0, 0 },"""
-    path = os.path.normpath(os.path.join(ROOT, "..", "..", "..", "..", "project_tcs",
-                                          "App", "tcs", "param_registry.c"))
-    txt = open(path, encoding="utf-8").read()
-    txt = txt[txt.index("s_params[PARAM_CAPACITY]"):txt.index("#define PARAM_N_REGISTERED")]
-    PF = {"PF_RW": 1, "PF_SCREEN": 2, "PF_WEB": 4, "PF_PERSIST": 8,
-          "PF_M207": 16, "PF_DANGER": 32}
-    TY = {"PARAM_TYPE_F32": 0, "PARAM_TYPE_U8": 1, "PARAM_TYPE_U16": 2}
-    out = []
-    pos = 0
+    """解析固件 param_registry.c 的 s_params[] 表（声明处到 #define PARAM_N_REGISTERED 为止）。
+    行形态：{ 0xID, "key", "name", "unit", TYPE, FLAGS..., min, max, step, value, 0, 0 }。
+    纯字符串解析；返回项含 id/type/flags/min/max/step/def/key/name/unit（def = 当前值）。"""
+    txt = open(REGISTRY_C, encoding="utf-8").read()
+    txt = txt[txt.index("static param_desc_t s_params"):txt.index("#define PARAM_N_REGISTERED")]
+    pf = {"PF_RW": 1, "PF_SCREEN": 2, "PF_WEB": 4, "PF_PERSIST": 8, "PF_M207": 16, "PF_DANGER": 32}
+    ty = {"PARAM_TYPE_F32": 0, "PARAM_TYPE_U8": 1, "PARAM_TYPE_U16": 2, "PARAM_TYPE_BTN": 3}
+    out, pos = [], 0
     while True:
         i = txt.find("{ 0x", pos)
         if i < 0:
             break
         j = txt.find("},", i)
-        if j < 0:
-            break
-        block = txt[i:j]
-        # 四个引号字段：key/name/unit + 类型
-        q1 = block.find(chr(34))
-        q2 = block.find(chr(34), q1 + 1)
-        key = block[q1 + 1:q2]
-        q3 = block.find(chr(34), q2 + 1)
-        q4 = block.find(chr(34), q3 + 1)
-        name = block[q3 + 1:q4]
-        q5 = block.find(chr(34), q4 + 1)
-        q6 = block.find(chr(34), q5 + 1)
-        unit = block[q5 + 1:q6] if q5 >= 0 else ""
-        # 类型
-        ty = 0
-        for k, v in TY.items():
-            if k in block:
-                ty = v
-                break
-        # flags：块内 PF_ 名求和
-        flags = 0
-        for k, v in PF.items():
-            if k in block:
-                flags |= v
-        # 数值段：最后一个逗号段里的浮点（形如 '0.0f, 100.0f, 0.1f, 0.4f,  0, 0'）
-        tail = block[block.rfind(",", 0, block.rfind(",")) - 0:]
-        nums = []
-        for tok in block.split(","):
-            tok = tok.strip()
-            if tok.endswith("f"):
-                try:
-                    nums.append(float(tok[:-1]))
-                except ValueError:
-                    pass
-        mn, mx, st, dv = nums[0], nums[1], nums[2], nums[3]
-        out.append({"id": int(block[2:block.find(chr(44))].strip(), 16), "type": ty, "flags": flags,
-                    "min": mn, "max": mx, "step": st, "def": dv,
-                    "key": key, "name": name, "unit": unit})
-        pos = j + 2
+        block, pos = txt[i:j], j + 2
+        q, k = [], 0                                   # 前 6 个引号：key / name / unit
+        while len(q) < 6:
+            k = block.index('"', k)
+            q.append(k)
+            k += 1
+        nums = [float(t.strip()[:-1]) for t in block.split(",") if t.strip().endswith("f")]
+        out.append({"id": int(block[2:block.index(",")].strip(), 16),
+                    "type": next((v for k, v in ty.items() if k in block), 0),
+                    "flags": sum(v for k, v in pf.items() if k in block),
+                    "min": nums[0], "max": nums[1], "step": nums[2], "def": nums[3],
+                    "key": block[q[0] + 1:q[1]], "name": block[q[2] + 1:q[3]], "unit": block[q[4] + 1:q[5]]})
     return out
 
+class Sim:
+    """设备仿真：水温物理 + 安全逻辑（镜像 control.c）+ 布防三态机 + 事件日志（50 条环）。
+    除 __init__ 外，所有方法都要求调用方已持 SIM.lock。"""
 
-REG = _extract_registry()
+    def __init__(self):
+        self.lock = threading.RLock()
+        self.reset()
 
-STATE = {"tc1": 25.0, "tc2": 25.0, "body": 36.8, "tec1": 0, "tec2": 0, "fan": 0,
-         "mode": 0, "alarm": 0, "seq": 0, "tc1_set": 25.0, "tc2_set": 25.0}
-LOCK = threading.Lock()
-CLIENTS = []
+    def reset(self):
+        self.params = _extract_registry()              # 各项的 def 字段 = 当前值
+        self.pid = {p["id"]: p for p in self.params}
+        self.t0 = time.time()                          # "开机"时刻；ts / up_s 由此推算
+        self.tc, self.body, self.sample_t = [22.0, 24.0], 36.8, 0
+        self.tec, self.fan, self.state, self.seq, self.run = [0, 0], 0, 0, 0, 0
+        self.alarm = self.latch = self.armed = 0
+        self.fault = dict.fromkeys(FAULTS, 0)
+        self.fault["screen"] = 1                       # 默认：屏幕在线
+        self.comm_ok_since, self.prev, self.last_disc = None, {}, None
+        self.log, self.log_total, self.log_sent = [], 0, 0
+        self._log("boot", "设备上电（模拟器复位）")
+        for key in ("estop", "ot", "body_lost", "m207_off", "sens_open", "scr", "mode"):
+            self._edge(key, False)                    # 记初值（上电时各故障均未发生、手动模式）
+        self._tec(0, 0)
+        self._tec(1, 0)
+        self._fan(0)
+        self._goto(0)                                 # 同上：输出与状态的初值
 
+    def ms(self):                                     # 开机以来的毫秒数
+        return int((time.time() - self.t0) * 1000)
 
-def demo_step():
-    with LOCK:
-        STATE["seq"] += 1
-        t = time.time()
-        if not (STATE["alarm"] & 4) and STATE["mode"]:
-            STATE["tc1"] += (STATE["tc1_set"] - STATE["tc1"]) * 0.08
-            STATE["tc2"] += (STATE["tc2_set"] - STATE["tc2"]) * 0.06
-            STATE["tc1"] += 0.03 * math.sin(t / 7)
-            STATE["tc2"] += 0.02 * math.sin(t / 11 + 1)
+    def pv(self, pid):                                # 参数当前值
+        return self.pid[pid]["def"]
+
+    def mode(self):                                   # 0 手动 / 1 自动
+        return int(self.pv(6))
+
+    def _log(self, ev, msg, lvl="info"):
+        self.log.append({"ts": self.ms(), "lvl": lvl, "ev": ev, "msg": msg})
+        self.log_total += 1                           # 累计条数；log_total - log_sent = 未广播条数
+        del self.log[:-50]
+
+    def _edge(self, key, active):
+        """状态沿 → 日志（文案见 LOG 表）；首次只记初值，不记日志。"""
+        if key not in self.prev:
+            self.prev[key] = active
+        elif self.prev[key] != active:
+            self.prev[key] = active
+            on, m_on, lvl, off, m_off = LOG[key]
+            self._log(on if active else off, m_on if active else m_off, lvl if active else "info")
+
+    def _tec(self, ch, on):                           # 输出原语（带沿日志）；锁存期"开"被压成 0
+        self.tec[ch] = int(bool(on) and not self.latch)
+        self._edge("tec%d" % ch, self.tec[ch])
+
+    def _fan(self, on):
+        self.fan = 1 if on else 0
+        self._edge("fan", self.fan)
+
+    def _goto(self, st):                              # 0 待机 / 1 制冷 / 2 制热 / 3 安全态
+        self.state = st
+        for key, n in (("cool", 1), ("heat", 2), ("safe", 3)):
+            self._edge(key, st == n)
+
+    def _safe(self):                                  # 安全态：TEC 全停 + 风扇全速
+        self._tec(0, 0)
+        self._tec(1, 0)
+        self._fan(1)
+        self._goto(3)
+
+    def _physics(self, now):                          # 100ms 一步
+        f, tc = self.fault, self.tc
+        if not f["body_lost"]:                        # 体温：36.8 附近的慢正弦（周期 100s）
+            self.body = 36.8 + 0.6 * math.sin(now / 16000.0)
+        if f["overtemp"]:                             # 演练钩子：把贴身水温顶到 49.5°C
+            tc[0] += (49.5 - tc[0]) * 0.2
+        if f["m207_off"] or now - self.sample_t < 500:
+            return
+        self.sample_t = now                           # 水温 500ms 采样一次（age = 距上次采样）
+        for i in (0, 1):
+            tgt = self.pv(i + 1) if self.tec[i] else 25.0
+            k = 0.05 if self.tec[i] else 0.01         # TEC 开：向设定值靠拢（τ≈10s）；关：向室温缓漂
+            if i == 0 and tc[i] > 48.0 and not f["overtemp"]:
+                k = 0.2                               # 超温演练：清障后快速回落
+            tc[i] += (tgt - tc[i]) * k + 0.01 * math.sin(now / 3000.0 + i * 2)
+
+    def _safety(self):                                # 镜像 control_poll 前半（过热/锁存/安全态）
+        f, now = self.fault, self.ms()
+        hot = self.tc[0] > 48.0                       # 过热硬切断：任意模式、任意布防态
+        if hot:
+            self.alarm |= A_OT
+            self.latch |= L_OT
+        self._edge("ot", hot)
+        for k in ("body_lost", "m207_off", "sens_open"):
+            self._edge(k, f[k])
+        self._edge("scr", not f["screen"])
+        self._edge("mode", self.mode() == 1)
+        ok = not (f["body_lost"] or f["m207_off"] or f["sens_open"] or hot)
+        if not self.latch or not ok:                  # 通信类故障：源持续健康 2s 自动清锁存
+            self.comm_ok_since = None
+        if self.latch & (L_BODY | L_M207):
+            if self.comm_ok_since is None:
+                self.comm_ok_since = now
+            elif now - self.comm_ok_since >= 2000:
+                self.latch &= ~(L_BODY | L_M207)
+                self.alarm &= ~COMM
+        if self.latch:                                # 锁存期：不再评估，停在安全态
+            self._safe()
+            return
+        lost = f["m207_off"] or f["sens_open"]
+        if self.armed and (f["body_lost"] or lost):   # 未布防：只记状态，不报警不进安全态
+            self.alarm |= A_BODY * f["body_lost"] | A_M207 * f["m207_off"] | A_OPEN * f["sens_open"]
+            self.latch |= L_BODY * f["body_lost"] | L_M207 * lost
+            self._safe()
+        elif self.state == 3 and not self.alarm:      # 源全恢复且无待确认报警 → 回待机
+            self._fan(0)
+            self._goto(0)
+
+    def _control(self):                               # 自动模式迁移表（镜像 control_poll 后半，含滞回）
+        if self.state == 3:
+            return                                    # 安全态的进出由 _safety 负责
+        hot, cold, hyst, b = self.pv(3), self.pv(4), self.pv(5), self.body
+        want = 1 if b > hot + hyst or self.state == 1 and b >= hot - hyst \
+            else 2 if b < cold - hyst or self.state == 2 and b <= cold + hyst else 0
+        if not self.mode():                           # 手动：状态机旁路，输出保持人工值
+            self._goto(0)
+        elif self.fault["body_lost"]:                 # 无有效体温样本不得继续自动冷热
+            if self.state:
+                self._tec(0, 0)
+                self._fan(0)
+                self._goto(0)
+        elif want != self.state:                      # 0 待机 / 1 制冷 / 2 制热；风扇随启停
+            self._tec(0, want > 0)
+            self._fan(1 if want else 0)
+            self._goto(want)
+
+    def _arming(self):
+        """布防三态机（post_arm_step）：0 未布防 / 1 已布防 / 2 布防但源丢失报警中。"""
+        f, m = self.fault, int(self.pv(8))
+        healthy = not (f["body_lost"] or f["m207_off"] or f["sens_open"])
+        if m == 2:
+            self.armed, self.run = 0, 0               # 强制不布防
+        elif self.armed == 0:
+            self.armed, self.run = int(m == 1 or healthy), 0   # 强制布防 / 自动布防（源健康即升入）
+        elif self.armed == 1:
+            self.armed, self.run = 2 - int(healthy), 0
         else:
-            STATE["tc1"] += (25 - STATE["tc1"]) * 0.01
-            STATE["tc2"] += (25 - STATE["tc2"]) * 0.01
-        STATE["body"] = 36.8 + 0.35 * math.sin(t / 23)
-        return {"t": "st", "valid": True, "ver": 1, "seq": STATE["seq"],
-                "tc1_act": round(STATE["tc1"], 2), "tc2_act": round(STATE["tc2"], 2),
-                "body": round(STATE["body"], 2), "body_sensor_ok": True,
-                "tec1": STATE["tec1"], "tec2": STATE["tec2"], "fan": STATE["fan"],
-                "mode": STATE["mode"], "alarm": STATE["alarm"], "online": 3,
-                "boot_s": int(t) % 100000}
+            self.run = self.run + 1 if healthy else 0
+            if not self.alarm & COMM and self.run >= 10:
+                self.armed = 1                        # 上线补入：报警已清 + 连续 10 拍健康
 
+    def settle(self):                                 # 不推进物理，只跑安全/控制/布防
+        self._safety()
+        self._control()
+        self._arming()
 
-def demo_set(pid, v):
-    with LOCK:
-        if pid == 1:
-            STATE["tc1_set"] = v
-        elif pid == 2:
-            STATE["tc2_set"] = v
-        elif pid == 6:
-            STATE["mode"] = int(v)
-        elif pid == 8:
-            STATE["commissioned"] = int(v)
-        else:
-            STATE["p_%d" % pid] = v   # H10 高级参数：mock 层存值即回显（R5 接真传输）
+    def status(self):                                 # 一条 st（seq 由 broadcast 填）
+        f, now, tc = self.fault, self.ms(), self.tc
+        return {"t": "st", "seq": self.seq, "ts": now, "ver": 1, "fw": FW,
+                "tc1": round(tc[0], 2), "tc2": round(tc[1], 2), "body": round(self.body, 2),
+                "age": 65535 if f["m207_off"] else min(65535, now - self.sample_t),
+                "tc1_set": self.pv(1), "tc2_set": self.pv(2),
+                "tec1": self.tec[0], "tec2": self.tec[1], "fan": self.fan, "mode": self.mode(),
+                "state": self.state, "alarm": self.alarm, "latch": self.latch, "armed": self.armed,
+                "m207": 1 - f["m207_off"], "body_ok": 1 - f["body_lost"], "sens_open": f["sens_open"],
+                "screen": f["screen"], "up_s": now // 1000, "reset": 1,
+                "heap": int(8500000 + 12000 * math.sin(now / 7000.0))}
 
-
-def demo_cmd(c):
-    with LOCK:
-        if c == 1:
-            STATE["tec1"] = 1
-        elif c == 2:
-            STATE["tec1"] = 0
+    def cmd(self, c):
+        """执行网页命令，返回 ack.rv（0 成功 / -1 未知 / -2 安全态或模块离线拒绝 / 10 = 已下发条数）。"""
+        rv = 0
+        if c in (1, 2, 3, 4, 5) and self.state == 3:
+            return -2                                 # 安全态拒绝 TEC/风扇类命令
+        if c in (1, 2, 3, 4):                         # TEC 开/关：c//3 选通道，奇数开、偶数关
+            self._tec(c // 3, c & 1)
         elif c == 5:
-            STATE["fan"] = 0 if STATE["fan"] else 1
-        elif c == 6:
-            STATE["mode"] = 1
-        elif c == 7:
-            STATE["mode"] = 0
-        elif c == 8:
-            STATE["alarm"] |= 4
-            STATE["mode"] = 0
-            STATE["tec1"] = STATE["tec2"] = 0
-            STATE["fan"] = 1
+            self._fan(1 - self.fan)                   # 风扇切换
+        elif c in (6, 7):                             # 切自动 / 切手动（与固件同走参数 6）
+            self.set_param(6, float(7 - c), "web", 0)
+        elif c == 8:                                  # 急停：TEC 全停 + 风扇全速 + 切手动 + 锁存
+            self._edge("estop", True)
+            self.alarm |= A_ESTOP
+            self.latch |= L_ESTOP
+            self.set_param(6, 0.0, "console", 0)
+            self._safe()
         elif c == 9:
-            STATE["alarm"] &= ~4
-        elif c == 10:
-            STATE["m207_save_requested"] = True   # WP-P3 保存按钮帧序断言锚
+            self.ack()
+        elif c == 10:                                 # 保存到模块：rv = 已下发条数
+            if self.fault["m207_off"]:
+                return -2                             # 模块离线未保存
+            rv = sum(p["id"] >= 0x100 and p["flags"] & 0x11 == 0x11 for p in self.params)   # 可写且需下发模块的条数
+            self._log("m207_save", "参数已保存到模块（%d 条）" % rv)
+        else:
+            return -1
+        self.settle()
+        return rv
 
+    def ack(self):
+        """人工确认（tcs_alarm_ack）：只清"源已恢复"的锁存；急停须其余源全部健康。"""
+        f = self.fault
+        ok = (L_OT if self.tc[0] <= 48.0 else 0) | (L_BODY if not f["body_lost"] else 0) \
+            | (L_M207 if not f["m207_off"] and not f["sens_open"] else 0)
+        drop = self.latch & ok & ~L_ESTOP
+        if not (self.latch & ~drop & ~L_ESTOP) and ok == L_OT | L_BODY | L_M207:
+            drop |= self.latch & L_ESTOP
+        self.latch &= ~drop
+        for lat, alm, healthy in ((L_OT, A_OT, self.tc[0] <= 48.0), (L_BODY, A_BODY, not f["body_lost"]),
+                                  (L_M207, A_M207, not f["m207_off"]), (L_M207, A_OPEN, not f["sens_open"]),
+                                  (L_ESTOP, A_ESTOP, True)):
+            if not self.latch & lat and healthy:      # ALM 显示位跟随锁存，不比锁存更早消失
+                self.alarm &= ~alm
+        if not self.latch & L_ESTOP:
+            self._edge("estop", False)
+        self.alarm &= ~A_EEP                          # 存储校验报警仅提示性
 
-def push_all(obj):
-    data = json.dumps(obj).encode()
-    dead = []
-    for c in list(CLIENTS):
-        try:
-            ws_send_frame(c, data)
-        except OSError:
-            dead.append(c)
-    for c in dead:
-        if c in CLIENTS:
-            CLIENTS.remove(c)
+    def set_param(self, pid, v, src, ref):
+        """镜像 param_set：钳制 → 步进取整 → 跨参约束；推 pv（回显 ref）与变化后的 reg。"""
+        p, ok, err, clamped, c = self.pid.get(pid), 0, 0, 0, 0.0
+        if p is None or not p["flags"] & 0x01:
+            err = -1                                  # 未知 id / 只读
+        elif v is None or not math.isfinite(v):
+            err = -2                                  # NaN / Inf
+        else:
+            c = min(p["max"], max(p["min"], v))
+            clamped = int(c != v)
+            c = round(p["min"] + round((c - p["min"]) / p["step"]) * p["step"], 6)
+            if p["type"] in (1, 2):
+                c = float(int(c))
+            err = -2 if pid == 3 and c <= self.pv(4) or pid == 4 and c >= self.pv(3) else 0
+            ok = 0 if err else 1                       # -2 = 过冷阈值必须小于过热阈值
+        if not ok:
+            c = p["def"] if p else 0.0
+        changed = ok and c != p["def"]
+        if changed:
+            p["def"] = c
+            self._log("param_set", "参数变更：%s → %g%s" % (p["name"], c, p["unit"]))
+        push({"t": "pv", "id": pid, "v": c, "src": src, "clamped": clamped, "ref": ref, "ok": ok, "err": err})
+        if changed:
+            push({"t": "reg", "list": self.params})
+        return ok
 
+# ====== WS 帧收发（服务端帧不掩码；客户端帧带掩码）======
+CLIENTS, SEND, FRAMES = [], threading.RLock(), collections.deque(maxlen=300)
 
-def ws_send_frame(s, data):
-    n = len(data)
-    hdr = bytes([0x81])
-    if n < 126:
-        hdr += bytes([n])
-    elif n < 65536:
-        hdr += bytes([126]) + struct.pack(">H", n)
-    else:
-        hdr += bytes([127]) + struct.pack(">Q", n)
-    s.sendall(hdr + data)
+def _frame(sock, data, op=1):
+    n = len(data)                                     # reg 帧约 6KB：两字节长度足够
+    hdr = bytes([0x80 | op, n]) if n < 126 else bytes([0x80 | op, 126]) + struct.pack(">H", n)
+    sock.sendall(hdr + data)
 
+def _exact(sock, n):
+    buf = b""
+    while len(buf) < n:
+        chunk = sock.recv(n - len(buf))
+        if not chunk:
+            return None                               # 对端已关闭
+        buf += chunk
+    return buf
 
-def ws_recv_msg(s):
-    hdr = s.recv(2)
-    if len(hdr) < 2:
-        return None
-    ln = hdr[1] & 0x7F
-    if ln == 126:
-        ln = struct.unpack(">H", s.recv(2))[0]
-    elif ln == 127:
-        ln = struct.unpack(">Q", s.recv(8))[0]
-    mask = s.recv(4)
-    data = b""
-    while len(data) < ln:
-        data += s.recv(ln - len(data))
-    return bytes(b ^ mask[i % 4] for i, b in enumerate(data))
+def ws_recv(sock):
+    """读一条完整消息，返回 bytes；对端关闭/出错返回 None。处理分片与 ping/pong/close。"""
+    frag = b""
+    while True:
+        hdr = _exact(sock, 2)
+        if hdr is None:
+            return None
+        fin, op, ln = hdr[0] & 0x80, hdr[0] & 0x0F, hdr[1] & 0x7F
+        ext = {126: 2, 127: 8}.get(ln)
+        if ext:
+            b = _exact(sock, ext)
+            if b is None:
+                return None
+            ln = struct.unpack(">H" if ext == 2 else ">Q", b)[0]
+        if ln > 65536:                                # 超长帧：直接断开（不做流式丢弃）
+            return None
+        mask = _exact(sock, 4) if hdr[1] & 0x80 else None
+        data = _exact(sock, ln) or b""
+        if mask:
+            data = bytes(c ^ mask[i & 3] for i, c in enumerate(data))
+        if op == 8:                                   # close：回 close 后结束
+            _frame(sock, data[:2], 8)
+            return None
+        if op == 9:                                   # ping → pong（pong 丢弃）
+            _frame(sock, data, 10)
+        elif op < 3:                                  # 文本/二进制首帧（op 1,2）或续帧（op 0）
+            frag = data if op else frag + data
+            if fin:
+                return frag
 
+def push(obj, only=None):
+    """推 JSON 帧：only = 只发给该连接；缺省群发，发送失败的连接即除名并关闭。"""
+    data = _json(obj)
+    with SEND:
+        for c in [only] if only else list(CLIENTS):
+            try:
+                _frame(c, data)
+            except OSError:
+                if c in CLIENTS:
+                    CLIENTS.remove(c)
+                c.close()
 
-def ws_serve(conn):
-    """握手已在 do_GET 完成；这里收发循环"""
-    CLIENTS.append(conn)
+def _json(obj):
+    return json.dumps(obj, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+
+def broadcast(force=False):
+    """日志增量即推；st 在离散字段相对上次推送有变化（或 force）时推；stall 注入时不推 st。"""
+    if SIM.log_total > SIM.log_sent:
+        push({"t": "log", "list": SIM.log[-(SIM.log_total - SIM.log_sent):]})
+        SIM.log_sent = SIM.log_total
+    st = SIM.status()
+    disc = [st[k] for k in KEYS]
+    if SIM.fault["stall"] or not (force or disc != SIM.last_disc):
+        return
+    SIM.last_disc, SIM.seq = disc, SIM.seq + 1
+    st["seq"] = SIM.seq
+    push(st)
+
+def _num(x):
+    """JSON 数值校验：非数字（含布尔/字符串）抛 ValueError，调用方回 bad_json（与固件 cJSON_IsNumber 一致）。"""
+    if isinstance(x, bool) or not isinstance(x, (int, float)):
+        raise ValueError("not a number: %r" % (x,))
+    return x
+
+def on_frame(text, sock):
+    """处理一条客户端→服务端文本帧（调用方持 SIM.lock）。残缺/类型错误的帧回 err。"""
+    FRAMES.append(text)
     try:
-        push_all({"t": "reg", "list": REG})
+        msg = json.loads(text)
+        if msg["t"] == "set":
+            SIM.set_param(int(_num(msg["id"])), float(_num(msg["v"])), "web", int(_num(msg.get("ref", 0))))
+            SIM.settle()
+        elif msg["t"] == "cmd":
+            c = int(_num(msg["c"]))
+            push({"t": "ack", "c": c, "rv": SIM.cmd(c), "ref": int(_num(msg.get("ref", 0)))}, sock)
+        elif msg["t"] == "ping":
+            push({"t": "pong", "ts": SIM.ms()}, sock)
+            return
+        else:
+            raise ValueError("unknown t")
+    except (ValueError, TypeError, KeyError, AttributeError) as e:   # JSON 语法错 / 非对象 / 字段缺失或类型不符
+        push({"t": "err", "code": "bad_json", "msg": str(e)[:80]}, sock)
+    broadcast()
+
+def drop_all():
+    """断开全部 WS 客户端（/__reset 等同设备重启）。先 shutdown 再 close：只 close 不会唤醒对方
+    线程里阻塞着的 recv，连接会半开着留到超时。各收发线程随后自行收尾。"""
+    with SEND:
+        socks, CLIENTS[:] = list(CLIENTS), []
+    for c in socks:
+        try:
+            c.shutdown(socket.SHUT_RDWR)
+        except OSError:
+            pass
+        c.close()
+
+def ws_serve(sock):
+    """握手完成后：入册 → 推 reg + 日志全量 → 收帧循环。返回时连接已关闭并除名。"""
+    try:
+        with SIM.lock:
+            with SEND:
+                CLIENTS.append(sock)
+            push({"t": "reg", "list": SIM.params}, sock)   # 连上即推注册表 + 日志全量
+            push({"t": "log", "list": SIM.log}, sock)
         while True:
-            raw = ws_recv_msg(conn)
+            try:
+                raw = ws_recv(sock)
+            except socket.timeout:
+                continue                             # 读超时只是空闲，不是断开
             if raw is None:
                 break
-            try:
-                msg = json.loads(raw.decode())
-            except json.JSONDecodeError:
-                continue
-            if msg.get("t") == "set":
-                demo_set(int(msg["id"]), float(msg["v"]))
-                push_all({"t": "pv", "id": int(msg["id"]), "v": float(msg["v"]),
-                          "src": "web_ack"})
-            elif msg.get("t") == "cmd":
-                demo_cmd(int(msg["c"]))
+            with SIM.lock:
+                on_frame(raw.decode("utf-8", "replace"), sock)
     except OSError:
         pass
     finally:
-        if conn in CLIENTS:
-            CLIENTS.remove(conn)
-
+        with SEND:
+            if sock in CLIENTS:
+                CLIENTS.remove(sock)
+        sock.close()
 
 class Handler(BaseHTTPRequestHandler):
-    MIME = {".html": "text/html", ".js": "application/javascript",
-            ".css": "text/css"}
+    protocol_version = "HTTP/1.1"
+    timeout = 30                                      # 空闲 keep-alive 连接的回收时间
 
-    def do_GET(self):
-        if "websocket" in (self.headers.get("Upgrade") or "").lower():
-            return self.handle_ws()
-        if self.path == "/__audit":          # K8：注入审计脚本的页面（同源保 WS）
-            body = open(os.path.join(ROOT, "index.html"), "rb").read().decode("utf-8")
-            inj = open(os.path.join(os.path.dirname(os.path.abspath(__file__)),
-                                    "web_audit_inject.html"), encoding="utf-8").read()
-            body = body.replace("</body>", "<script>\n" + inj + "\n</script>\n</body>")
-            body = body.encode("utf-8")      # Content-Length 必须按字节数（中文字符数<字节数）
-            self.send_response(200)
-            self.send_header("Content-Type", "text/html; charset=utf-8")
-            self.send_header("Content-Length", str(len(body)))
-            self.end_headers()
-            self.wfile.write(body)
-            return
-        name = "index.html" if self.path in ("/", "/index.html") else self.path.lstrip("/")
-        path = os.path.join(ROOT, name)
-        if not os.path.isfile(path):
-            self.send_error(404)
-            return
-        ext = os.path.splitext(name)[1]
-        body = open(path, "rb").read()
-        self.send_response(200)
-        self.send_header("Content-Type", self.MIME.get(ext, "application/octet-stream"))
+    def reply(self, code, body, ctype="application/json; charset=utf-8"):
+        self.send_response(code)
+        self.send_header("Content-Type", ctype)
         self.send_header("Content-Length", str(len(body)))
+        self.send_header("Cache-Control", "no-store")
         self.end_headers()
         self.wfile.write(body)
 
-    def handle_ws(self):
-        key = ""
-        for line in str(self.headers).splitlines():
-            if line.lower().startswith("sec-websocket-key:"):
-                key = line.split(":", 1)[1].strip()
-        accept = base64.b64encode(
-            hashlib.sha1((key + "258EAFA5-E914-47DA-95CA-C5AB0DC85B11").encode())
-            .digest()).decode()
+    def do_GET(self):
+        u = urlparse(self.path)
+        path, q = u.path, parse_qs(u.query)
+        name = "index.html" if path == "/" else path.lstrip("/")
+        if path == "/ws":
+            self.ws()
+        elif path.startswith("/__"):
+            self.ctrl(path, q)
+        elif path.startswith("/api/"):
+            with SIM.lock:
+                obj = {"t": "reg", "list": SIM.params} if path == "/api/registry" else \
+                    {"t": "log", "list": SIM.log} if path == "/api/log" else \
+                    {"t": "link", "rx_bytes": 769101, "rx_frames": 29665, "crc_err": 40, "len_err": 0,
+                     "gap_resets": 0, "dup": 1, "retry": 77, "txq_drop": 3, "uart_txdrop": 0, "echo_drop": 5,
+                     "pending_evict": 0, "proto_mismatch": 0,
+                     "ssid": "TCS-9A3C", "pass": "12345678", "url": "http://192.168.4.1"} if path == "/api/linkstats" else SIM.status()
+            return self.reply(200, _json(obj))
+        fn = os.path.join(WEB, name)                  # 每次读盘：改前端文件无需重启
+        if name in STATIC and os.path.isfile(fn):
+            self.reply(200, open(fn, "rb").read(), MIME[os.path.splitext(name)[1]])
+        else:
+            self.reply(204 if name == "favicon.ico" else 404, b"" if name == "favicon.ico" else b'{"err":"not found"}')
+
+    def ctrl(self, path, q):
+        """测试控制端点（仅回环）。"""
+        if self.client_address[0] != HOST:
+            return self.reply(403, b'{"err":"loopback only"}')
+        if path == "/__frames":
+            return self.reply(200, _json({"count": len(FRAMES), "frames": list(FRAMES)}))
+        with SIM.lock:
+            if path == "/__audit":                    # 内部状态快照
+                return self.reply(200, _json({"st": SIM.status(), "fault": SIM.fault, "tc": SIM.tc,
+                                              "body": round(SIM.body, 2), "clients": len(CLIENTS),
+                                              "log": SIM.log}))
+            if path not in ("/__fault", "/__reset"):
+                return self.reply(404, b'{"err":"unknown test endpoint"}')
+            if path == "/__reset":
+                SIM.reset()
+            else:                                     # 只改给出的标志，其余保持
+                for k, v in q.items():
+                    if k in SIM.fault:
+                        SIM.fault[k] = int(v[0] not in ("0", "false", ""))
+            SIM.settle()
+            if path == "/__reset":
+                drop_all()                              # 等同设备重启：页面重连后重新收到 reg 与日志全量
+            else:
+                broadcast(True)
+        self.reply(200, b'{"ok":1}')
+
+    def ws(self):
+        key = self.headers.get("Sec-WebSocket-Key")
+        if not key or "websocket" not in (self.headers.get("Upgrade") or "").lower():
+            return self.reply(400, b'{"err":"not a websocket handshake"}')
         self.send_response(101, "Switching Protocols")
         self.send_header("Upgrade", "websocket")
         self.send_header("Connection", "Upgrade")
-        self.send_header("Sec-WebSocket-Accept", accept)
+        self.send_header("Sec-WebSocket-Accept", base64.b64encode(hashlib.sha1((key + GUID).encode()).digest()).decode())
         self.end_headers()
         self.close_connection = True
-        ws_serve(self.connection)
+        sock = self.connection
+        sock.settimeout(2.0)                          # 半开连接：send 最多阻塞 2s
+        sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+        ws_serve(sock)
 
     def log_message(self, *a):
         pass
 
+class Server(ThreadingHTTPServer):
+    daemon_threads = True
+
+    def handle_error(self, request, client_address):
+        if not isinstance(sys.exc_info()[1], ConnectionError):   # 客户端提前断开（刷新/关页）不刷屏
+            ThreadingHTTPServer.handle_error(self, request, client_address)
+
+SIM = Sim()
+
+def ticker():
+    """100ms 节拍：物理推进 → 广播；st 500ms 周期推，其间离散字段有变立即推。"""
+    last = 0.0
+    while True:
+        time.sleep(0.1)
+        with SIM.lock:
+            SIM._physics(SIM.ms())
+            SIM.settle()
+            due = time.time() - last >= 0.5
+            last = time.time() if due else last
+            broadcast(due)
 
 if __name__ == "__main__":
-    def ticker():
-        while True:
-            time.sleep(0.5)
-            push_all(demo_step())
+    PORT = int(sys.argv[1]) if len(sys.argv) > 1 else PORT   # 可选端口参数（默认 8124）
     threading.Thread(target=ticker, daemon=True).start()
-    print(f"web_mock: http://127.0.0.1:{PORT}/  (Ctrl-C 停止)", flush=True)
-    ThreadingHTTPServer(("127.0.0.1", PORT), Handler).serve_forever()
+    try:
+        srv = Server((HOST, PORT), Handler)
+    except OSError as e:
+        raise SystemExit("web_mock: cannot bind %s:%d (%s). The port may be reserved by Windows - see "
+                         "'netsh interface ipv4 show excludedportrange protocol=tcp'. "
+                         "Retry with another port: python tools/web_mock.py <port>" % (HOST, PORT, e))
+    print("web_mock: http://%s:%d/  (Ctrl-C to stop)  test: /__fault /__reset /__frames /__audit" % (HOST, PORT), flush=True)
+    try:
+        srv.serve_forever()
+    except KeyboardInterrupt:
+        pass
+    finally:
+        srv.server_close()

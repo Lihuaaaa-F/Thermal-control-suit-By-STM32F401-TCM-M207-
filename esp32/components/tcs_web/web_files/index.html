@@ -7,76 +7,174 @@
 <link rel="stylesheet" href="/style.css">
 </head>
 <body>
-<div id="verbar" class="verbar hidden"></div>
-<div id="alarmbar" class="alarmbar hidden"></div>
 
-<header>
-  <div class="hgroup">
-    <span class="dot" id="dot"></span>
-    <span id="conn">连接中…</span>
+<!-- disconnect overlay: stops above the bottom bar, so 急停 stays reachable on every tab -->
+<div id="offline" class="mask hidden" data-testid="overlay">
+  <div>
+    <div id="offline-title">连接断开</div>
+    <div id="offline-sub">重连中，还有 <b id="offline-count" data-testid="reconnect-count">–</b> 秒</div>
+    <div id="offline-hint">断连期间设备仍按原设定独立控温</div>
+    <button class="btn" id="btn-retry" data-testid="btn-retry">立即重试</button>
   </div>
-  <div class="hgroup right">
-    <span id="uptime">--:--</span>
-    <button id="btn-ack" class="mini hidden">确认恢复</button>
-  </div>
+</div>
+
+<header class="top">
+  <span class="chip" id="conn" data-testid="conn-state" data-conn="wait">○ 连接中…</span>
+  <span class="chip warn hidden" id="stale" data-testid="stale-badge">▲ 数据过期</span>
+  <span class="muted" id="age" data-testid="data-age" style="margin-left:auto">—</span>
 </header>
 
-<main id="app" class="hidden">
-  <!-- ① hero：双水温大数值（数值字体阶梯移动端等效 40px）-->
-  <div class="heroes">
-    <div class="hcard"><div class="ttl">贴身水箱</div>
-      <span class="val" id="t1">--.-</span><span class="unit"> °C</span>
-      <canvas id="g1" width="140" height="140"></canvas></div>
-    <div class="hcard"><div class="ttl">环境水箱</div>
-      <span class="val" id="t2">--.-</span><span class="unit"> °C</span>
-      <canvas id="g2" width="140" height="140"></canvas></div>
-  </div>
+<main class="page" id="page">
 
-  <!-- ② 曲线+导出（体温）-->
-  <section class="card">
-    <h2>体温 <span class="unit" style="font-size:13px;color:var(--tx2)">当前 <b id="tb" style="color:var(--hero)">--.-</b> °C</span>
-      <canvas id="g3" width="140" height="140" style="width:44px;height:44px;vertical-align:middle;float:right;margin-top:-4px"></canvas></h2>
-    <canvas id="curve" height="180"></canvas>
-    <button id="btn-csv" class="csv">导出 CSV</button>
-    <div class="switches">
-      <button class="sw" id="sw-tec1">TEC1</button>
-      <button class="sw" id="sw-tec2">TEC2</button>
-      <button class="sw" id="sw-fan">风扇</button>
-      <button class="sw" id="sw-mode">自动</button>
+  <!-- 1 overview: value cards / actuator switches / alarms / chart -->
+  <section class="view" id="view-overview">
+    <div class="cards">
+      <div class="card vcard">
+        <div class="vhead"><span>贴身水箱</span><span>°C</span></div>
+        <div class="vbig" id="v-tc1" data-testid="val-tc1">—</div>
+        <div class="vsub" id="sub-tc1" data-testid="sub-tc1">设定 —</div>
+        <div class="vstate" id="state-tc1" data-testid="state-tc1">—</div>
+      </div>
+      <div class="card vcard">
+        <div class="vhead"><span>环境水箱</span><span>°C</span></div>
+        <div class="vbig" id="v-tc2" data-testid="val-tc2">—</div>
+        <div class="vsub" id="sub-tc2" data-testid="sub-tc2">设定 —</div>
+        <div class="vstate" id="state-tc2" data-testid="state-tc2">—</div>
+      </div>
+      <div class="card vcard">
+        <div class="vhead"><span>体温</span><span>°C</span></div>
+        <div class="vbig" id="v-body" data-testid="val-body">—</div>
+        <div class="vsub" id="sub-body" data-testid="sub-body">阈值 —</div>
+        <div class="vstate" id="state-body" data-testid="state-body">—</div>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>执行器</h2>
+      <div class="switches">
+        <button class="sw" id="sw-tec1" data-testid="sw-tec1" aria-pressed="false"><span>贴身 TEC</span><b>—</b></button>
+        <button class="sw" id="sw-tec2" data-testid="sw-tec2" aria-pressed="false"><span>环境 TEC</span><b>—</b></button>
+        <button class="sw" id="sw-fan" data-testid="sw-fan" aria-pressed="false"><span>风扇</span><b>—</b></button>
+        <button class="sw" id="sw-mode" data-testid="sw-mode" aria-pressed="false"><span>自动模式</span><b>—</b></button>
+      </div>
+    </div>
+
+    <div class="card allok hidden" id="no-alarm" data-testid="no-alarm">● 无报警，运行正常</div>
+    <div class="view" id="alarms" data-testid="alarms"></div>
+
+    <div class="card">
+      <div class="card-head">
+        <h2>温度曲线 <span class="muted">°C</span></h2>
+        <div class="seg">
+          <button data-testid="range-5" data-win="300000" aria-pressed="true">5 分钟</button>
+          <button data-testid="range-30" data-win="1800000" aria-pressed="false">30 分钟</button>
+        </div>
+      </div>
+      <div class="legend">
+        <button class="lg" data-testid="legend-tc1" data-series="tc1" aria-pressed="true">贴身水箱</button>
+        <button class="lg" data-testid="legend-tc2" data-series="tc2" aria-pressed="true">环境水箱</button>
+        <button class="lg" data-testid="legend-body" data-series="body" aria-pressed="true">体温</button>
+      </div>
+      <canvas id="chart" data-testid="chart" role="img" aria-label="温度曲线"></canvas>
+      <button class="btn wide" id="btn-csv" data-testid="btn-csv">导出 CSV</button>
     </div>
   </section>
 
-  <!-- ③ 参数区（registry 动态渲染，仅 PF_WEB）-->
-  <section class="card">
-    <h2>参数</h2>
-    <div id="params"></div>
+  <!-- 2 parameters: basic / advanced (collapsible groups) / read-only telemetry; the rows are built by app.js -->
+  <section class="view hidden" id="view-params">
+    <div class="card">
+      <h2>常用参数</h2>
+      <div id="params" data-testid="params"></div>
+    </div>
+    <div class="card">
+      <div class="card-head">
+        <h2>高级参数（温控模块）</h2>
+        <button class="btn outline" id="btn-save" data-testid="btn-save">保存到模块</button>
+      </div>
+      <p class="hint">改动即时生效，点「保存到模块」后才掉电保持。<span class="tag danger">保护类</span>参数修改前需确认。</p>
+      <div id="adv" data-testid="adv"></div>
+    </div>
+    <div class="card">
+      <h2>模块遥测（只读）</h2>
+      <div class="chips" id="tele" data-testid="tele"></div>
+    </div>
   </section>
 
-  <!-- ④ 高级区（M207 参数，registry 出现即自动生成；WP-P3 分组卡+保存语义）-->
-  <section class="card">
-    <details id="adv-details">
-      <summary>高级参数（M207）
-        <button id="btn-m207-save" class="mini" style="margin-left:8px">保存到模块</button></summary>
-      <div class="adv-hint">改动即时下发并读回确认；<b>保存到模块</b>后掉电保持——未保存的改动掉电后回模块上次保存值。保护/输出限制类参数修改需二次确认。</div>
-      <div id="adv-params"></div>
-    </details>
+  <!-- 3 device: the key/value rows come from one table in app.js -->
+  <section class="view hidden" id="view-device">
+    <div class="card">
+      <h2>如何连接</h2>
+      <dl class="kv">
+        <dt>热点名称</dt><dd id="dev-ssid">—</dd>
+        <dt>热点密码</dt><dd id="dev-pass">—</dd>
+        <dt>网页地址</dt><dd id="dev-url">—</dd>
+      </dl>
+      <p class="hint">别的手机要用这个控制台：先连上上面的 Wi-Fi，再用浏览器打开网页地址。设备不连互联网，手机若提示"无网络"请选择保持连接。</p>
+    </div>
+    <div class="card">
+      <h2>版本与运行</h2>
+      <dl class="kv" data-dev="0:7"></dl>
+      <h2>运行状态</h2>
+      <dl class="kv" data-dev="7:10"></dl>
+      <h2>连接状态</h2>
+      <dl class="kv" data-dev="10:14"></dl>
+      <h2>屏幕链路</h2>
+      <dl class="kv" data-dev="14:17"></dl>
+      <dl class="kv">
+        <dt>收到的帧</dt><dd id="link-rx">—</dd>
+        <dt>校验出错</dt><dd id="link-crc">—</dd>
+        <dt>回声丢弃</dt><dd id="link-echo">—</dd>
+        <dt>重传</dt><dd id="link-retry">—</dd>
+        <dt>发送丢弃</dt><dd id="link-drop">—</dd>
+      </dl>
+      <p class="hint">校验出错、回声丢弃持续增长，说明屏幕与主控之间的接线接触不良。</p>
+    </div>
   </section>
+
+  <!-- 4 log: event timeline, newest first -->
+  <section class="view hidden" id="view-log">
+    <div class="card">
+      <div class="card-head">
+        <h2>事件日志 <span class="muted" id="log-count" data-testid="log-count">0 条</span></h2>
+        <div class="btns">
+          <button class="btn" id="btn-log-pause" data-testid="btn-log-pause" aria-pressed="false">暂停</button>
+          <button class="btn" id="btn-log-clear" data-testid="btn-log-clear">清空视图</button>
+        </div>
+      </div>
+      <p class="hint hidden" id="log-paused" data-testid="log-paused"></p>
+      <ol class="log" id="log-list" data-testid="log-list"></ol>
+      <p class="hint hidden" id="log-empty" data-testid="log-empty">暂无事件</p>
+    </div>
+  </section>
+
 </main>
 
-<!-- ⑤ 急停：常驻底部拇指区（独占、永不变）-->
-<div class="estop-wrap">
-  <button id="btn-estop" class="estop">急停</button>
-</div>
+<!-- bottom bar: tabs + 急停. Top of the z-order: no overlay ever covers it. -->
+<nav class="bar" aria-label="主导航">
+  <div class="tabs">
+    <button class="tab" id="tab-overview" data-testid="tab-overview" aria-selected="true">总览</button>
+    <button class="tab" id="tab-params" data-testid="tab-params" aria-selected="false">参数</button>
+    <button class="tab" id="tab-device" data-testid="tab-device" aria-selected="false">设备</button>
+    <button class="tab" id="tab-log" data-testid="tab-log" aria-selected="false">日志</button>
+  </div>
+  <button class="estop" id="btn-estop" data-testid="btn-estop">急停</button>
+</nav>
 
-<div id="overlay" class="overlay hidden">
-  <div class="overlay-box">
-    <div id="ov-title">连接断开</div>
-    <div id="ov-sub">重连中 <span id="ov-count">--</span>s</div>
+<!-- confirmation sheet: non-blocking (data behind it keeps updating); stops above the bar too -->
+<div class="mask hidden" id="modal" data-testid="modal" role="dialog" aria-modal="true" aria-labelledby="modal-title">
+  <div class="sheet">
+    <div class="sheet-title" id="modal-title" data-testid="modal-title"></div>
+    <div class="sheet-body" id="modal-body" data-testid="modal-body"></div>
+    <div class="sheet-btns">
+      <button class="btn" id="modal-cancel" data-testid="modal-cancel">取消</button>
+      <button class="btn primary" id="modal-ok" data-testid="modal-ok">确定</button>
+    </div>
   </div>
 </div>
-<div id="toast" class="toast hidden"></div>
 
-<script src="/chart.umd.min.js"></script>
+<div class="toast hidden" id="toast" data-testid="toast" role="status" aria-live="polite"></div>
+
+<script src="/chart.js"></script>
 <script src="/app.js"></script>
 </body>
 </html>

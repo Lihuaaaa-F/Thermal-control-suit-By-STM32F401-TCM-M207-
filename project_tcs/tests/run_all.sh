@@ -7,6 +7,21 @@ cd "$(dirname "$0")/.." || exit 1
 FAIL=0
 
 IFLAGS="-IApp/tcs -IApp/proto -IApp/comm -ICore/Inc"
+
+# 选一个带 Pillow 的 Python（2026-11-24，X06-F-08 环境假红）：shell 里先 source 过 IDF 时，
+# python/python3 指向 IDF 自带解释器（没有 Pillow），二维码回读那一步会红。按候选顺序挑第一个能 import PIL 的。
+pick_pybin() {
+    local c
+    for c in ${TCS_PYBIN:-} python3 python "py -3" \
+             "/c/Users/$USERNAME/AppData/Local/Programs/Python/Python312/python.exe"; do
+        # shellcheck disable=SC2086  # "py -3" 需要按词拆开
+        if [ -n "$c" ] && $c -c "import PIL" >/dev/null 2>&1; then
+            $c -c "import sys; sys.stdout.write(sys.executable)"
+            return 0
+        fi
+    done
+    return 1
+}
 INC_CL="/IApp\\tcs /IApp\\proto /IApp\\comm"
 VARS64="C:\\Program Files\\Microsoft Visual Studio\\2022\\Community\\VC\\Auxiliary\\Build\\vcvars64.bat"
 
@@ -67,7 +82,9 @@ run touchsession tests/test_touch_session.c   App/tcs/touch_session.c Core/Src/f
 run qr          tests/test_qr.c               App/tcs/qr/qrcodegen.c
 
 # H13 二维码解码回读（PC 出图 → zxing-cpp 解码比对）
-PYBIN=$(command -v python3 || command -v python)
+PYBIN=$(pick_pybin) || PYBIN=""
+# S 线 D02：现场网页检查脚本自带的 WebSocket 客户端自测（本机回环，不需要设备）
+if [ -n "$PYBIN" ] && "$PYBIN" tools/site/test_ws_client.py; then :; else echo "[ws_client_selftest] FAIL"; FAIL=1; fi
 if [ -n "$PYBIN" ]; then
     # 2026-11-23：原来失败不打印（"静默红"）——shell 里先 source 过 IDF 环境时，
     # python 指向 IDF 自带解释器（无 Pillow）→ 本步 import 失败却看不到原因。
@@ -114,7 +131,7 @@ else
 fi
 
 # H3 字库缺字门禁（2026-11-15 UI 单栈：改为 LVGL 字库审计；旧 font_audit.py 已随栈删除）
-PYBIN=$(command -v python3 || command -v python)
+PYBIN=$(pick_pybin) || PYBIN=""
 if [ -n "$PYBIN" ]; then
     if "$PYBIN" tools/font_audit_lvgl.py; then :; else FAIL=1; fi
 else
@@ -141,8 +158,10 @@ fi
 
 # 官方库审计门禁（W5，v13.4 §6）：未入清单/未归类文件 → FAIL
 # 脚本内部自锚定仓库根（W5 改造）；新增源文件须同 commit 更新 docs/审计文件清单.txt
+# 2026-11-24（X06-F-08）：改用 --check-report——门禁只读，不再每次改写机器报告；
+# 报告与代码不一致（有源文件增删而没重跑审计）直接判红。
 if [ -n "$PYBIN" ]; then
-    if "$PYBIN" ../esp32/tools/official_lib_audit.py; then :; else FAIL=1; fi
+    if "$PYBIN" ../esp32/tools/official_lib_audit.py --check-report; then :; else FAIL=1; fi
 else
     echo "[audit] SKIP: python not found"; FAIL=1
 fi

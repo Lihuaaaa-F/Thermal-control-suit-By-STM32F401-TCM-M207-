@@ -1,0 +1,8 @@
+# 网页静态资源固定 LF（2026-11-24，S 线 D01）
+# 固件内嵌的是 web_files/*.gz，它们按 LF 内容压缩。Windows 上 core.autocrlf=true 会把新检出的
+# 源文件转成 CRLF，于是 web_gz 门禁在全新检出上必然假红（隔离工作区实测 4/4 陈旧）；
+# 反过来在 CRLF 文件上重压又会提交一份带 CRLF 的 .gz。这里把四个源文件钉成 LF。
+esp32/components/tcs_web/web_files/app.js            text eol=lf
+esp32/components/tcs_web/web_files/index.html        text eol=lf
+esp32/components/tcs_web/web_files/style.css         text eol=lf
+esp32/components/tcs_web/web_files/chart.umd.min.js  text eol=lf

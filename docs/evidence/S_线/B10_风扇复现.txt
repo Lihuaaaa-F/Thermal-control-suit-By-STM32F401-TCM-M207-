@@ -1,0 +1,75 @@
+# B10 ESP32 自复位复现（风扇 100%，2026-11-24 02:27–02:58）
+# 方法：经屏风扇卡（H743 CMD 5，控制端把风扇设到 100%，与 11-24 00:22 事故时的路径相同）；
+#       每分钟 status + linkstat；期间未烧录、未复位任何一块板。
+# 第一次尝试作废：用了控制台 fan 100，但该命令只在 DIAG 档存在，芯片回 Unrecognized command，风扇没开。
+# 结果：status 样本 35 个，全部 fan=100%；up 单调增长；rst 恒为 11；
+#       串口桥重枚举/读错误 0 次；链路 crc/retry/echo 计数在窗口内增量为 0；link down 0 次。
+# 结论：风扇 100% 连续约 30 分钟不会让 ESP32 自行复位（未复现）。00:22 那次复位的原因仍未定位。
+
+tc1=18.43 tc2=21.05 body=37.40(ok=1) fan=100% mode=0 m207=1 alarm=0x0000 armed=1 state=0 sim=1 latch=0x00 heap=8519084 up=5844s rst=11
+tc1=18.46 tc2=21.03 body=37.40(ok=1) fan=100% mode=0 m207=1 alarm=0x0000 armed=1 state=0 sim=1 latch=0x00 heap=8519084 up=5872s rst=11
+link rx_b=317098 rx_f=11922 crc=21 len=0 gap=11558 dup=0 retry=44 txqdrop=3 uartdrop=0 echo=1 evict=0 verg=0
+tc1=18.46 tc2=21.05 body=37.40(ok=1) fan=100% mode=0 m207=1 alarm=0x0000 armed=1 state=0 sim=1 latch=0x00 heap=8519084 up=5932s rst=11
+link rx_b=320123 rx_f=12043 crc=21 len=0 gap=11679 dup=0 retry=44 txqdrop=3 uartdrop=0 echo=1 evict=0 verg=0
+tc1=18.42 tc2=21.05 body=37.40(ok=1) fan=100% mode=0 m207=1 alarm=0x0000 armed=1 state=0 sim=1 latch=0x00 heap=8519084 up=5992s rst=11
+link rx_b=323123 rx_f=12163 crc=21 len=0 gap=11799 dup=0 retry=44 txqdrop=3 uartdrop=0 echo=1 evict=0 verg=0
+tc1=18.44 tc2=21.05 body=37.40(ok=1) fan=100% mode=0 m207=1 alarm=0x0000 armed=1 state=0 sim=1 latch=0x00 heap=8519084 up=6052s rst=11
+link rx_b=326123 rx_f=12283 crc=21 len=0 gap=11919 dup=0 retry=44 txqdrop=3 uartdrop=0 echo=1 evict=0 verg=0
+tc1=18.48 tc2=21.05 body=37.40(ok=1) fan=100% mode=0 m207=1 alarm=0x0000 armed=1 state=0 sim=1 latch=0x00 heap=8519084 up=6112s rst=11
+link rx_b=329123 rx_f=12403 crc=21 len=0 gap=12039 dup=0 retry=44 txqdrop=3 uartdrop=0 echo=1 evict=0 verg=0
+tc1=18.44 tc2=21.06 body=37.40(ok=1) fan=100% mode=0 m207=1 alarm=0x0000 armed=1 state=0 sim=1 latch=0x00 heap=8519084 up=6172s rst=11
+link rx_b=332123 rx_f=12523 crc=21 len=0 gap=12159 dup=0 retry=44 txqdrop=3 uartdrop=0 echo=1 evict=0 verg=0
+tc1=18.45 tc2=21.05 body=37.40(ok=1) fan=100% mode=0 m207=1 alarm=0x0000 armed=1 state=0 sim=1 latch=0x00 heap=8519084 up=6232s rst=11
+link rx_b=335148 rx_f=12644 crc=21 len=0 gap=12280 dup=0 retry=44 txqdrop=3 uartdrop=0 echo=1 evict=0 verg=0
+tc1=18.48 tc2=21.06 body=37.40(ok=1) fan=100% mode=0 m207=1 alarm=0x0000 armed=1 state=0 sim=1 latch=0x00 heap=8519084 up=6293s rst=11
+link rx_b=338148 rx_f=12764 crc=21 len=0 gap=12400 dup=0 retry=44 txqdrop=3 uartdrop=0 echo=1 evict=0 verg=0
+tc1=18.43 tc2=21.07 body=37.40(ok=1) fan=100% mode=0 m207=1 alarm=0x0000 armed=1 state=0 sim=1 latch=0x00 heap=8519084 up=6353s rst=11
+link rx_b=341148 rx_f=12884 crc=21 len=0 gap=12520 dup=0 retry=44 txqdrop=3 uartdrop=0 echo=1 evict=0 verg=0
+tc1=18.44 tc2=21.07 body=37.40(ok=1) fan=100% mode=0 m207=1 alarm=0x0000 armed=1 state=0 sim=1 latch=0x00 heap=8519084 up=6413s rst=11
+link rx_b=344148 rx_f=13004 crc=21 len=0 gap=12640 dup=0 retry=44 txqdrop=3 uartdrop=0 echo=1 evict=0 verg=0
+tc1=18.48 tc2=21.09 body=37.40(ok=1) fan=100% mode=0 m207=1 alarm=0x0000 armed=1 state=0 sim=1 latch=0x00 heap=8519084 up=6473s rst=11
+link rx_b=347148 rx_f=13124 crc=21 len=0 gap=12760 dup=0 retry=44 txqdrop=3 uartdrop=0 echo=1 evict=0 verg=0
+tc1=18.49 tc2=21.11 body=37.40(ok=1) fan=100% mode=0 m207=1 alarm=0x0000 armed=1 state=0 sim=1 latch=0x00 heap=8519084 up=6533s rst=11
+link rx_b=350148 rx_f=13244 crc=21 len=0 gap=12880 dup=0 retry=44 txqdrop=3 uartdrop=0 echo=1 evict=0 verg=0
+tc1=18.50 tc2=21.11 body=37.40(ok=1) fan=100% mode=0 m207=1 alarm=0x0000 armed=1 state=0 sim=1 latch=0x00 heap=8519084 up=6537s rst=11
+link rx_b=350273 rx_f=13249 crc=21 len=0 gap=12885 dup=0 retry=44 txqdrop=3 uartdrop=0 echo=1 evict=0 verg=0
+tc1=18.51 tc2=21.11 body=37.40(ok=1) fan=100% mode=0 m207=1 alarm=0x0000 armed=1 state=0 sim=1 latch=0x00 heap=8519084 up=6554s rst=11
+tc1=18.50 tc2=21.12 body=37.40(ok=1) fan=100% mode=0 m207=1 alarm=0x0000 armed=1 state=0 sim=1 latch=0x00 heap=8519084 up=6577s rst=11
+tc1=18.51 tc2=21.12 body=37.40(ok=1) fan=100% mode=0 m207=1 alarm=0x0000 armed=1 state=0 sim=1 latch=0x00 heap=8519084 up=6593s rst=11
+link rx_b=353173 rx_f=13365 crc=21 len=0 gap=13001 dup=0 retry=44 txqdrop=3 uartdrop=0 echo=1 evict=0 verg=0
+tc1=18.45 tc2=21.12 body=37.40(ok=1) fan=100% mode=0 m207=1 alarm=0x0000 armed=1 state=0 sim=1 latch=0x00 heap=8519084 up=6653s rst=11
+link rx_b=356173 rx_f=13485 crc=21 len=0 gap=13121 dup=0 retry=44 txqdrop=3 uartdrop=0 echo=1 evict=0 verg=0
+tc1=18.42 tc2=21.13 body=37.40(ok=1) fan=100% mode=0 m207=1 alarm=0x0000 armed=1 state=0 sim=1 latch=0x00 heap=8519084 up=6714s rst=11
+link rx_b=359223 rx_f=13607 crc=21 len=0 gap=13243 dup=0 retry=44 txqdrop=3 uartdrop=0 echo=1 evict=0 verg=0
+tc1=18.36 tc2=21.13 body=37.40(ok=1) fan=100% mode=0 m207=1 alarm=0x0000 armed=1 state=0 sim=1 latch=0x00 heap=8519084 up=6774s rst=11
+link rx_b=362223 rx_f=13727 crc=21 len=0 gap=13363 dup=0 retry=44 txqdrop=3 uartdrop=0 echo=1 evict=0 verg=0
+tc1=18.42 tc2=21.11 body=37.40(ok=1) fan=100% mode=0 m207=1 alarm=0x0000 armed=1 state=0 sim=1 latch=0x00 heap=8519084 up=6834s rst=11
+link rx_b=365248 rx_f=13848 crc=21 len=0 gap=13484 dup=0 retry=44 txqdrop=3 uartdrop=0 echo=1 evict=0 verg=0
+tc1=18.40 tc2=21.14 body=37.40(ok=1) fan=100% mode=0 m207=1 alarm=0x0000 armed=1 state=0 sim=1 latch=0x00 heap=8519084 up=6894s rst=11
+link rx_b=368248 rx_f=13968 crc=21 len=0 gap=13604 dup=0 retry=44 txqdrop=3 uartdrop=0 echo=1 evict=0 verg=0
+tc1=18.41 tc2=21.14 body=37.40(ok=1) fan=100% mode=0 m207=1 alarm=0x0000 armed=1 state=0 sim=1 latch=0x00 heap=8519084 up=6955s rst=11
+link rx_b=371248 rx_f=14088 crc=21 len=0 gap=13724 dup=0 retry=44 txqdrop=3 uartdrop=0 echo=1 evict=0 verg=0
+tc1=18.43 tc2=21.13 body=37.40(ok=1) fan=100% mode=0 m207=1 alarm=0x0000 armed=1 state=0 sim=1 latch=0x00 heap=8519084 up=7014s rst=11
+link rx_b=374248 rx_f=14208 crc=21 len=0 gap=13844 dup=0 retry=44 txqdrop=3 uartdrop=0 echo=1 evict=0 verg=0
+tc1=18.41 tc2=21.14 body=37.40(ok=1) fan=100% mode=0 m207=1 alarm=0x0000 armed=1 state=0 sim=1 latch=0x00 heap=8519084 up=7075s rst=11
+link rx_b=377248 rx_f=14328 crc=21 len=0 gap=13964 dup=0 retry=44 txqdrop=3 uartdrop=0 echo=1 evict=0 verg=0
+tc1=18.44 tc2=21.16 body=37.40(ok=1) fan=100% mode=0 m207=1 alarm=0x0000 armed=1 state=0 sim=1 latch=0x00 heap=8519084 up=7135s rst=11
+link rx_b=380248 rx_f=14448 crc=21 len=0 gap=14084 dup=0 retry=44 txqdrop=3 uartdrop=0 echo=1 evict=0 verg=0
+tc1=18.44 tc2=21.14 body=37.40(ok=1) fan=100% mode=0 m207=1 alarm=0x0000 armed=1 state=0 sim=1 latch=0x00 heap=8519084 up=7195s rst=11
+link rx_b=383273 rx_f=14569 crc=21 len=0 gap=14205 dup=0 retry=44 txqdrop=3 uartdrop=0 echo=1 evict=0 verg=0
+tc1=18.46 tc2=21.16 body=37.40(ok=1) fan=100% mode=0 m207=1 alarm=0x0000 armed=1 state=0 sim=1 latch=0x00 heap=8519084 up=7255s rst=11
+link rx_b=386273 rx_f=14689 crc=21 len=0 gap=14325 dup=0 retry=44 txqdrop=3 uartdrop=0 echo=1 evict=0 verg=0
+tc1=18.39 tc2=21.17 body=37.40(ok=1) fan=100% mode=0 m207=1 alarm=0x0000 armed=1 state=0 sim=1 latch=0x00 heap=8519084 up=7315s rst=11
+link rx_b=389273 rx_f=14809 crc=21 len=0 gap=14445 dup=0 retry=44 txqdrop=3 uartdrop=0 echo=1 evict=0 verg=0
+tc1=18.37 tc2=21.17 body=37.40(ok=1) fan=100% mode=0 m207=1 alarm=0x0000 armed=1 state=0 sim=1 latch=0x00 heap=8519084 up=7375s rst=11
+link rx_b=392273 rx_f=14929 crc=21 len=0 gap=14565 dup=0 retry=44 txqdrop=3 uartdrop=0 echo=1 evict=0 verg=0
+tc1=18.40 tc2=21.18 body=37.40(ok=1) fan=100% mode=0 m207=1 alarm=0x0000 armed=1 state=0 sim=1 latch=0x00 heap=8519084 up=7435s rst=11
+link rx_b=395298 rx_f=15050 crc=21 len=0 gap=14686 dup=0 retry=44 txqdrop=3 uartdrop=0 echo=1 evict=0 verg=0
+tc1=18.46 tc2=21.20 body=37.40(ok=1) fan=100% mode=0 m207=1 alarm=0x0000 armed=1 state=0 sim=1 latch=0x00 heap=8519084 up=7495s rst=11
+link rx_b=398298 rx_f=15170 crc=21 len=0 gap=14806 dup=0 retry=44 txqdrop=3 uartdrop=0 echo=1 evict=0 verg=0
+tc1=18.45 tc2=21.19 body=37.40(ok=1) fan=100% mode=0 m207=1 alarm=0x0000 armed=1 state=0 sim=1 latch=0x00 heap=8519084 up=7555s rst=11
+link rx_b=401298 rx_f=15290 crc=21 len=0 gap=14926 dup=0 retry=44 txqdrop=3 uartdrop=0 echo=1 evict=0 verg=0
+tc1=18.37 tc2=21.17 body=37.40(ok=1) fan=100% mode=0 m207=1 alarm=0x0000 armed=1 state=0 sim=1 latch=0x00 heap=8519084 up=7615s rst=11
+link rx_b=404298 rx_f=15410 crc=21 len=0 gap=15046 dup=0 retry=44 txqdrop=3 uartdrop=0 echo=1 evict=0 verg=0
+tc1=18.37 tc2=21.20 body=37.40(ok=1) fan=100% mode=0 m207=1 alarm=0x0000 armed=1 state=0 sim=1 latch=0x00 heap=8519084 up=7676s rst=11
+link rx_b=407298 rx_f=15530 crc=21 len=0 gap=15166 dup=0 retry=44 txqdrop=3 uartdrop=0 echo=1 evict=0 verg=0

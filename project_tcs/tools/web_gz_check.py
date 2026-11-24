@@ -33,7 +33,12 @@ def main() -> int:
             bad.append(f"{name}.gz: 缺失（改完源文件必须重压）")
             continue
         try:
-            if gzip.decompress(gz.read_bytes()) != src.read_bytes():
+            # 比对前把 CRLF 归一成 LF：.gz 里的内容按 LF 提交，而 Windows 上 autocrlf 会把检出的
+            # 源文件转成 CRLF（2026-11-24 全新检出实测 4/4 假红）。行尾差异对浏览器没有意义。
+            # 仓库根 .gitattributes 已把这四个文件钉成 LF，这里再兜一层。
+            def norm(b: bytes) -> bytes:
+                return b.replace(b"\r\n", b"\n")
+            if norm(gzip.decompress(gz.read_bytes())) != norm(src.read_bytes()):
                 bad.append(f"{name}.gz: 与源文件不一致（陈旧）")
         except OSError as e:
             bad.append(f"{name}.gz: 解压失败 {e}")

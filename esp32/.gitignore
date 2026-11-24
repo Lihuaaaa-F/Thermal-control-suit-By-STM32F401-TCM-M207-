@@ -6,3 +6,7 @@ managed_components/
 # 现场测试构建（PROD + CONFIG_TCS_SIM：TMP117 假值注入），不入库
 build-site/
 sdkconfig.site
+
+# Python 字节码（2026-11-24：此前有 5 个 .pyc 误入库，跑一次门禁就把工作区弄脏）
+__pycache__/
+*.pyc

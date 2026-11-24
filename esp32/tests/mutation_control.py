@@ -83,6 +83,20 @@ MUTATIONS = [
     ("M19 毫秒换算回到 32 位截断（P1-2）",
      [("return (uint32_t)((uint64_t)us / 1000u);",
        "return (uint32_t)((int32_t)us / 1000);")], ""),
+    # ---- 2026-11-24 网页复核后补：命令来源、锁存期间禁切自动 ----
+    ("M23 急停/超温锁存期间可以切自动（绕过'复位后单独启动'）",
+     [("    if (id == PARAM_ID_MODE && v != 0.0f\n"
+       "        && (s_safety_latch & (uint8_t)(SAFETY_BIT_ESTOP | SAFETY_BIT_OVERTEMP))) return -2;",
+       "    if (0) return -2;")], ""),
+    ("M24 通信类锁存也拦着不让切自动（过严）",
+     [("        && (s_safety_latch & (uint8_t)(SAFETY_BIT_ESTOP | SAFETY_BIT_OVERTEMP))) return -2;",
+       "        && s_safety_latch) return -2;")], ""),
+    ("M25 网页切模式一律记成'控制台'",
+     [("    case TCS_CMD_MODE_AUTO:     rv = param_set(PARAM_ID_MODE, 1.0f, src); return rv < 0 ? rv : 0;",
+       "    case TCS_CMD_MODE_AUTO:     rv = param_set(PARAM_ID_MODE, 1.0f, PARAM_SRC_CONSOLE); return rv < 0 ? rv : 0;")], ""),
+    ("M26 急停强制切手动一律记成'控制台'",
+     [("    case TCS_CMD_ESTOP:         tcs_emergency_stop_src(src); return 0;",
+       "    case TCS_CMD_ESTOP:         tcs_emergency_stop_src(PARAM_SRC_CONSOLE); return 0;")], ""),
     # ---- 以下三处各有两道防线，单删一处与另一处等价；D01 把两道一起删，必须被抓住 ----
     ("M20 置位时统一作废 TEC2 复原资格",
      [("    if (bit & (uint8_t)~SAFETY_BIT_BODY_LOST) s_restore_tec2_ok = 0;", "    ;")],
@@ -173,11 +187,14 @@ def main():
         old = subprocess.run(["git", "-C", ESP, "show",
                               BASELINE + ":esp32/components/tcs_core/control.c"],
                              capture_output=True, text=True, encoding="utf-8").stdout
-    # 基线里没有 control_ms_from_us（U 线复核后新增的纯函数）：补上它的正确实现只为让测试
-    # 链接得过——W2-21 测的是这个函数本身，不是基线里有的行为，所以它在旧实现上绿是正常的。
+    # 基线里没有 U 线之后新增的这几个函数：补上"什么都不改"的实现只为让测试链接得过。
+    # W2-21 测的是 control_ms_from_us 本身、W2-22/23 测的是新加的行为，它们在旧实现上绿是正常的。
     if "control_ms_from_us" not in old:
-        old += ("\n/* mutation_control.py: 基线没有这个函数，为链接补上 */\n"
-                "uint32_t control_ms_from_us(int64_t us) { return (uint32_t)((uint64_t)us / 1000u); }\n")
+        old += ("\n/* mutation_control.py: 基线没有这些函数，为链接补上 */\n"
+                "uint32_t control_ms_from_us(int64_t us) { return (uint32_t)((uint64_t)us / 1000u); }\n"
+                "int control_param_check(uint16_t id, float v) { (void)id; (void)v; return 0; }\n"
+                "int control_apply_cmd_src(uint8_t cmd, uint8_t src) { (void)src; return control_apply_cmd(cmd); }\n"
+                "void tcs_emergency_stop_src(uint8_t src) { (void)src; tcs_emergency_stop(); }\n")
     ok, out, rc = compile_run(old)
     if ok:
         fl = fails_of(out)

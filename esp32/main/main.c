@@ -132,11 +132,12 @@ static void esp_on_cmd(uint8_t cmd, uint8_t seq)
     if (cmd == TCS_CMD_M207_SAVE) {          /* 10：依赖 tcs_m207，不进 control */
         st = (m207_save_all() >= 0) ? TCS_ACK_OK : TCS_ACK_BUSY;
     } else {
-        /* 1..9 + 11 与网页 WS 走同一份语义（control_apply_cmd），避免两处 switch 漂移 */
-        int cr = control_apply_cmd(cmd);
+        /* 1..9 + 11 与网页 WS 走同一份语义（control_apply_cmd_src），避免两处 switch 漂移。
+         * 来源记"屏幕"：事件日志据此写"屏幕：…"，而不是一律记成网页。*/
+        int cr = control_apply_cmd_src(cmd, PARAM_SRC_TOUCH);
         if (cr == -2) {
             st = TCS_ACK_BUSY;
-            ESP_LOGW(TAG, "H743 CMD %u rejected by SAFE -> BUSY", (unsigned)cmd);
+            ESP_LOGW(TAG, "H743 CMD %u rejected (SAFE, or mode locked) -> BUSY", (unsigned)cmd);
         } else if (cr != 0) {
             st = TCS_ACK_BAD_ID;
             ESP_LOGW(TAG, "H743 CMD %u unknown -> BAD_ID", (unsigned)cmd);
@@ -187,7 +188,8 @@ void app_main(void)
                             .on_m207_set = m207_hook_set_temp,
                             .on_m207_map_set = m207_hook_map_set,
                             .on_mode_change = control_on_mode_change,
-                            .on_broadcast = esp_on_broadcast };
+                            .on_broadcast = esp_on_broadcast,
+                            .on_check = control_param_check };   /* 急停/超温锁存期间不得切自动 */
     param_registry_init(&hooks);
     {
         uint8_t img[EE_IMG_SIZE];

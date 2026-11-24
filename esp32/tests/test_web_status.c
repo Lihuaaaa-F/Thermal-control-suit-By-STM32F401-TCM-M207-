@@ -33,6 +33,15 @@ static cJSON *parse(const char *s)
     return o;
 }
 
+/* 分配失败注入（cJSON 钩子）：第 g_alloc_fail_at 次分配返回 NULL（1 起数；0 = 不注入）。
+ * 用来证明"任何一次分配失败都不会发出残缺的 JSON"。*/
+static int g_alloc_fail_at, g_alloc_n;
+static void *hook_malloc(size_t sz)
+{
+    if (g_alloc_fail_at && ++g_alloc_n == g_alloc_fail_at) return NULL;
+    return malloc(sz);
+}
+
 /* 检查一段字节串是合法且完整的 UTF-8（没有半个字符）。返回 0=合法。*/
 static int utf8_valid(const char *s)
 {
@@ -141,21 +150,31 @@ int main(void)
         b.ts_ms = 99999; b.heap = 1;
         CHECK(web_status_changed(&a, &b) == 0, "B ts/heap 变化不算");
         struct { const char *name; size_t off; } f[] = {
-            { "tc1_act", offsetof(web_status_t, tc1_act) }, { "tc2_act", offsetof(web_status_t, tc2_act) },
-            { "body", offsetof(web_status_t, body) },       { "age_ms", offsetof(web_status_t, age_ms) },
-            { "tc1_set", offsetof(web_status_t, tc1_set) }, { "tec1", offsetof(web_status_t, tec1) },
+            { "tc1_set", offsetof(web_status_t, tc1_set) },
+            { "tec1", offsetof(web_status_t, tec1) },
             { "tec2", offsetof(web_status_t, tec2) },       { "fan", offsetof(web_status_t, fan) },
             { "mode", offsetof(web_status_t, mode) },       { "state", offsetof(web_status_t, state) },
             { "alarm", offsetof(web_status_t, alarm) },     { "latch", offsetof(web_status_t, latch) },
             { "armed", offsetof(web_status_t, armed) },     { "m207", offsetof(web_status_t, m207) },
             { "body_ok", offsetof(web_status_t, body_ok) }, { "sens_open", offsetof(web_status_t, sens_open) },
-            { "screen", offsetof(web_status_t, screen) },   { "up_s", offsetof(web_status_t, up_s) },
+            { "screen", offsetof(web_status_t, screen) },
         };
         for (size_t i = 0; i < sizeof(f) / sizeof(f[0]); i++) {
             b = a;
             ((unsigned char *)&b)[f[i].off] ^= 1;
             CHECK(web_status_changed(&a, &b) == 1, f[i].name);   /* 失败时打印字段名 */
         }
+        /* 水温/体温：按发出去的两位小数比，变了 0.01 才算 */
+        b = a; b.tc1_act = a.tc1_act + 0.01f; CHECK(web_status_changed(&a, &b) == 1, "tc1_act 变了 0.01");
+        b = a; b.tc2_act = a.tc2_act - 0.01f; CHECK(web_status_changed(&a, &b) == 1, "tc2_act 变了 0.01");
+        b = a; b.body    = a.body    + 0.01f; CHECK(web_status_changed(&a, &b) == 1, "body 变了 0.01");
+        b = a; b.tc2_set = a.tc2_set + 0.1f;  CHECK(web_status_changed(&a, &b) == 1, "tc2_set");
+        /* 不算变化的：age 每 50ms 量化一跳、运行时长每秒走一格——算进去等于每拍都"变了"，
+         * 500ms 心跳永远走不到（独立复核 P2-2：真机上 st 实际约 10Hz）；以及水温 float 末位抖动 */
+        b = a; b.age_ms = (uint16_t)(a.age_ms ^ 1u); b.up_s = a.up_s ^ 1u;
+        CHECK(web_status_changed(&a, &b) == 0, "B age/运行时长起伏不算");
+        b = a; b.tc1_act = a.tc1_act + 0.0001f; b.tc2_act = a.tc2_act + 0.0001f; b.body = a.body + 0.0001f;
+        CHECK(web_status_changed(&a, &b) == 0, "B 水温 float 末位抖动不算（发出去都是两位小数）");
         CHECK(web_status_changed(NULL, &a) == 1 && web_status_changed(&a, NULL) == 1,
               "B 空指针按有变化处理");
     }
@@ -300,7 +319,7 @@ int main(void)
     /* ====== F. log 消息 JSON ====== */
     {
         set_ring();                                    /* 3 条：info / warn / alarm */
-        memset(buf, 'X', 64);
+        memset(buf, 'X', 512);                          /* 整段 JSON 都盖到：NUL 检查才不靠栈上残留 */
         size_t n = web_log_json(0, 3, buf, sizeof(buf));
         CHECK(n > 0 && n < sizeof(buf), "F log JSON 生成");
         CHECK(buf[n] == '\0', "F 结尾带 NUL");
@@ -396,12 +415,103 @@ int main(void)
         CHECK(n > 0 && web_link_json(cnt, "TCS-A8A1", "12345678", "http://192.168.4.1",
                                      buf, n) == 0, "G 只放得下内容、放不下 NUL → 0");
         /* 写出来的是结尾带 NUL 的 C 串（测试与日志都能直接当字符串用）*/
-        memset(buf, 'X', 64);
+        memset(buf, 'X', sizeof buf);
         n = web_link_json(cnt, "TCS-A8A1", "12345678", "http://192.168.4.1", buf, sizeof(buf));
         CHECK(n > 0 && buf[n] == '\0', "G 结尾带 NUL");
+        CHECK(n > 0 && buf[n + 1] == 'X', "G 没有多写一个字节");
+
         CHECK(web_link_json(cnt, "a", "b", "c", NULL, 100) == 0, "G 空缓冲返回 0");
         CHECK(web_link_json(NULL, "a", "b", "c", buf, sizeof(buf)) == 0, "G 计数空指针返回 0");
         CHECK(web_link_json(cnt, NULL, "b", "c", buf, sizeof(buf)) == 0, "G ssid 空指针返回 0");
+    }
+
+    /* ====== H. reg 消息：参数表的 float 必须按 6 位有效数字发出去 ======
+     * 参数表里是 float：step=0.1f 作为 double 打印是 0.10000000149011612，网页按它数小数位，
+     * 参数页就会变成 17 位小数（独立复核 P0：真机上 51 个参数里 19 个中招，含两个水箱设定）。*/
+    {
+        CHECK(web_num_short(0.1f) == 0.1, "H 0.1f 归一成 0.1");
+        CHECK(web_num_short(0.2f) == 0.2 && web_num_short(0.01f) == 0.01 && web_num_short(0.05f) == 0.05, "H 常见步进");
+        CHECK(web_num_short(25.0f) == 25.0 && web_num_short(123456.0f) == 123456.0 && web_num_short(1234567.0f) == 1234567.0,
+              "H 整数原样");
+        CHECK(web_num_short(37.4f) == 37.4 && web_num_short(-0.3f) == -0.3, "H 负数与一位小数");
+        CHECK(web_num_short(NAN) == 0.0 && web_num_short(INFINITY) == 0.0, "H 非有限数归 0（与 st 同口径）");
+
+        param_desc_t p1 = { .id = 0x0001, .key = "tc1_set", .name = "贴身水箱设定温度", .unit = "°C",
+                            .type = 0, .flags = 0x1F, .min = 5.0f, .max = 45.0f, .step = 0.1f, .value = 25.0f };
+        param_desc_t p2 = { .id = 0x0004, .key = "body_cold", .name = "体温过冷阈值", .unit = "°C",
+                            .type = 0, .flags = 0x1F, .min = 35.0f, .max = 39.0f, .step = 0.1f, .value = 36.5f };
+        param_desc_t p3 = { .id = 0x0103, .key = NULL, .name = NULL, .unit = NULL,
+                            .type = 0, .flags = 0x07, .min = 0.0f, .max = 200.0f, .step = 0.5f, .value = 0.5f };
+        const param_desc_t *ps[] = { &p1, &p2, NULL, &p3, &p1 };   /* 含一个空位 */
+        size_t n = web_registry_json(ps, 5, buf, sizeof(buf));
+        CHECK(n > 0 && buf[n] == '\0', "H reg JSON 生成且带 NUL");
+        CHECK(strstr(buf, "0.100000001") == NULL && strstr(buf, "e-") == NULL && strstr(buf, "e+") == NULL,
+              "H 不出现 float32 尾数");
+        CHECK(strstr(buf, "\"step\":0.1,") != NULL && strstr(buf, "\"step\":0.5,") != NULL, "H 步进是短小数");
+        cJSON *o = parse(buf);
+        if (o) {
+            cJSON *list = cJSON_GetObjectItem(o, "list");
+            CHECK(strcmp(cJSON_GetObjectItem(o, "t")->valuestring, "reg") == 0, "H t=reg");
+            CHECK(cJSON_IsArray(list) && cJSON_GetArraySize(list) == 4, "H 5 个位置里 1 个空位被跳过 → 4 条");
+            cJSON *it = cJSON_GetArrayItem(list, 0);
+            CHECK(it && num_is(it, "id", 1) && num_is(it, "min", 5) && num_is(it, "max", 45) &&
+                  num_is(it, "step", 0.1) && num_is(it, "def", 25), "H 第 1 条各字段");
+            CHECK(it && cJSON_GetArraySize(it) == 10, "H 每条 10 个字段");
+            CHECK(strcmp(cJSON_GetObjectItem(it, "key")->valuestring, "tc1_set") == 0, "H key");
+            CHECK(strcmp(cJSON_GetObjectItem(it, "name")->valuestring, "贴身水箱设定温度") == 0, "H name（UTF-8 原样）");
+            cJSON *it3 = cJSON_GetArrayItem(list, 2);
+            CHECK(it3 && num_is(it3, "step", 0.5) && strcmp(cJSON_GetObjectItem(it3, "key")->valuestring, "") == 0,
+                  "H 字符串字段为空的参数写成空串");
+            CHECK(cJSON_GetArrayItem(list, 3) && cJSON_GetArrayItem(list, 3) != it &&
+                  cJSON_GetArraySize(cJSON_GetArrayItem(list, 3)) == 10, "H 同一个描述符出现两次各出一条");
+        } else {
+            g_fail++; printf("FAIL: H reg JSON 解析失败\n");
+        }
+        cJSON_Delete(o);
+        CHECK(web_registry_json(ps, 5, buf, 16) == 0, "H 容量不够返回 0");
+        CHECK(web_registry_json(NULL, 0, buf, sizeof(buf)) == 0, "H 空指针返回 0");
+        n = web_registry_json(ps, 0, buf, sizeof(buf));
+        o = parse(buf);
+        CHECK(o && cJSON_IsArray(cJSON_GetObjectItem(o, "list")) &&
+              cJSON_GetArraySize(cJSON_GetObjectItem(o, "list")) == 0, "H 0 条参数 = 空列表");
+        cJSON_Delete(o);
+    }
+
+    /* ====== I. 分配失败时不能发出半包 ======
+     * 独立复核 P2-4：第 7 次分配失败时 web_log_json 返回 21 字节的空列表、第 8~16 次失败
+     * 返回缺字段的条目——调用方会把它们当成功发出去并推进游标，这些事件就永久丢了。*/
+    {
+        set_ring();
+        int partial = 0, succeeded = 0;
+        cJSON_Hooks hooks = { hook_malloc, free };
+        cJSON_InitHooks(&hooks);
+        for (int k = 1; k <= 60; k++) {              /* 让第 k 次分配失败（1 起数）*/
+            g_alloc_fail_at = k;
+            g_alloc_n = 0;
+            memset(buf, 0, 64);
+            size_t n = web_log_json(0, 3, buf, sizeof(buf));
+            g_alloc_fail_at = 0;                     /* 测试自己的 parse 不受注入影响 */
+            if (n == 0) continue;                    /* 整体失败：正是期望的行为 */
+            succeeded++;
+            cJSON *o = cJSON_Parse(buf);
+            cJSON *list = o ? cJSON_GetObjectItem(o, "list") : NULL;
+            cJSON *last = list ? cJSON_GetArrayItem(list, 2) : NULL;
+            int whole = list && cJSON_GetArraySize(list) == 3 &&      /* 三条都在 */
+                        last && cJSON_GetObjectItem(last, "msg") &&   /* 末条字段齐 */
+                        cJSON_GetObjectItem(last, "ev") && cJSON_GetObjectItem(last, "ts");
+            cJSON_Delete(o);
+            if (!whole) {
+                partial++;
+                printf("FAIL: I 第 %d 次分配失败时发出了残缺的包: %.160s\n", k, buf);
+            }
+        }
+        cJSON_InitHooks(NULL);                       /* 恢复默认分配器 */
+        CHECK(partial == 0, "I 任何一次分配失败都不产生残缺的包");
+        CHECK(succeeded > 0, "I 注入点之前的分配不影响结果（有成功的轮次）");
+        size_t n = web_log_json(0, 3, buf, sizeof(buf));
+        cJSON *o = parse(buf);
+        CHECK(o && cJSON_GetArraySize(cJSON_GetObjectItem(o, "list")) == 3, "I 恢复分配器后正常");
+        cJSON_Delete(o);
     }
 
     printf("test_web_status: PASS=%d FAIL=%d\n", g_pass, g_fail);

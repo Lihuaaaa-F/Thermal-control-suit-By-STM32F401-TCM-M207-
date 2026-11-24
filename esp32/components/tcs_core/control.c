@@ -324,7 +324,7 @@ void tcs_alarm_ack(void)
     ALM_UNLOCK();
 }
 
-void tcs_emergency_stop(void)
+void tcs_emergency_stop_src(uint8_t src)
 {
     s_estop_latch = 1;
     safety_trip(SAFETY_BIT_ESTOP);          /* P0-04：置锁存后，在途状态机的"开"被 out_tec_sw 压成 0 */
@@ -333,9 +333,24 @@ void tcs_emergency_stop(void)
     if (s_state != CTRL_SAFE) safe_remember_outputs();
     s_restore_tec2_ok = 0;                  /* 急停不复原 TEC（safety_trip 已作废，这里再写一次表明意图）*/
     s_exit_by_recover = 0;
-    /* mode=手动（经 param_set 同一数据源路径，自动广播 0x11）*/
-    (void)param_set(PARAM_ID_MODE, 0.0f, PARAM_SRC_CONSOLE);
+    /* mode=手动（经 param_set 同一数据源路径，自动广播 0x11）。来源照实记：事件日志要能
+     * 分清是网页、屏幕还是控制台按的急停（原先一律记成"控制台：控制模式 改为 0"）。*/
+    (void)param_set(PARAM_ID_MODE, 0.0f, src);
     safe_outputs();
+}
+
+void tcs_emergency_stop(void) { tcs_emergency_stop_src(PARAM_SRC_CONSOLE); }
+
+/* 参数写入前的安全校验（main 把它接进 param_hooks_t.on_check，所有写路径都会经过）：
+ * 急停或超温锁存期间不得切到自动模式。
+ * "急停复位后不得自动重启"：锁存期间先把模式切成自动，解除的那一拍状态机就会重新开 TEC，
+ * 等于绕过了"复位后要单独下启动指令"。所以"切自动"被挡在锁存之外——解除之后必须再明确切一次。
+ * 通信类故障（体温/模块）的锁存不在此列：那是会自己好的故障，自动模式恢复后按体温接管。*/
+int control_param_check(uint16_t id, float v)
+{
+    if (id == PARAM_ID_MODE && v != 0.0f
+        && (s_safety_latch & (uint8_t)(SAFETY_BIT_ESTOP | SAFETY_BIT_OVERTEMP))) return -2;
+    return 0;
 }
 
 /* ====== 手动直控 ====== */
@@ -351,7 +366,7 @@ void control_manual_fan(uint8_t on)
     out_fan(on);
 }
 
-int control_apply_cmd(uint8_t cmd)
+int control_apply_cmd_src(uint8_t cmd, uint8_t src)
 {
     /* 复核 D1：SAFE 下手动执行器命令会被 control_manual_* 静默吞掉，原来仍回 0
      * → 网页/屏幕都显示"成功"。这里显式拒绝（-2），由调用方映射成 BUSY。*/
@@ -361,15 +376,18 @@ int control_apply_cmd(uint8_t cmd)
             || cmd == TCS_CMD_FAN_TOGGLE)) {
         return -2;
     }
+    int rv;
     switch (cmd) {
     case TCS_CMD_TEC1_ON:       control_manual_tec(1, 1); return 0;
     case TCS_CMD_TEC1_OFF:      control_manual_tec(1, 0); return 0;
     case TCS_CMD_TEC2_ON:       control_manual_tec(2, 1); return 0;
     case TCS_CMD_TEC2_OFF:      control_manual_tec(2, 0); return 0;
     case TCS_CMD_FAN_TOGGLE:    control_manual_fan(g_tcs.fan_on ? 0 : 1); return 0;
-    case TCS_CMD_MODE_AUTO:     return (param_set(PARAM_ID_MODE, 1.0f, PARAM_SRC_WEB) < 0) ? -1 : 0;
-    case TCS_CMD_MODE_MANUAL:   return (param_set(PARAM_ID_MODE, 0.0f, PARAM_SRC_WEB) < 0) ? -1 : 0;
-    case TCS_CMD_ESTOP:         tcs_emergency_stop(); return 0;
+    /* 改模式：来源原样带进参数表（事件日志据此写"网页/屏幕/控制台"）；被安全校验拒绝
+     * （急停/超温锁存期间切自动）时 param_set 返回 -2，这里如实往上带 */
+    case TCS_CMD_MODE_AUTO:     rv = param_set(PARAM_ID_MODE, 1.0f, src); return rv < 0 ? rv : 0;
+    case TCS_CMD_MODE_MANUAL:   rv = param_set(PARAM_ID_MODE, 0.0f, src); return rv < 0 ? rv : 0;
+    case TCS_CMD_ESTOP:         tcs_emergency_stop_src(src); return 0;
     case TCS_CMD_ALARM_ACK:     tcs_alarm_ack(); return 0;
     case TCS_CMD_OVERTEMP_STOP:
         /* R2-N-01：屏观测到超温 → 请求停机。只锁 OVERTEMP + 停两条 TCSW，
@@ -384,6 +402,8 @@ int control_apply_cmd(uint8_t cmd)
     default:                    return -1;
     }
 }
+
+int control_apply_cmd(uint8_t cmd) { return control_apply_cmd_src(cmd, PARAM_SRC_CONSOLE); }
 
 void control_on_mode_change(uint8_t m)
 {

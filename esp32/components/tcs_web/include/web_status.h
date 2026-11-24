@@ -43,7 +43,9 @@ typedef struct {
  * 浮点四舍五入到 2 位小数（JSON 里不出现 18.469999 这类尾数）。返回 0=成功，-1=分配失败。*/
 int web_status_fill_json(const web_status_t *s, cJSON *root);
 
-/* 两份快照在"使用者关心的字段"上是否有差别（ts_ms / heap 的起伏不算变化）。*/
+/* 两份快照在"使用者关心的字段"上是否有差别（ts_ms / heap / age_ms 的起伏不算变化：
+ * age 每 50ms 量化一跳，算进去的话每拍都"变了"，500ms 心跳就永远走不到）。
+ * 水温/体温按发出去的两位小数比较——原始 float 的末位抖动不算变化。*/
 int web_status_changed(const web_status_t *a, const web_status_t *b);
 
 /* ====== 事件日志（环形，保留最新 WEB_LOG_N 条；按绝对序号访问）====== */
@@ -71,6 +73,8 @@ void web_log_addf(uint32_t ts_ms, char lvl, const char *ev, const char *fmt, ...
 
 /* 按绝对序号取一条的拷贝。序号早于环里最旧的一条 → 返回 -1（已被覆盖）。*/
 int web_log_get(uint32_t abs_idx, web_log_t *out);
+/* 最新一条的拷贝；一条都没有 → -1。*/
+int web_log_last(web_log_t *out);
 
 /* 对"上一份 → 当前"做差分，把发生的事件写进日志环；返回新增条数。
  * prev->ts_ms == 0 视为首次：只建基线，不产生事件。*/
@@ -92,6 +96,20 @@ extern const char *const web_link_keys[WEB_LINK_N];
  * 或分配失败返回 0。*/
 size_t web_link_json(const uint32_t cnt[WEB_LINK_N], const char *ssid, const char *pass,
                      const char *url, char *buf, size_t cap);
+
+/* ====== reg 消息（连接建立时推一次的参数表）====== */
+#include "param_registry.h"
+/* float 用"最短且能还原成同一个 float"的写法交给 cJSON。参数表里是 float，直接按 double
+ * 打印会带出 0.10000000149011612 这样的尾数——网页参数页的小数位因此变成 17 位
+ * （独立复核 P0）。非有限数归 0（与 st 同口径）。*/
+double web_num_short(float v);
+/* 把 n 条参数写成 reg 消息：{"t":"reg","list":[{id,type,flags,min,max,step,def,key,name,unit}…]}。
+ * ps 是参数描述符指针数组（空指针的位子跳过）；数值一律经 web_num_short。
+ * 返回 0=成功，-1=分配失败（root 里可能已有部分内容）。
+ * "def" 是**当前值**（字段名沿用 v1 契约）。*/
+int web_registry_fill_json(const param_desc_t *const *ps, int n, cJSON *root);
+/* 同上并序列化进 buf（结尾带 NUL 的 C 串）；返回串长，cap 不够或失败返回 0。*/
+size_t web_registry_json(const param_desc_t *const *ps, int n, char *buf, size_t cap);
 
 #ifdef __cplusplus
 }

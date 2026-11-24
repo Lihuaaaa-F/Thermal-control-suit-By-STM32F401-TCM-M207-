@@ -5,6 +5,7 @@
  * 192.168.4.1 的 TCP），网页在真机上到底能不能被手机取到，只能让固件**用自己的 HTTP 客户端
  * 回环访问自己**一遍，把每个端点的状态码和字节数打到串口上。
  * 只做 GET，不改任何状态；生产档（两个开关都关）整段不编译，命令也不注册。
+ * WebSocket 部分在 web_selftest_ws.c（固件自己当 WS 客户端连自己），由 ws_selftest() 一并调用。
  */
 #include "websocket.h"
 #include <stdio.h>
@@ -48,11 +49,13 @@ static int fetch(const char *base, const char *path, int *code_out)
 int ws_selftest(void)
 {
     /* 用热点网口自己的地址（默认 192.168.4.1），不写死 */
-    char base[40] = "http://192.168.4.1";
+    char ip_str[16] = "192.168.4.1";
+    char base[48] = "http://192.168.4.1";
     esp_netif_t *nf = esp_netif_get_handle_from_ifkey("WIFI_AP_DEF");
     esp_netif_ip_info_t ip;
     if (nf && esp_netif_get_ip_info(nf, &ip) == ESP_OK)
-        snprintf(base, sizeof base, "http://" IPSTR, IP2STR(&ip.ip));
+        snprintf(ip_str, sizeof ip_str, IPSTR, IP2STR(&ip.ip));
+    snprintf(base, sizeof base, "http://%s", ip_str);
 
     static const char *const paths[] = {
         "/", "/index.html", "/style.css", "/app.js", "/chart.js",
@@ -66,8 +69,14 @@ int ws_selftest(void)
         if (ok) pass++;
         printf("  %-14s HTTP %d  %d bytes  %s\r\n", paths[i], code, len, ok ? "OK" : "FAIL");
     }
-    printf("webtest: %d/%d PASS\r\n", pass, n);
-    return (pass == n) ? 0 : -1;
+    printf("webtest: %d/%d PASS (HTTP)\r\n", pass, n);
+    /* WebSocket 部分：固件自己当客户端连自己（web_selftest_ws.c）。
+     * 开发机连不上设备热点，/ws 在真机上的行为只能这样验。*/
+    int wp = 0, wt = 0;
+    int wrv = ws_selftest_ws(ip_str, 80, &wp, &wt);
+    printf("webtest: HTTP %d/%d, WS %d/%d -> %s\r\n", pass, n, wp, wt,
+           (pass == n && wrv == 0) ? "ALL PASS" : "HAS FAILURES");
+    return (pass == n && wrv == 0) ? 0 : -1;
 }
 
 #else /* 生产档 */

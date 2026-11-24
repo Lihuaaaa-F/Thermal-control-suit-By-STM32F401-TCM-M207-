@@ -65,6 +65,14 @@ static void enter_auto_healthy(void)
     reset_stubs();
 }
 
+/* W2-22：记录最近一次参数广播的 id 与来源（钩子须是文件作用域：MSVC 不支持嵌套函数）*/
+static uint16_t g_bc_id;
+static uint8_t  g_bc_src;
+static void bcast_rec(param_desc_t *p, uint8_t src) { g_bc_id = p->id; g_bc_src = src; }
+
+/* 旧签名的单测调用按"控制台"来源走（固件里台架自测也是这个口径）*/
+#define control_apply_cmd(c) control_apply_cmd_src((c), PARAM_SRC_CONSOLE)
+
 int main(void)
 {
     /* ====== 滞回边界（默认 37.5/36.5/0.2）====== */
@@ -683,6 +691,60 @@ int main(void)
               && control_ms_from_us(1000) == 1u, "W2-21 sub-millisecond truncation");
         CHECK(control_ms_from_us(4294967295000LL) == 4294967295u
               && control_ms_from_us(4294967296000LL) == 0u, "W2-21 wraps at 2^32 ms as a plain counter");
+    }
+
+    /* ====== 2026-11-24 网页复核后补：命令来源如实进参数表；急停/超温锁存期间不得切自动 ====== */
+
+    /* W2-22 谁下的命令就记谁：网页/屏幕/控制台各有各的来源，事件日志据此写"谁改的"。
+     * 原先改模式一律记成"网页"、急停强制切手动一律记成"控制台"。*/
+    {
+        control_init(&(control_ops_t){
+            .fan_set = stub_fan, .tec_sw = stub_tec, .tec_temp = stub_temp, .on_state = 0,
+        });
+        param_registry_init(&(param_hooks_t){ .on_broadcast = bcast_rec, .on_check = control_param_check });
+        set_armed(1);
+        g_tcs.body_sensor_ok = 1;
+        g_tcs.m207_online = 1;
+        g_tcs.m207_sensor_open = 0;
+        g_tcs.tc1_act = 25.0f;
+        s_now = 10000u;
+        g_bc_src = 0;
+        CHECK(control_apply_cmd_src(TCS_CMD_MODE_AUTO, PARAM_SRC_WEB) == 0 && g_tcs.mode == 1 &&
+              g_bc_id == PARAM_ID_MODE && g_bc_src == PARAM_SRC_WEB, "W2-22 web mode switch is tagged web");
+        CHECK(control_apply_cmd_src(TCS_CMD_MODE_MANUAL, PARAM_SRC_TOUCH) == 0 && g_tcs.mode == 0 &&
+              g_bc_src == PARAM_SRC_TOUCH, "W2-22 screen mode switch is tagged screen");
+        CHECK(control_apply_cmd(TCS_CMD_MODE_AUTO) == 0 && g_bc_src == PARAM_SRC_CONSOLE,
+              "W2-22 old entry point is tagged console");
+
+        /* W2-23 急停锁存期间不得切到自动——"急停复位后不得自动重启"。原先锁存期间就能把模式
+         * 预先切成自动，解除的那一拍状态机立刻重新开 TEC，等于绕过了"复位后要单独启动"。*/
+        control_apply_cmd_src(TCS_CMD_ESTOP, PARAM_SRC_TOUCH);
+        CHECK(g_bc_id == PARAM_ID_MODE && g_bc_src == PARAM_SRC_TOUCH,
+              "W2-22 estop's forced-manual carries the estop's own source (was console)");
+        CHECK(g_tcs.mode == 0 && control_state() == CTRL_SAFE, "W2-23 precondition: estop, manual, SAFE");
+        CHECK(param_set(PARAM_ID_MODE, 1.0f, PARAM_SRC_WEB) == -2 && g_tcs.mode == 0,
+              "W2-23 param_set(mode=1) refused while estop latched");
+        CHECK(control_apply_cmd_src(TCS_CMD_MODE_AUTO, PARAM_SRC_WEB) == -2 && g_tcs.mode == 0,
+              "W2-23 cmd 5 refused while estop latched");
+        tcs_alarm_ack();
+        tick100();
+        CHECK(control_state() == CTRL_IDLE, "W2-23 estop cleared");
+        CHECK(control_apply_cmd_src(TCS_CMD_MODE_AUTO, PARAM_SRC_WEB) == 0 && g_tcs.mode == 1,
+              "W2-23 auto is allowed once the estop is cleared");
+        (void)param_set(PARAM_ID_MODE, 0.0f, 4);
+        control_test_trip(SAFETY_BIT_OVERTEMP);
+        tcs_alarm_raise(ALM_OVERTEMP);
+        CHECK(param_set(PARAM_ID_MODE, 1.0f, PARAM_SRC_WEB) == -2,
+              "W2-23 auto refused while overtemp latched");
+        tcs_alarm_ack();
+        CHECK(control_safety_latched() == 0 && param_set(PARAM_ID_MODE, 1.0f, PARAM_SRC_WEB) == 0,
+              "W2-23 auto allowed once overtemp is cleared");
+        /* 通信类故障的锁存不在此列：那是会自己好的故障，自动模式恢复后按体温接管 */
+        g_tcs.body_sensor_ok = 0; tick100();
+        CHECK(control_state() == CTRL_SAFE, "W2-23 precondition: comm-type SAFE");
+        (void)param_set(PARAM_ID_MODE, 0.0f, 4);
+        CHECK(param_set(PARAM_ID_MODE, 1.0f, PARAM_SRC_WEB) == 0,
+              "W2-23 auto is NOT blocked by a comm-type latch");
     }
 
     printf("test_control: PASS=%d FAIL=%d\n", g_pass, g_fail);

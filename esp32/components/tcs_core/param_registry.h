@@ -98,6 +98,10 @@ typedef struct {
     void (*on_mode_change)(uint8_t m);
     int  (*eeprom_commit)(const uint8_t *img);   /* 传整 256B 镜像（含 CRC），物理写 */
     uint8_t src_touch, src_console, src_web;     /* src 标记（回显来源用）*/
+    /* 写前校验（U 线复核后新增，放在末尾：旧的位置初始化不受影响）：
+     * 返回 0 放行，非 0 拒绝（param_set 回 -2，与跨参数约束同一个返回码）。
+     * main 接的是 control_param_check：急停/超温锁存期间不得切到自动模式。*/
+    int  (*on_check)(uint16_t id, float v);
 } param_hooks_t;
 
 /* src 约定值（回显"来源"字段）*/

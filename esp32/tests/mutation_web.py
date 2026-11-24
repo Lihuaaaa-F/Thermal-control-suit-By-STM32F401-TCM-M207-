@@ -43,8 +43,8 @@ MUTATIONS = [
      "a->mode != b->mode || a->state != b->state ||",
      "a->state != b->state ||"),
     ("M06 时间戳起伏也算变化",
-     "return (a->tc1_act != b->tc1_act ||",
-     "return (a->ts_ms != b->ts_ms ||\n            a->tc1_act != b->tc1_act ||"),
+     "            r2(a->body) != r2(b->body) ||\n",
+     "            r2(a->body) != r2(b->body) || a->ts_ms != b->ts_ms ||\n"),
     ("M07 空指针按无变化处理",
      "if (!a || !b) return 1;",
      "if (!a || !b) return 0;"),
@@ -104,6 +104,29 @@ MUTATIONS = [
      "        if (k != WEB_LINK_N) break;\n",
      "        for (k = 0; k + 1u < WEB_LINK_N; k++)\n"
      "            if (!cJSON_AddNumberToObject(root, web_link_keys[k], (double)cnt[k])) break;\n"),
+    # ---- 2026-11-24 固件 WS 复核后补 ----
+    ("M25 变化检测又把采样龄算进去（st 回到约 10Hz）",
+     "    return (r2(a->tc1_act) != r2(b->tc1_act) || r2(a->tc2_act) != r2(b->tc2_act) ||\n"
+     "            r2(a->body) != r2(b->body) ||\n",
+     "    return (r2(a->tc1_act) != r2(b->tc1_act) || r2(a->tc2_act) != r2(b->tc2_act) ||\n"
+     "            r2(a->body) != r2(b->body) || a->age_ms != b->age_ms ||\n"),
+    ("M26 变化检测按原始 float 比（末位抖动也算变化）",
+     "    return (r2(a->tc1_act) != r2(b->tc1_act) || r2(a->tc2_act) != r2(b->tc2_act) ||\n"
+     "            r2(a->body) != r2(b->body) ||\n",
+     "    return (a->tc1_act != b->tc1_act || a->tc2_act != b->tc2_act ||\n"
+     "            a->body != b->body ||\n"),
+    ("M27 注册表的 step 不做数值归一（带出 float32 尾数）",
+     'cJSON_AddNumberToObject(it, "step",  web_num_short(p->step)) != NULL &&',
+     'cJSON_AddNumberToObject(it, "step",  p->step) != NULL &&'),
+    ("M28 数值归一固定用 6 位有效数字（1234567 写成 1.23457e+06）",
+     '        snprintf(b, sizeof b, "%.*g", p, (double)v);',
+     '        snprintf(b, sizeof b, "%.6g", (double)v); if (p >= 1) p = 9;'),
+    ("M29 日志条目少一个字段也当成功（分配失败时的半条）",
+     '                !cJSON_AddStringToObject(it, "msg", e.msg) ||\n',
+     ''),
+    ("M30 日志条数不齐也当成功（分配失败时的半包）",
+     "        if (cJSON_GetArraySize(arr) != (int)(to - from)) break;   /* 上面任何一处 break 都走到这 */",
+     "        ;"),
 ]
 
 

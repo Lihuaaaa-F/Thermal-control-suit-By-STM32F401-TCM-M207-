@@ -49,13 +49,13 @@ static esp_err_t h_asset(httpd_req_t *req)
     return httpd_resp_send(req, (const char *)a->start, a->end - a->start);
 }
 
-/* 大 JSON（reg 约 10KB、log 约 9KB）在堆上序列化：httpd 任务栈只有 8KB */
+/* 大 JSON（reg 现约 7KB、log 最坏约 9KB）在堆上序列化：httpd 任务栈只有 8KB */
 typedef struct {
     size_t (*build)(char *, size_t);
     size_t   cap;
 } big_json_t;
 
-static const big_json_t k_reg_json = { ws_registry_json, 16384u };
+static const big_json_t k_reg_json = { ws_registry_json, WS_REG_BUF };
 static const big_json_t k_log_json = { ws_log_json, WEB_LOG_JSON_CAP };
 
 static esp_err_t h_api_big(httpd_req_t *req)
@@ -110,12 +110,20 @@ static esp_err_t h_api_ota(httpd_req_t *req)
 }
 #endif /* CONFIG_TCS_DIAG: /api/ota */
 
-/* /ws：握手 + 收发都进 websocket.c */
+/* /ws 上收到的帧（握手之后 httpd 把这条连接上的每个帧都交给它）→ websocket.c */
 static esp_err_t h_ws(httpd_req_t *req)
 {
-    if (req->method == HTTP_GET) return ws_on_open(req);
     return ws_on_recv(req);
 }
+
+/* httpd 握手成功后**不会**调用 URI 的 handler（esp_http_server 源码：
+ * "If the request is websocket handshake, then do not call the uri->handler"），
+ * 只在打开了这个 Kconfig 选项时调用 ws_post_handshake_cb。客户端的登记与首推都在那个回调里；
+ * 少了它，页面能连上（101）却永远收不到注册表、状态和任何回执——2026-11-24 真机回环自检发现，
+ * 之前只验过 HTTP 端点、浏览器测的又是模拟器，所以一直没暴露。*/
+#if !CONFIG_HTTPD_WS_POST_HANDSHAKE_CB_SUPPORT
+#error "CONFIG_HTTPD_WS_POST_HANDSHAKE_CB_SUPPORT=y is required (see sdkconfig.defaults): without it no WebSocket client is ever registered"
+#endif
 
 static const httpd_uri_t s_uris[] = {
     { .uri = "/",             .method = HTTP_GET, .handler = h_asset, .user_ctx = (void *)&k_index },
@@ -133,7 +141,11 @@ static const httpd_uri_t s_uris[] = {
     { .uri = "/api/ota",      .method = HTTP_POST, .handler = h_api_ota },
 #endif
     { .uri = "/ws",           .method = HTTP_GET, .handler = h_ws,
-      .is_websocket = true, .handle_ws_control_frames = true },
+      /* control frames 交给 httpd 自己应答：PING 回 PONG、CLOSE 回 CLOSE 并关连接。
+       * 以前设成 true，处理函数会把 CLOSE 的状态码当 JSON 解析、回一帧 err，客户端表里
+       * 还留着这个 fd（独立复核 P1-1）。*/
+      .is_websocket = true, .handle_ws_control_frames = false,
+      .ws_post_handshake_cb = ws_on_open },
 };
 
 static httpd_handle_t s_httpd;
@@ -143,7 +155,11 @@ void web_start(void)
     httpd_config_t cfg = HTTPD_DEFAULT_CONFIG();
     cfg.max_uri_handlers = sizeof(s_uris) / sizeof(s_uris[0]) + 2;
     cfg.stack_size = 8192;
+    /* 连接数吃紧时挤掉最久没活动的连接。WS 会话每收到一帧推送都会刷新自己的计数
+     * （websocket.c），所以先被挤的是半死的普通 HTTP 连接，不是正在看页面的手机。*/
     cfg.lru_purge_enable = true;
+    /* 一条半死连接的阻塞发送最多卡 httpd 任务这么久（默认 5s：期间所有推送和 HTTP 请求都停）*/
+    cfg.send_wait_timeout = 2;
     ESP_ERROR_CHECK(httpd_start(&s_httpd, &cfg));
     for (size_t i = 0; i < sizeof(s_uris) / sizeof(s_uris[0]); i++)
         ESP_ERROR_CHECK(httpd_register_uri_handler(s_httpd, &s_uris[i]));

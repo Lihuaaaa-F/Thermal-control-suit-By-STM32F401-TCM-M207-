@@ -30,6 +30,9 @@ CONFIG_BT_ENABLED=n
 
 # --- HTTP Server WebSocket（/ws 推送）---
 CONFIG_HTTPD_WS_SUPPORT=y
+# 握手完成后要回调到本模块：不打开的话 httpd 握手成功后**不调用** URI 处理函数，
+# 客户端永远登记不进表、收不到任何推送与回执（2026-11-24 真机回环自检发现）。
+CONFIG_HTTPD_WS_POST_HANDSHAKE_CB_SUPPORT=y
 
 # --- FreeRTOS 运行时可观测（console ps/task 列表必需）---
 # R1 复核 R-13：此前靠开发者本机未入库的 sdkconfig，第三方从零构建会 undefined vTaskList。

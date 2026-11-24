@@ -264,10 +264,34 @@ static volatile uint32_t s_echo_plen;      /* 本端刚发那帧的载荷长度�
 static volatile uint32_t s_echo_until_ms;  /* 该帧在线路上发完的时刻 + 余量 */
 static uint32_t s_echo_drop;
 
+/* 链路诊断（只在 CONFIG_TCS_SIM / CONFIG_TCS_DIAG 构建里；PROD 没有下面任何符号）：
+ *   link_mute_ms(N)   —— N 毫秒内既不发也不收（收到的字节直接丢弃）。不拔线就能诱导
+ *                        "屏链路断开再恢复"，用来验证两端的恢复逻辑；物理层仍要人工拔线。
+ *   link_loopback(1)  —— 芯片内部把 TX 接到 RX：本端发什么就收什么，是确定性的回声源，
+ *                        用来在真机上验证上面的回声防护（echo 计数应增长，不得出现参数写入）。*/
+#if CONFIG_TCS_SIM || CONFIG_TCS_DIAG
+static volatile uint32_t s_mute_until_ms;
+static volatile uint8_t  s_loopback;
+static uint32_t s_mute_rxdrop;
+
+static uint32_t diag_now_ms(void) { return (uint32_t)(esp_timer_get_time() / 1000LL); }
+uint8_t  link_muted(void)            { return (int32_t)(s_mute_until_ms - diag_now_ms()) > 0; }
+void     link_mute_ms(uint32_t ms)   { s_mute_until_ms = diag_now_ms() + ms; }
+uint32_t link_mute_rxdrop(void)      { return s_mute_rxdrop; }
+esp_err_t link_loopback(uint8_t on)
+{
+    s_loopback = on ? 1u : 0u;
+    return uart_set_loop_back(LINK_UART, on ? true : false);
+}
+#endif
+
 static void link_uart_send(const uint8_t *d, size_t n)
 {
     /* R1 P1-07：非阻塞写——TX 环满时丢弃该帧（comm 层 ARQ 会重传），
      * 不让 uart_write_bytes 阻塞把 link 任务拖死触发 TWDT。*/
+#if CONFIG_TCS_SIM || CONFIG_TCS_DIAG
+    if (link_muted()) return;             /* 诊断静默期：不上线。no-ARQ 帧丢弃，ARQ 帧由 comm 层超时重传 */
+#endif
     size_t free_sz = 0;
     if (uart_get_tx_buffer_free_size(LINK_UART, &free_sz) == ESP_OK && free_sz >= n) {
         uart_write_bytes(LINK_UART, d, n);
@@ -625,6 +649,9 @@ static void link_task(void *arg)
         if (xQueueReceive(s_uart_queue, &evt, pdMS_TO_TICKS(50))) {
             if (evt.type == UART_DATA) {
                 int n = uart_read_bytes(LINK_UART, buf, sizeof(buf), 0);
+#if CONFIG_TCS_SIM || CONFIG_TCS_DIAG
+                if (link_muted()) { if (n > 0) s_mute_rxdrop += (uint32_t)n; n = 0; }
+                #endif
                 if (n > 0) s_rx_bytes += (uint32_t)n;
                 for (int i = 0; i < n; i++) {
                     const uint8_t *pl; size_t plen; int dup;

@@ -284,6 +284,32 @@ static int cmd_linkrepin(int argc, char **argv)
     return 0;
 }
 
+#if CONFIG_TCS_SIM || CONFIG_TCS_DIAG
+static int cmd_linkmute(int argc, char **argv)
+{
+    if (argc < 2) {
+        printf("linkmute <0-600 秒>（现在：%s，已丢弃接收 %lu 字节）\n",
+               link_muted() ? "静默中" : "正常", (unsigned long)link_mute_rxdrop());
+        return 1;
+    }
+    int sec = atoi(argv[1]);
+    if (sec < 0 || sec > 600) { printf("linkmute 0-600\n"); return 1; }
+    link_mute_ms((uint32_t)sec * 1000u);
+    printf("link muted %d s\n", sec);
+    return 0;
+}
+static int cmd_linkloop(int argc, char **argv)
+{
+    if (argc < 2 || (strcmp(argv[1], "0") != 0 && strcmp(argv[1], "1") != 0)) {
+        printf("linkloop <0|1>（1=芯片内部 TX 接 RX，本端发什么收什么；用来验证回声防护）\n");
+        return 1;
+    }
+    esp_err_t r = link_loopback((uint8_t)atoi(argv[1]));
+    printf("linkloop %s -> %s\n", argv[1], esp_err_to_name(r));
+    return r == ESP_OK ? 0 : 1;
+}
+#endif
+
 static int cmd_ltx(int argc, char **argv)
 {
     (void)argc; (void)argv;
@@ -366,6 +392,12 @@ int tcs_console_start(void)
       .func=cmd_gedge, .argtable=NULL },
     { .command="ltx", .help="屏链自检：UART1 连发 100B 0x55", .hint=NULL,
           .func=cmd_ltx, .argtable=NULL },
+#if CONFIG_TCS_SIM || CONFIG_TCS_DIAG
+    { .command="linkmute", .help="linkmute <秒>：链路静默（不收不发），用来诱导断链再恢复", .hint="<0-600>",
+          .func=cmd_linkmute, .argtable=NULL },
+    { .command="linkloop", .help="linkloop <0|1>：芯片内部 TX→RX 回环（回声源，验证回声防护）", .hint="<0|1>",
+          .func=cmd_linkloop, .argtable=NULL },
+#endif
         { .command="reset", .help="软复位", .hint=NULL,
           .func=cmd_reset, .argtable=NULL },
     };

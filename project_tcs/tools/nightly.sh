@@ -8,7 +8,7 @@
 #
 # 用法：先 source ESP-IDF 环境，再 bash tools/nightly.sh          （ESP32 那两步需要 idf.py）
 #       现场档需要 esp32/sdkconfig.site（不入库）；没有就跳过现场档并如实写出。
-#       耗时：约 25–35 分钟（全部从零）。
+#       耗时：约 5 分钟（2026-11-24 本机实测：H743 五次从零 + ESP32 两档从零 + 主机单测）。
 #
 # 2026-11-24 重写（S 线 D04）。旧版的三项不再保留，原因如下：
 #   - 旧 UI 的"三页基准帧 diff"：基准帧是 2026-11-15 已删除的旧 tcs_ui 栈的截图，永远对不上；
@@ -28,11 +28,13 @@ echo "=== nightly @ $(date '+%F %T') ===" | tee -a "$LOG"
 echo "--- ① 构建矩阵 ---" | tee -a "$LOG"
 ARGS="--twice"
 command -v idf.py >/dev/null 2>&1 && ARGS="$ARGS --esp32" || echo "（没有 idf.py：跳过 ESP32，只做 H743）" | tee -a "$LOG"
-[ -f ../esp32/sdkconfig.site ] && command -v idf.py >/dev/null 2>&1 && ARGS="$ARGS --site"
+if command -v idf.py >/dev/null 2>&1; then
+    if [ -f ../esp32/sdkconfig.site ]; then ARGS="$ARGS --site"; else echo "（没有 esp32/sdkconfig.site：跳过 ESP32 现场档）" | tee -a "$LOG"; fi
+fi
 bash tools/build_matrix.sh $ARGS > build/nightly_matrix.txt 2>&1
 RC=$?
 cat build/nightly_matrix.txt >> "$LOG"
-grep -aE "^\[[A-Za-z0-9]+\] exit=|可复现构建|ESP32：|build_matrix: (PASS|FAIL)" build/nightly_matrix.txt | tee -a "$LOG"
+grep -aE "^\[[A-Za-z0-9_-]+\] (exit=|告警数|没有告警基线)|可复现构建|ESP32：|build_matrix: (PASS|FAIL)" build/nightly_matrix.txt | tee -a "$LOG"
 [ "$RC" -ne 0 ] && FAIL=1
 
 echo "--- ② PC 单测 ---" | tee -a "$LOG"

@@ -23,8 +23,8 @@
 | PC 单测 | `bash tests/run_all.sh`（含 font_audit 字库门禁，必须全绿才能提交） |
 | 字库重生成 | 改 UI/注册表文案后：`python tools/gen_font_ui.py && python tools/font_audit_lvgl.py`（`run_all.sh` 已含字库门禁）|
 | 活性体检 | `bash tools/wp_check.sh`（reset→loop_passes 增长判定） |
-| 构建矩阵 | `bash tools/build_matrix.sh [--esp32] [--site] [--twice]`（H743 PROD/BENCH/SIM/SIMWG 从零构建 + 告警基线核对；`--twice` 比对可复现 md5；约 10 分钟起）|
-| 夜间回归 | `bash tools/nightly.sh`（先 source IDF：构建矩阵含 ESP32 两档与可复现比对 + PC 单测；约 25–35 分钟）|
+| 构建矩阵 | `bash tools/build_matrix.sh [--esp32] [--site] [--twice]`（H743 PROD/BENCH/SIM/SIMWG 从零构建 + 告警基线核对；`--twice` 比对可复现 md5；约 3 分钟）|
+| 夜间回归 | `bash tools/nightly.sh`（先 source IDF：构建矩阵含 ESP32 两档与可复现比对 + PC 单测；约 5 分钟）|
 | 答辩彩排 | `python tools/rehearsal.py <遍数>`（附录 A 20 项自动评分，板上 sim 固件）|
 | 台架一键 | `bash tools/bench.sh [--device]`（PROD 增量构建→单测；`--device` 才烧录→回读校验→活性→体检）|
 | 烧录脚本 | `bash tools/flash_lvgl.sh [ELF] [--check-only]`（probe-rs 下载→多点回读校验→复位→核对版本串与主循环计数）|

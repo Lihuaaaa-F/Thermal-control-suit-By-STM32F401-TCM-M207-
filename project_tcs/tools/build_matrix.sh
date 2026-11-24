@@ -119,10 +119,13 @@ if [ "$DO_ESP32" = 1 ] || [ "$DO_SITE" = 1 ]; then
         (
             cd ../esp32 || exit 1
             if [ "$DO_ESP32" = 1 ]; then
-                rm -rf build-matrix sdkconfig
-                echo "=== [esp32-default] 从零构建"
-                idf.py -B build-matrix set-target esp32s3 > build-matrix.settarget.log 2>&1 && \
-                    idf.py -B build-matrix build > build-matrix.build.log 2>&1
+                # 用独立的 sdkconfig.matrix（内容 = sdkconfig.defaults）。不动工作树自己的 sdkconfig：
+                # 2026-11-24 首次带 --esp32 运行时这里是 `rm -rf build-matrix sdkconfig`，会把别人
+                # menuconfig 改过的配置悄悄清掉（当时只在本脚本作者自己的工作树里跑过，没有伤到别人）。
+                rm -rf build-matrix sdkconfig.matrix sdkconfig.matrix.old
+                echo "=== [esp32-default] 从零构建（配置 = sdkconfig.defaults，落在 sdkconfig.matrix）"
+                idf.py -B build-matrix -D SDKCONFIG=sdkconfig.matrix set-target esp32s3 > build-matrix.settarget.log 2>&1 && \
+                    idf.py -B build-matrix -D SDKCONFIG=sdkconfig.matrix build > build-matrix.build.log 2>&1
                 rc=$?
                 echo "[esp32-default] exit=$rc error=$(grep -acE ' error:|FAILED:' build-matrix.build.log) warning=$(grep -acE 'warning:' build-matrix.build.log)"
                 [ "$rc" -ne 0 ] && exit 1

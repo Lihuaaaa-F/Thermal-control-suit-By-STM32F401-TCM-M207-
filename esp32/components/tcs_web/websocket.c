@@ -33,6 +33,8 @@
 #include "control.h"
 #include "post.h"
 #include "m207_service.h"
+#include "softap.h"          /* 热点名/密码（设备页"如何连接"）*/
+#include "esp_netif.h"
 
 static const char *TAG = "tcs_ws";
 
@@ -44,7 +46,7 @@ static const char *TAG = "tcs_ws";
 static httpd_handle_t s_hd;
 static int s_fds[WS_MAX_CLIENTS];
 static portMUX_TYPE s_mux = portMUX_INITIALIZER_UNLOCKED;
-static char s_fw[24];                  /* 本端固件版本（init 时取一次）*/
+static char s_fw[32];                  /* 本端固件版本（init 时取一次）；与 esp_app_desc_t.version[32] 同宽 */
 static volatile uint32_t s_seq;        /* st 推送序号 */
 
 /* ====== 客户端表 ====== */
@@ -272,15 +274,23 @@ size_t ws_linkstats_json(char *buf, size_t cap)
 {
     link_stats_t st;
     link_stats_get(&st);
+    /* 顺带带上热点凭据与网址：网页"设备"页给别的手机看（它们不在 st 里：不常变，不必每 500ms 推）*/
+    char ssid[33] = {0}, pass[65] = {0}, url[40] = "http://192.168.4.1";
+    (void)softap_credentials(ssid, sizeof ssid, pass, sizeof pass);
+    esp_netif_t *nf = esp_netif_get_handle_from_ifkey("WIFI_AP_DEF");
+    esp_netif_ip_info_t ip;
+    if (nf && esp_netif_get_ip_info(nf, &ip) == ESP_OK)
+        snprintf(url, sizeof url, "http://" IPSTR, IP2STR(&ip.ip));
     int n = snprintf(buf, cap,
         "{\"t\":\"link\",\"rx_bytes\":%lu,\"rx_frames\":%lu,\"crc_err\":%lu,\"len_err\":%lu,"
         "\"gap_resets\":%lu,\"dup\":%lu,\"retry\":%lu,\"txq_drop\":%lu,\"uart_txdrop\":%lu,"
-        "\"echo_drop\":%lu,\"pending_evict\":%lu,\"proto_mismatch\":%lu}",
+        "\"echo_drop\":%lu,\"pending_evict\":%lu,\"proto_mismatch\":%lu,"
+        "\"ssid\":\"%s\",\"pass\":\"%s\",\"url\":\"%s\"}",
         (unsigned long)st.rx_bytes, (unsigned long)st.rx_frames, (unsigned long)st.crc_err,
         (unsigned long)st.len_err, (unsigned long)st.gap_resets, (unsigned long)st.dup,
         (unsigned long)st.retry, (unsigned long)st.txq_drop, (unsigned long)st.uart_txdrop,
         (unsigned long)st.echo_drop, (unsigned long)st.pending_evict,
-        (unsigned long)st.proto_mismatch);
+        (unsigned long)st.proto_mismatch, ssid, pass, url);
     return (n > 0 && (size_t)n < cap) ? (size_t)n : 0;
 }
 

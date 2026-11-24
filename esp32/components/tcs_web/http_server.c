@@ -13,6 +13,7 @@
 #include "esp_http_server.h"
 #include "esp_log.h"
 #include "websocket.h"
+#include "web_status.h"     /* WEB_LOG_JSON_CAP（日志全量的缓冲上限）*/
 
 static const char *TAG = "tcs_web";
 

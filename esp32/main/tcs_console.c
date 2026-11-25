@@ -159,6 +159,10 @@ static int cmd_linkmute(int argc, char **argv)
     link_mute_ms((uint32_t)sec * 1000u);
     tcs_snap_mute((uint32_t)sec);
     printf("linkmute %d s (0 = resume)\n", sec);
+    /* m1（模式页，用户 2026-11-26 裁决）：静默期间屏发来的帧不进链路层——满 3 秒主控按
+     * "屏链路断开 = 急停"进安全态（link_loss_guard），恢复后要在屏上确认解除。事先说一声。*/
+    if (sec >= 3)
+        printf("  note: mute >= 3 s triggers the link-loss ESTOP (user ruling 2026-11-26); acknowledge on the display after resume\n");
     return 0;
 }
 #endif
@@ -423,7 +427,7 @@ int tcs_console_start(void)
 #if CONFIG_TCS_DIAG || CONFIG_TCS_SIM
         { .command="webtest", .help="网页端点自检：回环 GET 9 个端点 + WebSocket 回环自检；webtest dump 另把 /api/ 各接口的响应体与收到的帧原文转储到控制台（台架/现场档）", .hint="[dump]",
           .func=cmd_webtest, .argtable=NULL },
-        { .command="linkmute", .help="linkmute <秒>：链路静默（不收不发，快照也停发），用来诱导断链再恢复；0=恢复", .hint="<0-3600>",
+        { .command="linkmute", .help="linkmute <秒>：链路静默（不收不发，快照也停发），用来诱导断链再恢复；0=恢复；静默>=3s 触发断链急停", .hint="<0-3600>",
           .func=cmd_linkmute, .argtable=NULL },
 #endif
 #if CONFIG_TCS_DIAG

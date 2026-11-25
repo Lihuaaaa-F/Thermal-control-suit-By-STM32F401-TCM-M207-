@@ -183,6 +183,7 @@ static void m207_task(void *arg)
 /* ====== 公共 API（生命周期；写路径与状态读侧在 m207_core.c）====== */
 int m207_service_start(void)
 {
+    esp_err_t err;
     if (s_started) return 0;
     uart_config_t cfg = {
         .baud_rate = M207_BAUD,
@@ -192,11 +193,30 @@ int m207_service_start(void)
         .flow_ctrl = UART_HW_FLOWCTRL_DISABLE,
         .source_clk = UART_SCLK_DEFAULT,
     };
-    ESP_ERROR_CHECK(uart_driver_install(M207_UART, M207_RXBUF, M207_TXBUF,
-                                        M207_EVTQ_LEN, &s_evt_q, 0));
-    ESP_ERROR_CHECK(uart_param_config(M207_UART, &cfg));
-    ESP_ERROR_CHECK(uart_set_pin(M207_UART, M207_TXD_GPIO, M207_RXD_GPIO,
-                                 UART_PIN_NO_CHANGE, UART_PIN_NO_CHANGE));
+    /* M12-F-16：装驱动 / 配参数 / 设引脚三步都判返回值。原来是 ESP_ERROR_CHECK——失败即 abort，
+     * 一个外设故障被放大成整机复位（加热控制同时重启）。现在失败 = 记日志 + 清理现场 + 返回 -1：
+     * 内核保持未启动，所有写返回 -2（计 wdrop），链路恒离线，control 在上电宽限后进 SAFE。
+     * 这里不能自己置 ALM_M207：main 里 control_init 在本函数之后才跑，会把报警位清掉；
+     * 报警由 control 按"模块离线"统一置位（main.c 判本函数返回值的补丁见结果文档）。 */
+    err = uart_driver_install(M207_UART, M207_RXBUF, M207_TXBUF,
+                              M207_EVTQ_LEN, &s_evt_q, 0);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "service start FAILED: uart_driver_install %s — M207 unavailable; "
+                      "writes rejected, control enters SAFE after boot grace",
+                 esp_err_to_name(err));
+        return -1;
+    }
+    err = uart_param_config(M207_UART, &cfg);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "service start FAILED: uart_param_config %s", esp_err_to_name(err));
+        goto fail;
+    }
+    err = uart_set_pin(M207_UART, M207_TXD_GPIO, M207_RXD_GPIO,
+                       UART_PIN_NO_CHANGE, UART_PIN_NO_CHANGE);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "service start FAILED: uart_set_pin %s", esp_err_to_name(err));
+        goto fail;
+    }
     /* 首写病理吸收（hex 取证 2026-10-26：装驱动后首个 TX 前导坏字节+丢帧尾 \r，
      * 后续写全部字节完好）。空行先导帧消耗之；空行对真机模块无副作用（正典 §1 空行非法即忽略）。*/
     uart_write_bytes(M207_UART, "\r", 1);
@@ -207,15 +227,24 @@ int m207_service_start(void)
         .tx = m207_tx_now,
         .now_us = m207_now_us,
     });
-    s_started = 1;
 
     if (xTaskCreatePinnedToCore(m207_task, "m207_svc", M207_TASK_STACK, NULL,
-                                M207_TASK_PRIO, NULL, M207_TASK_CORE) != pdPASS)
-        return -1;
+                                M207_TASK_PRIO, NULL, M207_TASK_CORE) != pdPASS) {
+        ESP_LOGE(TAG, "service start FAILED: cannot create m207_svc task — M207 unavailable; "
+                      "writes rejected, control enters SAFE after boot grace");
+        goto fail;
+    }
+    /* 只有服务任务真的起来了才算"已启动"：原来在起任务之前就置 1，起任务失败后再调本函数
+     * 会返回 0，像是启动成功了，其实没有任务在跑。 */
+    s_started = 1;
     ESP_LOGI(TAG, "service started uart%d %d baud tx=%d rx=%d core=%d",
              (int)M207_UART, M207_BAUD, M207_TXD_GPIO, M207_RXD_GPIO,
              M207_TASK_CORE);
     return 0;
+
+fail:
+    uart_driver_delete(M207_UART);      /* 不把 UART2 占死：重试或别的使用者还能装驱动 */
+    return -1;
 }
 
 /* ===================================================================== */

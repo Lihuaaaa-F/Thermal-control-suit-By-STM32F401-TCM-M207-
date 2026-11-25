@@ -22,6 +22,44 @@ def read(rel):
         return f.read().replace("\r\n", "\n")
 
 
+
+def strip_comments(src):
+    """剥掉 C 风格注释（跳过字符串字面量里的内容）。"""
+    out = []
+    i = 0
+    in_str = False
+    n = len(src)
+    while i < n:
+        c = src[i]
+        if in_str:
+            out.append(c)
+            if c == "\\" and i + 1 < n:
+                out.append(src[i + 1])
+                i += 2
+                continue
+            if c == '"':
+                in_str = False
+            i += 1
+            continue
+        if c == '"':
+            in_str = True
+            out.append(c)
+            i += 1
+            continue
+        if src.startswith("/*", i):
+            e = src.find("*/", i + 2)
+            i = n if e < 0 else e + 2
+            out.append(" ")
+            continue
+        if src.startswith("//", i):
+            e = src.find("\n", i)
+            i = n if e < 0 else e
+            continue
+        out.append(c)
+        i += 1
+    return "".join(out)
+
+
 def function_body(src, signature):
     """取从 signature 起到配平的右花括号为止的函数体；找不到返回空串。"""
     i = src.find(signature)
@@ -170,6 +208,23 @@ else:
     check("unexpected=%u" in a[1], "[M207P] periodic line has unexpected=%u")
     check(len(specs) == len(a) - 2,
           "[M207P] ESP_LOGI: %d conversion specs vs %d args (must match)" % (len(specs), len(a) - 2))
+
+# ---------------------------------------------------------------------------
+# M12-F-16 UART 驱动安装失败不得 abort
+# ---------------------------------------------------------------------------
+print("[gate] M12-F-16 m207_service_start: no ESP_ERROR_CHECK; every step checked; cleanup on failure")
+start = strip_comments(function_body(svc, "int m207_service_start(void)"))  # 只看代码，注释里提到的不算
+check(start != "", "found m207_service_start")
+check("ESP_ERROR_CHECK" not in start, "m207_service_start has no ESP_ERROR_CHECK (a peripheral fault must not abort)")
+for call in ("uart_driver_install(", "uart_param_config(", "uart_set_pin("):
+    checked = re.search(r"err = " + re.escape(call), start) is not None and \
+        re.search(r"if \(err != ESP_OK\)", start) is not None
+    check(checked, "%s return value is checked" % call.rstrip("("))
+check("uart_driver_delete(M207_UART);" in start,
+      "a failure after the driver is installed uninstalls it (UART2 is not left occupied)")
+check(start.find("s_started = 1;") > start.find("xTaskCreatePinnedToCore("),
+      "s_started is set only after the service task exists")
+check("return -1;" in start, "start failure returns -1 (the caller can see it)")
 
 print("===================")
 if FAIL == 0:

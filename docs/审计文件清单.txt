@@ -162,6 +162,7 @@ project_tcs/tests/test_site_logic.c
 project_tcs/tests/test_touch_session.c
 project_tcs/tests/test_ui_model.c
 project_tcs/tests/test_ws_json_escape.c
+project_tcs/tools/card_surface_check.py
 project_tcs/tools/colorblind_check.py
 project_tcs/tools/fb_dump.py
 project_tcs/tools/font_audit_lvgl.py

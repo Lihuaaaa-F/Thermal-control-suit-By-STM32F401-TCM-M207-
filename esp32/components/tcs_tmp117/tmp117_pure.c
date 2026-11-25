@@ -10,6 +10,12 @@ float tmp117_raw_to_c(int16_t raw)
     return (float)raw * TMP117_LSB_C;
 }
 
+/* ====== 配置寄存器比对（M13-F-02；S-G e2 新增）：只比可读写字段 ====== */
+uint8_t tmp117_cfg_matches(uint16_t cfg)
+{
+    return ((cfg & TMP117_CFG_RW_MASK) == (TMP117_CFG_WORD & TMP117_CFG_RW_MASK)) ? 1u : 0u;
+}
+
 void tmp117_health_init(tmp117_health_t *h)
 {
     h->ok = 1;

@@ -313,7 +313,8 @@ if [ -f ../esp32/tests/run_m207_tests.sh ]; then
         echo "[esp32_tests] FAIL"; FAIL=1
     fi
 else
-    echo "[esp32_tests] SKIP: ../esp32/tests/run_m207_tests.sh 缺失"
+    # S-G e2（M12-F-12）：出货二进制 = 两端的组合。ESP32 测试入口缺失必须判红，不能 SKIP。
+    echo "[esp32_tests] FAIL: ../esp32/tests/run_m207_tests.sh 缺失"; FAIL=1
 fi
 
 # S-G h1a（M01-F-10）：出现过的每个 IRQ 都必须有处理函数。

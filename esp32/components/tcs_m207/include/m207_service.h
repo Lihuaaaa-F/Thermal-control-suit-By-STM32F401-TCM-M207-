@@ -44,6 +44,41 @@ uint16_t m207_stats_offline(void);                   /* 离线沿累计 */
 uint16_t m207_stats_wdrop(void);                     /* 离线/未启动拒写累计 */
 void    m207_perf_reset(void);                       /* perf 窗口清零 */
 
+/* ====== 队列 / 发送侧计数（S-G e2：M12-F-08 / X03-F-07 / M12-F-14；排障用，单调累计）======
+ * 语义：这五项里任何一项在运行中增长，都说明"调用方以为发出去了、其实没有"或者
+ * "模块回了不该回的码"——各自对应一条可见的日志（限频）。*/
+typedef struct {
+    uint16_t qdrop;        /* 下行队列满被拒的写入（API 返回 -1 的每一次；安全关断帧不进队列，不计这里）*/
+    uint16_t superseded;   /* 被更新的同类写取代、没上线路的帧（关断之后作废的"开"）*/
+    uint16_t unexpected;   /* 无在途事务、也不在轮询等待窗的 CMD:REPLY（链路活但语义意外）*/
+    uint16_t save_ok;      /* 保存帧（`!`）被模块确认（CMD:REPLY=8）*/
+    uint16_t save_rej;     /* 保存帧得到其它回码，或应答窗内没有回码 */
+    uint16_t linedrop;     /* 没进解析器就被丢弃的行：超长（>64B）整行、空闲 >500ms 的半行、UART 溢出清缓冲 */
+    uint32_t txdrop;       /* 发送环满、没交给 UART 的帧 */
+} m207_qstats_t;
+void     m207_stats_queue(m207_qstats_t *out);       /* 一次取全 */
+uint16_t m207_stats_unexpected(void);                /* M12-F-14：控制台 perf 行用 */
+uint8_t  m207_save_busy(void);                       /* 1=保存序列进行中（此时再按"保存"应答 BUSY）*/
+
+/* ====== 模块自带保护状态（S-G e2：X04-F-05 ①）======
+ * 服务在线时每 60s 读一次 TCx:TCERRORSTATUS? 与 TCx:TCOTPSTATUS?（只读查询，排普通队列）；
+ * 复联后马上读一次。这里只做"如实取值"：不报警、不进 SAFE。
+ * 为什么不在这里接报警：TCERRORSTATUS 含上电锁存位，要模块断电重启才清；真机实录里 TC1 恒回
+ * 239 / 253（传感器开路 / 过压位锁存）。把它直接接成 SAFE，设备一上电就永久停机。
+ * 要不要、按哪些位、锁存位怎么对待，由 control 决定（批次 e3a）。*/
+typedef struct {
+    uint16_t errstat;      /* TC1/TC2:TCERRORSTATUS 原值（8 位：正常=1 故障=0）；0xFFFF=尚未取到 */
+    uint16_t otpstat;      /* TCx:TCOTPSTATUS 原值（极性未在真机核实，只透传）；0xFFFF=尚未取到 */
+    uint8_t  fault_mask;   /* = m207_errstat_fault_mask(errstat)；尚未取到时为 0 */
+    uint8_t  valid;        /* 1=本通道取到过至少一次 */
+    uint32_t age_ms;       /* 距最近一次取到的真实毫秒（掉线后继续增长）；0xFFFFFFFF=从未取到 */
+} m207_mod_status_t;
+int         m207_module_status(uint8_t ch, m207_mod_status_t *out);  /* 0=ok；-1=通道非法或 out 为空 */
+uint8_t     m207_errstat_fault_mask(uint16_t errstat);   /* 纯解码：(~errstat)&0x7F —— 置位=该位保护触发或锁存 */
+const char *m207_fault_bit_name(uint8_t bit);            /* bit0 external / 1 over-voltage / 2 over-current /
+                                                         * 3 over-temp / 4 sensor-open / 5 load-short / 6 load-open
+                                                         * （位义取自厂商帮助文件 tc_hlp.xml，未逐位上机核实）*/
+
 /* ====== 报警（F5：置位在服务内；清除走 tcs_alarm_ack 人工确认）====== */
 uint8_t m207_alarm_active(void);                     /* ALM_M207 位 */
 

@@ -197,6 +197,7 @@ project_tcs/tools/site/tune_refresh_check.py
 project_tcs/tools/site/verify_prod_clean.py
 project_tcs/tools/site/wvar.py
 project_tcs/tools/src_byte_check.py
+project_tcs/tools/study_cards_check.py
 project_tcs/tools/tl8_read.py
 project_tcs/tools/touch_analyze.py
 project_tcs/tools/touch_inject_test.py

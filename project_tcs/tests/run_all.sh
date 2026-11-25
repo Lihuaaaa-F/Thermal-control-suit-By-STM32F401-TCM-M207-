@@ -269,20 +269,35 @@ for line in io.open(sys.argv[1],encoding='utf-8'):
     line=line.strip()
     if not line or line.startswith('#'): continue
     parts=line.split(';;')
-    if len(parts)!=4: continue
+    # 2026-11-25 S 线（审查条目 X06-F-07 ⑤）：坏行与"0 行基线"原先被静默跳过或恒成立——
+    # 把基线删空、删坏也能 PASS。现在都判红；卡的张数少于 7 也判红。
+    if len(parts)!=4:
+        print('[card_surface] FAIL 基线里有坏行: %s' % line[:60]); bad+=1; continue
     name,dirs,pat,want=parts[0],parts[1].split(),parts[2],int(parts[3].split()[0])
+    if want<=0 or not dirs or not pat:
+        print('[card_surface] FAIL %s: 基线为 0 或缺目录/模式' % name); bad+=1; continue
     n+=1
     out=subprocess.run([GREP,'-rnE',pat]+dirs+['--include=*.c'],
                        capture_output=True,text=True).stdout
     got=len([l for l in out.splitlines() if l])
     if got!=want:
         print('[card_surface] FAIL %s: got=%d want=%d' % (name,got,want)); bad+=1
+if n<7:
+    print('[card_surface] FAIL 基线里只有 %d 张卡（应 ≥ 7）' % n); bad+=1
 print('[card_surface] %s (%d cards)' % ('PASS' if not bad else 'FAIL',n))
 sys.exit(1 if bad else 0)
 PYEOF2
     then :; else FAIL=1; fi
 else
     echo "[card_surface] SKIP: 基线或 python 缺失"; FAIL=1
+fi
+
+# 研学卡 ③ 逐行核对（2026-11-25 S 线，审查条目 X06-F-07 / X06-F-09 的文档漂移部分）：
+# 上面那道只数行数，看不出"文档里的行号漂了"和"文档本身比代码少列了 17 行"——这两件事当时都发生了。
+if [ -n "$PYBIN" ]; then
+    if "$PYBIN" tools/study_cards_check.py; then :; else FAIL=1; fi
+else
+    echo "[card_lines] SKIP: 没有 python"; FAIL=1
 fi
 
 # 源码字节门禁：NUL / 孤立 CR（"转义写成真字符"类损坏，2026-11-16 事故后加）

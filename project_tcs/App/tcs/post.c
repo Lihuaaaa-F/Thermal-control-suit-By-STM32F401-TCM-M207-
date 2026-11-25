@@ -124,6 +124,34 @@ void post_arm_commit(post_arm_t st) { s_cur_state = st; }
 post_arm_t post_arm_state(void)     { return s_cur_state; }
 uint8_t    post_armed(void)         { return (s_cur_state != POST_ARM_UNARMED_ABSENT); }
 
+/* ====== 纯逻辑 5：单项宽限重试（M06-F-12；口径见 post.h）====== */
+void post_retry_init(post_retry_t *r, uint32_t now_ms)
+{
+    r->t0_ms = now_ms;          /* 宽限窗从上电首读那一刻算 */
+    r->t_try_ms = now_ms;
+    r->tries = 1;
+}
+
+uint8_t post_retry_due(const post_retry_t *r, uint32_t now_ms)
+{
+    return ((uint32_t)(now_ms - r->t_try_ms) >= POST_RETRY_GAP_MS) ? 1u : 0u;
+}
+
+uint8_t post_retry_judge(post_retry_t *r, uint8_t item, int ok, uint32_t now_ms)
+{
+    r->t_try_ms = now_ms;
+    if (r->tries < 255u) r->tries++;
+    if (ok) {
+        post_set_result(item, 1);            /* 窗内成功即 PASS */
+        return 1u;
+    }
+    if ((uint32_t)(now_ms - r->t0_ms) >= POST_RETRY_WAIT_MS) {
+        post_set_result(item, 0);            /* 窗到点仍失败 */
+        return 1u;
+    }
+    return 0u;                               /* 还在窗内：不裁决，下次再试 */
+}
+
 /* ===================================================================== */
 /*                          目标机驱动                                    */
 /* ===================================================================== */
@@ -145,6 +173,7 @@ uint8_t    post_armed(void)         { return (s_cur_state != POST_ARM_UNARMED_AB
 #define POST_BADGE_MS     3000u    /* 角标显示 3s 后淡出 */
 
 static post_arm_ctx_t s_arm;
+static post_retry_t   s_retry_tp;  /* TMP117：上电首读没过时的宽限重试账本（M06-F-12）*/
 static uint32_t s_t0_ms;
 static uint8_t  s_done;            /* 六项全部裁决完成 */
 static uint32_t s_badge_t0;        /* 角标起始时刻 */
@@ -224,10 +253,17 @@ void post_init(int eeprom_cfg_invalid)
      * 该项固定记 FAIL——交付档不跑布防，它只出现在 post 命令的显示里。*/
     post_set_result(POST_ITEM_TMP117, 0);
 #else
-    uint16_t devid = 0;
-    int ok = 0;
-    for (int t = 0; t < 3 && !ok; t++) ok = (tmp117_read_devid(&devid) == 0 && devid == 0x0117u);
-    post_set_result(POST_ITEM_TMP117, (uint8_t)ok);
+    /* 台架/仿真档：这里只读一次。没过不急着裁决——慢启动的传感器会在微秒级内连吃
+     * 几次 NAK（M06-F-12 原实现：3 次读之间没有延时，当场永久判 FAIL）。
+     * 留给 post_poll 在宽限窗内每隔 POST_RETRY_GAP_MS 再试。*/
+    {
+        uint16_t devid = 0;
+        if (tmp117_read_devid(&devid) == 0 && devid == 0x0117u) {
+            post_set_result(POST_ITEM_TMP117, 1);
+        } else {
+            post_retry_init(&s_retry_tp, HAL_GetTick());
+        }
+    }
 #endif
 
     /* 2. M207 一拍：宽限窗内裁决（post_poll）——先占位不记 decided */
@@ -249,6 +285,13 @@ void post_init(int eeprom_cfg_invalid)
 void post_poll(uint32_t now_ms)
 {
     if (s_t0_ms == 0) s_t0_ms = now_ms ? now_ms : 1u;
+
+    /* TMP117：上电首读没过的，在宽限窗内按间隔重试（M06-F-12）*/
+    if (!s_decided[POST_ITEM_TMP117] && post_retry_due(&s_retry_tp, now_ms)) {
+        uint16_t devid = 0;
+        int ok = (tmp117_read_devid(&devid) == 0 && devid == 0x0117u);
+        (void)post_retry_judge(&s_retry_tp, POST_ITEM_TMP117, ok, now_ms);
+    }
 
     /* M207 一拍裁决：在线即刻过；宽限 2.5s 到点仍离线记 FAIL */
     if (!s_decided[POST_ITEM_M207]) {

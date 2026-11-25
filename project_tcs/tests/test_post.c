@@ -121,12 +121,79 @@ static void test_aggregate(void)
     CHECK(post_item_decided(POST_ITEM_M207) == 0, "reset clears");
 }
 
+/* ====== 4. 单项宽限重试（S-G h1a，审查 M06-F-12）=====
+ * 原：post_init 里连读 3 次 TMP117 Device ID、中间没有任何延时——传感器上电慢一点，
+ * 微秒级内 3 次全 NACK，当场永久判 FAIL，auto 布防被挡。
+ * 现：首读没过先不裁决，post_poll 在宽限窗内每隔 POST_RETRY_GAP_MS 再试；窗内成功即 PASS。 */
+static void test_retry_window(void)
+{
+    post_retry_t r;
+    uint32_t now;
+
+    /* 首读失败（t=1000）：满一个间隔才重试 */
+    post_reset_results();
+    post_retry_init(&r, 1000);
+    CHECK(post_retry_due(&r, 1005) == 0, "retry: not before gap");
+    CHECK(post_retry_due(&r, 1000 + POST_RETRY_GAP_MS - 1u) == 0, "retry: gap-1ms not due");
+    CHECK(post_retry_due(&r, 1000 + POST_RETRY_GAP_MS) == 1, "retry: due at gap");
+
+    /* 第 5 次才应答的传感器：连续 4 次失败都不裁决，第 5 次 PASS */
+    CHECK(post_retry_judge(&r, POST_ITEM_TMP117, 0, 1020) == 0, "fail#2: still waiting");
+    CHECK(post_retry_due(&r, 1021) == 0 && post_retry_due(&r, 1039) == 0, "waits a full gap between tries");
+    CHECK(post_retry_judge(&r, POST_ITEM_TMP117, 0, 1040) == 0, "fail#3: still waiting");
+    CHECK(post_item_decided(POST_ITEM_TMP117) == 0, "3 fails in a row: not FAIL (old code stopped here)");
+    CHECK(post_retry_judge(&r, POST_ITEM_TMP117, 0, 1060) == 0, "fail#4: still waiting");
+    CHECK(post_retry_judge(&r, POST_ITEM_TMP117, 1, 1080) == 1, "5th try answers: PASS");
+    CHECK(post_item_ok(POST_ITEM_TMP117) == 1 && post_item_decided(POST_ITEM_TMP117) == 1,
+          "slow-start sensor decided PASS");
+    CHECK(post_retry_due(&r, 2000) == 1, "due() is a pure schedule query (state unchanged by it)");
+
+    /* 一直不应答：宽限窗到点后的那次尝试记 FAIL——不早于窗，也不拖过一个间隔 */
+    post_reset_results();
+    post_retry_init(&r, 0);
+    now = 0;
+    int early = 0;
+    while (now + POST_RETRY_GAP_MS < POST_RETRY_WAIT_MS) {
+        now += POST_RETRY_GAP_MS;
+        if (post_retry_judge(&r, POST_ITEM_TMP117, 0, now)) early++;
+    }
+    CHECK(early == 0, "absent sensor: no verdict before the window ends");
+    CHECK(post_item_decided(POST_ITEM_TMP117) == 0, "absent sensor: undecided at window-1 try");
+    now += POST_RETRY_GAP_MS;
+    CHECK(now == POST_RETRY_WAIT_MS, "test schedule lands on window end");
+    CHECK(post_retry_judge(&r, POST_ITEM_TMP117, 0, now) == 1, "absent sensor: FAIL at window end");
+    CHECK(post_item_ok(POST_ITEM_TMP117) == 0 && post_item_decided(POST_ITEM_TMP117) == 1,
+          "absent sensor decided FAIL");
+
+    /* 窗内最后一次机会成功：恰好到点的那次尝试成功也算 PASS（先看成功，再看窗）*/
+    post_reset_results();
+    post_retry_init(&r, 500);
+    CHECK(post_retry_judge(&r, POST_ITEM_TMP117, 1, 500u + POST_RETRY_WAIT_MS) == 1, "success at window end");
+    CHECK(post_item_ok(POST_ITEM_TMP117) == 1, "success at window end -> PASS not FAIL");
+
+    /* 毫秒计数回绕：窗跨过 2^32 */
+    post_reset_results();
+    post_retry_init(&r, 0xFFFFFF00u);
+    now = 0xFFFFFF00u;
+    early = 0;
+    for (uint32_t k = 0; k < POST_RETRY_WAIT_MS / POST_RETRY_GAP_MS - 1u; k++) {
+        now += POST_RETRY_GAP_MS;
+        if (post_retry_judge(&r, POST_ITEM_TMP117, 0, now)) early++;
+    }
+    CHECK(early == 0, "wrap: no verdict before window");
+    now += POST_RETRY_GAP_MS;
+    CHECK(now == 0xFFFFFF00u + POST_RETRY_WAIT_MS, "wrap: schedule arithmetic");
+    CHECK(post_retry_judge(&r, POST_ITEM_TMP117, 0, now) == 1, "wrap: FAIL at window end");
+    CHECK(r.tries == (uint8_t)(1u + POST_RETRY_WAIT_MS / POST_RETRY_GAP_MS), "wrap: tries counted");
+}
+
 int main(void)
 {
     test_body_sanity();
     test_m207_sanity();
     test_arm_fsm();
     test_aggregate();
+    test_retry_window();
     printf("test_post: PASS=%d FAIL=%d\n", g_pass, g_fail);
     return g_fail ? 1 : 0;
 }

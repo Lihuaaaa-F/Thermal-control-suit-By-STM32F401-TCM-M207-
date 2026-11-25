@@ -8,6 +8,7 @@
 #include "tcs_console.h"
 #include "websocket.h"      /* ws_selftest：网页端点自检 */
 #include "tcs_snap.h"       /* tcs_snap_mute：linkmute 取证 */
+#include "tcs_bootrec.h"    /* X04-F-03 / R5-13：status 的"本次 / 上次"字段 */
 #include "param_registry.h"
 #include "nvs_store.h"
 #include "control.h"
@@ -166,8 +167,10 @@ static int cmd_linkmute(int argc, char **argv)
 static int cmd_status(int argc, char **argv)
 {
     (void)argc; (void)argv;
+    char brec[176];                    /* tcs_bootrec_status 的输出上限远小于此 */
+    tcs_bootrec_status(brec, sizeof brec);
     printf("tc1=%.2f tc2=%.2f body=%.2f(ok=%u) fan=%u%% mode=%u m207=%u "
-           "alarm=0x%04X armed=%u state=%d sim=%u latch=0x%02X heap=%u up=%us rst=%d\n",
+           "alarm=0x%04X armed=%u state=%d sim=%u latch=0x%02X heap=%u up=%us rst=%d%s\n",
            (double)g_tcs.tc1_act, (double)g_tcs.tc2_act, (double)g_tcs.body_temp,
            (unsigned)g_tcs.body_sensor_ok, (unsigned)fan_get_duty(),
            (unsigned)g_tcs.mode, (unsigned)g_tcs.m207_online,
@@ -179,8 +182,16 @@ static int cmd_status(int argc, char **argv)
             * （启动日志在 USB 串口重枚举期间丢失）。这里带上运行时长与复位原因
             * （esp_reset_reason_t：0 UNKNOWN 1 POWERON 2 EXT 3 SW 4 PANIC 5 INT_WDT 6 TASK_WDT
             *   7 WDT 8 DEEPSLEEP 9 BROWNOUT 10 SDIO 11 USB 12 JTAG 13 EFUSE 14 PWR_GLITCH
-            *   15 CPU_LOCKUP）。*/
-           (unsigned)(esp_timer_get_time() / 1000000LL), (int)esp_reset_reason());
+            *   15 CPU_LOCKUP）。
+           * 2026-11-25（X04-F-03 / R5-13）行尾追加，键=值：
+           *   本次——rst=（上面那个）、up=（上面那个）；
+           *   上次——prst=上一轮是被什么复位原因启动的（-1 = 没有上一轮的记录：冷上电 / 首次运行 /
+           *            记录被改写）、pup=上一轮运行了多久、palm= / plat=上一轮最后一次刷新时的
+           *            报警位 / 安全锁存、pseq=上一轮的启动序号；
+           *            "上一轮是怎么结束的"看本轮的 rst=。
+           *   nvalm=随安全锁存落盘的报警位快照（锁存变化那一刻），cd=1 表示 flash 里留着上一次异常的
+           *   core dump。全部由 tcs_bootrec.c 提供。*/
+           (unsigned)(esp_timer_get_time() / 1000000LL), (int)esp_reset_reason(), brec);
     return 0;
 }
 

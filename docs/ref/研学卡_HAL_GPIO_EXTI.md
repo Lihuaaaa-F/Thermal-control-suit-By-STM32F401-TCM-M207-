@@ -39,6 +39,7 @@
 
 
 
+
 复现命令（仓库根 `/d/Espressif/ws/tcs`，Git Bash；raw 输出路径分隔符为 `\`，表内归一为 `/`）：
 
 ```bash
@@ -47,6 +48,7 @@ grep -rnE "HAL_GPIO_|HAL_EXTI_" project_tcs/App project_tcs/Core/Src --include=*
 ```
 
 vendor 域说明：`App/rtt/`（SEGGER RTT vendor 五文件）同一 pattern 单独跑=**0 命中**（无需列行）。
+
 
 
 

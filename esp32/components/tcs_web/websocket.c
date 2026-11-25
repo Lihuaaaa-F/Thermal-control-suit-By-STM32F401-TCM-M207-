@@ -396,15 +396,19 @@ void ws_param_changed(const param_desc_t *p, uint8_t src)
          * 其它页面：ref=0 的副本——两台手机各自的 ref 都从 1 数起，带 ref 群发的话
          * 一方会把另一方的回执当成自己的（独立复核 P2-6）。*/
         s_web_seen = 1;
-        push_pv(p->id, p->value, tag, (p->value != s_web_want), s_web_ref, 1, 0, s_web_fd, -1);
+        /* X02-F-05：回执依据 param_set 的结果——值进了注册表但温控模块没受理（离线 / 忙）时
+         * apply_err=2：ok=0、err=2，不再显示成功（改动只在这两处应答上，鉴权 / 连接管理归 e3b）。*/
+        push_pv(p->id, p->value, tag, (p->value != s_web_want), s_web_ref,
+                param_apply_err(p->id) == 0, param_apply_err(p->id), s_web_fd, -1);
         push_pv(p->id, p->value, tag, 0, 0u, 1, 0, -1, s_web_fd);
     } else {
         push_pv(p->id, p->value, tag, 0, 0u, 1, 0, -1, -1);
     }
     char val[32];
     fmt_param(val, sizeof val, p);
-    web_log_addf(now_ms(), 'i', "param", "%s：%s 改为 %s", src_name(src, 1),
-                 p->name ? p->name : p->key, val);
+    web_log_addf(now_ms(), param_apply_err(p->id) ? 'w' : 'i', "param", param_apply_err(p->id)
+                 ? "%s：%s 改为 %s（已记录，温控模块未受理：离线或忙）" : "%s：%s 改为 %s",
+                 src_name(src, 1), p->name ? p->name : p->key, val);
     ws_registry_invalidate();       /* reg 的 def=当前值变了，缓存失配 */
 }
 

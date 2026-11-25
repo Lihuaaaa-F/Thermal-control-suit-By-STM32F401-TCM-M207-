@@ -11,7 +11,12 @@
  *   stage 20：  复位原因=ESP_RST_TASK_WDT 断言 + 参数保持复验 → done=1
  * 副作用：E-21 期间真模块 TC1 TCADJTEMP/TCSW 被写（TEC 无负载=电无害）；结束恢复
  * mode=手动（F9 语义）。done=1 后常态放行，不再自跑。
+ * M09-F-12 / X05-F-05（S 线 e3a）：整文件只在 CONFIG_TCS_R1E_PROBE=y 的取证构建里编译。
+ * 此前实现体无条件编译，只是因为没人调用才被链接器丢掉；现在声明（r1e_probe.h）、实现、
+ * 调用（main.c）三处同一个条件。
  */
+#include "sdkconfig.h"
+#if CONFIG_TCS_R1E_PROBE
 #include "r1e_probe.h"
 #include "param_registry.h"
 #include "control.h"
@@ -212,3 +217,4 @@ void r1e_probe_run(void)
     control_service_hang_test(1);
     /* 不会返回：TWDT 3s → panic → 复位 → stage=20 分支 */
 }
+#endif /* CONFIG_TCS_R1E_PROBE */

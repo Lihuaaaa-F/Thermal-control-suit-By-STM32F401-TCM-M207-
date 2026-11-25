@@ -16,6 +16,7 @@
 
 #include <stdint.h>
 #include <stddef.h>
+#include "../../../protocol/tcs_version.h"   /* 版本唯一源（X06-F-09）：fw_ver 从它推导 */
 
 #ifdef __cplusplus
 extern "C" {
@@ -86,6 +87,9 @@ typedef struct {
     uint8_t  body_sensor_ok;
     uint8_t  esp_link_ok;
     uint32_t fw_ver;              /* BCD 0x010000 = v1.0.0 */
+    uint8_t  tec_known;           /* P1-09：bit0=TC1 bit1=TC2；1=模块在线、开关状态可信，0=未知。
+                                   * control_poll 每拍刷新（取值接口 control_tec_known()）。
+                                   * 快照接线（0x20 设备信息）归 l1 批次。*/
 } tcs_state_t;
 
 extern tcs_state_t g_tcs;
@@ -93,8 +97,8 @@ extern tcs_state_t g_tcs;
 /* ====== 板级副作用注入（main 里装配；PC 测试不装=NULL 全跳过）====== */
 typedef struct {
     void (*on_broadcast)(param_desc_t *p, uint8_t src);
-    void (*on_m207_set)(uint8_t ch, float v);
-    void (*on_m207_map_set)(uint16_t pid, float v);  /* H10：0x100+ 映射表参数下发 */
+    int  (*on_m207_set)(uint8_t ch, float v);          /* 返回 0=模块服务已受理；非 0=没受理（离线 -2 / 队列满或忙 -1）*/
+    int  (*on_m207_map_set)(uint16_t pid, float v);    /* H10：0x100+ 映射表参数下发；返回值同上 */
     void (*on_mode_change)(uint8_t m);
     int  (*eeprom_commit)(const uint8_t *img);   /* 传整 256B 镜像（含 CRC），物理写 */
     uint8_t src_touch, src_console, src_web;     /* src 标记（回显来源用）*/
@@ -114,23 +118,39 @@ typedef struct {
 void  param_registry_init(const param_hooks_t *h);   /* 建表+装配钩子+装默认值 */
 int   param_count(void);                     /* 已注册参数条数 */
 const param_desc_t *param_at(int idx);       /* 按序访问（注册表遍历/网页列表）*/
-param_desc_t *param_find(uint16_t id);       /* O(N) 线性（≤32 项）*/
+param_desc_t *param_find(uint16_t id);       /* O(N) 线性（N = PARAM_N_REGISTERED，现 51 项）*/
 const param_desc_t *param_find_by_key(const char *key);
 
 /**
- * 写参数唯一路径（触摸/网页/CLI 同走这里，F7 并发写天然串行化）。
+ * 写参数唯一路径（触摸/网页/CLI 同走这里）。调用方分属多个任务：校验 / 写入 / 侧效应与落盘的
+ * 序列化 / 清脏由注册表内部的一把递归互斥锁串行化（M10-F-03；PC 单测是单线程，锁退化为空）。
+ * 原先这里写的是"F7 并发写天然串行化"，与事实相反。
  * clamp→相等短路→写→置脏→广播→返回 0。
  * 返回：0=ok；1=clamp 生效（回显 clamp 后值）；-1=坏 id；-2=约束拒绝
  *      （body_cold<body_hot 强制：写任一侧校验另一侧，违反拒写）。
+ *      2 = 已记录、模块没受理（X02-F-05）：值进了注册表并已广播，但温控模块离线 / 忙——调用方不得
+ *          当成功显示（屏幕链路回 BUSY，网页回执 ok=0）。PF_M207 参数的同值重写不再被相等短路：
+ *          只补发模块、不广播（M12-F-08）。
  */
 int   param_set(uint16_t id, float v, uint8_t src);
+/* 最近一次写入里模块侧的结果（X02-F-05）：0=已受理 / 该参数没有模块侧效应；2=没受理（离线 / 忙）。
+ * 广播回调（网页回执）据此如实回执。与参数表分开存放，不进 param_desc_t。*/
+uint8_t param_apply_err(uint16_t id);
 float param_get(uint16_t id);
 
-/* 2s 防抖增量写 EEPROM：主循环节拍调用。有脏参且到点 → 序列化 → eeprom_commit。 */
+/* 2s 防抖落盘：persist_worker（低优先级任务）每 500ms 调一次（M09-F-07，不在控制任务里）。
+ * 有脏参且到点 → 序列化 → eeprom_commit。 */
 void  param_persist_flush(uint32_t now_ms);
 /* 立即固化（p save / 调参页保存按钮）。返回 0=已提交，1=无脏参，-1=commit 失败。 */
 int   param_persist_now(void);
 uint32_t param_persist_fail_count(void);   /* R1 P1-04：连续落盘失败次数 */
+/* X04-F-07：上电恢复后要不要报 ALM_EEPROM（首次上电不报；NVS 读失败 / 镜像校验不过要报）*/
+uint8_t param_restore_alarm_needed(uint8_t load_not_found, uint8_t deser_ok);
+/* 上电参数镜像是否完好（M09-F-06）：自动布防的前置条件之一（ESP32 没有 H743 的六项 POST 电池，
+ * 以"镜像完好 + 双源健康"替代"POST 过"）。默认值 / 首次上电 = 1；加载时有记录被拒 = 0；
+ * 之后一次成功落盘 = 1。param_set_image_ok() 供 app_main 在 NVS 读失败时标坏。*/
+uint8_t param_boot_image_ok(void);
+void    param_set_image_ok(uint8_t ok);
 
 /* 广播（param_set 内部已调；模式等非参数变更可手动调）*/
 void  param_broadcast(param_desc_t *p, uint8_t src);
@@ -138,7 +158,9 @@ void  param_broadcast(param_desc_t *p, uint8_t src);
 void  param_load_defaults(void);
 /* 上电恢复：img 由 eeprom.c 读出；magic/ver/CRC 任一不符 → 默认值 + 返回 -1 */
 int   param_deserialize(const uint8_t *img);
-void  param_load_eeprom(void);               /* 目标板用：eeprom 读 256B → deserialize */
+/* 同上，另报告跳过了几条记录（M10-F-04）：类型与本固件的参数表不符、参数本不持久化、值为 NaN/Inf
+ * 的记录一律跳过并计数；两条 body 记录加载成 body_cold >= body_hot → 整份不采信（回默认）、返回 -1。*/
+int   param_deserialize_ex(const uint8_t *img, int *skipped);
 
 /* ====== EEPROM v2 序列化（纯函数，PC 单测 §5.1）====== */
 /* 把全部 PF_PERSIST 参数打包成 256B 镜像（magic/ver/count/记录/CRC 全填）。

@@ -43,6 +43,13 @@ typedef enum {
 #define SAFETY_BIT_BODY_LOST  (1u << 1)
 #define SAFETY_BIT_M207_LOST  (1u << 2)
 #define SAFETY_BIT_ESTOP      (1u << 3)
+/* 读数卡死（M09-F-09 / X04-F-06）：源自报健康，但读数逐位不变 ≥ CTRL_STUCK_WINDOW_MS 且 TEC 已开
+ * 同样久。与上面四位的区别：只在运行时成立，**不落盘**——复位后"哪个通道、冻在哪个值"都无从得知，
+ * 而运行时判据会在 TEC 重新开满一个窗口后再次触发，落盘不增加保护；反而会在上电恢复时因为
+ * 通道归属丢失（见 s_stuck_chn）把没有体温探头的设备永久锁在 SAFE。按通信类自动恢复：读数重新
+ * 开始变化后 2s 自清。不受布防门控。*/
+#define SAFETY_BIT_STUCK      (1u << 4)
+/* 卡死窗口 CTRL_STUCK_WINDOW_MS 定义在 control.c（30s = 300 拍，审查方案 M09-F-09 的 N=300）*/
 
 typedef struct {
     void (*fan_set)(uint8_t on);
@@ -51,6 +58,13 @@ typedef struct {
     void (*on_state)(ctrl_state_t st);          /* 迁移日志钩子，可 NULL */
     void    (*safety_persist)(uint8_t latch);   /* latch 变化时落盘，可 NULL */
     uint8_t (*safety_load)(void);               /* 启动读回 latch，可 NULL */
+    /* 安全关断通道（P1-09，AD-4）：SAFE 的 TCSW=0——进入沿 + 锁存期间每 500ms 的重申、以及
+     * cmd 11 的停机——都走这里。可为 NULL：退化为 tec_sw（普通命令队列）。
+     * 为什么要单独一条通道：普通队列在模块离线时拒收（m207_tec 回 -2），离线沿还会被清空，
+     * "关"就送不到执行器。实现方（tcs_m207 的 m207_tec_force，e2 批次）的约定：
+     *   不占普通队列；离线也记下意图，复联第一帧补发；每 500ms 重试到读回一致。
+     * 只有"关"走这条通道：状态机与手动的"开"永远走 tec_sw。*/
+    void    (*tec_force)(uint8_t ch, uint8_t on);
 } control_ops_t;
 
 void  control_init(const control_ops_t *ops);
@@ -84,6 +98,15 @@ void  tcs_emergency_stop(void);
 
 /* ====== 安全锁存读侧（R1 修复；console/网页/诊断用）====== */
 uint8_t control_safety_latched(void);           /* 非 0 = 仍在安全锁存 */
+/* TEC 开关状态是否"已知"（P1-09）：bit0=TC1 bit1=TC2。1 = 模块在线，开关状态可信；
+ * 0 = 未知——离线期间 g_tcs.tec*_on 只是本端的命令意图，执行器实际状态无从得知，
+ * 快照 / 界面不得把它显示成"已关"。g_tcs.tec_known 是它的缓存副本（每拍刷新，最多晚一拍）。*/
+uint8_t control_tec_known(void);
+/* 命令意图（只有控制写）与模块回显（M207 服务写）分开取（X03-F-08）：
+ * control_tec_cmd() = 控制要 TEC 开关是什么；control_tec_act() = 模块上次回显的 TCSW。两者可以不一致
+ * （回显晚到 / 模块离线期间的旧值），"复联判据""卡死判据"读 cmd，界面要显示"实际"读 act。*/
+uint8_t control_tec_cmd(uint8_t ch);
+uint8_t control_tec_act(uint8_t ch);
 /* N-01：设备服务层（M207 解析等）可直接置安全锁存——超温切断不得只依赖 control 任务存活。*/
 void    control_safety_trip(uint8_t bit);
 

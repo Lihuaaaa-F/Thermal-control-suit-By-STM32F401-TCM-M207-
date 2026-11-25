@@ -17,7 +17,7 @@ EXTRA_DEF=""        # run 可按用例追加预处理定义（见下方 tmp117si
 
 cl_run() {  # cl_run <out.exe> <src...> — bat 内 cd 到 OUT，产物/对象全落 OUT
     local exe="$1"; shift
-    local cmd_line='cl /nologo /W4 /std:c11 /utf-8 /D_CRT_SECURE_NO_WARNINGS /DTCS_UNIT_TEST /I..\..\components\tcs_m207\include /I..\..\components\tcs_tmp117\include /I..\..\components\tcs_fan\include /I..\..\components\tcs_core /I..\..\components\tcs_link\include /I..\..\components\tcs_link /I..\..\components\tcs_web\include'
+    local cmd_line='cl /nologo /W4 /std:c11 /utf-8 /D_CRT_SECURE_NO_WARNINGS /DTCS_UNIT_TEST /I..\..\components\tcs_m207\include /I..\..\components\tcs_tmp117\include /I..\..\components\tcs_fan\include /I..\..\components\tcs_core /I..\..\components\tcs_link\include /I..\..\components\tcs_link /I..\..\components\tcs_web\include /I..\..\components\tcs_core\include'
     [ -n "$EXTRA_INC" ] && cmd_line="$cmd_line $EXTRA_INC"
     [ -n "$EXTRA_DEF" ] && cmd_line="$cmd_line $EXTRA_DEF"
     for s in "$@"; do
@@ -88,6 +88,10 @@ EXTRA_INC="/I..\..\tests\host_stubs"
 run linkdir tests/test_link_dir.c components/tcs_link/link_task.c components/tcs_link/comm.c components/tcs_link/proto.c
 EXTRA_INC=""
 
+# S-G e3a：tcs_core 里 control.c 之外的纯逻辑（上次运行记录、安全记录 v2，以及后面本批次补的参数用例）
+run tcscore   tests/test_tcs_core.c       components/tcs_core/boot_record.c components/tcs_core/nvs_store.c components/tcs_core/svc_status.c components/tcs_core/param_registry.c components/tcs_link/proto.c
+
+
 # U 线 W1：网页 WS 契约（st / log 消息，真实 cJSON）
 if [ -f "$CJSON_DIR/cJSON.c" ]; then
     EXTRA_INC="/I\"$(cygpath -w "$CJSON_DIR")\""
@@ -109,6 +113,12 @@ else echo "[m207gates] FAIL"; FAIL=1; fi
 run m207host tests/m207_core_host.c components/tcs_m207/m207_core.c components/tcs_m207/m207_proto.c components/tcs_core/control.c components/tcs_core/param_registry.c components/tcs_core/post_pure.c components/tcs_link/proto.c
 if [ -x build/tests_m207/tests_m207host.exe ] && "$PYGATE" -I tests/test_m207_fw_adv.py \
         build/tests_m207/tests_m207host.exe; then :; else echo "[m207fwadv] FAIL"; FAIL=1; fi
+
+# S-G e3a：分区表布局与现场故障证据配置的源码门禁（X04-F-03：coredump 分区 / 配置 / 现有偏移不变）
+python tests/check_layout.py || FAIL=1
+# S-G e3a：版本单一源（X06-F-09）——头文件可解析、CMake / 注册表都从它推导、没有第二处写死的版本号
+python ../tools/version_bump.py --check || FAIL=1
+
 
 [ $FAIL = 0 ] && echo "esp32-tests: ALL GREEN" || echo "esp32-tests: HAS FAILURES"
 exit $FAIL

@@ -126,6 +126,69 @@ MUTATIONS = [
     ("M30 退出 SAFE 时的布防判断写反（未布防才要求体温源）",
      [("    if (commissioned() && !g_tcs.body_sensor_ok) return 0;",
        "    if (!commissioned() && !g_tcs.body_sensor_ok) return 0;")], ""),
+    # ---- 2026-11-25 S 线 e3a：读数卡死 → SAFE（M09-F-09 / X04-F-06）。用例 K1–K17 在 test_control_esp32.c ----
+    ("M31 卡死窗口无限长（永远判不出卡死）",
+     [("#define CTRL_STUCK_WINDOW_MS    30000u", "#define CTRL_STUCK_WINDOW_MS    0xFFFFFFFFu")], ""),
+    ("M32 卡死窗口 30000ms 改 30100ms",
+     [("#define CTRL_STUCK_WINDOW_MS    30000u", "#define CTRL_STUCK_WINDOW_MS    30100u")], ""),
+    ("M33 体温卡死受布防门控（未布防就不判）",
+     [("        body_stuck = (uint8_t)(g_tcs.mode != 0 && (s_state == CTRL_HEAT || s_state == CTRL_COOL)",
+       "        body_stuck = (uint8_t)(commissioned() && g_tcs.mode != 0 && (s_state == CTRL_HEAT || s_state == CTRL_COOL)")], ""),
+    ("M34 水温卡死不看 TEC 是否开着",
+     [("        tc1_stuck  = (uint8_t)(s_tec_cmd_on[0] && stuck_is(&s_stuck_tc1, now_ms, s_tec_on_since[0]));",
+       "        tc1_stuck  = (uint8_t)(m207_src_ok && stuck_is(&s_stuck_tc1, now_ms, now_ms - CTRL_STUCK_WINDOW_MS));")], ""),
+    ("M51 卡死判据读模块回显（晚到的“关”回显会掩盖卡死；X03-F-08）",
+     [("        tc1_stuck  = (uint8_t)(s_tec_cmd_on[0] && stuck_is(&s_stuck_tc1, now_ms, s_tec_on_since[0]));",
+       "        tc1_stuck  = (uint8_t)(g_tcs.tec1_on && stuck_is(&s_stuck_tc1, now_ms, s_tec_on_since[0]));")], ""),
+    ("M35 卡死窗口不把 TEC 开沿算在内（读数冻够了立刻判）",
+     [("    if (!c->last_change || stuck_live(c, now_ms) || !on_since) return 0;",
+       "    if (!c->last_change || stuck_live(c, now_ms)) return 0;"),
+      ("    return (uint8_t)((uint32_t)(now_ms - on_since) >= CTRL_STUCK_WINDOW_MS);",
+       "    (void)on_since; return 1;")], ""),
+    ("M36 源不健康期间不清卡死样本（陈旧读数被当成卡死）",
+     [("        c->last_change = 0;", "        ;")], ""),
+    ("M37 STUCK 自愈不看读数是否恢复变化（还冻着也 2s 自清）",
+     [("                          | (stuck_recovered(now_ms, stuck_chn) ? SAFETY_BIT_STUCK : 0u));",
+       "                          | SAFETY_BIT_STUCK);")], ""),
+    ("M38 ack 清掉卡死借用的报警位（设备停在 SAFE 而屏上说不出原因）",
+     [("    if (!(lat & SAFETY_BIT_BODY_LOST) && !(stuck_chn & 1u) && g_tcs.body_sensor_ok)",
+       "    if (!(lat & SAFETY_BIT_BODY_LOST) && g_tcs.body_sensor_ok)")], ""),
+    ("M39 ack 不看读数是否恢复变化就清 STUCK",
+     [("        safety_set_ok(SAFETY_BIT_STUCK, stuck_recovered(s_poll_now_ms, stuck_chn));",
+       "        safety_set_ok(SAFETY_BIT_STUCK, 1);")], ""),
+    ("M40 STUCK 位落盘",
+     [("#define SAFETY_PERSIST_MASK     ((uint8_t)~SAFETY_BIT_STUCK)",
+       "#define SAFETY_PERSIST_MASK     (0xFFu)")], ""),
+    ("M41 上电不丢弃存储里留着的 STUCK 位",
+     [("        s_safety_latch = (uint8_t)(lat & SAFETY_PERSIST_MASK);",
+       "        s_safety_latch = lat;")], ""),
+    ("M42 体温卡死不分模式（手动模式下任何 TEC 开着就判）",
+     [("        body_stuck = (uint8_t)(g_tcs.mode != 0 && (s_state == CTRL_HEAT || s_state == CTRL_COOL)",
+       "        body_stuck = (uint8_t)((g_tcs.tec1_on || g_tcs.tec2_on)"),
+      ("                               && stuck_is(&s_stuck_body, now_ms, s_tec_on_since[0]));",
+       "                               && stuck_is(&s_stuck_body, now_ms, now_ms - CTRL_STUCK_WINDOW_MS));")], ""),
+    # ---- 2026-11-25 S 线 e3a：SAFE 到得了执行器（P1-09）。用例 P9-1…P9-7 在 test_control_esp32.c ----
+    ("M43 SAFE 的关断不走安全关断通道（回到只占普通队列）",
+     [("    if (force && s_ops.tec_force) s_ops.tec_force(ch, on);",
+       "    if (0 && force && s_ops.tec_force) s_ops.tec_force(ch, on);")], ""),
+    ("M44 cmd 11 的停机不走安全关断通道",
+     [("        out_tec_sw_ex(1, 0, 1);", "        out_tec_sw_ex(1, 0, 0);"),
+      ("        out_tec_sw_ex(2, 0, 1);", "        out_tec_sw_ex(2, 0, 0);")], ""),
+    ("M45 普通的“开”也走安全关断通道（通道不再只留给“关”）",
+     [("static void out_tec_sw(uint8_t ch, uint8_t on) { out_tec_sw_ex(ch, on, 0); }",
+       "static void out_tec_sw(uint8_t ch, uint8_t on) { out_tec_sw_ex(ch, on, 1); }")], ""),
+    ("M46 模块离线时开关状态仍显示“已知”",
+     [("    return (uint8_t)(g_tcs.m207_online ? 0x03u : 0x00u);", "    return 0x03u;")], ""),
+    # ---- 2026-11-26 S 线 e3a（X06-F-03）：把 5 条 P0 安全路径的修复回退成修前写法，必须被抓住 ----
+    ("M47 超温只报警不锁存（回到 P0-01 修前）",
+     [("        safety_trip(SAFETY_BIT_OVERTEMP);", "        ;")], ""),
+    ("M48 锁存不拦在途的“开”（P0-04 门控）",
+     [("    if (on && s_safety_latch) on = 0;", "    ;")], ""),
+    ("M49 上电丢弃持久化的锁存（复位即解除安全态）",
+     [("        s_safety_latch = (uint8_t)(lat & SAFETY_PERSIST_MASK);", "        s_safety_latch = 0;")], ""),
+    ("M50 超温门控受布防影响",
+     [("    if (g_tcs.tc1_act > ALM_OVERTEMP_HARD_C) {",
+       "    if (g_tcs.tc1_act > ALM_OVERTEMP_HARD_C && commissioned()) {")], ""),
 ]
 
 
@@ -211,6 +274,16 @@ def main():
                 "int control_param_check(uint16_t id, float v) { (void)id; (void)v; return 0; }\n"
                 "int control_apply_cmd_src(uint8_t cmd, uint8_t src) { (void)src; return control_apply_cmd(cmd); }\n"
                 "void tcs_emergency_stop_src(uint8_t src) { (void)src; tcs_emergency_stop(); }\n")
+    # S 线 e3a（P1-09）：更近的基线已含上面那几个函数，缺的是这个读接口。桩恒回"已知"，
+    # 所以 P9-6 的"离线 = 未知"断言在旧实现上照样是红的。
+    if "control_tec_known" not in old:
+        old += ("\n/* mutation_control.py: 基线没有 control_tec_known，为链接补上 */\n"
+                "uint8_t control_tec_known(void) { return 0x03u; }\n")
+    # S 线 e3a（X03-F-08）：命令 / 回显取值接口；桩回到修前的口径（两者都是那个混用字段）
+    if "control_tec_cmd" not in old:
+        old += ("\n/* mutation_control.py: 基线没有 control_tec_cmd / control_tec_act，为链接补上 */\n"
+                "uint8_t control_tec_cmd(uint8_t ch) { (void)ch; return g_tcs.tec1_on; }\n"
+                "uint8_t control_tec_act(uint8_t ch) { (void)ch; return g_tcs.tec1_on; }\n")
     ok, out, rc = compile_run(old)
     if ok:
         fl = fails_of(out)

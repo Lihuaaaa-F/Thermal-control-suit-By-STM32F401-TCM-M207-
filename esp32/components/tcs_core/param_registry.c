@@ -14,12 +14,34 @@
 #include <string.h>
 #include <math.h>
 
+/* ====== 写路径互斥（M10-F-03）======
+ * param_set 的调用方分属多个任务（控制 / httpd / 链路回调 / 控制台），param_persist_flush 在控制任务、
+ * param_persist_now 在控制台任务。原先没有任何锁：
+ *   A. 控制任务在落盘的 flash 写窗口里序列化完 → 别的任务改值并置脏 → 控制任务回来把脏位全清
+ *      → 新值只在 RAM，复位即丢；
+ *   B. 两个任务同时写 0x03 / 0x04，各自在对方写入前通过校验 → body_cold >= body_hot。
+ * 现在 param_set 的校验 / 写入 / 侧效应，与落盘的序列化 / 清脏，都在同一把（递归）互斥锁内，
+ * 落盘的"序列化 → 清脏"之间不可能再插入别的写入，所以不需要"只清本次序列化覆盖的版本号"。
+ * 广播回调在锁外调用（它可能再去读注册表、发帧，不能让它在锁里等）。
+ * 递归：flush 持锁期间会调 param_persist_now；控制任务自己也会在持锁期间走到这里。
+ * PC 单测是单线程：锁退化为空——保持本模块零 HAL 依赖（与 control.c 同样的纪律）。*/
+#ifdef ESP_PLATFORM
+#include "freertos/FreeRTOS.h"
+#include "freertos/semphr.h"
+static SemaphoreHandle_t s_reg_mux;
+#define REG_LOCK()   do { if (s_reg_mux) xSemaphoreTakeRecursive(s_reg_mux, portMAX_DELAY); } while (0)
+#define REG_UNLOCK() do { if (s_reg_mux) xSemaphoreGiveRecursive(s_reg_mux); } while (0)
+#else
+#define REG_LOCK()   ((void)0)
+#define REG_UNLOCK() ((void)0)
+#endif
+
 /* ====== 状态快照实例 ====== */
 tcs_state_t g_tcs = {
     .tc1_act = 0.0f, .tc2_act = 0.0f, .body_temp = 0.0f,
     .tec1_on = 0, .tec2_on = 0, .fan_on = 0, .mode = 0,
     .alarm_bits = 0, .m207_online = 0, .body_sensor_ok = 0,
-    .esp_link_ok = 0, .fw_ver = 0x010200u,   /* v1.2.0 BCD（第六阶段：触摸会话重写+UI 工艺）*/
+    .esp_link_ok = 0, .fw_ver = TCS_FW_VER_BCD,   /* 从 protocol/tcs_version.h 推导（X06-F-09；原先是手写的 0x010200）*/
 };
 
 /* ====== 参数表 v1（初值/[min,max]/step/flags 严格按任务书 §3.3 表）====== */
@@ -166,14 +188,28 @@ _Static_assert(sizeof(s_defaults) / sizeof(s_defaults[0]) ==
 static param_hooks_t s_hooks;
 static uint32_t s_armed_at_ms;    /* 首个脏参出现后由 flush 起算的 2s 防抖窗口 */
 static uint8_t  s_flush_armed;
+/* 模块侧受理结果（X02-F-05），与 s_params 同下标。不进 param_desc_t：那张表有 51 行位置初始化器，
+ * 给结构体加字段会让每一行都报 -Wmissing-field-initializers。取值 param_apply_err()。*/
+static uint8_t  s_apply_err[PARAM_N_REGISTERED];
+/* 上电参数镜像是否完好（M09-F-06 的"可布防"条件之一）。初值 1：默认值自洽、首次上电不算坏；
+ * param_deserialize_ex() 有记录被拒 / 整份拒绝 → 0；之后一次成功落盘 → 1（存进去的镜像已是好的）；
+ * app_main 在 NVS 读失败时用 param_set_image_ok(0) 标坏。*/
+static uint8_t  s_image_ok = 1;
 
 /* ====== 基础 ====== */
 void param_registry_init(const param_hooks_t *h)
 {
     if (h) s_hooks = *h;
+#ifdef ESP_PLATFORM
+    if (!s_reg_mux) s_reg_mux = xSemaphoreCreateRecursiveMutex();   /* M10-F-03；失败则退化为不加锁 */
+#endif
+    REG_LOCK();
     param_load_defaults();
+    s_image_ok = 1;
+    memset(s_apply_err, 0, sizeof(s_apply_err));   /* X02-F-05：受理结果随注册表一起复位 */
     s_armed_at_ms = 0;
     s_flush_armed = 0;
+    REG_UNLOCK();
 }
 
 int param_count(void) { return PARAM_N_REGISTERED; }
@@ -219,17 +255,24 @@ static float type_quantize(const param_desc_t *p, float v)
     return v;
 }
 
-static void side_effects(param_desc_t *p)
+/* 板级侧效应（X02-F-05 / M12-F-08）。返回 0 = 没有模块侧效应，或模块服务已受理；
+ * 2 = 模块服务没受理（离线 / 队列满 / 忙）：值已经写进注册表（注册表是唯一真值），模块上还是旧值。
+ * 结果同时留在 s_apply_err 上（取值 param_apply_err），广播回调（网页回执）据此如实回执。
+ * redo = 同值重写：只把值再下发一次模块，不改模式镜像、不置脏。*/
+static int side_effects(param_desc_t *p, uint8_t redo)
 {
+    int err = 0;
     if (p->flags & PF_M207) {
         if (p->id >= PARAM_ID_M207_BASE) {
             /* H10：映射表参数（0x100+）走通用模板通道 */
-            if (s_hooks.on_m207_map_set) s_hooks.on_m207_map_set(p->id, p->value);
+            if (s_hooks.on_m207_map_set) err = s_hooks.on_m207_map_set(p->id, p->value);
         } else {
             uint8_t ch = (p->id == PARAM_ID_TC1_SET) ? 1u : 2u;
-            if (s_hooks.on_m207_set) s_hooks.on_m207_set(ch, p->value);
+            if (s_hooks.on_m207_set) err = s_hooks.on_m207_set(ch, p->value);
         }
     }
+    s_apply_err[p - s_params] = (uint8_t)(err ? 2u : 0u);
+    if (redo) return err ? 2 : 0;
     if (p->id == PARAM_ID_MODE) {
         g_tcs.mode = (uint8_t)p->value;
         if (s_hooks.on_mode_change) s_hooks.on_mode_change((uint8_t)p->value);
@@ -238,11 +281,14 @@ static void side_effects(param_desc_t *p)
         p->dirty_persist = 1;
         s_flush_armed = 1;    /* 防抖窗口起点在首次 flush 调用时锁定 */
     }
+    return err ? 2 : 0;
 }
 
-int param_set(uint16_t id, float v, uint8_t src)
+/* 锁内的实现（外壳见下方 param_set()）：校验、写入、侧效应都在这里；*out 非空 = 值变了，外壳在锁外广播 */
+static int param_set_impl(uint16_t id, float v, uint8_t src, param_desc_t **out)
 {
     param_desc_t *p = param_find(id);
+    *out = NULL;
     if (!p) return -1;
     if (!(p->flags & PF_RW)) return -1;
 
@@ -257,9 +303,12 @@ int param_set(uint16_t id, float v, uint8_t src)
     c = type_quantize(p, c);
     int clamped = (c != v);
 
-    /* 相等短路：值没变就什么都不做（R1 修复 M05-F-19：原来仍广播，与"变更即推"不符）*/
+    /* 相等短路：值没变就什么都不做（R1 修复 M05-F-19：原来仍广播，与"变更即推"不符）。
+     * 例外（M12-F-08）：PF_M207 参数的同值重写仍要下发模块——注册表与模块可能已经不一致
+     * （离线时写过 / 首次上电模块 EEPROM 是别的值），用户重写同一个值正是为了补发。只补发，不广播。*/
     if (c == p->value) {
-        return clamped ? 1 : 0;
+        if (!(p->flags & PF_M207)) return clamped ? 1 : 0;
+        return clamped ? 1 : side_effects(p, 1);
     }
 
     /* 跨参数约束：body_cold < body_hot（写任一侧校验另一侧，违反拒写）*/
@@ -270,9 +319,28 @@ int param_set(uint16_t id, float v, uint8_t src)
     if (s_hooks.on_check && s_hooks.on_check(p->id, c) != 0) return -2;
 
     p->value = c;
-    side_effects(p);
-    param_broadcast(p, src);
-    return clamped ? 1 : 0;
+    {
+        int se = side_effects(p, 0);     /* X02-F-05：模块没受理（2）要盖过"clamp 生效"（1），如实上报 */
+        *out = p;                        /* 值变了：外壳在锁外广播 */
+        return se ? se : (clamped ? 1 : 0);
+    }
+}
+
+int param_set(uint16_t id, float v, uint8_t src)
+{
+    param_desc_t *p = NULL;
+    int rv;
+    REG_LOCK();
+    rv = param_set_impl(id, v, src, &p);
+    REG_UNLOCK();
+    if (p) param_broadcast(p, src);
+    return rv;
+}
+
+uint8_t param_apply_err(uint16_t id)
+{
+    param_desc_t *p = param_find(id);
+    return p ? s_apply_err[p - s_params] : 0u;
 }
 
 /* ====== EEPROM v2 序列化（纯函数，PC 单测 §5.1）====== */
@@ -314,12 +382,14 @@ int param_serialize(uint8_t img[EE_IMG_SIZE])
     return 0;
 }
 
-int param_deserialize(const uint8_t *img)
+int param_deserialize_ex(const uint8_t *img, int *skipped)
 {
-    if (img[0] != EE_MAGIC_V2 || img[1] != EE_LAYOUT_VER) return -1;
-    if (proto_crc8(img, EE_CRC_ADDR) != img[EE_CRC_ADDR]) return -1;
+    int nsk = 0;
+    if (skipped) *skipped = 0;
+    if (img[0] != EE_MAGIC_V2 || img[1] != EE_LAYOUT_VER) { s_image_ok = 0; return -1; }
+    if (proto_crc8(img, EE_CRC_ADDR) != img[EE_CRC_ADDR]) { s_image_ok = 0; return -1; }
     int n = img[2];
-    if (n > 30) return -1;
+    if (n > 30) { s_image_ok = 0; return -1; }
     param_load_defaults();               /* 先全默认，再用记录覆盖（缺记录=默认）*/
     const uint8_t *r = &img[4];
     for (int i = 0; i < n; i++, r += 8) {
@@ -329,16 +399,30 @@ int param_deserialize(const uint8_t *img)
                      | ((uint32_t)r[6] << 16) | ((uint32_t)r[7] << 24);
         param_desc_t *p = param_find(id);
         if (!p) continue;                /* 未知 id（旧固件残留）→ 跳过 */
+        /* M10-F-04：原先只验 magic/ver/CRC8。同 magic/ver 但类型不同的镜像、或给不该持久化的参数
+         * 伪造的记录，会把 U8 按位型解释成 F32 写进注册表。只认"类型对得上、本就持久化"的记录，
+         * 其余跳过并计数（调用方据此报警）。*/
+        if (ty != p->type || !(p->flags & PF_PERSIST)) { nsk++; continue; }
         float v;
         if (ty == PARAM_TYPE_F32) memcpy(&v, &v32, 4);
         else v = (float)v32;
+        if (!isfinite(v)) { nsk++; continue; }
         if (v < p->min) v = p->min;      /* 防御：EEPROM 里被改坏的越界值 */
         if (v > p->max) v = p->max;
         p->value = v;
         if (p->id == PARAM_ID_MODE) g_tcs.mode = (uint8_t)v;
     }
-    return 0;
+    /* 跨参数约束（M10-F-04）：param_set 写入时强制 body_cold < body_hot，加载时却不查——
+     * 两条 body 记录可以加载成 cold >= hot，绕过写时约束，控制判据落进矛盾区间。
+     * 不满足就整份不采信（回默认），返回 -1。*/
+    int cross_bad = (param_get(PARAM_ID_BODY_COLD) >= param_get(PARAM_ID_BODY_HOT));
+    if (cross_bad) param_load_defaults();
+    if (skipped) *skipped = nsk + (cross_bad ? 1 : 0);
+    s_image_ok = (uint8_t)(cross_bad || nsk) ? 0u : 1u;   /* M09-F-06：有记录被拒 = 镜像不完好 */
+    return cross_bad ? -1 : 0;
 }
+
+int param_deserialize(const uint8_t *img) { return param_deserialize_ex(img, NULL); }
 
 void param_load_defaults(void)
 {
@@ -349,18 +433,8 @@ void param_load_defaults(void)
     g_tcs.mode = 0;                       /* F9：上电默认手动 */
 }
 
-void param_load_eeprom(void)
-{
-    /* 目标板入口：读 256B 镜像 → deserialize。eeprom.c 在目标工程提供，
-     * PC 单测提供同名桩（不调本函数即可）。离线/读失败由 main 置 ALM_EEPROM。 */
-    extern int eeprom_ready(void);
-    extern int eeprom_read_image(uint8_t img[EE_IMG_SIZE]);
-    uint8_t img[EE_IMG_SIZE];
-    if (eeprom_ready() && eeprom_read_image(img) == 0)
-        (void)param_deserialize(img);
-}
-
-int param_persist_now(void)
+/* 锁内的实现（外壳 param_persist_now() 持锁）：serialize → commit → 清脏，中间不会有别的写入 */
+static int persist_now_locked(void)
 {
     uint8_t img[EE_IMG_SIZE];
     int dirty = 0;
@@ -372,12 +446,23 @@ int param_persist_now(void)
     for (int i = 0; i < PARAM_N_REGISTERED; i++) s_params[i].dirty_persist = 0;
     s_flush_armed = 0;
     s_armed_at_ms = 0;
+    s_image_ok = 1;                     /* 这次写进去的镜像是通过校验的值 */
     return 0;
+}
+
+int param_persist_now(void)
+{
+    int rv;
+    REG_LOCK();
+    rv = persist_now_locked();
+    REG_UNLOCK();
+    return rv;
 }
 
 static uint32_t s_persist_fail;
 
-void param_persist_flush(uint32_t now_ms)
+/* 锁内的实现（外壳 param_persist_flush() 持锁）*/
+static void persist_flush_locked(uint32_t now_ms)
 {
     if (!s_flush_armed) return;
     if (s_armed_at_ms == 0) {             /* 窗口起点 = 置脏后首个节拍 */
@@ -396,4 +481,22 @@ void param_persist_flush(uint32_t now_ms)
     s_persist_fail = 0;
 }
 
+void param_persist_flush(uint32_t now_ms)
+{
+    REG_LOCK();
+    persist_flush_locked(now_ms);
+    REG_UNLOCK();
+}
+
 uint32_t param_persist_fail_count(void) { return s_persist_fail; }
+
+/* 上电恢复的结果要不要报 ALM_EEPROM（X04-F-07）。
+ * load_not_found = NVS 里没有镜像（首次上电）；deser_ok = param_deserialize 的结果（读失败时传 0）。
+ * 首次上电是正常现象，不报；读失败 / 镜像校验不过意味着用户的设定已经丢了，必须报。*/
+uint8_t param_boot_image_ok(void) { return s_image_ok; }
+void param_set_image_ok(uint8_t ok) { s_image_ok = ok ? 1u : 0u; }
+
+uint8_t param_restore_alarm_needed(uint8_t load_not_found, uint8_t deser_ok)
+{
+    return (load_not_found || deser_ok) ? 0u : 1u;
+}

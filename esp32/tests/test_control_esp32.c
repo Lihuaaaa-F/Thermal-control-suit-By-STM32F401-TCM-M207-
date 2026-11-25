@@ -17,11 +17,6 @@ static int g_pass, g_fail;
     else { g_fail++; printf("FAIL: %s (line %d)\n", name, __LINE__); fflush(stdout); } \
 } while (0)
 
-/* param_load_eeprom 引用的 eeprom 桩（本测试不调用，仅满足链接）*/
-int eeprom_ready(void) { return 0; }
-int eeprom_read_image(uint8_t img[EE_IMG_SIZE]) { (void)img; return -1; }
-
-/* H6：布防判据已迁移到 post 三态机（control 经 post_armed() 读取），测试直写状态 */
 static void set_armed(uint8_t a)
 {
     post_arm_commit(a ? POST_ARM_ARMED_ONLINE : POST_ARM_UNARMED_ABSENT);
@@ -33,22 +28,58 @@ static uint8_t last_fan; static uint8_t last_tec_on, last_tec_ch;
 static float last_temp_v; static uint8_t last_temp_ch;
 
 static void stub_fan(uint8_t on)        { fan_calls++; last_fan = on; }
-static void stub_tec(uint8_t ch, uint8_t on)  { tec_calls++; last_tec_ch = ch; last_tec_on = on; }
+static int tec_on_calls;                               /* X06-F-03：到过执行器的"开"次数 */
+static void stub_tec(uint8_t ch, uint8_t on)  { tec_calls++; last_tec_ch = ch; last_tec_on = on; if (on) tec_on_calls++; }
 static void stub_temp(uint8_t ch, float v)    { temp_calls++; last_temp_ch = ch; last_temp_v = v; }
+
+/* P1-09 用：m207_tec 的主机模型——模块离线时"拒收"（回 -2、不出帧），不记送达 */
+static uint8_t  s_link_down;              /* 1 = M207 链路断（用例同步把 g_tcs.m207_online 置 0）*/
+static uint32_t s_off_delivered_ms;       /* 最近一次"关"真正送达执行器的时刻；0 = 从未 */
+static uint32_t s_stub_now_ms;            /* 桩里的时钟（拍前由用例更新）*/
+static void stub_tec_strict(uint8_t ch, uint8_t on)
+{
+    tec_calls++; last_tec_ch = ch; last_tec_on = on;
+    if (!on && !s_link_down) s_off_delivered_ms = s_stub_now_ms ? s_stub_now_ms : 1u;
+}
+/* P1-09 用：安全关断通道（m207_tec_force 的主机模型）——不依赖普通队列，断链时也记下意图 */
+static int force_calls;
+static void stub_force(uint8_t ch, uint8_t on)
+{
+    force_calls++; last_tec_ch = ch; last_tec_on = on;
+    if (!on) s_off_delivered_ms = s_stub_now_ms ? s_stub_now_ms : 1u;
+}
 
 /* P0-08 持久化钩子桩（文件作用域：MSVC 不支持嵌套函数定义）*/
 static uint8_t s_persisted;
 static void    persist_cb(uint8_t latch) { s_persisted = latch; }
 static uint8_t load_cb(void)             { return SAFETY_BIT_ESTOP; }
+/* S 线 e3a（卡死判据）用：上电无锁存 / 存储里留着 STUCK 位 */
+static uint8_t load0_cb(void)            { return 0; }
+static uint8_t load_stuck_cb(void)       { return SAFETY_BIT_STUCK; }
+/* X06-F-03 用：复位前锁存着超温 + 急停 */
+static uint8_t load_ot_estop_cb(void)    { return SAFETY_BIT_OVERTEMP | SAFETY_BIT_ESTOP; }
+/* X04-F-07 用：NVS 落盘总是失败 */
+static int commit_fail_stub(const uint8_t *img) { (void)img; return -1; }
 
 static void reset_stubs(void)
 {
     fan_calls = tec_calls = temp_calls = 0;
+    force_calls = 0;
+    tec_on_calls = 0;
 }
 
 /* 推进 500ms 评估节拍 */
 static uint32_t s_now;
-static void tick(void) { s_now += 500u; control_poll(s_now); }
+static void tick(void) { s_now += 500u; s_stub_now_ms = s_now; control_poll(s_now); }
+/* 推进一拍（100ms）并同步桩时钟；P1-09 的用例用 */
+static void poll100(void) { s_now += 100u; s_stub_now_ms = s_now; control_poll(s_now); }
+
+/* S 线 e3a（卡死判据）用：推进一拍，同时让**不该被判**的那个通道保持活的读数。
+ * 真实传感器的读数一直在抖（真机旁证：TCACTTEMP 相邻两次 ±0.01~0.07°C）；用例里如果让它
+ * 一直是常量，水温通道会和体温通道一起被判卡死，断言就分不清是谁触发的。*/
+static int s_flick;
+#define tick100_tc1_live() do { g_tcs.tc1_act = (s_flick++ & 1) ? 24.99f : 25.01f; tick100(); } while (0)
+#define tick_tc1_live()    do { g_tcs.tc1_act = (s_flick++ & 1) ? 24.99f : 25.01f; tick(); } while (0)
 
 static void enter_auto_healthy(void)
 {
@@ -847,6 +878,445 @@ int main(void)
         tcs_alarm_ack();
         tick();
         CHECK(control_state() == CTRL_IDLE && tcs_alarm_active(ALM_ESTOP) == 0, "N5 armed: probe back + ack -> released");
+    }
+
+    /* ====== 2026-11-25 S 线 e3a（M09-F-09 / X04-F-06）：读数卡死 → SAFE ======
+     * 合理性滤波只查范围与变化率，恒定读数永远"合理"：体温冻结则自动模式永远停在 HEAT/COOL，
+     * 水温冻结则 48°C 硬切断失明。判据：源自报健康 + 读数逐位不变 ≥30s + TEC 已开 ≥30s → 锁存 STUCK、
+     * 进 SAFE，不受布防门控。时间全部用 100ms 拍推进（现场服务就是 100ms 一拍）。
+     * 判别性与变异验证见 tests/mutation_control.py 的 M31 起。*/
+    {
+        /* K1 体温冻在 30.0，自动模式 HEAT：TEC 开满 30 s 才判，差一拍都不判 */
+        enter_auto_healthy();
+        g_tcs.body_temp = 30.0f;                 /* 远低于 cold-hyst，且从此不变 */
+        tick();                                  /* 评估进 HEAT：TC1 在这一拍开 */
+        CHECK(control_state() == CTRL_HEAT && g_tcs.tec1_on == 1, "K1 precondition: HEAT, TC1 on");
+        for (int i = 0; i < 299; i++) tick100_tc1_live();   /* 29.9 s：还不到窗口 */
+        CHECK(control_state() == CTRL_HEAT, "K1 frozen body: no trip before 30 s");
+        tick100_tc1_live();                      /* 整 30.0 s */
+        CHECK(control_state() == CTRL_SAFE, "K1 frozen body + TC1 on for 30 s -> SAFE");
+        CHECK((control_safety_latched() & SAFETY_BIT_STUCK) != 0, "K1 STUCK latched");
+        CHECK(g_tcs.tec1_on == 0 && g_tcs.tec2_on == 0, "K1 both TEC off");
+        CHECK(tcs_alarm_active(ALM_BODY_SENSOR) == 1, "K1 ALM_BODY_SENSOR raised");
+        CHECK(tcs_alarm_active(ALM_SENSOR_OPEN) == 0, "K1 body-only: no ALM_SENSOR_OPEN");
+        CHECK(g_tcs.fan_on == 1, "K1 fan full");
+
+        /* K2 未布防同样进 SAFE（卡死判据不受布防门控；未布防时普通的体温失联是不进 SAFE 的）*/
+        enter_auto_healthy();
+        set_armed(0);
+        g_tcs.body_temp = 30.0f;
+        tick();
+        CHECK(control_state() == CTRL_HEAT, "K2 precondition: unarmed auto HEAT");
+        for (int i = 0; i < 300; i++) tick100_tc1_live();
+        CHECK(control_state() == CTRL_SAFE && (control_safety_latched() & SAFETY_BIT_STUCK) != 0,
+              "K2 unarmed: frozen body still -> SAFE");
+        CHECK(tcs_alarm_active(ALM_BODY_SENSOR) == 1, "K2 unarmed: ALM_BODY_SENSOR raised");
+
+        /* K11 读数一直不变 → 一直留在 SAFE；K12 这时 ack 不清（读数没恢复变化就不算恢复），
+         *     借用的报警位也不清——设备停在 SAFE 时屏上说得出原因 */
+        for (int i = 0; i < 600; i++) tick100_tc1_live();  /* 再过 60 s */
+        CHECK(control_state() == CTRL_SAFE && (control_safety_latched() & SAFETY_BIT_STUCK) != 0,
+              "K11 still frozen -> stays SAFE");
+        tcs_alarm_ack();
+        CHECK((control_safety_latched() & SAFETY_BIT_STUCK) != 0,
+              "K12 ack cannot clear STUCK while the reading is still frozen");
+        CHECK(tcs_alarm_active(ALM_BODY_SENSOR) == 1, "K12 alarm bit stays while STUCK is latched");
+        CHECK(control_state() == CTRL_SAFE, "K12 still SAFE after ack");
+
+        /* K10 读数重新开始变化 → 2 s 后自愈退出 SAFE、清报警，自动模式当拍重新评估 */
+        {
+            uint32_t t_ok = s_now;
+            int n = 0;
+            while (control_state() == CTRL_SAFE && n < 40) {
+                g_tcs.body_temp = (n & 1) ? 29.99f : 30.01f;   /* 活了：每拍都在变 */
+                tick100_tc1_live();
+                n++;
+            }
+            CHECK(control_state() == CTRL_HEAT, "K10 reading moves again -> SAFE left, HEAT resumes");
+            CHECK(control_safety_latched() == 0 && tcs_alarm_active(ALM_BODY_SENSOR) == 0,
+                  "K10 latch and alarm cleared");
+            /* 与 W2-1 同一口径：恢复后第 1 拍起计时，满 2000ms 的那一拍退出 → 距恢复 2100ms */
+            CHECK(s_now - t_ok == 2100u, "K10 exit exactly 2000 ms after the first live poll");
+
+            /* K15 只动了一下又冻住：自愈后 TEC 最多再开一个窗口，然后再次进 SAFE。
+             *     时冻时动的传感器，每次"动一下"换来的输出不超过一个窗口——把这条实际行为钉住。*/
+            for (int i = 0; i < 280; i++) tick100_tc1_live();   /* 距读数最后一次变化 28 s */
+            CHECK(control_state() == CTRL_HEAT, "K15 no re-trip before the window ends");
+            for (int i = 0; i < 25; i++) tick100_tc1_live();
+            CHECK(control_state() == CTRL_SAFE && (control_safety_latched() & SAFETY_BIT_STUCK) != 0,
+                  "K15 frozen again -> SAFE again");
+        }
+
+        /* K3 反证：体温每拍都在变（活着的传感器）→ HEAT 开满 60 s 也不进 SAFE */
+        enter_auto_healthy();
+        g_tcs.body_temp = 30.0f; tick();
+        CHECK(control_state() == CTRL_HEAT, "K3 precondition: HEAT");
+        for (int i = 0; i < 600; i++) {
+            g_tcs.body_temp = (i & 1) ? 29.99f : 30.01f;
+            g_tcs.tc1_act   = (i & 1) ? 24.99f : 25.01f;
+            tick100();
+        }
+        CHECK(control_state() == CTRL_HEAT && (control_safety_latched() & SAFETY_BIT_STUCK) == 0,
+              "K3 live body: no trip after 60 s of HEAT");
+
+        /* K4 反证：读数不变但 TEC 没开（带内 IDLE）→ 不判卡死（判据要求 TEC 在输出）*/
+        enter_auto_healthy();
+        g_tcs.body_temp = 37.0f; tick();
+        for (int i = 0; i < 120; i++) tick();          /* 60 s，体温一直是 37.0 */
+        CHECK(control_state() == CTRL_IDLE && control_safety_latched() == 0,
+              "K4 frozen body with TEC off -> no trip");
+
+        /* K5 手动模式下体温读数不驱动任何输出：冻住也不判
+         *     （否则"环境水箱 TEC2 开着 + 安静的体温探头"会被误停机）*/
+        enter_auto_healthy();
+        (void)param_set(PARAM_ID_MODE, 0.0f, 4);
+        g_tcs.body_temp = 30.0f;
+        tick();
+        control_manual_tec(2, 1);                       /* 手动开 TEC2（环境水箱）*/
+        for (int i = 0; i < 120; i++) tick();
+        CHECK(control_state() == CTRL_IDLE && control_safety_latched() == 0,
+              "K5 manual mode: frozen body does not trip");
+
+        /* K6 水温读数冻结（48°C 硬切断对它失明）：TC1 开着 30 s → SAFE + ALM_SENSOR_OPEN（手动模式同样判）*/
+        enter_auto_healthy();
+        (void)param_set(PARAM_ID_MODE, 0.0f, 4);
+        tick();                                         /* 喂进第一个水温样本 */
+        g_tcs.tc1_act = 30.0f; tick();
+        control_manual_tec(1, 1);                       /* TC1 在拍外开：开沿记在最近一拍的时间戳上 */
+        CHECK(control_state() == CTRL_IDLE && g_tcs.tec1_on == 1,
+              "K6 precondition: manual, TC1 on, water frozen at 30.0");
+        for (int i = 0; i < 299; i++) tick100();
+        CHECK(control_state() == CTRL_IDLE, "K6 frozen water: no trip before 30 s");
+        tick100();
+        CHECK(control_state() == CTRL_SAFE && (control_safety_latched() & SAFETY_BIT_STUCK) != 0,
+              "K6 frozen water + TC1 on for 30 s -> SAFE");
+        CHECK(tcs_alarm_active(ALM_SENSOR_OPEN) == 1 && tcs_alarm_active(ALM_BODY_SENSOR) == 0,
+              "K6 ALM_SENSOR_OPEN raised (water channel)");
+        CHECK(g_tcs.tec1_on == 0, "K6 TC1 off");
+
+        /* K17 X04-F-06 关单条件：体温活着（一直在动）、水温冻在 30°C，TC1 加热 30 s → 进 SAFE */
+        enter_auto_healthy();
+        g_tcs.body_temp = 37.0f; tick();                            /* 带内：先喂一拍 IDLE 样本 */
+        g_tcs.tc1_act = 30.0f; g_tcs.body_temp = 30.0f; tick();     /* 这一拍进 HEAT */
+        CHECK(control_state() == CTRL_HEAT, "K17 precondition: HEAT with water frozen at 30.0");
+        for (int i = 0; i < 300; i++) { g_tcs.body_temp = (i & 1) ? 29.99f : 30.01f; tick100(); }
+        CHECK(control_state() == CTRL_SAFE && (control_safety_latched() & SAFETY_BIT_STUCK) != 0,
+              "K17 frozen water while heating -> SAFE even though the body reading is live");
+        CHECK(tcs_alarm_active(ALM_SENSOR_OPEN) == 1 && tcs_alarm_active(ALM_BODY_SENSOR) == 0,
+              "K17 water channel blamed, not body");
+
+        /* K7 反证：真实模块的 TCACTTEMP 以 0.01°C 持续抖动（真机旁证 B10），TC1 开 60 s 不误报 */
+        enter_auto_healthy();
+        (void)param_set(PARAM_ID_MODE, 0.0f, 4);
+        tick();
+        control_manual_tec(1, 1);
+        for (int i = 0; i < 600; i++) { g_tcs.tc1_act = (i & 1) ? 18.43f : 18.46f; tick100(); }
+        CHECK(control_state() == CTRL_IDLE && control_safety_latched() == 0,
+              "K7 live water reading: no trip after 60 s with TC1 on");
+
+        /* K8 反证：水温不变但 TC1 没开 → 不判 */
+        enter_auto_healthy();
+        (void)param_set(PARAM_ID_MODE, 0.0f, 4);
+        for (int i = 0; i < 120; i++) tick();
+        CHECK(control_state() == CTRL_IDLE && control_safety_latched() == 0,
+              "K8 frozen water with TC1 off -> no trip");
+
+        /* K9 读数早就冻住了、TEC 后开：从 TEC 开起再等满一个窗口才判（给被控对象留响应时间），
+         *     不是一开 TEC 就判 */
+        enter_auto_healthy();
+        (void)param_set(PARAM_ID_MODE, 0.0f, 4);
+        g_tcs.body_temp = 30.0f; tick();
+        for (int i = 0; i < 120; i++) tick_tc1_live();   /* 手动模式下体温冻 60 s */
+        (void)param_set(PARAM_ID_MODE, 1.0f, 4);       /* 切自动：下一拍进 HEAT */
+        tick();
+        CHECK(control_state() == CTRL_HEAT, "K9 precondition: HEAT starts with an already-frozen reading");
+        for (int i = 0; i < 299; i++) tick100_tc1_live();
+        CHECK(control_state() == CTRL_HEAT,
+              "K9 window counts from TEC turn-on, not from when the reading froze");
+        tick100_tc1_live();
+        CHECK(control_state() == CTRL_SAFE && (control_safety_latched() & SAFETY_BIT_STUCK) != 0,
+              "K9 trips one window after TEC turn-on");
+
+        /* K14 源不健康时不累计：未布防 + 模块离线 + TC1 开着 + 水温陈旧不变
+         *     → 走既有失联路径，不报卡死（离线不是"读数冻结"）*/
+        enter_auto_healthy();
+        (void)param_set(PARAM_ID_MODE, 0.0f, 4);
+        set_armed(0);
+        tick();
+        s_now += 5000u;                                 /* 越过 M207 上电宽限 */
+        g_tcs.m207_online = 0;
+        control_manual_tec(1, 1);
+        for (int i = 0; i < 120; i++) tick();
+        CHECK((control_safety_latched() & SAFETY_BIT_STUCK) == 0, "K14 unhealthy source is not a stuck reading");
+        CHECK(control_state() != CTRL_SAFE, "K14 unarmed + module offline: no SAFE (existing semantics untouched)");
+
+        /* K13 STUCK 不落盘：复位后"哪个通道、冻在哪个值"都无从得知，落盘不增加保护 */
+        control_init(&(control_ops_t){
+            .fan_set = stub_fan, .tec_sw = stub_tec, .tec_temp = stub_temp,
+            .on_state = 0, .safety_persist = persist_cb, .safety_load = load0_cb,
+        });
+        param_registry_init(&(param_hooks_t){0});
+        set_armed(1);
+        g_tcs.body_sensor_ok = 1; g_tcs.m207_online = 1; g_tcs.m207_sensor_open = 0;
+        g_tcs.body_temp = 30.0f; g_tcs.tc1_act = 25.0f;
+        s_now = 10000u;
+        (void)param_set(PARAM_ID_MODE, 1.0f, 4);
+        tick();
+        for (int i = 0; i < 300; i++) tick100();
+        CHECK(control_state() == CTRL_SAFE && (control_safety_latched() & SAFETY_BIT_STUCK) != 0,
+              "K13 precondition: STUCK latched");
+        CHECK((s_persisted & SAFETY_BIT_STUCK) == 0, "K13 STUCK is never written to persistent storage");
+
+        /* K16 存储里留着 STUCK 位（别的固件写的）：上电读回即丢——通道归属已丢失，
+         *     留着会让没有体温探头的设备永远等不到"体温读数恢复变化" */
+        control_init(&(control_ops_t){
+            .fan_set = stub_fan, .tec_sw = stub_tec, .tec_temp = stub_temp,
+            .on_state = 0, .safety_persist = persist_cb, .safety_load = load_stuck_cb,
+        });
+        param_registry_init(&(param_hooks_t){0});
+        CHECK(control_safety_latched() == 0 && control_state() == CTRL_IDLE,
+              "K16 a STUCK bit found in storage is dropped at boot");
+    }
+
+    /* ====== 2026-11-25 S 线 e3a（P1-09）：SAFE 必须到得了执行器 ======
+     * 普通命令队列在模块离线时拒收（m207_tec 回 -2），离线沿还会被清空——"关"送不到执行器。
+     * 控制核这边：① SAFE 的 TCSW=0（进入沿 + 锁存期间每 500ms 的重申）走单独的安全关断通道
+     * ops.tec_force（没提供时退化为 tec_sw）；② 做出 tec_known：模块离线时开关状态是"未知"，
+     * 快照不得显示"已关"。执行器那一侧（m207_tec_force：离线记下意图、复联第一帧补发）在
+     * tcs_m207（e2 批次），这里用主机模型 stub_force 代表它。变异验证见 M43 起。*/
+    {
+        /* P9-1 / P9-2 / P9-4 / P9-5：安全关断通道 */
+        control_init(&(control_ops_t){
+            .fan_set = stub_fan, .tec_sw = stub_tec, .tec_temp = stub_temp, .on_state = 0,
+            .tec_force = stub_force,
+        });
+        param_registry_init(&(param_hooks_t){0});
+        set_armed(0);
+        g_tcs.body_sensor_ok = 1; g_tcs.m207_online = 1; g_tcs.m207_sensor_open = 0;
+        g_tcs.body_temp = 37.0f; g_tcs.tc1_act = 25.0f;
+        s_now = 10000u; s_stub_now_ms = s_now; s_link_down = 0;
+        (void)param_set(PARAM_ID_MODE, 0.0f, 4);        /* 手动 */
+        reset_stubs();
+        control_manual_tec(1, 1);                       /* 手动开着 TC1 */
+        CHECK(g_tcs.tec1_on == 1 && tec_calls == 1 && force_calls == 0,
+              "P9-5 manual on goes through the normal channel only");
+        reset_stubs();
+        tcs_emergency_stop();
+        CHECK(control_state() == CTRL_SAFE, "P9-1 estop -> SAFE");
+        CHECK(force_calls == 2 && tec_calls == 0,
+              "P9-1 SAFE turns both TEC off through the force channel, not the queue");
+        CHECK(g_tcs.tec1_on == 0 && g_tcs.tec2_on == 0, "P9-1 command intent: both off");
+        CHECK(control_tec_known() == 3, "P9-7 link up: TEC state is known");
+
+        reset_stubs();
+        for (int i = 0; i < 10; i++) poll100();         /* 1000ms */
+        CHECK(force_calls == 4,
+              "P9-2 SAFE re-assert uses the force channel every 500ms (2 x 2 channels in 1 s)");
+        CHECK(tec_calls == 0, "P9-2 re-assert never touches the normal queue");
+        CHECK(control_state() == CTRL_SAFE, "P9-2 stays SAFE");
+
+        /* 解除（未布防 + 源健康 → ack 可清），下一拍离开 SAFE */
+        tcs_alarm_ack();
+        poll100();
+        CHECK(control_state() == CTRL_IDLE, "P9 precondition: SAFE left");
+
+        /* P9-4 cmd 11（屏侧观测到超温的停机请求）：同样走安全关断通道 */
+        reset_stubs();
+        CHECK(control_apply_cmd(TCS_CMD_OVERTEMP_STOP) == 0, "P9-4 cmd 11 accepted");
+        CHECK(force_calls == 2 && tec_calls == 0 && last_tec_on == 0,
+              "P9-4 cmd 11 stops both TEC through the force channel");
+        g_tcs.tc1_act = 30.0f;
+        poll100();
+        tcs_alarm_ack();
+        poll100();
+        CHECK(control_state() == CTRL_IDLE, "P9 precondition: SAFE left again");
+
+        /* P9-5 自动状态机的"开"只走普通通道（安全关断通道只留给"关"）*/
+        g_tcs.body_temp = 30.0f;
+        (void)param_set(PARAM_ID_MODE, 1.0f, 4);
+        reset_stubs();
+        tick();
+        CHECK(control_state() == CTRL_HEAT && g_tcs.tec1_on == 1, "P9-5 precondition: HEAT");
+        CHECK(tec_calls >= 1 && force_calls == 0, "P9-5 the state machine's 'on' never uses the force channel");
+
+        /* P9-3 没有提供安全关断通道（e2 接线之前）：退化为普通通道，行为与原先一致 */
+        control_init(&(control_ops_t){
+            .fan_set = stub_fan, .tec_sw = stub_tec, .tec_temp = stub_temp, .on_state = 0,
+        });
+        param_registry_init(&(param_hooks_t){0});
+        set_armed(0);
+        s_now = 10000u; s_stub_now_ms = s_now;
+        (void)param_set(PARAM_ID_MODE, 0.0f, 4);
+        reset_stubs();
+        tcs_emergency_stop();
+        CHECK(tec_calls == 2 && last_tec_on == 0 && control_state() == CTRL_SAFE,
+              "P9-3 without a force channel SAFE falls back to the normal channel");
+
+        /* P9-6（X06-F-03 ②）断链 + 急停：关断必须在 3s 内到达执行器；离线期开关状态是"未知"
+         *    主机模型：stub_tec_strict = m207_tec（离线拒收、不出帧）；stub_force = m207_tec_force
+         *    （断链时也记下意图）。s_off_delivered_ms = "关"真正送达执行器的时刻。*/
+        control_init(&(control_ops_t){
+            .fan_set = stub_fan, .tec_sw = stub_tec_strict, .tec_temp = stub_temp, .on_state = 0,
+            .tec_force = stub_force,
+        });
+        param_registry_init(&(param_hooks_t){0});
+        set_armed(0);
+        g_tcs.body_sensor_ok = 1; g_tcs.m207_online = 1; g_tcs.m207_sensor_open = 0;
+        g_tcs.body_temp = 37.0f; g_tcs.tc1_act = 25.0f;
+        s_now = 10000u; s_stub_now_ms = s_now; s_link_down = 0; s_off_delivered_ms = 0;
+        (void)param_set(PARAM_ID_MODE, 0.0f, 4);
+        poll100();                                     /* 捕获 boot 基准 */
+        reset_stubs();
+        control_manual_tec(1, 1);                      /* 加热中 */
+        CHECK(g_tcs.tec1_on == 1 && control_tec_known() == 3,
+              "P9-6 precondition: TC1 on, link up, state known");
+        s_link_down = 1;
+        g_tcs.m207_online = 0;                         /* 拔 M207 通信线（模块仍供电、TEC 负载仍在）*/
+        {
+            uint32_t t0 = s_now;
+            s_off_delivered_ms = 0;
+            tcs_emergency_stop();                      /* 离线期间触发急停 */
+            CHECK(control_state() == CTRL_SAFE && g_tcs.tec1_on == 0,
+                  "P9-6 estop while the link is down -> SAFE, command intent off");
+            CHECK(s_off_delivered_ms != 0 && (uint32_t)(s_off_delivered_ms - t0) <= 3000u,
+                  "P9-6 'off' reaches the actuator channel within 3 s even with the link down");
+        }
+        for (int i = 0; i < 10; i++) poll100();
+        CHECK(control_tec_known() == 0,
+              "P9-6 while the module is offline the TEC state is UNKNOWN, not 'off'");
+        CHECK(g_tcs.tec_known == 0, "P9-6 snapshot copy of tec_known is 0 while offline");
+        CHECK(control_state() == CTRL_SAFE, "P9-6 stays SAFE while offline");
+        s_link_down = 0;
+        g_tcs.m207_online = 1;                         /* 复联 */
+        poll100();
+        CHECK(control_tec_known() == 3 && g_tcs.tec_known == 3, "P9-6 link back -> TEC state known again");
+        reset_stubs();
+        for (int i = 0; i < 10; i++) poll100();
+        CHECK(force_calls == 4 && last_tec_on == 0,
+              "P9-6 after reconnect the off is still pushed every 500ms");
+    }
+
+    /* ====== 2026-11-26 S 线 e3a（X03-F-08）：命令意图 ≠ 模块回显 ======
+     * g_tcs.tec1_on 原先一个字段两种语义：控制写命令意图，M207 服务回 TCSW? 时写回显。
+     * 现在命令意图另有取值接口 control_tec_cmd()（只有 out_tec_sw 写），卡死判据读它。*/
+    {
+        enter_auto_healthy();
+        (void)param_set(PARAM_ID_MODE, 0.0f, 4);
+        tick();
+        control_manual_tec(1, 1);
+        CHECK(control_tec_cmd(1) == 1 && control_tec_act(1) == 1, "K18 precondition: command on, echo on");
+        g_tcs.tec1_on = 0;                            /* 晚到的回显：模块回的是"关" */
+        CHECK(control_tec_cmd(1) == 1 && control_tec_act(1) == 0,
+              "K18 command intent and module echo are two different quantities");
+        g_tcs.tc1_act = 30.0f; tick();                /* 喂进第一个水温样本 */
+        for (int i = 0; i < 299; i++) tick100();
+        CHECK(control_state() == CTRL_IDLE, "K18 no trip before the window");
+        tick100();
+        CHECK(control_state() == CTRL_SAFE && (control_safety_latched() & SAFETY_BIT_STUCK) != 0,
+              "K18 a late 'off' echo cannot hide a frozen water reading while TC1 is commanded on");
+        /* 关断后两个量一致：都是"关" */
+        control_manual_tec(2, 1);                     /* SAFE 期被拒 */
+        CHECK(control_tec_cmd(2) == 0 && control_tec_act(2) == 0, "K18 in SAFE both channels read off");
+    }
+
+    /* ====== 2026-11-26 S 线 e3a（X06-F-03）：5 条 P0 安全路径的判别性用例 ======
+     * 审查指出"超温用例只断言报警位"。每条 P0 配一句直接断言执行器与状态的话；"回退则红"由
+     * tests/mutation_control.py 的 M47–M50 给出（把修复回退成修前写法，必须被抓住）。
+     *   ① 超温 → tec1_on==0 && state==SAFE            Z1（M47 / M50）
+     *   ② 急停 + 断链 → 3 s 内 TEC=0                   P9-6（M43；修前的 control.c 上红的是 P9-6×4）
+     *   ③ pindrv 在交付档被拒                          H743 侧：tools/site/verify_prod_clean.py（构建矩阵里跑）
+     *   ④ SAFE 不被在途状态机覆盖                      Z2 + 既有的 P0-04 两条（M48）
+     *   ⑤ 复位后仍 SAFE                                Z3（M49）*/
+    {
+        /* Z1 未布防 + 手动 + 两路 TEC 正在输出 → 水温 49°C：当拍双 TEC 关、进 SAFE、风扇全开 */
+        control_init(&(control_ops_t){
+            .fan_set = stub_fan, .tec_sw = stub_tec, .tec_temp = stub_temp, .on_state = 0,
+            .tec_force = stub_force,
+        });
+        param_registry_init(&(param_hooks_t){0});
+        set_armed(0);
+        g_tcs.body_sensor_ok = 1; g_tcs.m207_online = 1; g_tcs.m207_sensor_open = 0;
+        g_tcs.body_temp = 37.0f; g_tcs.tc1_act = 40.0f;
+        s_now = 10000u; s_stub_now_ms = s_now; s_link_down = 0;
+        (void)param_set(PARAM_ID_MODE, 0.0f, 4);
+        poll100();                                     /* 捕获 boot 基准 */
+        control_manual_tec(1, 1);                      /* 手动加热中 */
+        control_manual_tec(2, 1);
+        CHECK(g_tcs.tec1_on == 1 && g_tcs.tec2_on == 1 && control_state() == CTRL_IDLE,
+              "Z1 precondition: manual, both TEC on");
+        reset_stubs();
+        g_tcs.tc1_act = 49.0f;
+        poll100();                                     /* 当拍 */
+        CHECK(g_tcs.tec1_on == 0 && control_state() == CTRL_SAFE,
+              "Z1 overtemp: tec1_on==0 AND state==SAFE on the same tick");
+        CHECK(g_tcs.tec2_on == 0, "Z1 overtemp: the other channel is off too");
+        CHECK(force_calls == 2 && last_tec_on == 0, "Z1 overtemp: both 'off' went out through the safety channel");
+        CHECK(g_tcs.fan_on == 1, "Z1 overtemp: fan full");
+        g_tcs.tc1_act = 30.0f;                         /* 回落但未 ack */
+        reset_stubs();
+        for (int i = 0; i < 10; i++) poll100();
+        control_manual_tec(1, 1);
+        CHECK(control_state() == CTRL_SAFE && g_tcs.tec1_on == 0 && tec_on_calls == 0,
+              "Z1 stays SAFE with TEC off until acknowledged");
+
+        /* Z2 在途状态机盖不过 SAFE：自动 COOL（体温仍高，状态机每个评估拍都"想"继续制冷）时急停，
+         *    之后连跑 6 s + 手动"开"——一次"开"都没有到过执行器 */
+        enter_auto_healthy();
+        g_tcs.body_temp = 40.0f; tick();                /* COOL：TC1 开、风扇开 */
+        CHECK(control_state() == CTRL_COOL && g_tcs.tec1_on == 1, "Z2 precondition: auto COOL with TC1 on");
+        tcs_emergency_stop();
+        CHECK(control_state() == CTRL_SAFE && g_tcs.tec1_on == 0 && g_tcs.tec2_on == 0,
+              "Z2 estop: SAFE, both TEC off at once");
+        reset_stubs();
+        for (int i = 0; i < 12; i++) tick();            /* 6 s，体温一直是 40°C */
+        control_manual_tec(1, 1);                       /* 在途 / 网页的"开" */
+        control_manual_tec(2, 1);
+        CHECK(control_state() == CTRL_SAFE, "Z2 in-flight state machine cannot pull the device out of SAFE");
+        CHECK(g_tcs.tec1_on == 0 && g_tcs.tec2_on == 0 && tec_on_calls == 0,
+              "Z2 not a single 'on' reached the actuator in 6 s of in-flight state machine + manual attempts");
+
+        /* Z3 复位后仍 SAFE：锁存里存着超温 + 急停 → 上电就是 SAFE，第一拍双 TEC 关、风扇全开；
+         *    水温仍高时 ack 不解除 */
+        control_init(&(control_ops_t){
+            .fan_set = stub_fan, .tec_sw = stub_tec, .tec_temp = stub_temp,
+            .on_state = 0, .safety_persist = persist_cb, .safety_load = load_ot_estop_cb,
+        });
+        param_registry_init(&(param_hooks_t){0});
+        CHECK(control_state() == CTRL_SAFE, "Z3 reset with a persisted latch: SAFE before the first poll");
+        g_tcs.tec1_on = 1; g_tcs.tec2_on = 1;          /* 假设复位前两路都在输出 */
+        g_tcs.tc1_act = 49.0f;
+        s_now = 100u; s_stub_now_ms = s_now;
+        reset_stubs();
+        poll100();
+        CHECK(g_tcs.tec1_on == 0 && g_tcs.tec2_on == 0 && control_state() == CTRL_SAFE,
+              "Z3 first poll after reset: both TEC off, still SAFE");
+        CHECK(fan_calls >= 1 && last_fan == 1, "Z3 fan full from the first poll");
+        tcs_alarm_ack();
+        CHECK(control_safety_latched() != 0 && control_state() == CTRL_SAFE,
+              "Z3 ack cannot clear it while the water is still over 48");
+    }
+
+    /* ====== 2026-11-26 S 线 e3a（X04-F-07）：参数存储出故障要看得见 ====== */
+    {
+        control_init(&(control_ops_t){
+            .fan_set = stub_fan, .tec_sw = stub_tec, .tec_temp = stub_temp, .on_state = 0,
+        });
+        param_registry_init(&(param_hooks_t){ .eeprom_commit = commit_fail_stub });
+        set_armed(0);
+        g_tcs.body_sensor_ok = 1; g_tcs.m207_online = 1; g_tcs.m207_sensor_open = 0;
+        g_tcs.body_temp = 37.0f; g_tcs.tc1_act = 25.0f;
+        s_now = 10000u;
+        (void)param_set(PARAM_ID_HYST, 0.4f, 4);
+        param_persist_flush(s_now);
+        s_now += PARAM_PERSIST_DEBOUNCE_MS;
+        param_persist_flush(s_now);                   /* commit 失败 */
+        control_poll(s_now);
+        CHECK(param_persist_fail_count() == 1 && tcs_alarm_active(ALM_EEPROM) == 1,
+              "E3 a failed parameter write raises ALM_EEPROM on the next control tick");
+        tcs_alarm_ack();
+        CHECK(tcs_alarm_active(ALM_EEPROM) == 0, "E3 ALM_EEPROM is informational: ack clears it");
+        control_poll(s_now + 100u);
+        CHECK(tcs_alarm_active(ALM_EEPROM) == 1, "E3 re-raised on the next tick while the failure count stands");
     }
 
     printf("test_control: PASS=%d FAIL=%d\n", g_pass, g_fail);

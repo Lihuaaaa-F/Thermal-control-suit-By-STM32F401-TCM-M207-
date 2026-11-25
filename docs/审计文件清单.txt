@@ -1,6 +1,8 @@
 # SOP（W5，v13.4 §6）：新增源文件（esp32 四树+project_tcs 四树）必须在同一 commit 更新本清单
 # 提交前自查：python esp32/tools/official_lib_audit.py → 红（未入清单/未归类）= 补登记后再提交
 # （'#'开头行由脚本加载时忽略——本头三行即机制自证）
+esp32/components/tcs_core/boot_record.c
+esp32/components/tcs_core/boot_record.h
 esp32/components/tcs_core/control.c
 esp32/components/tcs_core/control.h
 esp32/components/tcs_core/control_service.c
@@ -11,6 +13,8 @@ esp32/components/tcs_core/param_registry.c
 esp32/components/tcs_core/param_registry.h
 esp32/components/tcs_core/post.h
 esp32/components/tcs_core/post_pure.c
+esp32/components/tcs_core/svc_status.c
+esp32/components/tcs_core/svc_status.h
 esp32/components/tcs_fan/fan_service.c
 esp32/components/tcs_fan/include/fan_service.h
 esp32/components/tcs_link/comm.c
@@ -45,10 +49,13 @@ esp32/components/tcs_wifi/softap.c
 esp32/main/main.c
 esp32/main/r1e_probe.c
 esp32/main/r1e_probe.h
+esp32/main/tcs_bootrec.c
+esp32/main/tcs_bootrec.h
 esp32/main/tcs_console.c
 esp32/main/tcs_console.h
 esp32/main/tcs_snap.c
 esp32/main/tcs_snap.h
+esp32/tests/check_layout.py
 esp32/tests/host_stubs/driver/uart.h
 esp32/tests/host_stubs/esp_err.h
 esp32/tests/host_stubs/esp_log.h
@@ -60,6 +67,7 @@ esp32/tests/host_stubs/freertos/task.h
 esp32/tests/m207_core_host.c
 esp32/tests/m207_tb.h
 esp32/tests/mutation_control.py
+esp32/tests/mutation_core.py
 esp32/tests/mutation_web.py
 esp32/tests/shim_h7/m207.h
 esp32/tests/test_control_esp32.c
@@ -74,6 +82,7 @@ esp32/tests/test_m207_link.c
 esp32/tests/test_m207_proto.c
 esp32/tests/test_m207_queue.c
 esp32/tests/test_m207_status.c
+esp32/tests/test_tcs_core.c
 esp32/tests/test_tcs_proto.c
 esp32/tests/test_tmp117_core.c
 esp32/tests/test_tmp117_pure.c
@@ -256,5 +265,7 @@ project_tcs/tools/vl4_aa_check.py
 project_tcs/tools/web_gz_check.py
 protocol/proto_layout.h
 protocol/tcs_proto.h
+protocol/tcs_version.h
 tools/proto_sync.py
+tools/version_bump.py
 esp32/tools/chart_test.js

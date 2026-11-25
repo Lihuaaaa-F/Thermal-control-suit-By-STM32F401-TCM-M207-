@@ -293,6 +293,8 @@ static void cmd_exec(char *line)
         tx_drain();                          /* 16 行约 0.6KB：一次排掉，免得和后面的输出挤 TX 环 */
         return;
     }
+    /* --- fault：重打上一次 HardFault 现场（启动那一行只有 RTT 开着才看得到；2026-11-26，S 线 C06）--- */
+    if (strcmp(argv[0], "fault") == 0) { console_print_fault_record(); return; }
     /* --- stat --- */
     if (strcmp(argv[0], "stat") == 0) {
         printf("tc1=%.1f tc2=%.1f body=%.1f tec1=%u tec2=%u fan=%u mode=%u "
@@ -890,15 +892,23 @@ void console_init(UART_HandleTypeDef *huart)
 /* ====== 复位源解析（§3.9：复位后首行日志）======
  * WP-C.4：IWDG1RSTF 优先于 PIN——IWDG 复位时 NRST 也被拉低，PINRSTF 同样置位，
  * 按 PIN 优先会误报。其余位照常见义。 */
-/* X04-F-03：上次 HardFault 现场（.noinit，复位存活）。只在发生过时打印，不主动清。*/
+/* X04-F-03：上次 HardFault 现场（.noinit，复位存活）。只在发生过时打印，不主动清。
+ * 2026-11-26（S 线 C06）：记录多留了栈指针、栈内的返回地址与 xPSR、异常状态和序号——三次受控触发读出的 PC 都是 0，
+ * 没有这些判不出记录器哪一步不对。结构布局与 Core/Src/stm32h7xx_it.c 的 fault_rec_t 必须一致（改一处同步另一处）。*/
 void console_print_fault_record(void)
 {
-    extern volatile struct { uint32_t magic, pc, lr, cfsr, hfsr, bfar; } g_fault_rec;
+    extern volatile struct {
+        uint32_t magic, pc, lr, cfsr, hfsr, bfar;
+        uint32_t sp, stk_lr, xpsr, icsr, shcsr, fpccr, seq;
+    } g_fault_rec;
     if (g_fault_rec.magic != 0x54434641u) return;
-    tcs_log("[FAULT]", "last HardFault PC=0x%08lx LR=0x%08lx CFSR=0x%08lx HFSR=0x%08lx BFAR=0x%08lx",
-            (unsigned long)g_fault_rec.pc, (unsigned long)g_fault_rec.lr,
+    tcs_log("[FAULT]", "HardFault #%lu PC=0x%08lx EXC_RETURN=0x%08lx CFSR=0x%08lx HFSR=0x%08lx BFAR=0x%08lx",
+            (unsigned long)g_fault_rec.seq, (unsigned long)g_fault_rec.pc, (unsigned long)g_fault_rec.lr,
             (unsigned long)g_fault_rec.cfsr, (unsigned long)g_fault_rec.hfsr,
             (unsigned long)g_fault_rec.bfar);
+    tcs_log("[FAULT]", "  stacked SP=0x%08lx stk_lr=0x%08lx xPSR=0x%08lx ICSR=0x%08lx SHCSR=0x%08lx FPCCR=0x%08lx",
+            (unsigned long)g_fault_rec.sp, (unsigned long)g_fault_rec.stk_lr, (unsigned long)g_fault_rec.xpsr,
+            (unsigned long)g_fault_rec.icsr, (unsigned long)g_fault_rec.shcsr, (unsigned long)g_fault_rec.fpccr);
 }
 
 void console_print_reset_source(void)

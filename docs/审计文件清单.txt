@@ -20,8 +20,10 @@ esp32/components/tcs_link/link_task.c
 esp32/components/tcs_link/proto.c
 esp32/components/tcs_link/proto.h
 esp32/components/tcs_link/tcs_proto.h
+esp32/components/tcs_m207/include/m207_core.h
 esp32/components/tcs_m207/include/m207_proto.h
 esp32/components/tcs_m207/include/m207_service.h
+esp32/components/tcs_m207/m207_core.c
 esp32/components/tcs_m207/m207_proto.c
 esp32/components/tcs_m207/m207_service.c
 esp32/components/tcs_tmp117/include/tmp117_pure.h
@@ -45,9 +47,11 @@ esp32/main/tcs_console.c
 esp32/main/tcs_console.h
 esp32/main/tcs_snap.c
 esp32/main/tcs_snap.h
+esp32/tests/m207_tb.h
 esp32/tests/mutation_control.py
 esp32/tests/mutation_web.py
 esp32/tests/test_control_esp32.c
+esp32/tests/test_m207_core.c
 esp32/tests/test_m207_golden.c
 esp32/tests/test_m207_proto.c
 esp32/tests/test_tcs_proto.c

@@ -63,6 +63,7 @@ def _is_skip_dir(name):
 # 缺失=黄灯（一个版本期不阻断 exit；§1c W7 门禁=黄灯数 0；新增 🟦 文件应随 SOP 同步登记本表）
 VERIFY_COMMENT_FILES = (
     'esp32/components/tcs_m207/m207_service.c',
+    'esp32/components/tcs_m207/m207_core.c',       # S-G e2：服务决策逻辑（自 m207_service.c 抽出）
     'esp32/components/tcs_m207/m207_proto.c',
     'esp32/components/tcs_link/link_task.c',
     'esp32/components/tcs_link/comm.c',

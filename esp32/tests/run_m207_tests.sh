@@ -50,6 +50,9 @@ run m207golden tests/test_m207_golden.c components/tcs_m207/m207_proto.c
 run tmp117pure tests/test_tmp117_pure.c    components/tcs_tmp117/tmp117_pure.c
 run tcsproto  tests/test_tcs_proto.c
 run control   tests/test_control_esp32.c   components/tcs_core/control.c components/tcs_core/param_registry.c components/tcs_core/post_pure.c components/tcs_link/proto.c
+# S-G e2（X06-F-05 / M12-F-12）：M207 服务内核（m207_core.c）逐拍主机用例——首联、selfloop 九步移植、
+# 探测、传感器开路、超温、写路径、离线停写、下行帧黄金样本
+run m207core  tests/test_m207_core.c components/tcs_m207/m207_core.c components/tcs_m207/m207_proto.c components/tcs_core/control.c components/tcs_core/param_registry.c components/tcs_core/post_pure.c components/tcs_link/proto.c
 
 # U 线 W1：网页 WS 契约（st / log 消息，真实 cJSON）
 if [ -f "$CJSON_DIR/cJSON.c" ]; then

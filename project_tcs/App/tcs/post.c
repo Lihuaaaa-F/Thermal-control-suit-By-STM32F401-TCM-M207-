@@ -136,6 +136,7 @@ uint8_t    post_armed(void)         { return (s_cur_state != POST_ARM_UNARMED_AB
 #include "ft5446.h"
 #include "tmp117.h"
 #include "m207.h"
+#include "tcs_profile.h"    /* TCS_H743_LINK_ONLY：交付档不探测本地 TMP117（P1-06 残余）*/
 #include "segger_rtt.h"
 #include <stdio.h>              /* snprintf：F16 浮点/长度修饰符日志预格式化 */
 #include <string.h>
@@ -218,6 +219,10 @@ void post_init(int eeprom_cfg_invalid)
     /* 1. TMP117 Device ID（0x0F == 0x0117；TCS_SIM 假体温源恒过）*/
 #ifdef TCS_SIM
     post_set_result(POST_ITEM_TMP117, 1);
+#elif TCS_H743_LINK_ONLY
+    /* 交付档（v2）：体温传感器在主控侧，本机不探测（I2C1 也不初始化，P1-06 残余）。
+     * 该项固定记 FAIL——交付档不跑布防，它只出现在 post 命令的显示里。*/
+    post_set_result(POST_ITEM_TMP117, 0);
 #else
     uint16_t devid = 0;
     int ok = 0;

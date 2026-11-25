@@ -466,8 +466,12 @@ static void hook_m207_map_set(uint16_t pid, float v)
 }
 static void hook_mode_change(uint8_t m)        { control_on_mode_change(m); }
 static int  hook_eeprom_commit(const uint8_t *img) { return eeprom_commit_image(img); }
+/* 台架/仿真档专用：交付档的 control_init 不接任何本地执行器钩子（P1-06 残余），
+ * 这两个函数在交付档没有调用者，不编译。*/
+#if !TCS_H743_LINK_ONLY
 static void ops_tec_sw(uint8_t ch, uint8_t on)   { (void)m207_tec(ch, on); }
 static void ops_tec_temp(uint8_t ch, float v)    { (void)m207_set_temp(ch, v); }
+#endif
 
 /* ====== 链路帧分发（主循环上下文）====== */
 void on_frame(const uint8_t *payload, size_t len)
@@ -789,12 +793,16 @@ static void MX_UART_Init(void)
 #endif
     uart_common_init(&huart_link, USART2, LINK_BAUD, USART2_IRQn);
 
-    /* USART3 PB10/PB11 AF7 M207（接线表 #1/#2）*/
+#if !TCS_H743_LINK_ONLY
+    /* USART3 PB10/PB11 AF7 M207（接线表 #1/#2）。
+     * 台架/仿真档专用：v2 里 M207 挂在 ESP32 侧，交付档不初始化这一路，
+     * PB10/PB11 保持复位态（P1-06 残余）。*/
     __HAL_RCC_USART3_CLK_ENABLE();
     __HAL_RCC_GPIOB_CLK_ENABLE();
     uart_gpio_af    (GPIOB, GPIO_PIN_10, GPIO_AF7_USART3);
     uart_gpio_af_pull(GPIOB, GPIO_PIN_11, GPIO_AF7_USART3, GPIO_PULLUP);
     uart_common_init(&huart_m207, USART3, M207_BAUD, USART3_IRQn);
+#endif
 }
 
 /* ====== I2C1 PB8/PB9 AF4 @100kHz（TMP117，接线表 #5/#6）====== */
@@ -813,6 +821,8 @@ void HAL_I2C_MspInit(I2C_HandleTypeDef *hi2c)
     }
 }
 
+/* 台架/仿真档专用（交付档不探测本地 TMP117：I2C1 和 PB8/PB9 都不初始化；P1-06 残余）。*/
+#if !TCS_H743_LINK_ONLY
 static void MX_I2C1_Init(void)
 {
     hi2c_tmp117.Instance = I2C1;
@@ -832,6 +842,7 @@ static void MX_I2C1_Init(void)
      * 以后若改用 HAL 的 *_IT 中断式收发，必须同一次提交里补上 I2C1_EV_IRQHandler
      * （run_all.sh 末尾的 [irq_handler] 门禁会查"使能了但没有处理函数"的 IRQ）。*/
 }
+#endif /* !TCS_H743_LINK_ONLY：MX_I2C1_Init */
 
 void Error_Handler(void)
 {
@@ -874,7 +885,9 @@ int main(void)
     SystemClock_Config();
     MX_GPIO_Init();
     MX_UART_Init();
-    MX_I2C1_Init();
+#if !TCS_H743_LINK_ONLY
+    MX_I2C1_Init();      /* 台架/仿真档：本地 TMP117 的 I2C1（PB8/PB9）*/
+#endif
 
     console_init(&huart_console);
     console_print_reset_source();
@@ -903,8 +916,14 @@ int main(void)
     iwdg_refresh();
     /* keypad 有意不初始化：KP_COL2=PD5 归 USART2_TX（接线表 #3），文件仅保留编译 */
 
-    /* EEPROM → 参数注册表（离线/CRC 坏不阻塞，默认值 + ALM_EEPROM）*/
+    /* EEPROM → 参数注册表（离线/CRC 坏不阻塞，默认值 + ALM_EEPROM）。
+     * 台架/仿真档专用。交付档的参数真值在 ESP32/NVS，但原来这里照跑：PH4/PH5 上的
+     * 位探测 + 整片读要翻约 120ms，结果随即丢弃（P1-06 残余）。*/
+#if TCS_H743_LINK_ONLY
+    int ee_rv = -1;              /* 交付档：没碰本地 EEPROM，下面只 (void) 它 */
+#else
     int ee_rv = eeprom_init();
+#endif
     iwdg_refresh();
     uint8_t ee_cfg_invalid = 0;
     param_registry_init(&(param_hooks_t){
@@ -940,17 +959,37 @@ int main(void)
     }
 #endif
 
-    /* 安全控制 + 外设桥 */
+    /* 安全控制 + 外设桥。
+     * 交付档（TCS_H743_LINK_ONLY）：v2 里 TEC / 风扇 / M207 / 体温传感器都在 ESP32 侧，
+     * 本机不驱动任何执行器——三个本地执行器钩子传空。原来交付档也把 fan_set 接了进来：
+     * 急停（屏幕 / KEY0 / 控制台 estop 同一入口）和超温兜底都会经它把 PB14 写低，而 v1
+     * 接线表里 PB14 是"→ 风扇光耦，低电平=开"，交付档又不跑 control_poll，这个低电平会
+     * 一直保持到复位——样机上若 PB14 还接着光耦，它就是和 ESP32 并联的第二个写者
+     * （P1-06 残余）。control_init 在交付档也会拒收这三个钩子（tests/test_prod_link_only.c）。*/
     control_init(&(control_ops_t){
+#if TCS_H743_LINK_ONLY
+        .fan_set  = NULL,
+        .tec_sw   = NULL,
+        .tec_temp = NULL,
+#else
         .fan_set  = fan_set,
         .tec_sw   = ops_tec_sw,
         .tec_temp = ops_tec_temp,
+#endif
         .on_state = NULL,
     });
     if (ee_cfg_invalid) tcs_alarm_raise(ALM_EEPROM);   /* control_init 之后置位才不被清 */
+#if !TCS_H743_LINK_ONLY
+    /* 台架/仿真档的本地外设（交付档不初始化：P1-06 残余）
+     *   m207_init：挂 USART3 单字节 RX 中断（引脚在 MX_UART_Init 里配）
+     *   fan_init ：PB14 推挽输出，默认关（高）*/
     m207_init(&huart_m207);
-    tmp117_init(&hi2c_tmp117);
     fan_init();
+#endif
+    /* tmp117_init 不按档位门控：它不碰任何引脚和外设（只存句柄、复位软件状态），而
+     * status_tx 的 0x10 帧在首帧快照到达之前要靠它置的 g_tcs.body_sensor_ok 初值
+     * （M01-F-10 的教训：本机的 0 会经 0x10 传到网页）。引脚在 MX_I2C1_Init，那边已门控。*/
+    tmp117_init(&hi2c_tmp117);
 
     comm_init(&g_link, link_uart_send, now_ms_fn, on_link_down, crit_enter, crit_exit);
 

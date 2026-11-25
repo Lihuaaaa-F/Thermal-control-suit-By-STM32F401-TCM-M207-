@@ -333,6 +333,36 @@ else
     echo "[irq_handler] SKIP: python not found"; FAIL=1
 fi
 
+# S-G h1a（P1-06 残余）：交付档（TCS_PROFILE=0 → TCS_H743_LINK_ONLY=1）下 control 不驱动任何本地执行器。
+# 上面每一行都按台架语义（TCS_PROFILE=1）编译，走不到交付档的分支（独立复核 R5-06）。
+# 这一段自带一套开关，不动既有行；源文件与 run control 同一组。
+if [ "$MODE" = gcc ]; then
+    if $GCC -Wall -Wextra -std=c11 -O1 -DTCS_UNIT_TEST -DTCS_PROFILE=0 $IFLAGS \
+         tests/test_prod_link_only.c App/tcs/control.c App/tcs/param_registry.c App/tcs/post.c App/proto/proto.c \
+         -o build/tests_prodlink.exe 2> build/tests_prodlink.err \
+       && ./build/tests_prodlink.exe; then :; else
+        echo "[prodlink] FAIL"; cat build/tests_prodlink.err 2>/dev/null | head -20; FAIL=1
+    fi
+else
+    mkdir -p build
+    PL_CMD='cl /nologo /W4 /std:c11 /utf-8 /D_CRT_SECURE_NO_WARNINGS /DTCS_UNIT_TEST /DTCS_PROFILE=0 /I..\App\tcs /I..\App\proto /I..\App\comm /I..\App\lvgl_ui /I..\Core\Inc'
+    for s in tests/test_prod_link_only.c App/tcs/control.c App/tcs/param_registry.c App/tcs/post.c App/proto/proto.c; do
+        PL_CMD="$PL_CMD \"$(cygpath -w "$PWD/$s")\""
+    done
+    PL_CMD="$PL_CMD /Fe:tests_prodlink.exe"
+    {
+        echo '@echo off'
+        echo 'call "C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Auxiliary\Build\vcvars64.bat" >nul 2>&1'
+        echo "cd /d \"$(cygpath -w "$PWD/build")\""
+        echo "$PL_CMD || exit /b 1"
+        echo 'tests_prodlink.exe'
+        echo 'exit /b %ERRORLEVEL%'
+    } > build/prodlink_compile.bat
+    if cmd //c "build\\prodlink_compile.bat" > build/prodlink.log 2>&1; then :; else
+        echo "[prodlink] FAIL"; grep -a "FAIL" build/prodlink.log | head -20; FAIL=1
+    fi
+fi
+
 echo "==================="
 if [ "$FAIL" = 0 ]; then echo "run_all: ALL GREEN"; else echo "run_all: HAS FAILURES"; fi
 exit $FAIL

@@ -5,17 +5,12 @@
  */
 #include <stdio.h>
 #include "post.h"
-#include "param_registry.h"   /* EE_IMG_SIZE（eeprom 桩签名）*/
 
 static int g_pass, g_fail;
 #define CHECK(cond, name) do { \
     if (cond) { g_pass++; } \
     else { g_fail++; printf("FAIL: %s (line %d)\n", name, __LINE__); } \
 } while (0)
-
-/* param_load_eeprom 引用的 eeprom 桩（本测试不调用，仅满足链接）*/
-int eeprom_ready(void) { return 0; }
-int eeprom_read_image(uint8_t img[EE_IMG_SIZE]) { (void)img; return -1; }
 
 /* ====== 1. 合理性滤波 ====== */
 static void test_body_sanity(void)

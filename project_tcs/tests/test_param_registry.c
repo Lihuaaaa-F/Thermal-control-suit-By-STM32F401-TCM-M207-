@@ -15,10 +15,6 @@ static int g_pass, g_fail;
     else { g_fail++; printf("FAIL: %s (line %d)\n", name, __LINE__); } \
 } while (0)
 
-/* param_load_eeprom 引用的 eeprom 桩（本测试不调用它，仅满足链接）*/
-int eeprom_ready(void) { return 0; }
-int eeprom_read_image(uint8_t img[EE_IMG_SIZE]) { (void)img; return -1; }
-
 static int commit_cnt;
 static int stub_commit(const uint8_t *img) { (void)img; commit_cnt++; return 0; }
 

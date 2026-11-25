@@ -389,16 +389,10 @@ void param_load_defaults(void)
     g_tcs.mode = 0;                       /* F9：上电默认手动 */
 }
 
-void param_load_eeprom(void)
-{
-    /* 目标板入口：读 256B 镜像 → deserialize。eeprom.c 在目标工程提供，
-     * PC 单测提供同名桩（不调本函数即可）。离线/读失败由 main 置 ALM_EEPROM。 */
-    extern int eeprom_ready(void);
-    extern int eeprom_read_image(uint8_t img[EE_IMG_SIZE]);
-    uint8_t img[EE_IMG_SIZE];
-    if (eeprom_ready() && eeprom_read_image(img) == 0)
-        (void)param_deserialize(img);
-}
+/* M05-F-16（S-G h1a，2026-11-25）：这里原有一个 param_load_eeprom()——产品代码从不调用
+ * （main.c 自己读镜像再 param_deserialize，为的是把"离线/CRC 坏"记成 ALM_EEPROM），
+ * 只有主机测试为它备了两个 eeprom 桩；它还把 param_deserialize 的返回值直接丢掉，
+ * 谁要是拿它当加载入口，CRC 坏了也不会报。已删除。块作用域 extern（M05-F-18）随之消失。*/
 
 int param_persist_all(void)
 {

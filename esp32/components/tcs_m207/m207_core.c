@@ -65,10 +65,12 @@ static portMUX_TYPE s_qmux = portMUX_INITIALIZER_UNLOCKED;
 #define M207_OPEN_DEBOUNCE 3   /* 连续 =2 次数达标才判断线（防交错误归属）*/
 #define M207_PEND_MAX    4       /* 在途写确认事务（FIFO）*/
 #define M207_PERF_WIN    200u    /* perf 汇报窗 = 200 拍 = 10s */
+#define M207_SAVE_N      32u     /* "保存到模块"的帧数：TC1/TC2 各 16 个参数（映射表前 32 项）*/
 
 /* ====== 队列消息（生产者：任意任务 API/内部；消费者：服务任务）====== */
 typedef struct {
     uint8_t  verify;                 /* 1=需写后读回确认 */
+    uint8_t  dead;                   /* X03-F-07：1=已被更新的写取代，出队时跳过（不上线路）*/
     uint8_t  ch;                     /* 1/2 */
     uint8_t  decimals;
     float    value;                  /* 期望值（确认比对）*/
@@ -121,11 +123,73 @@ static uint8_t  s_have_temp[M207_MOD_MAX];
 
 static struct {
     uint16_t nak, verify_ok, resend, offline, wdrop, qdrop, unexpected;
+    uint16_t superseded;                /* X03-F-07：被更新的写取代、没上线路的帧 */
+    uint16_t save_ok, save_rej;         /* M12-F-08：保存帧被确认 / 被拒或无应答 */
     uint32_t tx, rx_lines, parse_err;
     uint32_t tick_max_us, fsm_max_us;    /* perf 窗口内最大值 */
 } s_stat;
 static uint32_t s_txdrop;                /* 发送环满丢帧（服务出口报 -1 的次数）*/
 static uint8_t  s_perf_due;
+
+/* ====== 安全关断旁路（X03-F-07）======
+ * TCSW=0 不进普通队列：每通道一个单槽，最新值覆盖，下一拍优先上线路（排在重发与队列帧之前），
+ * 所以不会被 16 条普通写挤掉。上线路时作废该通道队列里还没发的 TCSW 写、以及在途未确认的
+ * TCSW 事务——后者若按重试预算重发 TCSW=1，会把刚发出去的关断盖掉（TEC 重新打开而系统以为已关）。*/
+typedef struct { uint8_t pending; uint8_t on; } m207_lane_t;
+static m207_lane_t s_lane[M207_MOD_MAX];
+
+/* ====== "保存到模块"序列（M12-F-08）======
+ * 32 条 `!` 帧不再一次入队（队列只有 16 深，TC2 的 16 条会静默丢掉），
+ * 改为由服务任务按游标每拍发一条；掉线即中止。*/
+static uint8_t  s_save_active;
+static uint8_t  s_save_idx;              /* 下一条要发的保存帧在 s_map 里的下标 */
+static uint8_t  s_save_summary_due;      /* 末帧应答窗结束后打一次汇总 */
+static uint32_t s_save_last_tick;        /* 末帧上线路的拍号 */
+static uint16_t s_save_ack_ok, s_save_ack_other;   /* 本序列内收到的 CMD:REPLY=8 / 其它回码 */
+
+/* ====== H10 映射表（逐字复制自 project_tcs m207.c s_map；R5 接注册表镜像）====== */
+static const m207_map_entry_t s_map[] = {
+    { 0x100, 1, "TCPIDP",       3, 0 },   /* mod=0：TC 前缀 */
+    { 0x101, 1, "TCPIDTI",      2, 0 },   /* mod=0：TC 前缀 */
+    { 0x102, 1, "TCPIDTD",      3, 0 },   /* mod=0：TC 前缀 */
+    { 0x103, 1, "TCOTPHT",      1, 0 },   /* mod=0：TC 前缀 */
+    { 0x104, 1, "TCOTPLT",      1, 0 },   /* mod=0：TC 前缀 */
+    { 0x105, 1, "TCOTPHHYS",    1, 0 },   /* mod=0：TC 前缀 */
+    { 0x106, 1, "TCOTPMODE",    0, 0 },   /* mod=0：TC 前缀 */
+    { 0x107, 1, "TCOCPADJTHR",  2, 0 },   /* mod=0：TC 前缀 */
+    { 0x108, 1, "TCOVPADJTHR",  2, 0 },   /* mod=0：TC 前缀 */
+    { 0x109, 1, "TCRTOCPHT",    1, 0 },   /* mod=0：TC 前缀 */
+    { 0x10A, 1, "TCRTOCPLT",    1, 0 },   /* mod=0：TC 前缀 */
+    { 0x10B, 1, "TCMINTEMP",    1, 0 },   /* mod=0：TC 前缀 */
+    { 0x10C, 1, "TCMAXTEMP",    1, 0 },   /* mod=0：TC 前缀 */
+    { 0x10D, 1, "TCMAXV",       2, 0 },   /* mod=0：TC 前缀 */
+    { 0x10E, 1, "TCCOOLVRATIO", 2, 0 },   /* mod=0：TC 前缀 */
+    { 0x10F, 1, "TCSTEPTEMP",   3, 0 },   /* mod=0：TC 前缀 */
+    { 0x110, 2, "TCPIDP",       3, 0 },   /* mod=0：TC 前缀 */
+    { 0x111, 2, "TCPIDTI",      2, 0 },   /* mod=0：TC 前缀 */
+    { 0x112, 2, "TCPIDTD",      3, 0 },   /* mod=0：TC 前缀 */
+    { 0x113, 2, "TCOTPHT",      1, 0 },   /* mod=0：TC 前缀 */
+    { 0x114, 2, "TCOTPLT",      1, 0 },   /* mod=0：TC 前缀 */
+    { 0x115, 2, "TCOTPHHYS",    1, 0 },   /* mod=0：TC 前缀 */
+    { 0x116, 2, "TCOTPMODE",    0, 0 },   /* mod=0：TC 前缀 */
+    { 0x117, 2, "TCOCPADJTHR",  2, 0 },   /* mod=0：TC 前缀 */
+    { 0x118, 2, "TCOVPADJTHR",  2, 0 },   /* mod=0：TC 前缀 */
+    { 0x119, 2, "TCRTOCPHT",    1, 0 },   /* mod=0：TC 前缀 */
+    { 0x11A, 2, "TCRTOCPLT",    1, 0 },   /* mod=0：TC 前缀 */
+    { 0x11B, 2, "TCMINTEMP",    1, 0 },   /* mod=0：TC 前缀 */
+    { 0x11C, 2, "TCMAXTEMP",    1, 0 },   /* mod=0：TC 前缀 */
+    { 0x11D, 2, "TCMAXV",       2, 0 },   /* mod=0：TC 前缀 */
+    { 0x11E, 2, "TCCOOLVRATIO", 2, 0 },   /* mod=0：TC 前缀 */
+    { 0x11F, 2, "TCSTEPTEMP",   3, 0 },   /* mod=0：TC 前缀 */
+    /* 系统/PCB 模块无通道概念；PCB:* 下发由 R5 按 module 字段扩展 */
+    /* M12-F-05：正典 §2.5 的模块前缀是 PCB:/PCRS232:，参数名照抄正典
+     * （TMOTPHT/TMOTPLT/TMOTPHHYS/COMADDR）。*/
+    { 0x120, 0, "TMOTPHT",      1, M207_MOD_PCB     },
+    { 0x121, 0, "TMOTPLT",      1, M207_MOD_PCB     },
+    { 0x122, 0, "TMOTPHHYS",    1, M207_MOD_PCB     },
+    { 0x126, 0, "COMADDR",      0, M207_MOD_PCRS232 },
+};
+#define M207_MAP_N  (sizeof(s_map) / sizeof(s_map[0]))
 
 /* ====== 发送出口 ====== */
 static int64_t m207_now_us(void)
@@ -133,47 +197,85 @@ static int64_t m207_now_us(void)
     return s_io.now_us ? s_io.now_us(s_io.time_ctx) : 0;
 }
 
-static void m207_core_tx(const char *cmd, size_t len)
+/* 返回 0=已交给发送出口（计 tx）；-1=发送环满被丢（计 txdrop；调用方决定是否重发）*/
+static int m207_core_tx(const char *cmd, size_t len)
 {
     if (!s_io.tx || s_io.tx(s_io.tx_ctx, cmd, len) != 0) {
         s_txdrop++;
         if ((s_txdrop % 50u) == 1u)
             M207_LOGW("tx ring full, dropped %lu frames", (unsigned long)s_txdrop);
-        return;
+        return -1;
     }
     s_stat.tx++;
+    return 0;
 }
 
 /* ====== 下行队列（环形；生产者任意任务）======
  * 容量与抽取前的 FreeRTOS 队列一致：恰好 M207_Q_LEN 条。用计数判满——
  * "留空一格判满"的环形只能放 N-1 条（第一版就错在这里，主机差分的队列桩同错，没照出来）。*/
+/* 调用方已持锁：入队。0=成功，-1=满 */
+static int m207_ring_push(const m207_msg_t *msg)
+{
+    if (s_q_count >= M207_Q_LEN) return -1;
+    s_ring[s_q_head] = *msg;
+    s_q_head = (uint8_t)((s_q_head + 1u) % M207_Q_LEN);
+    s_q_count++;
+    return 0;
+}
+
+/* 服务内部帧（复联查询等）：满了计 qdrop 并留日志——不静默丢 */
 static int m207_enqueue(const m207_msg_t *msg)
 {
-    int rc = -1;
-    if (!s_started) return -1;
+    int rc;
     M207_Q_LOCK();
-    if (s_q_count < M207_Q_LEN) {
-        s_ring[s_q_head] = *msg;
-        s_q_head = (uint8_t)((s_q_head + 1u) % M207_Q_LEN);
-        s_q_count++;
-        rc = 0;
+    rc = s_started ? m207_ring_push(msg) : -1;
+    M207_Q_UNLOCK();
+    if (rc != 0) {
+        s_stat.qdrop++;
+        M207_LOGW("tx queue full: internal frame dropped (%s)", msg->cmd);
+    }
+    return rc;
+}
+
+/* API 写入的统一出口（M12-F-08）：在线判定与入队在同一临界区——离线清队与入队不交错。
+ * 返回 0=入队；-1=队列满（计 qdrop，限频日志）；-2=未启动或离线（计 wdrop）。
+ * 队列满不再无声：每一次被拒都有计数，调用方拿到的是 -1 而不是 0。*/
+static int m207_submit(const m207_msg_t *msg)
+{
+    int rc;
+    M207_Q_LOCK();
+    if (!s_started || !s_online) { s_stat.wdrop++; rc = -2; }
+    else if (m207_ring_push(msg) == 0) rc = 0;
+    else { s_stat.qdrop++; rc = -1; }
+    M207_Q_UNLOCK();
+    if (rc == -1 && (s_stat.qdrop % 8u) == 1u)
+        M207_LOGW("tx queue full: write dropped, qdrop=%u (last '%s')",
+                  (unsigned)s_stat.qdrop, msg->cmd);
+    return rc;
+}
+
+/* 出队：跳过已被取代的消息（它们计入 superseded）。返回 1=取到一条要发的 */
+static int m207_dequeue(m207_msg_t *msg)
+{
+    int rc = 0;
+    M207_Q_LOCK();
+    while (s_q_count > 0) {
+        *msg = s_ring[s_q_tail];
+        s_q_tail = (uint8_t)((s_q_tail + 1u) % M207_Q_LEN);
+        s_q_count--;
+        if (!msg->dead) { rc = 1; break; }
     }
     M207_Q_UNLOCK();
     return rc;
 }
 
-static int m207_dequeue(m207_msg_t *msg)
+/* 旁路槽置位（任意任务）：该通道下一条 TCSW 写下一拍优先上线路；槽里已有未发出的写则被最新值覆盖 */
+static void m207_lane_set(uint8_t ch, uint8_t on)
 {
-    int rc = 0;
     M207_Q_LOCK();
-    if (s_q_count > 0) {
-        *msg = s_ring[s_q_tail];
-        s_q_tail = (uint8_t)((s_q_tail + 1u) % M207_Q_LEN);
-        s_q_count--;
-        rc = 1;
-    }
+    s_lane[ch].pending = 1;
+    s_lane[ch].on = on ? 1u : 0u;
     M207_Q_UNLOCK();
-    return rc;
 }
 
 /* 等长语义同 strncpy 写入已清零的缓冲：最多 cap-1 字节，尾 NUL */
@@ -259,20 +361,25 @@ static void m207_go_online(const char *why)
     s_online = 1;
     g_tcs.m207_online = 1;
     M207_LOGI("online (%s)", why);
-    /* 复联重同步（E-08 预研）：状态查询 + SAFE 语义保持 */
-    m207_enqueue_simple("TC1:TCSW?\r");
-    m207_enqueue_simple("TC2:TCSW?\r");
+    /* 复联重同步（E-08 预研）：目标温度只读回；TEC 该关的通道经安全关断旁路补发 TCSW=0
+     * （X03-F-07：先于只读查询上线路，且自带一次回读确认），该开的通道只读回 TCSW?。
+     * 不在这里开环恢复 TEC：模块侧是什么就镜像什么，要不要重开由 control 裁决。*/
     m207_enqueue_simple("TC1:TCADJTEMP?\r");
     m207_enqueue_simple("TC2:TCADJTEMP?\r");
-    if (!g_tcs.tec1_on) m207_enqueue_simple("TC1:TCSW=0\r");
-    if (!g_tcs.tec2_on) m207_enqueue_simple("TC2:TCSW=0\r");
+    if (!g_tcs.tec1_on) m207_lane_set(1, 0); else m207_enqueue_simple("TC1:TCSW?\r");
+    if (!g_tcs.tec2_on) m207_lane_set(2, 0); else m207_enqueue_simple("TC2:TCSW?\r");
 }
 
 static void m207_go_offline(void)
 {
     m207_msg_t m;
+    /* 转离线与清队列在同一临界区：与 m207_submit 的"在线判定 + 入队"互斥，
+     * 不会有写入在清队之后又落进队列、等到探测期才发出去。*/
+    M207_Q_LOCK();
     s_online = 0;
     g_tcs.m207_online = 0;
+    while (m207_dequeue(&m)) s_stat.qdrop++;
+    M207_Q_UNLOCK();
     s_probing = 1;                       /* 转入 1s 探测（一次性沿；报警粘滞）*/
     s_stat.offline++;
     s_waiting = 0;
@@ -280,10 +387,18 @@ static void m207_go_offline(void)
     M207_LOGW("OFFLINE (%u fails) → ALM_M207, writes halted, SAFE by control",
               (unsigned)s_fail);
     s_fail = 0;
-    /* 清队列 + 失败全部在途事务 */
-    while (m207_dequeue(&m)) s_stat.qdrop++;
+    /* 失败全部在途事务 */
     for (int i = 0; i < M207_PEND_MAX; i++)
         if (s_pend[i].in_use) pend_nak(&s_pend[i], "offline", 0);
+    /* 保存序列中止（M12-F-08）：日志说明发到第几一条；已发帧的确认/拒绝计入累计 */
+    if (s_save_active) {
+        M207_LOGW("save_all aborted at %u/%u (offline)",
+                  (unsigned)s_save_idx, (unsigned)M207_SAVE_N);
+        s_save_active = 0;
+        s_save_summary_due = 0;
+        s_stat.save_ok = (uint16_t)(s_stat.save_ok + s_save_ack_ok);
+        s_stat.save_rej = (uint16_t)(s_stat.save_rej + s_save_ack_other);
+    }
     s_next_probe = s_tick + M207_PROBE_TICKS;
 }
 
@@ -335,6 +450,15 @@ static void m207_handle_line(const char *line)
                 s_stat.unexpected++;   /* 链路活但应答语义意外 → 留痕取证 */
                 M207_LOGI("unexpected CMD:REPLY=%u (poll ch=%u)",
                           (unsigned)r.errcode, (unsigned)s_wait_ch);
+            }
+        } else if (s_save_active || s_save_summary_due) {
+            /* 保存序列进行中（或末帧应答窗内）。保存期间不发轮询，无事务的回码只会是 `!` 帧的应答：
+             * 正典——可设参数保存 → 8；只读 / 不可存 → 3。 */
+            if (r.errcode == 8) {
+                s_save_ack_ok++;
+            } else {
+                s_save_ack_other++;
+                M207_LOGW("save frame rejected: CMD:REPLY=%u", (unsigned)r.errcode);
             }
         } else {
             s_stat.unexpected++;         /* 无事务 ACK/注入回码 → 留痕可见 */
@@ -405,7 +529,7 @@ static void m207_handle_line(const char *line)
             if (r.value > ALM_OVERTEMP_HARD_C) {
                 control_safety_trip(SAFETY_BIT_OVERTEMP);
                 tcs_alarm_raise(ALM_OVERTEMP);   /* 锁存必须伴随可见报警，否则屏/网页只看到"停机"不知原因 */
-                m207_enqueue_simple("TC1:TCSW=0\r");
+                m207_lane_set(1, 0);            /* X03-F-07：安全关断走旁路，不排在普通写后面 */
             }
         }
         else               g_tcs.tc2_act = r.value;
@@ -508,19 +632,72 @@ void m207_core_tick_begin(uint32_t now_ms)
     s_tick++;
 }
 
-void m207_core_tick_end(int64_t t0_us)
+/* 本拍的发送名额先给安全关断旁路（X03-F-07）。返回 1=本拍的名额已用于旁路帧 */
+static int m207_lane_step(void)
 {
-    /* 1) 在途事务超时检查（重试只标记，TX 交给本拍仲裁）*/
-    for (int i = 0; i < M207_PEND_MAX; i++) {
-        m207_pend_t *p = &s_pend[i];
-        if (!p->in_use || p->resend_due) continue;
-        if ((int32_t)(s_tick - p->deadline) >= 0) {
-            if (p->phase == 1) pend_mark_resend(p, 1, "ack timeout");
-            else               pend_mark_resend(p, 2, "query echo lost");
+    uint8_t lch = 0;
+    for (int ch = 1; ch <= 2 && !lch; ch++)
+        if (s_lane[ch].pending) lch = (uint8_t)ch;
+    if (!lch) return 0;
+
+    uint8_t on = s_lane[lch].on;
+    unsigned nsup = 0, ninfl = 0;
+    /* (a) 队列里还没发出去的该通道 TCSW 写：都比这条旁路请求旧，作废（出队时跳过）*/
+    M207_Q_LOCK();
+    for (uint8_t idx = s_q_tail, k = 0; k < s_q_count;
+         k++, idx = (uint8_t)((idx + 1u) % M207_Q_LEN)) {
+        m207_msg_t *q = &s_ring[idx];
+        if (!q->dead && q->verify && q->ch == lch && strcmp(q->param, "TCSW") == 0) {
+            q->dead = 1;
+            nsup++;
         }
     }
+    M207_Q_UNLOCK();
+    s_stat.superseded = (uint16_t)(s_stat.superseded + nsup);
+    /* (b) 在途未确认的 TCSW 事务：作废。不计 NAK——它是被更新的命令取代，不是确认失败；
+     *     留着的话，它应答超时会按重试预算重发 TCSW=1，把这条关断盖掉。*/
+    for (int i = 0; i < M207_PEND_MAX; i++) {
+        m207_pend_t *p = &s_pend[i];
+        if (p->in_use && p->ch == lch && strcmp(p->param, "TCSW") == 0) {
+            pend_release(p);
+            ninfl++;
+        }
+    }
+    if (nsup || ninfl)
+        M207_LOGI("safe-off ch=%u: superseded %u queued + %u unconfirmed TCSW write(s)",
+                  (unsigned)lch, nsup, ninfl);
 
-    /* 2) TX 仲裁：每拍至多 1 帧（重发 > 队列帧 > 轮询帧）*/
+    /* (c) 上线路 */
+    char cmd[24];
+    snprintf(cmd, sizeof cmd, "TC%u:TCSW=%u\r", (unsigned)lch, (unsigned)on);
+    if (m207_core_tx(cmd, strlen(cmd)) != 0)
+        return 1;                         /* 发送环满：槽保持待发，下一拍重来 */
+    /* 发出去了才清槽；这期间若有更新的请求改写了槽值，保留新值 */
+    M207_Q_LOCK();
+    if (s_lane[lch].pending && s_lane[lch].on == on) s_lane[lch].pending = 0;
+    M207_Q_UNLOCK();
+    if (s_online) {
+        /* 在线：和其它写一样读回确认——模块不肯关就重发一次，仍不肯就 NAK，如实可见 */
+        m207_pend_t *p = pend_alloc();
+        if (p) {
+            p->in_use = 1; p->phase = 1;
+            p->ch = lch; p->decimals = 0; p->retries = 0;
+            p->value = on ? 1.0f : 0.0f;
+            strcpy(p->param, "TCSW");
+            m207_zcopy(p->set_cmd, sizeof(p->set_cmd), cmd);
+            snprintf(p->qry_cmd, sizeof(p->qry_cmd), "TC%u:TCSW?\r", (unsigned)lch);
+            p->deadline = s_tick + M207_REPLY_TICKS;
+        } else {
+            M207_LOGW("safe-off ch=%u sent unverified (no free confirmation slot)",
+                      (unsigned)lch);
+        }
+    }
+    return 1;
+}
+
+/* 发送名额没被旁路占用时的仲裁：每拍至多 1 帧（重发 > 队列帧 > 保存帧 > 轮询帧）*/
+static void m207_arbitrate(void)
+{
     m207_pend_t *rp = NULL;
     for (int i = 0; i < M207_PEND_MAX; i++)
         if (s_pend[i].in_use && s_pend[i].resend_due) { rp = &s_pend[i]; break; }
@@ -547,10 +724,56 @@ void m207_core_tick_end(int64_t t0_us)
                     M207_LOGW("pend overflow: %s sent unverified", m.cmd);
                 }
             }
+        } else if (s_save_active) {
+            /* "保存到模块"：按游标每拍一条。发送环满则下一拍重发同一条，不跳号（M12-F-08）*/
+            const m207_map_entry_t *e = &s_map[s_save_idx];
+            char cmd[M207_CMD_MAX];
+            snprintf(cmd, sizeof cmd, "TC%u:%s!\r", (unsigned)e->ch, e->cmd);
+            if (m207_core_tx(cmd, strlen(cmd)) == 0) {
+                s_save_idx++;
+                s_save_last_tick = s_tick;
+                if (s_save_idx >= M207_SAVE_N) {
+                    s_save_active = 0;
+                    s_save_summary_due = 1;
+                }
+            }
         } else {
             const char *poll = m207_fsm_poll_timed();
             if (poll) m207_core_tx(poll, strlen(poll));
         }
+    }
+}
+
+void m207_core_tick_end(int64_t t0_us)
+{
+    /* 1) 在途事务超时检查（重试只标记，TX 交给本拍仲裁）*/
+    for (int i = 0; i < M207_PEND_MAX; i++) {
+        m207_pend_t *p = &s_pend[i];
+        if (!p->in_use || p->resend_due) continue;
+        if ((int32_t)(s_tick - p->deadline) >= 0) {
+            if (p->phase == 1) pend_mark_resend(p, 1, "ack timeout");
+            else               pend_mark_resend(p, 2, "query echo lost");
+        }
+    }
+
+    /* 2) 发送名额：安全关断旁路优先；否则 重发 > 队列帧 > 保存帧 > 轮询帧。每拍至多 1 帧 */
+    if (!m207_lane_step()) m207_arbitrate();
+
+    /* 3) 保存序列结账（M12-F-08）：末帧的应答窗结束后汇总一次，没回码的记作被拒 */
+    if (s_save_summary_due &&
+        (int32_t)(s_tick - s_save_last_tick) >= (int32_t)M207_REPLY_TICKS) {
+        unsigned noreply = (unsigned)M207_SAVE_N - s_save_ack_ok - s_save_ack_other;
+        s_save_summary_due = 0;
+        s_stat.save_ok = (uint16_t)(s_stat.save_ok + s_save_ack_ok);
+        s_stat.save_rej = (uint16_t)(s_stat.save_rej + s_save_ack_other + noreply);
+        if (noreply || s_save_ack_other)
+            M207_LOGW("save_all done: sent=%u ack_ok=%u rejected=%u no_reply=%u",
+                      (unsigned)M207_SAVE_N, (unsigned)s_save_ack_ok,
+                      (unsigned)s_save_ack_other, noreply);
+        else
+            M207_LOGI("save_all done: sent=%u ack_ok=%u rejected=%u no_reply=%u",
+                      (unsigned)M207_SAVE_N, (unsigned)s_save_ack_ok,
+                      (unsigned)s_save_ack_other, noreply);
     }
 
     /* 3) perf 统计（第八章：队列服务+节流 ≤1ms/拍，轮询状态机 ≤0.3ms）*/
@@ -571,6 +794,8 @@ int m207_core_perf_take(m207_core_perf_t *out)
         out->tx = s_stat.tx; out->rx_lines = s_stat.rx_lines; out->parse_err = s_stat.parse_err;
         out->nak = s_stat.nak; out->verify_ok = s_stat.verify_ok; out->resend = s_stat.resend;
         out->offline = s_stat.offline; out->qdrop = s_stat.qdrop; out->wdrop = s_stat.wdrop;
+        out->superseded = s_stat.superseded; out->unexpected = s_stat.unexpected;
+        out->txdrop = s_txdrop;
     }
     s_stat.tick_max_us = 0;
     s_stat.fsm_max_us = 0;
@@ -600,6 +825,12 @@ void m207_core_init(const m207_core_io_t *io)
     s_next_probe = 0;
     m207_lineasm_reset(&s_asm);
     memset(s_pend, 0, sizeof(s_pend));
+    memset(s_lane, 0, sizeof(s_lane));
+    s_save_active = 0;
+    s_save_idx = 0;
+    s_save_summary_due = 0;
+    s_save_last_tick = 0;
+    s_save_ack_ok = s_save_ack_other = 0;
     memset(s_temp, 0, sizeof(s_temp));
     memset(s_temp_tick, 0, sizeof(s_temp_tick));
     memset(s_have_temp, 0, sizeof(s_have_temp));
@@ -610,9 +841,10 @@ void m207_core_init(const m207_core_io_t *io)
     g_tcs.m207_sensor_open = 0;
     s_started = 1;
 
-    /* F9 上电安全默认：双通道 TCSW=0（模块若在场，先钳到安全侧）*/
-    m207_enqueue_simple("TC1:TCSW=0\r");
-    m207_enqueue_simple("TC2:TCSW=0\r");
+    /* F9 上电安全默认：双通道 TCSW=0（模块若在场，先钳到安全侧）。
+     * 走安全关断旁路：头两拍各发一条，上线路顺序与抽取前相同；此时离线，不做读回确认。*/
+    m207_lane_set(1, 0);
+    m207_lane_set(2, 0);
 }
 
 #if CONFIG_TCS_M207_SELFLOOP
@@ -634,65 +866,33 @@ int m207_set_temp(uint8_t ch, float v)
     strcpy(m.param, "TCADJTEMP");
     snprintf(m.cmd, sizeof(m.cmd), "TC%u:TCADJTEMP=%.1f\r", (unsigned)ch, (double)v);
     snprintf(m.qry, sizeof(m.qry), "TC%u:TCADJTEMP?\r", (unsigned)ch);
-    return m207_enqueue(&m);
+    return m207_submit(&m);
 }
 
 int m207_tec(uint8_t ch, uint8_t on)
 {
+    m207_msg_t m;
     if (ch != 1 && ch != 2) return -1;
     if (!s_started || !s_online) { s_stat.wdrop++; return -2; }
-    m207_msg_t m;
+    M207_Q_LOCK();
+    if (!on || s_lane[ch].pending) {
+        /* X03-F-07：关断走旁路单槽，不进普通队列——队列满了也收得下，下一拍优先上线路。
+         * "开"照旧走普通队列，保住 control"先设目标、后开"的入队顺序；但旁路槽里若还有
+         * 一条没发出去的写（50ms 窗内先关后开），以最新值为准。*/
+        s_lane[ch].pending = 1;
+        s_lane[ch].on = on ? 1u : 0u;
+        M207_Q_UNLOCK();
+        return 0;
+    }
+    M207_Q_UNLOCK();
     memset(&m, 0, sizeof(m));
     m.verify = 1; m.ch = ch; m.decimals = 0; m.value = on ? 1.0f : 0.0f;
     strcpy(m.param, "TCSW");
     snprintf(m.cmd, sizeof(m.cmd), "TC%u:TCSW=%u\r", (unsigned)ch, (unsigned)(on ? 1u : 0u));
     snprintf(m.qry, sizeof(m.qry), "TC%u:TCSW?\r", (unsigned)ch);
-    return m207_enqueue(&m);
+    return m207_submit(&m);
 }
 
-/* ====== H10 映射表（逐字复制自 project_tcs m207.c s_map；R5 接注册表镜像）====== */
-static const m207_map_entry_t s_map[] = {
-    { 0x100, 1, "TCPIDP",       3, 0 },   /* mod=0：TC 前缀 */
-    { 0x101, 1, "TCPIDTI",      2, 0 },   /* mod=0：TC 前缀 */
-    { 0x102, 1, "TCPIDTD",      3, 0 },   /* mod=0：TC 前缀 */
-    { 0x103, 1, "TCOTPHT",      1, 0 },   /* mod=0：TC 前缀 */
-    { 0x104, 1, "TCOTPLT",      1, 0 },   /* mod=0：TC 前缀 */
-    { 0x105, 1, "TCOTPHHYS",    1, 0 },   /* mod=0：TC 前缀 */
-    { 0x106, 1, "TCOTPMODE",    0, 0 },   /* mod=0：TC 前缀 */
-    { 0x107, 1, "TCOCPADJTHR",  2, 0 },   /* mod=0：TC 前缀 */
-    { 0x108, 1, "TCOVPADJTHR",  2, 0 },   /* mod=0：TC 前缀 */
-    { 0x109, 1, "TCRTOCPHT",    1, 0 },   /* mod=0：TC 前缀 */
-    { 0x10A, 1, "TCRTOCPLT",    1, 0 },   /* mod=0：TC 前缀 */
-    { 0x10B, 1, "TCMINTEMP",    1, 0 },   /* mod=0：TC 前缀 */
-    { 0x10C, 1, "TCMAXTEMP",    1, 0 },   /* mod=0：TC 前缀 */
-    { 0x10D, 1, "TCMAXV",       2, 0 },   /* mod=0：TC 前缀 */
-    { 0x10E, 1, "TCCOOLVRATIO", 2, 0 },   /* mod=0：TC 前缀 */
-    { 0x10F, 1, "TCSTEPTEMP",   3, 0 },   /* mod=0：TC 前缀 */
-    { 0x110, 2, "TCPIDP",       3, 0 },   /* mod=0：TC 前缀 */
-    { 0x111, 2, "TCPIDTI",      2, 0 },   /* mod=0：TC 前缀 */
-    { 0x112, 2, "TCPIDTD",      3, 0 },   /* mod=0：TC 前缀 */
-    { 0x113, 2, "TCOTPHT",      1, 0 },   /* mod=0：TC 前缀 */
-    { 0x114, 2, "TCOTPLT",      1, 0 },   /* mod=0：TC 前缀 */
-    { 0x115, 2, "TCOTPHHYS",    1, 0 },   /* mod=0：TC 前缀 */
-    { 0x116, 2, "TCOTPMODE",    0, 0 },   /* mod=0：TC 前缀 */
-    { 0x117, 2, "TCOCPADJTHR",  2, 0 },   /* mod=0：TC 前缀 */
-    { 0x118, 2, "TCOVPADJTHR",  2, 0 },   /* mod=0：TC 前缀 */
-    { 0x119, 2, "TCRTOCPHT",    1, 0 },   /* mod=0：TC 前缀 */
-    { 0x11A, 2, "TCRTOCPLT",    1, 0 },   /* mod=0：TC 前缀 */
-    { 0x11B, 2, "TCMINTEMP",    1, 0 },   /* mod=0：TC 前缀 */
-    { 0x11C, 2, "TCMAXTEMP",    1, 0 },   /* mod=0：TC 前缀 */
-    { 0x11D, 2, "TCMAXV",       2, 0 },   /* mod=0：TC 前缀 */
-    { 0x11E, 2, "TCCOOLVRATIO", 2, 0 },   /* mod=0：TC 前缀 */
-    { 0x11F, 2, "TCSTEPTEMP",   3, 0 },   /* mod=0：TC 前缀 */
-    /* 系统/PCB 模块无通道概念；PCB:* 下发由 R5 按 module 字段扩展 */
-    /* M12-F-05：正典 §2.5 的模块前缀是 PCB:/PCRS232:，参数名照抄正典
-     * （TMOTPHT/TMOTPLT/TMOTPHHYS/COMADDR）。*/
-    { 0x120, 0, "TMOTPHT",      1, M207_MOD_PCB     },
-    { 0x121, 0, "TMOTPLT",      1, M207_MOD_PCB     },
-    { 0x122, 0, "TMOTPHHYS",    1, M207_MOD_PCB     },
-    { 0x126, 0, "COMADDR",      0, M207_MOD_PCRS232 },
-};
-#define M207_MAP_N  (sizeof(s_map) / sizeof(s_map[0]))
 
 int m207_map_set(uint16_t pid, float v)
 {
@@ -710,7 +910,7 @@ int m207_map_set(uint16_t pid, float v)
             snprintf(m.qry, sizeof(m.qry), "%s:%s?\r", m207_mod_name(e->mod), e->cmd);
         else
             snprintf(m.qry, sizeof(m.qry), "TC%u:%s?\r", (unsigned)e->ch, e->cmd);
-        return m207_enqueue(&m);
+        return m207_submit(&m);
     }
     return -1;                           /* 未映射参数 */
 }
@@ -718,18 +918,18 @@ int m207_map_set(uint16_t pid, float v)
 int m207_save_all(void)
 {
     if (!s_started || !s_online) { s_stat.wdrop++; return -2; }
-    int n = 0;
-    for (size_t i = 0; i < M207_MAP_N; i++) {
-        const m207_map_entry_t *e = &s_map[i];
-        if (e->pid >= 0x120) continue;      /* PCB/PCRS232 语法未确认（M12-F-05）*/
-        m207_msg_t m;
-        memset(&m, 0, sizeof(m));
-        snprintf(m.cmd, sizeof(m.cmd), "TC%u:%s!\r", (unsigned)e->ch, e->cmd);
-        if (m207_enqueue(&m) == 0) n++;
-    }
-    M207_LOGI("save_all: %d frames queued", n);
-    return n;
+    if (s_save_active) return -1;              /* 上一轮还在发：调用方应答 BUSY */
+    /* M12-F-08：原来一次入队 32 条，队列只有 16 深——TC2 的 16 条被静默丢掉，
+     * 返回值却让屏幕收到 OK。现在由服务任务按游标每拍发一条（见 m207_arbitrate），
+     * 32 条都会上线路；返回"将要发送的条数"。PCB/PCRS232 组语法未确认，不发（M12-F-05）。*/
+    s_save_idx = 0;
+    s_save_ack_ok = s_save_ack_other = 0;
+    s_save_active = 1;
+    M207_LOGI("save_all: %u frames, one per tick", (unsigned)M207_SAVE_N);
+    return (int)M207_SAVE_N;
 }
+
+uint8_t m207_save_busy(void) { return s_save_active; }
 
 int m207_send_raw(const char *cmd)
 {
@@ -743,7 +943,7 @@ int m207_send_raw(const char *cmd)
     if (n >= M207_CMD_MAX - 1) return -1;
     strncpy(m.cmd, cmd, M207_CMD_MAX - 2);
     if (m.cmd[n - 1] != '\r') m.cmd[n] = '\r';
-    return m207_enqueue(&m);
+    return m207_submit(&m);
 }
 
 uint8_t m207_online(void) { return s_online; }
@@ -766,6 +966,17 @@ uint16_t m207_stats_verify_ok(void) { return s_stat.verify_ok; }
 uint16_t m207_stats_resend(void) { return s_stat.resend; }
 uint16_t m207_stats_offline(void) { return s_stat.offline; }
 uint16_t m207_stats_wdrop(void) { return s_stat.wdrop; }
+uint16_t m207_stats_unexpected(void) { return s_stat.unexpected; }
+void m207_stats_queue(m207_qstats_t *out)
+{
+    if (!out) return;
+    out->qdrop = s_stat.qdrop;
+    out->superseded = s_stat.superseded;
+    out->unexpected = s_stat.unexpected;
+    out->save_ok = s_stat.save_ok;
+    out->save_rej = s_stat.save_rej;
+    out->txdrop = s_txdrop;
+}
 uint8_t m207_alarm_active(void) { return tcs_alarm_active(ALM_M207); }
 
 void m207_perf_reset(void)

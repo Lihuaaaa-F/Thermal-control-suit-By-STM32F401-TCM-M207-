@@ -53,6 +53,9 @@ run control   tests/test_control_esp32.c   components/tcs_core/control.c compone
 # S-G e2（X06-F-05 / M12-F-12）：M207 服务内核（m207_core.c）逐拍主机用例——首联、selfloop 九步移植、
 # 探测、传感器开路、超温、写路径、离线停写、下行帧黄金样本
 run m207core  tests/test_m207_core.c components/tcs_m207/m207_core.c components/tcs_m207/m207_proto.c components/tcs_core/control.c components/tcs_core/param_registry.c components/tcs_core/post_pure.c components/tcs_link/proto.c
+# S-G e2（X03-F-07 / M12-F-08）：安全关断旁路（队列满也下一拍上线路、作废过期的开）、
+# 队列满计数、"保存到模块"32 条不丢
+run m207queue tests/test_m207_queue.c components/tcs_m207/m207_core.c components/tcs_m207/m207_proto.c components/tcs_core/control.c components/tcs_core/param_registry.c components/tcs_core/post_pure.c components/tcs_link/proto.c
 
 # U 线 W1：网页 WS 契约（st / log 消息，真实 cJSON）
 if [ -f "$CJSON_DIR/cJSON.c" ]; then

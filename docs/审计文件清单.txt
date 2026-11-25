@@ -54,6 +54,7 @@ esp32/tests/test_control_esp32.c
 esp32/tests/test_m207_core.c
 esp32/tests/test_m207_golden.c
 esp32/tests/test_m207_proto.c
+esp32/tests/test_m207_queue.c
 esp32/tests/test_tcs_proto.c
 esp32/tests/test_tmp117_pure.c
 esp32/tests/test_web_status.c

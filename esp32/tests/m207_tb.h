@@ -55,6 +55,7 @@ static struct {
         int   silent;           /* 1=应答静默（拔线仿真的另一种开关）*/
         float adj[3];           /* TCADJTEMP */
         int   sw[3];            /* TCSW */
+        int   sw_stuck[3];      /* 1=该通道"关不动"：设定照回 REPLY=1，回读仍是原值 */
         float act[3];           /* TCACTTEMP 基值 */
         float ramp[3];          /* 每次应答的增量（造渐变到超温区，过的了合理性滤波）*/
         int   n[3];             /* 基值之外的小抖动计数 */
@@ -165,7 +166,7 @@ static void tb_mod_frame(const char *f)
     }
     if (ch && !strncmp(p, "TCSW=", 5)) {
         if (TB.m.reject_set) { tb_reply("CMD:REPLY=4\r"); return; }
-        TB.m.sw[ch] = atoi(p + 5);
+        if (!TB.m.sw_stuck[ch]) TB.m.sw[ch] = atoi(p + 5);
         tb_reply("CMD:REPLY=1\r");
         return;
     }

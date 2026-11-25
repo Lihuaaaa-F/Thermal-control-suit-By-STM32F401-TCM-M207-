@@ -23,16 +23,20 @@ static void test_boot_first_online(void)
     tb_tick();
     TB_CHECK(tb_tx_at(2, "TC1:TCACTTEMP?") && TB.ntx == 3, "tick3: first poll TC1");
     TB_CHECK(!m207_online(), "tick3: still offline (reply not yet arrived)");
-    tb_tick();                                   /* 应答到 → 上线 + 复联查询入队 */
+    tb_tick();                                   /* 应答到 → 上线；TEC 关着 → 双通道经旁路补发 TCSW=0 */
     TB_CHECK(m207_online(), "tick4: online on first temperature");
     TB_CHECK(g_tcs.m207_online == 1, "g_tcs.m207_online mirrors online");
-    TB_CHECK(tb_tx_at(3, "TC1:TCSW?"), "tick4: resync TC1:TCSW?");
-    tb_tick(); tb_tick(); tb_tick();
-    TB_CHECK(tb_tx_at(4, "TC2:TCSW?") && tb_tx_at(5, "TC1:TCADJTEMP?") &&
-             tb_tx_at(6, "TC2:TCADJTEMP?"), "resync order: TCSW? x2 then TCADJTEMP? x2");
+    /* X03-F-07：复联补发的安全关断帧走旁路，先于只读查询上线路；每条自带回读，
+     * 所以复联序列里每个通道恰好一次 TCSW?（原来查询在前、关断排在队尾）*/
     tb_tick(); tb_tick();
-    TB_CHECK(tb_tx_at(7, "TC1:TCSW=0") && tb_tx_at(8, "TC2:TCSW=0"),
-             "resync keeps TCSW=0 (TEC off)");
+    TB_CHECK(tb_tx_at(3, "TC1:TCSW=0") && tb_tx_at(4, "TC2:TCSW=0"),
+             "resync: safe-off frames first (one per tick)");
+    tb_tick(); tb_tick();
+    TB_CHECK(tb_tx_at(5, "TC1:TCSW?") && tb_tx_at(6, "TC2:TCSW?"),
+             "resync: read back TCSW once per channel");
+    tb_tick(); tb_tick();
+    TB_CHECK(tb_tx_at(7, "TC1:TCADJTEMP?") && tb_tx_at(8, "TC2:TCADJTEMP?") && TB.ntx == 9,
+             "resync: then TCADJTEMP? x2, nothing else");
     /* 50ms 铁律：相邻两帧不同拍 */
     for (int i = 1; i < TB.ntx; i++)
         TB_CHECK(TB.tx[i].tick > TB.tx[i - 1].tick, "one frame per tick (50ms rule)");
@@ -158,6 +162,7 @@ static void test_write_paths(void)
 {
     tb_init();
     TB_CHECK(tb_wait_online(120), "online");
+    tb_run(30);                                  /* 复联序列（含安全关断的读回）发完再取基线 */
     uint16_t nak0 = m207_stats_nak(), rs0 = m207_stats_resend();
     TB.m.reject_set = 1;
     TB_CHECK(m207_set_temp(1, 30.0f) == 0, "set enqueued");

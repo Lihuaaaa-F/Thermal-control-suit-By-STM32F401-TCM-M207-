@@ -38,13 +38,6 @@ static void put_u16_be(uint8_t *p, uint16_t v)
     p[1] = (uint8_t)(v & 0xFF);
 }
 
-#if 0  /* 接收侧解码暂未用到（地面站只编码下行），保留供将来解码上行帧时启用 */
-static uint16_t get_u16_be(const uint8_t *p)
-{
-    return (uint16_t)(((uint16_t)p[0] << 8) | p[1]);
-}
-#endif
-
 static void put_u32_be(uint8_t *p, uint32_t v)
 {
     p[0] = (uint8_t)(v >> 24);
@@ -52,14 +45,6 @@ static void put_u32_be(uint8_t *p, uint32_t v)
     p[2] = (uint8_t)(v >> 8);
     p[3] = (uint8_t)(v & 0xFF);
 }
-
-#if 0  /* 接收侧解码暂未用到（地面站只编码下行），保留供将来解码上行帧时启用 */
-static uint32_t get_u32_be(const uint8_t *p)
-{
-    return ((uint32_t)p[0] << 24) | ((uint32_t)p[1] << 16)
-         | ((uint32_t)p[2] << 8)  | (uint32_t)p[3];
-}
-#endif
 
 /* int16 定点 0.01m：米 → 补码 int16（×100，四舍五入，限幅 ±32767）。
  * 负数按补码处理：直接强转 uint16_t 即得补码表示，大端拆字节与 Python 一致。

@@ -9,7 +9,8 @@
  *   → param_persist_flush(2s) → STATUS 帧(500ms) → KEY0 急停 → LED 心跳 → 等下一节拍
  * ISR 只做：UART RX 单字节入环形缓冲（USART1 console / USART2 link / USART3 m207）。
  *
- * keypad 不初始化：KP_COL2=PD5 与 USART2_TX(ESP32) 冲突（接线表 #3），只编译不链接执行。
+ * 矩阵键盘驱动 keypad.c 已删除（2026-11-25，审查条目 M02-F-07）：KP_COL2=PD5 与 USART2_TX(ESP32) 冲突
+ * （接线表 #3），PD5 归屏链发送专用。
  */
 #include "main.h"
 #include "stm32h7xx_it.h"
@@ -867,7 +868,7 @@ int main(void)
     int tp_rv = ft5446_init();
     tcs_log("[SYSTEM]", "ft5446 init rv=%d ready=%d", tp_rv, touch_ready());
     iwdg_refresh();
-    /* keypad 有意不初始化：KP_COL2=PD5 归 USART2_TX（接线表 #3），文件仅保留编译 */
+    /* 矩阵键盘驱动已删除（M02-F-07）：KP_COL2=PD5 归 USART2_TX（接线表 #3），不要在这里初始化任何键盘 */
 
     /* EEPROM → 参数注册表（离线/CRC 坏不阻塞，默认值 + ALM_EEPROM）*/
     int ee_rv = eeprom_init();

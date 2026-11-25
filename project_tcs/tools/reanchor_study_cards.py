@@ -10,7 +10,9 @@
     python tools/reanchor_study_cards.py            # 重锚 UART/GPIO 两卡
     python tools/reanchor_study_cards.py --check    # 只打印差集，不落盘
 """
-import io, os, re, subprocess, sys, shutil
+import datetime, io, os, re, subprocess, sys, shutil
+
+TODAY = datetime.date.today().isoformat()   # 2026-11-25 起：重锚日期取运行当天（原先写死 2026-10-30）
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))  # project_tcs/
 REPO = os.path.dirname(ROOT)
@@ -21,6 +23,8 @@ GREP = shutil.which("grep") or "grep"
 CARDS = {
     "研学卡_HAL_UART":      os.path.join(REF, "研学卡_HAL_UART.md"),
     "研学卡_HAL_GPIO_EXTI": os.path.join(REF, "研学卡_HAL_GPIO_EXTI.md"),
+    # 2026-11-25 纳入：同一张表格式；此前只能手工改，行号早就漂了
+    "研学卡_HAL_PWR_RCC":    os.path.join(REF, "研学卡_HAL_PWR_RCC.md"),
 }
 
 def load_baseline():
@@ -189,12 +193,12 @@ def reanchor(name, card_path, defs, check_only):
     text = re.sub(r"本卡 \*\*\d+ 行 == \d+ 命中\*\*", "本卡 **%d 行 == %d 命中**" % (n, n), text)
     text = text.replace("（R2 链路 RX 自愈 +1，2026-10-30）", "（2026-10-30 v2 迁移重锚）")
     # ③ 前言里的代码块计数（→ N 命中 / 下表 N 行）
-    text = re.sub(r"→ \d+ 命中（[^）]*）", "→ %d 命中（2026-10-30 重锚）" % n, text, count=1)
+    text = re.sub(r"→ \d+ 命中（[^）]*）", "→ %d 命中（%s 重锚）" % (n, TODAY), text, count=1)
     text = re.sub(r"下表 \d+ 行", "下表 %d 行" % n, text, count=1)
     mt = re.search(r"(## ④.*)$", text, re.S)
     if mt:
         text = text[: mt.start(1)] + renumber_refs(mt.group(1), old2new)
-    text = re.sub(r"——研学卡完（\d+/\d+[^）]*）", "——研学卡完（%d/%d，2026-10-30 重锚）" % (n, n), text)
+    text = re.sub(r"——研学卡完（\d+/\d+[^）]*）", "——研学卡完（%d/%d，%s 重锚）" % (n, n, TODAY), text)
     io.open(card_path, "w", encoding="utf-8", newline="\n").write(text)
     return len(old_rows), n
 
@@ -206,19 +210,43 @@ def main():
         results[name] = reanchor(name, path, defs, check)
     if check:
         return
-    # 更新基线 want 与注释
+    # 更新基线 want 与注释。
+    # 2026-11-25 起原地更新：原先每运行一次就多插一行说明，文字还是旧的（"2026-10-30 v2 迁移重锚"）；
+    # 基线行里的行内注释（如 R1 的 +17）保留，只改数字。
+    notes = {
+        "研学卡_HAL_UART":      "# UART 37→38（R2 自愈+1）→%d（%s 重锚）",
+        "研学卡_HAL_GPIO_EXTI": "# GPIO 54→58（2026-10-30 v2 迁移重锚：main/it/console 新增调用面）→%d（%s 重锚）",
+        "研学卡_HAL_PWR_RCC":   "# PWR/RCC →%d（%s 重锚）",
+    }
+    prefixes = {"研学卡_HAL_UART": "# UART ", "研学卡_HAL_GPIO_EXTI": "# GPIO ",
+                "研学卡_HAL_PWR_RCC": "# PWR/RCC "}
     lines = io.open(BASE, encoding="utf-8").read().split("\n")
-    out = []
+    out, done = [], set()
     for ln in lines:
-        if ln.startswith("研学卡_HAL_UART;;"):
-            ln = "研学卡_HAL_UART;;App Core/Src;;HAL_UART_;;%d" % results["研学卡_HAL_UART"][1]
-        elif ln.startswith("研学卡_HAL_GPIO_EXTI;;"):
-            ln = "研学卡_HAL_GPIO_EXTI;;App Core/Src;;HAL_GPIO_|HAL_EXTI_;;%d" % results["研学卡_HAL_GPIO_EXTI"][1]
-        out.append(ln)
-    out.insert(3, "# UART 37→38（R2 自愈+1）→%d（2026-10-30 v2 迁移重锚）" % results["研学卡_HAL_UART"][1])
-    out.insert(8, "# GPIO 54→%d（2026-10-30 v2 迁移重锚：main/it/console 新增调用面）" % results["研学卡_HAL_GPIO_EXTI"][1])
+        for name, fmt in notes.items():
+            if ln.startswith(prefixes[name]):              # 该卡的说明行
+                if name in done:                            # 旧工具把说明行插在基线行后面，会残留一行旧的：删掉
+                    ln = None
+                    break
+                else:                                      # 第一条说明行：换成新的
+                    ln = fmt % (results[name][1], TODAY)
+                    done.add(name)
+            elif ln.startswith(name + ";;") and name not in done:   # 没有说明行：在基线行前补一行
+                out.append(fmt % (results[name][1], TODAY))
+                done.add(name)
+        if ln is None:
+            continue
+        for name in notes:
+            if ln.startswith(name + ";;"):
+                parts = ln.split(";;")
+                fourth = parts[3].split("#", 1)
+                comment = ("   #" + fourth[1]) if len(fourth) > 1 else ""
+                ln = ";;".join(parts[:3]) + ";;%d%s" % (results[name][1], comment)
+        if ln is not None:
+            out.append(ln)
     io.open(BASE, "w", encoding="utf-8", newline="\n").write("\n".join(out))
-    print("基线已更新:", results)
+    print("基线已更新:", results, "（重锚日期 %s）" % TODAY)
+
 
 if __name__ == "__main__":
     main()

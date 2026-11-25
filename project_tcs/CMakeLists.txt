@@ -63,7 +63,8 @@ set(APP_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/Core/Src/syscalls_stub.c
     ${CMAKE_CURRENT_SOURCE_DIR}/Core/Src/ltdc.c
     ${CMAKE_CURRENT_SOURCE_DIR}/Core/Src/ft5446.c
-    ${CMAKE_CURRENT_SOURCE_DIR}/Core/Src/keypad.c     # 只编译不初始化（PD5 冲突，见 main.c）
+    # keypad.c 已删（2026-11-25 S 线，审查条目 M02-F-07 / X05-F-08）：矩阵键盘的 KP_COL2=PD5 与 USART2_TX 冲突，
+    # 全工程零调用，此前"只编译不初始化"——公开的 keypad_init() 一旦有人调用就会把屏链发送脚改成输入。
     ${CMAKE_CURRENT_SOURCE_DIR}/App/proto/proto.c
     ${CMAKE_CURRENT_SOURCE_DIR}/App/comm/comm.c
     ${CMAKE_CURRENT_SOURCE_DIR}/App/comm/link_info.c   # 主控设备信息（0x22 INFO）保存与查询

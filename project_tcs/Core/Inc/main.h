@@ -8,8 +8,8 @@
  *   GPIO    PB14 推挽 → 风扇光耦，低电平=开（#7）
  * 板载：LED1=PB0/LED2=PB1（低亮）、KEY0=PA1（急停键）、CH340↔USART1 PA9/PA10 控制台。
  *
- * ⚠️ keypad.c 矩阵键盘含 KP_COL2=PD5，与 USART2_TX 冲突 → TCS 固件只编译不初始化
- *    keypad（链接器 --gc-sections 剔除），见 main.c 注释。
+ * 板载矩阵键盘的 KP_COL2=PD5 与 USART2_TX（屏链发送）冲突：keypad.c 已于 2026-11-25 删除
+ * （审查条目 M02-F-07），不要再把矩阵键盘驱动加回来；PD5 归 USART2_TX 专用。
  */
 #ifndef TCS_MAIN_H
 #define TCS_MAIN_H

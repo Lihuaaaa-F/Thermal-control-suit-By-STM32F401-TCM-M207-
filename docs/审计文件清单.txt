@@ -131,7 +131,6 @@ project_tcs/App/tcs/tmp117.h
 project_tcs/App/tcs/touch_session.c
 project_tcs/App/tcs/touch_session.h
 project_tcs/Core/Inc/ft5446.h
-project_tcs/Core/Inc/keypad.h
 project_tcs/Core/Inc/ltdc.h
 project_tcs/Core/Inc/main.h
 project_tcs/Core/Inc/stm32h7xx_hal_conf.h
@@ -140,7 +139,6 @@ project_tcs/Core/Inc/ui_layout.h
 project_tcs/Core/Src/ft5446.c
 project_tcs/Core/Src/i2c_timing_utility.c
 project_tcs/Core/Src/i2c_timing_utility.h
-project_tcs/Core/Src/keypad.c
 project_tcs/Core/Src/ltdc.c
 project_tcs/Core/Src/main.c
 project_tcs/Core/Src/stm32h7xx_hal_msp.c

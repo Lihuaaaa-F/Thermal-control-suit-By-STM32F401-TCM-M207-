@@ -14,6 +14,28 @@
 #include <string.h>
 #include <math.h>
 
+/* ====== 写路径互斥（M10-F-03）======
+ * param_set 的调用方分属多个任务（控制 / httpd / 链路回调 / 控制台），param_persist_flush 在控制任务、
+ * param_persist_now 在控制台任务。原先没有任何锁：
+ *   A. 控制任务在落盘的 flash 写窗口里序列化完 → 别的任务改值并置脏 → 控制任务回来把脏位全清
+ *      → 新值只在 RAM，复位即丢；
+ *   B. 两个任务同时写 0x03 / 0x04，各自在对方写入前通过校验 → body_cold >= body_hot。
+ * 现在 param_set 的校验 / 写入 / 侧效应，与落盘的序列化 / 清脏，都在同一把（递归）互斥锁内，
+ * 落盘的"序列化 → 清脏"之间不可能再插入别的写入，所以不需要"只清本次序列化覆盖的版本号"。
+ * 广播回调在锁外调用（它可能再去读注册表、发帧，不能让它在锁里等）。
+ * 递归：flush 持锁期间会调 param_persist_now；控制任务自己也会在持锁期间走到这里。
+ * PC 单测是单线程：锁退化为空——保持本模块零 HAL 依赖（与 control.c 同样的纪律）。*/
+#ifdef ESP_PLATFORM
+#include "freertos/FreeRTOS.h"
+#include "freertos/semphr.h"
+static SemaphoreHandle_t s_reg_mux;
+#define REG_LOCK()   do { if (s_reg_mux) xSemaphoreTakeRecursive(s_reg_mux, portMAX_DELAY); } while (0)
+#define REG_UNLOCK() do { if (s_reg_mux) xSemaphoreGiveRecursive(s_reg_mux); } while (0)
+#else
+#define REG_LOCK()   ((void)0)
+#define REG_UNLOCK() ((void)0)
+#endif
+
 /* ====== 状态快照实例 ====== */
 tcs_state_t g_tcs = {
     .tc1_act = 0.0f, .tc2_act = 0.0f, .body_temp = 0.0f,
@@ -174,10 +196,15 @@ static uint8_t  s_apply_err[PARAM_N_REGISTERED];
 void param_registry_init(const param_hooks_t *h)
 {
     if (h) s_hooks = *h;
+#ifdef ESP_PLATFORM
+    if (!s_reg_mux) s_reg_mux = xSemaphoreCreateRecursiveMutex();   /* M10-F-03；失败则退化为不加锁 */
+#endif
+    REG_LOCK();
     param_load_defaults();
     memset(s_apply_err, 0, sizeof(s_apply_err));   /* X02-F-05：受理结果随注册表一起复位 */
     s_armed_at_ms = 0;
     s_flush_armed = 0;
+    REG_UNLOCK();
 }
 
 int param_count(void) { return PARAM_N_REGISTERED; }
@@ -252,9 +279,11 @@ static int side_effects(param_desc_t *p, uint8_t redo)
     return err ? 2 : 0;
 }
 
-int param_set(uint16_t id, float v, uint8_t src)
+/* 锁内的实现（外壳见下方 param_set()）：校验、写入、侧效应都在这里；*out 非空 = 值变了，外壳在锁外广播 */
+static int param_set_impl(uint16_t id, float v, uint8_t src, param_desc_t **out)
 {
     param_desc_t *p = param_find(id);
+    *out = NULL;
     if (!p) return -1;
     if (!(p->flags & PF_RW)) return -1;
 
@@ -287,9 +316,20 @@ int param_set(uint16_t id, float v, uint8_t src)
     p->value = c;
     {
         int se = side_effects(p, 0);     /* X02-F-05：模块没受理（2）要盖过"clamp 生效"（1），如实上报 */
-        param_broadcast(p, src);
+        *out = p;                        /* 值变了：外壳在锁外广播 */
         return se ? se : (clamped ? 1 : 0);
     }
+}
+
+int param_set(uint16_t id, float v, uint8_t src)
+{
+    param_desc_t *p = NULL;
+    int rv;
+    REG_LOCK();
+    rv = param_set_impl(id, v, src, &p);
+    REG_UNLOCK();
+    if (p) param_broadcast(p, src);
+    return rv;
 }
 
 uint8_t param_apply_err(uint16_t id)
@@ -387,7 +427,8 @@ void param_load_defaults(void)
     g_tcs.mode = 0;                       /* F9：上电默认手动 */
 }
 
-int param_persist_now(void)
+/* 锁内的实现（外壳 param_persist_now() 持锁）：serialize → commit → 清脏，中间不会有别的写入 */
+static int persist_now_locked(void)
 {
     uint8_t img[EE_IMG_SIZE];
     int dirty = 0;
@@ -402,9 +443,19 @@ int param_persist_now(void)
     return 0;
 }
 
+int param_persist_now(void)
+{
+    int rv;
+    REG_LOCK();
+    rv = persist_now_locked();
+    REG_UNLOCK();
+    return rv;
+}
+
 static uint32_t s_persist_fail;
 
-void param_persist_flush(uint32_t now_ms)
+/* 锁内的实现（外壳 param_persist_flush() 持锁）*/
+static void persist_flush_locked(uint32_t now_ms)
 {
     if (!s_flush_armed) return;
     if (s_armed_at_ms == 0) {             /* 窗口起点 = 置脏后首个节拍 */
@@ -421,6 +472,13 @@ void param_persist_flush(uint32_t now_ms)
         return;
     }
     s_persist_fail = 0;
+}
+
+void param_persist_flush(uint32_t now_ms)
+{
+    REG_LOCK();
+    persist_flush_locked(now_ms);
+    REG_UNLOCK();
 }
 
 uint32_t param_persist_fail_count(void) { return s_persist_fail; }

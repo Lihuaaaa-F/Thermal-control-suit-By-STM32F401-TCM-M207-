@@ -121,7 +121,9 @@ param_desc_t *param_find(uint16_t id);       /* O(N) 线性（N = PARAM_N_REGIST
 const param_desc_t *param_find_by_key(const char *key);
 
 /**
- * 写参数唯一路径（触摸/网页/CLI 同走这里，F7 并发写天然串行化）。
+ * 写参数唯一路径（触摸/网页/CLI 同走这里）。调用方分属多个任务：校验 / 写入 / 侧效应与落盘的
+ * 序列化 / 清脏由注册表内部的一把递归互斥锁串行化（M10-F-03；PC 单测是单线程，锁退化为空）。
+ * 原先这里写的是"F7 并发写天然串行化"，与事实相反。
  * clamp→相等短路→写→置脏→广播→返回 0。
  * 返回：0=ok；1=clamp 生效（回显 clamp 后值）；-1=坏 id；-2=约束拒绝
  *      （body_cold<body_hot 强制：写任一侧校验另一侧，违反拒写）。
@@ -135,7 +137,8 @@ int   param_set(uint16_t id, float v, uint8_t src);
 uint8_t param_apply_err(uint16_t id);
 float param_get(uint16_t id);
 
-/* 2s 防抖增量写 EEPROM：主循环节拍调用。有脏参且到点 → 序列化 → eeprom_commit。 */
+/* 2s 防抖落盘：persist_worker（低优先级任务）每 500ms 调一次（M09-F-07，不在控制任务里）。
+ * 有脏参且到点 → 序列化 → eeprom_commit。 */
 void  param_persist_flush(uint32_t now_ms);
 /* 立即固化（p save / 调参页保存按钮）。返回 0=已提交，1=无脏参，-1=commit 失败。 */
 int   param_persist_now(void);

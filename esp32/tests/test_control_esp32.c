@@ -33,7 +33,8 @@ static uint8_t last_fan; static uint8_t last_tec_on, last_tec_ch;
 static float last_temp_v; static uint8_t last_temp_ch;
 
 static void stub_fan(uint8_t on)        { fan_calls++; last_fan = on; }
-static void stub_tec(uint8_t ch, uint8_t on)  { tec_calls++; last_tec_ch = ch; last_tec_on = on; }
+static int tec_on_calls;                               /* X06-F-03：到过执行器的"开"次数 */
+static void stub_tec(uint8_t ch, uint8_t on)  { tec_calls++; last_tec_ch = ch; last_tec_on = on; if (on) tec_on_calls++; }
 static void stub_temp(uint8_t ch, float v)    { temp_calls++; last_temp_ch = ch; last_temp_v = v; }
 
 /* P1-09 用：m207_tec 的主机模型——模块离线时"拒收"（回 -2、不出帧），不记送达 */
@@ -60,11 +61,14 @@ static uint8_t load_cb(void)             { return SAFETY_BIT_ESTOP; }
 /* S 线 e3a（卡死判据）用：上电无锁存 / 存储里留着 STUCK 位 */
 static uint8_t load0_cb(void)            { return 0; }
 static uint8_t load_stuck_cb(void)       { return SAFETY_BIT_STUCK; }
+/* X06-F-03 用：复位前锁存着超温 + 急停 */
+static uint8_t load_ot_estop_cb(void)    { return SAFETY_BIT_OVERTEMP | SAFETY_BIT_ESTOP; }
 
 static void reset_stubs(void)
 {
     fan_calls = tec_calls = temp_calls = 0;
     force_calls = 0;
+    tec_on_calls = 0;
 }
 
 /* 推进 500ms 评估节拍 */
@@ -1193,6 +1197,83 @@ int main(void)
         for (int i = 0; i < 10; i++) poll100();
         CHECK(force_calls == 4 && last_tec_on == 0,
               "P9-6 after reconnect the off is still pushed every 500ms");
+    }
+
+    /* ====== 2026-11-26 S 线 e3a（X06-F-03）：5 条 P0 安全路径的判别性用例 ======
+     * 审查指出"超温用例只断言报警位"。每条 P0 配一句直接断言执行器与状态的话；"回退则红"由
+     * tests/mutation_control.py 的 M47–M50 给出（把修复回退成修前写法，必须被抓住）。
+     *   ① 超温 → tec1_on==0 && state==SAFE            Z1（M47 / M50）
+     *   ② 急停 + 断链 → 3 s 内 TEC=0                   P9-6（M43；修前的 control.c 上红的是 P9-6×4）
+     *   ③ pindrv 在交付档被拒                          H743 侧：tools/site/verify_prod_clean.py（构建矩阵里跑）
+     *   ④ SAFE 不被在途状态机覆盖                      Z2 + 既有的 P0-04 两条（M48）
+     *   ⑤ 复位后仍 SAFE                                Z3（M49）*/
+    {
+        /* Z1 未布防 + 手动 + 两路 TEC 正在输出 → 水温 49°C：当拍双 TEC 关、进 SAFE、风扇全开 */
+        control_init(&(control_ops_t){
+            .fan_set = stub_fan, .tec_sw = stub_tec, .tec_temp = stub_temp, .on_state = 0,
+            .tec_force = stub_force,
+        });
+        param_registry_init(&(param_hooks_t){0});
+        set_armed(0);
+        g_tcs.body_sensor_ok = 1; g_tcs.m207_online = 1; g_tcs.m207_sensor_open = 0;
+        g_tcs.body_temp = 37.0f; g_tcs.tc1_act = 40.0f;
+        s_now = 10000u; s_stub_now_ms = s_now; s_link_down = 0;
+        (void)param_set(PARAM_ID_MODE, 0.0f, 4);
+        poll100();                                     /* 捕获 boot 基准 */
+        control_manual_tec(1, 1);                      /* 手动加热中 */
+        control_manual_tec(2, 1);
+        CHECK(g_tcs.tec1_on == 1 && g_tcs.tec2_on == 1 && control_state() == CTRL_IDLE,
+              "Z1 precondition: manual, both TEC on");
+        reset_stubs();
+        g_tcs.tc1_act = 49.0f;
+        poll100();                                     /* 当拍 */
+        CHECK(g_tcs.tec1_on == 0 && control_state() == CTRL_SAFE,
+              "Z1 overtemp: tec1_on==0 AND state==SAFE on the same tick");
+        CHECK(g_tcs.tec2_on == 0, "Z1 overtemp: the other channel is off too");
+        CHECK(force_calls == 2 && last_tec_on == 0, "Z1 overtemp: both 'off' went out through the safety channel");
+        CHECK(g_tcs.fan_on == 1, "Z1 overtemp: fan full");
+        g_tcs.tc1_act = 30.0f;                         /* 回落但未 ack */
+        reset_stubs();
+        for (int i = 0; i < 10; i++) poll100();
+        control_manual_tec(1, 1);
+        CHECK(control_state() == CTRL_SAFE && g_tcs.tec1_on == 0 && tec_on_calls == 0,
+              "Z1 stays SAFE with TEC off until acknowledged");
+
+        /* Z2 在途状态机盖不过 SAFE：自动 COOL（体温仍高，状态机每个评估拍都"想"继续制冷）时急停，
+         *    之后连跑 6 s + 手动"开"——一次"开"都没有到过执行器 */
+        enter_auto_healthy();
+        g_tcs.body_temp = 40.0f; tick();                /* COOL：TC1 开、风扇开 */
+        CHECK(control_state() == CTRL_COOL && g_tcs.tec1_on == 1, "Z2 precondition: auto COOL with TC1 on");
+        tcs_emergency_stop();
+        CHECK(control_state() == CTRL_SAFE && g_tcs.tec1_on == 0 && g_tcs.tec2_on == 0,
+              "Z2 estop: SAFE, both TEC off at once");
+        reset_stubs();
+        for (int i = 0; i < 12; i++) tick();            /* 6 s，体温一直是 40°C */
+        control_manual_tec(1, 1);                       /* 在途 / 网页的"开" */
+        control_manual_tec(2, 1);
+        CHECK(control_state() == CTRL_SAFE, "Z2 in-flight state machine cannot pull the device out of SAFE");
+        CHECK(g_tcs.tec1_on == 0 && g_tcs.tec2_on == 0 && tec_on_calls == 0,
+              "Z2 not a single 'on' reached the actuator in 6 s of in-flight state machine + manual attempts");
+
+        /* Z3 复位后仍 SAFE：锁存里存着超温 + 急停 → 上电就是 SAFE，第一拍双 TEC 关、风扇全开；
+         *    水温仍高时 ack 不解除 */
+        control_init(&(control_ops_t){
+            .fan_set = stub_fan, .tec_sw = stub_tec, .tec_temp = stub_temp,
+            .on_state = 0, .safety_persist = persist_cb, .safety_load = load_ot_estop_cb,
+        });
+        param_registry_init(&(param_hooks_t){0});
+        CHECK(control_state() == CTRL_SAFE, "Z3 reset with a persisted latch: SAFE before the first poll");
+        g_tcs.tec1_on = 1; g_tcs.tec2_on = 1;          /* 假设复位前两路都在输出 */
+        g_tcs.tc1_act = 49.0f;
+        s_now = 100u; s_stub_now_ms = s_now;
+        reset_stubs();
+        poll100();
+        CHECK(g_tcs.tec1_on == 0 && g_tcs.tec2_on == 0 && control_state() == CTRL_SAFE,
+              "Z3 first poll after reset: both TEC off, still SAFE");
+        CHECK(fan_calls >= 1 && last_fan == 1, "Z3 fan full from the first poll");
+        tcs_alarm_ack();
+        CHECK(control_safety_latched() != 0 && control_state() == CTRL_SAFE,
+              "Z3 ack cannot clear it while the water is still over 48");
     }
 
     printf("test_control: PASS=%d FAIL=%d\n", g_pass, g_fail);

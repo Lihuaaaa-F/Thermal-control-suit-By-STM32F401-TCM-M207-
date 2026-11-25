@@ -176,6 +176,16 @@ MUTATIONS = [
        "static void out_tec_sw(uint8_t ch, uint8_t on) { out_tec_sw_ex(ch, on, 1); }")], ""),
     ("M46 模块离线时开关状态仍显示“已知”",
      [("    return (uint8_t)(g_tcs.m207_online ? 0x03u : 0x00u);", "    return 0x03u;")], ""),
+    # ---- 2026-11-26 S 线 e3a（X06-F-03）：把 5 条 P0 安全路径的修复回退成修前写法，必须被抓住 ----
+    ("M47 超温只报警不锁存（回到 P0-01 修前）",
+     [("        safety_trip(SAFETY_BIT_OVERTEMP);", "        ;")], ""),
+    ("M48 锁存不拦在途的“开”（P0-04 门控）",
+     [("    if (on && s_safety_latch) on = 0;", "    ;")], ""),
+    ("M49 上电丢弃持久化的锁存（复位即解除安全态）",
+     [("        s_safety_latch = (uint8_t)(lat & SAFETY_PERSIST_MASK);", "        s_safety_latch = 0;")], ""),
+    ("M50 超温门控受布防影响",
+     [("    if (g_tcs.tc1_act > ALM_OVERTEMP_HARD_C) {",
+       "    if (g_tcs.tc1_act > ALM_OVERTEMP_HARD_C && commissioned()) {")], ""),
 ]
 
 

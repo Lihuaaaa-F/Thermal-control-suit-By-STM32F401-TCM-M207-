@@ -337,32 +337,38 @@ fi
 # S-G l1：R5-06 残余——按**交付档**编译的主机用例，覆盖 control_link_follow（92899c2 加的 SAFE 退出判据）。
 # 上面其余用例一律按台架档（-DTCS_PROFILE=1）编译，交付档专属的这段判定在那些编译单元里不存在，
 # 此前在主机门禁里零覆盖。自带一套 CFLAGS，不改既有行。
-PROD_CFLAGS="-Wall -Wextra -std=c11 -O1 -DTCS_UNIT_TEST -DTCS_PROFILE=0 $IFLAGS"
-PROD_SRCS="tests/test_link_follow_prod.c App/tcs/control.c App/tcs/param_registry.c App/tcs/post.c App/proto/proto.c"
-if [ "$MODE" = gcc ]; then
-    if $GCC $PROD_CFLAGS $PROD_SRCS -o build/tests_linkfollow_prod.exe 2> build/tests_linkfollow_prod.err \
-       && ./build/tests_linkfollow_prod.exe; then
-        echo "[linkfollow_prod] PASS"
-    else
-        echo "[linkfollow_prod] FAIL"; cat build/tests_linkfollow_prod.err 2>/dev/null | head -20; FAIL=1
+# run_prod <名字> <用例.c> <源文件...>：按交付档（-DTCS_PROFILE=0）编译并运行一个用例。
+# （M07-F-08 起第二个使用者是 auditring_prod：同一份审计用例再按交付档编译一次。）
+run_prod() {  # run_prod <name> <test.c> <sources...>
+    local name="$1"; shift
+    local exe="build/tests_${name}_exe"
+    local srcs="" s
+    for s in "$@"; do srcs="$srcs \"$(cygpath -w "$PWD/$s")\""; done
+    if [ "$MODE" = gcc ]; then
+        if $GCC -Wall -Wextra -std=c11 -O1 -DTCS_UNIT_TEST -DTCS_PROFILE=0 $IFLAGS "$@" -o "$exe" 2> "build/tests_${name}.err" \
+           && "./$exe"; then
+            echo "[$name] PASS"
+        else
+            echo "[$name] FAIL"; cat "build/tests_${name}.err" 2>/dev/null | head -20; FAIL=1
+        fi
+        return
     fi
-else
-    PROD_CMD='cl /nologo /W4 /std:c11 /utf-8 /D_CRT_SECURE_NO_WARNINGS /DTCS_UNIT_TEST /DTCS_PROFILE=0 /I..\App\tcs /I..\App\proto /I..\App\comm'
-    for s in $PROD_SRCS; do PROD_CMD="$PROD_CMD \"$(cygpath -w "$PWD/$s")\""; done
-    PROD_CMD="$PROD_CMD /Fe:tests_linkfollow_prod.exe"
+    local cmd='cl /nologo /W4 /std:c11 /utf-8 /D_CRT_SECURE_NO_WARNINGS /DTCS_UNIT_TEST /DTCS_PROFILE=0 /I..\App\tcs /I..\App\proto /I..\App\comm'
+    cmd="$cmd $srcs /Fe:$(basename "$exe")"
     {
         echo '@echo off'
         echo 'call "C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Auxiliary\Build\vcvars64.bat" >nul 2>&1'
         echo "cd /d \"$(cygpath -w "$PWD/build")\""
-        echo "$PROD_CMD"
+        echo "$cmd"
         echo 'exit /b %ERRORLEVEL%'
-    } > build/prod_compile.bat
-    if cmd //c "build\\prod_compile.bat" > build/prod_compile.log 2>&1 && ./build/tests_linkfollow_prod.exe; then
-        echo "[linkfollow_prod] PASS"
+    } > "build/prod_compile_${name}.bat"
+    if cmd //c "build\\prod_compile_${name}.bat" > "build/prod_compile_${name}.log" 2>&1 && "./$exe"; then
+        echo "[$name] PASS"
     else
-        echo "[linkfollow_prod] FAIL"; cat build/prod_compile.log | head -20; FAIL=1
+        echo "[$name] FAIL"; cat "build/prod_compile_${name}.log" | head -20; FAIL=1
     fi
-fi
+}
+run_prod linkfollow_prod tests/test_link_follow_prod.c App/tcs/control.c App/tcs/param_registry.c App/tcs/post.c App/proto/proto.c
 # 它的回滚式验证：把判据逐个改回错误写法（不看四个标志 / 不看安全类报警 / 去掉"只在 SAFE 才判"…），
 # 上面那个用例必须每次都变红。control.c 本身不改（归 h1a 批次），变异体在 build/ 下的副本里。
 if [ -n "$PYBIN" ] && PYTHONUTF8=1 "$PYBIN" tests/mutation_link_follow.py > build/mut_follow.log 2>&1; then
@@ -385,6 +391,19 @@ fi
 # （要触摸、要屏），用源码门禁钉住两件事：主循环最先看屏急停入口（在 comm_poll_tx / console_poll 之前）；
 # console.c / main.c 里每个循环体不为空的 while 循环要么体内让位（console_estop_yield），要么登记了例外。
 if [ -n "$PYBIN" ] && PYTHONUTF8=1 "$PYBIN" -X utf8 tests/check_estop_yield.py; then :; else echo "[estop_yield] FAIL"; FAIL=1; fi
+
+# S-G l1（2026-11-25）：M07-F-08——关键控制台命令的审计留痕环（App/tcs/audit_ring.c，纯逻辑，独立 512 字节）。
+# 关单条件"执行 5 类命令，审计环有 5 条记录"在用例第 2 节；哪些命令留痕、环满覆盖、回放顺序与容量也在里面。
+run auditring   tests/test_audit_ring.c  App/tcs/audit_ring.c
+# 同一份用例再按**交付档**编译一次：交付档的审计表里不得有台架专用的命令名——否则那些命令名会出现在
+# 交付档产物里，tools/site/verify_prod_clean.py 按产物查台架命令名就过不了（2026-11-26 实际踩到）。
+run_prod auditring_prod tests/test_audit_ring.c App/tcs/audit_ring.c
+# 它的变异验证（脚手架 tests/mutkit.py）：什么命令都不留痕 / 只读命令也留痕 / 环满计数溢出 / 回放顺序反 / 不管容量。
+if [ -n "$PYBIN" ] && PYTHONUTF8=1 "$PYBIN" tests/mutation_audit_ring.py > build/mut_audit.log 2>&1; then
+    echo "[mut-audit] PASS（$(tail -1 build/mut_audit.log)）"
+else
+    echo "[mut-audit] FAIL"; grep -a "活下来\|编译失败\|锚点\|FAIL" build/mut_audit.log | head -12; FAIL=1
+fi
 
 echo "==================="
 if [ "$FAIL" = 0 ]; then echo "run_all: ALL GREEN"; else echo "run_all: HAS FAILURES"; fi

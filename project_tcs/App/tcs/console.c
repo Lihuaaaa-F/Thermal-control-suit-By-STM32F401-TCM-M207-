@@ -14,6 +14,7 @@
 #include "control.h"
 #include "m207.h"
 #include "m207_txq.h"   /* M207_CMD_MAX：m207 send 的长度上限（M07-F-10）*/
+#include "audit_ring.h" /* M07-F-08：关键命令的审计留痕环 */
 #include "post.h"
 #include "segger_rtt.h"
 #include "ltdc.h"
@@ -219,6 +220,27 @@ static void touch_log_dump_poll(void)
     }
 }
 
+/* ====== 审计留痕（M07-F-08，2026-11-25，S-G l1）======
+ * 改参数 / 改模式 / 驱动引脚 / 急停与确认 / 仿真注入 / 复位这类命令，执行后记进一块**独立的**
+ * 512 字节环形缓冲（不走控制台 TX 环，也不占 RTT 缓冲），同时往 RTT 打一行 [AUDIT]。
+ * 判定与环在 audit_ring.c（纯逻辑，主机可测）；这里只做接入。三档都保留，`audit` 命令只读回放。*/
+static audit_ring_t s_audit;
+static char s_audit_text[AUDIT_CMD_MAX + 1u];   /* 本条命令的留痕文本；空串 = 这条不留 */
+static int  s_cmd_rv;                            /* 本条命令的返回值：未知命令 -1，p set / m207 send 取其实际返回值 */
+
+/* 命令执行完之后调：把这条（如果要留）写进环并打到 RTT */
+static void audit_commit(void)
+{
+    uint32_t now = HAL_GetTick();
+    char ln[96];
+    if (!s_audit_text[0]) return;
+    (void)audit_ring_add(&s_audit, now, s_audit_text, s_cmd_rv);
+    snprintf(ln, sizeof(ln), "[AUDIT] %lu %s rv=%d\n",
+             (unsigned long)now, s_audit_text, s_cmd_rv);
+    SEGGER_RTT_WriteString(ln);
+    s_audit_text[0] = '\0';
+}
+
 /* ====== 命令执行 ====== */
 static void cmd_exec(char *line)
 {
@@ -227,12 +249,26 @@ static void cmd_exec(char *line)
     while (n && (line[n-1] == ' ' || line[n-1] == '\t')) line[--n] = '\0';
     if (n == 0) return;
 
+    /* M07-F-08：strtok_r 会把 line 就地切碎，留痕用的原文要在它之前抄一份 */
+    char raw[CON_LINE_MAX];
+    strncpy(raw, line, sizeof(raw) - 1);
+    raw[sizeof(raw) - 1] = '\0';
+
     char *argv[6];
     int argc = 0;
     char *save = NULL;
     for (char *tok = strtok_r(line, " \t", &save);
          tok && argc < 6; tok = strtok_r(NULL, " \t", &save))
         argv[argc++] = tok;
+
+    /* M07-F-08：关键命令留痕。这里只判断并抄原文；写环在执行之后（audit_commit），带返回值。
+     * 交付档上被档位挡掉、但仍在审计表里的关键命令（p defaults / p save）会留一条 rv=-1——
+     * 有人在交付固件上试过什么，事后看得到。台架专用的命令（pindrv / mode …）在交付档不进审计表
+     * （命令名不能出现在交付档产物里），试敲它们不留痕。*/
+    s_cmd_rv = 0;
+    s_audit_text[0] = '\0';
+    if (audit_is_critical(argv[0], argc >= 2 ? argv[1] : NULL))
+        audit_cmd_text(s_audit_text, sizeof(s_audit_text), raw);
 
     /* --- ver --- */
     if (strcmp(argv[0], "ver") == 0) {
@@ -243,6 +279,17 @@ static void cmd_exec(char *line)
                (unsigned long)(g_tcs.fw_ver >> 8) & 0xFFu,
                (unsigned long)(g_tcs.fw_ver) & 0xFFu,
                TCS_BUILD_STAMP, TCS_BUILD_GIT, 1);
+        return;
+    }
+    /* --- audit：审计留痕回放（只读；三档都在，M07-F-08）---
+     * 环里是从旧到新的关键命令（时间戳 ms + 命令原文 + 返回值），最多 16 条；total 是开机以来的总条数。*/
+    if (strcmp(argv[0], "audit") == 0) {
+        static char buf[AUDIT_SLOT_BYTES * AUDIT_SLOT_COUNT + 1u];   /* 不占主栈：513 字节 */
+        int shown = audit_ring_format(&s_audit, buf, sizeof(buf));
+        printf("audit: total=%lu kept=%u shown=%d\n",
+               (unsigned long)s_audit.total, (unsigned)s_audit.count, shown);
+        printf("%s", buf);
+        tx_drain();                          /* 16 行约 0.6KB：一次排掉，免得和后面的输出挤 TX 环 */
         return;
     }
     /* --- stat --- */
@@ -520,6 +567,7 @@ static void cmd_exec(char *line)
             uint16_t id = (uint16_t)strtoul(argv[2], NULL, 0);
             float v = strtof(argv[3], NULL);
             int rv = param_set(id, v, PARAM_SRC_CONSOLE);
+            s_cmd_rv = rv;                  /* M07-F-08：留痕用 */
             if (rv == 0)      printf("ok %.2f\n", (double)param_get(id));
             else if (rv == 1) printf("clamped %.2f\n", (double)param_get(id));
             else if (rv == -2) printf("rejected (body_cold<body_hot)\n");
@@ -600,6 +648,7 @@ static void cmd_exec(char *line)
         char cmd[M207_CMD_MAX + 1u];
         snprintf(cmd, sizeof(cmd), "%s\r", argv[2]);
         int rv = m207_send_raw(cmd);
+        s_cmd_rv = rv;                      /* M07-F-08：留痕用 */
         if (rv == 0)       printf("m207 send -> queued (not sent yet; one frame per 50ms; reply in log)\n");
         else if (rv == -1) printf("m207 send -> NOT queued (queue full or empty command)\n");
         else               printf("m207 send -> NOT queued (rv=%d)\n", rv);
@@ -748,6 +797,7 @@ static void cmd_exec(char *line)
         return;
     }
 #endif
+    s_cmd_rv = -1;                          /* M07-F-08：没被任何分支接住 = 这条命令没执行 */
     printf("?\n");
 }
 
@@ -773,6 +823,7 @@ void console_poll(void)
             if (len >= MB_CMD_MAX) s_mb.cmd[MB_CMD_MAX - 1] = '\0';
             else                   s_mb.cmd[len] = '\0';
             cmd_exec(s_mb.cmd);
+            audit_commit();                  /* M07-F-08 */
             s_mb_seq++;
             tcs_log("[MB]", "done seq=%lu", (unsigned long)(s_mb_seq + 1));
         }
@@ -798,6 +849,7 @@ void console_poll(void)
             } else if (s_line_len) {
                 s_line[s_line_len] = '\0';
                 cmd_exec(s_line);
+                audit_commit();              /* M07-F-08 */
                 s_line_len = 0;
             }
         } else if (s_line_discard) {
@@ -819,6 +871,8 @@ void console_init(UART_HandleTypeDef *huart)
     s_tx_drop_cnt = 0;
     s_line_len = 0;
     s_line_discard = 0;
+    audit_ring_init(&s_audit);              /* M07-F-08：审计环上电清空 */
+    s_audit_text[0] = '\0';
     HAL_UART_Receive_IT(s_uart, &s_rx_byte, 1);
 }
 

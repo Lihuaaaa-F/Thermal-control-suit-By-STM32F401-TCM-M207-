@@ -81,6 +81,7 @@ set(APP_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/App/tcs/post.c
     ${CMAKE_CURRENT_SOURCE_DIR}/App/tcs/qr/qrcodegen.c
     ${CMAKE_CURRENT_SOURCE_DIR}/App/tcs/console.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/App/tcs/audit_ring.c    # 关键控制台命令的审计留痕环（纯逻辑，主机可测；M07-F-08）
     ${CMAKE_CURRENT_SOURCE_DIR}/App/tcs/touch_session.c
 )
 

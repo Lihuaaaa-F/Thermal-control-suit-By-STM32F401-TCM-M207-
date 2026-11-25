@@ -11,7 +11,6 @@
 #include "stm32h7xx_hal.h"
 #include <string.h>
 
-extern void ltdc_show_buffer(uint16_t * p);   /* ltdc.c：CFBAR+VBR 无撕裂上屏 */
 extern volatile uint32_t g_shown_fb;          /* ltdc.c：当前显示帧地址（fb_dump 同源） */
 
 /* G5-Z27（终极正解）：chunk 放 SDRAM 空闲区并扩为整屏高——任何刷新 area 永不

@@ -83,4 +83,65 @@ void ts_feed(ts_state_t *st, const ts_sample_t *s, uint32_t now_ms, ts_out_t *ou
 uint8_t ts_is_ghost(uint32_t dur_ms, int max_disp, uint8_t area0, uint8_t area1,
                     uint8_t multipoint, uint8_t chained, uint8_t injected);
 
+/* ====== 触摸链路健康与恢复（M02-F-01；纯逻辑，PC 单测直接覆盖）======
+ * 背景：触摸总线一死（排线接触不良 / ESD / 从机拉死 SCL），原来既不恢复也不报告——
+ * 读失败被当成"合法无触摸"，屏端急停入口随之失灵且无人知晓。
+ * 这里只做判定：何时判离线、离线后每一拍该做哪一步。总线动作由驱动层（ft5446.c）执行。
+ *
+ * 设计约束（改之前先看这两条）：
+ *   1. 判离线之后 ft5446_read() 不再碰总线。卡死总线上每次 HAL 读都要等 25ms 超时，
+ *      一拍两次读 = 主循环节拍从 10ms 拖到 50ms 以上，而两次急停判定之间的间隔就是急停响应上界。
+ *   2. 恢复流程拆成小步，每拍最多执行一步；步与步之间的延时（IC 复位 20ms + ROM 加载 300ms）
+ *      靠"等时间到"实现，不阻塞——延时期间 ft5446_service() 立即返回，主循环节拍不变。
+ *
+ * 调用约定（驱动层每拍一次）：
+ *      act = ts_tp_link_step(st, prev_ok, now_ms);   // prev_ok = 上一次返回的动作执行得如何
+ *      prev_ok = 执行(act);                            // act == TP_ACT_NONE 时什么都不做
+ * 在线时每次读轮询之后：ts_tp_link_poll(st, 读成功, now_ms)，返回 1 = 本次调用把链路判为离线。
+ * 所有用到时间的比较都是 (uint32_t)(now - mark) 的差值，毫秒计数回绕安全。 */
+
+#define TP_FAIL_MAX         3u     /* 在线时连续失败轮询数达到此值 → 判离线 */
+#define TP_RETRY_DELAY_MS   100u   /* 一轮恢复失败（或刚判离线）后，到下一轮之间的退避 */
+#define TP_RST_LOW_MS       20u    /* 恢复时触摸 IC 的 RST 拉低时长（同上电初始化）*/
+#define TP_RST_HIGH_MS      300u   /* RST 释放后等 ROM 加载（同上电初始化）*/
+
+typedef enum {
+    TP_LINK_ONLINE = 0,    /* 在线：读正常走总线 */
+    TP_LINK_WAIT,          /* 离线退避：等 TP_RETRY_DELAY_MS 再来一轮 */
+    TP_LINK_BUS_CLEAR,     /* 恢复① 已发"清总线"，等结果 */
+    TP_LINK_PERIPH,        /* 恢复② 已发"I2C 外设复位重配"，等结果 */
+    TP_LINK_RST_LOW,       /* 恢复③ RST 已拉低，等 TP_RST_LOW_MS */
+    TP_LINK_RST_HIGH,      /* 恢复④ RST 已释放，等 TP_RST_HIGH_MS */
+    TP_LINK_CFG,           /* 恢复⑤ 已发"重写配置寄存器"，等结果 */
+    TP_LINK_VERIFY         /* 恢复⑥ 已发"回读核对"，等结果：过=回在线，不过=退避 */
+} tp_link_state_t;
+
+typedef enum {
+    TP_ACT_NONE = 0,       /* 本拍无事（在线，或在等延时）*/
+    TP_ACT_BUS_CLEAR,      /* SCL 打 9 个脉冲 + STOP；两线都回高才算成功 */
+    TP_ACT_PERIPH_INIT,    /* I2C 外设复位 + 重配 */
+    TP_ACT_RST_LOW,        /* 触摸 IC 的 RST 拉低 */
+    TP_ACT_RST_HIGH,       /* 触摸 IC 的 RST 释放 */
+    TP_ACT_CFG,            /* 重写 4 个配置寄存器，全部成功才算成功 */
+    TP_ACT_VERIFY          /* 回读核对（ft5446_probe_online），一致才算成功 */
+} tp_link_act_t;
+
+typedef struct {
+    uint8_t  state;            /* tp_link_state_t */
+    uint8_t  streak;           /* 连续失败轮询数（成功清零；饱和在 255）*/
+    uint32_t t_mark_ms;        /* 进入当前状态 / 发出上一步的时刻 */
+    uint32_t t_offline_ms;     /* 最近一次判离线的时刻 */
+    uint32_t fail_total;       /* 累计失败轮询数 */
+    uint32_t recover_tries;    /* 启动过的恢复轮数 */
+    uint32_t recoveries;       /* 恢复成功次数（离线 → 在线）*/
+    uint32_t offline_last_ms;  /* 最近一次离线持续了多久 */
+    uint32_t offline_max_ms;   /* 最长一次离线持续了多久 */
+} tp_link_t;
+
+void          ts_tp_link_init(tp_link_t *st, int online, uint32_t now_ms);
+int           ts_tp_link_poll(tp_link_t *st, int ok, uint32_t now_ms);
+tp_link_act_t ts_tp_link_step(tp_link_t *st, int prev_ok, uint32_t now_ms);
+/* 台架钩子用：不经过失败计数，直接把在线的链路打成离线（走同一条恢复流程）。离线时无事。*/
+void          ts_tp_link_force_offline(tp_link_t *st, uint32_t now_ms);
+
 #endif /* TOUCH_SESSION_H */

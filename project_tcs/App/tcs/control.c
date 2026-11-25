@@ -107,7 +107,23 @@ static void goto_state(ctrl_state_t st)
 
 void control_init(const control_ops_t *ops)
 {
-    if (ops) s_ops = *ops;
+    /* 先清空（每个 s_ops.* 调用点都判空，这里再兜一层：不传钩子也能安全运行）*/
+    s_ops.fan_set = 0;
+    s_ops.tec_sw = 0;
+    s_ops.tec_temp = 0;
+    s_ops.on_state = 0;
+    if (ops) {
+#if TCS_H743_LINK_ONLY
+        /* 交付档（v2）：TEC / 风扇在主控侧，本机不驱动任何执行器。装配处传了什么本地
+         * 执行器钩子都不接——原来交付档也接 fan_set，急停 / 超温兜底会经它把 PB14
+         * （v1 接线里的风扇光耦，低=开）写低并一直保持到复位（P1-06 残余）。
+         * 只保留 on_state 这种纯通知钩子。急停本身照旧：置本地自持与报警位、
+         * 经 s_cmd_hook 把 cmd 8 发给主控。tests/test_prod_link_only.c 按交付档编译盯着这一条。*/
+        s_ops.on_state = ops->on_state;
+#else
+        s_ops = *ops;
+#endif
+    }
     s_state = CTRL_IDLE;
     s_last_eval = 0;
     s_boot_ms_base_set = 0;

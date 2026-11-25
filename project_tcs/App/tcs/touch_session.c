@@ -9,8 +9,11 @@
  *   （防手掌长期遮蔽把会话挂死）。
  * 幽灵会话（时长<50ms+零位移+面积恒定+无多点+非链式+非注入）→ UP_GHOST，
  * UI 只清理不合成 tap；其余会话 UP_OK。跨会话零惩罚（无任何基线遗留）。
+ *
+ * 触摸链路健康与恢复（M02-F-01）：判定在本文件末尾，接口与设计约束见 touch_session.h。
  */
 #include "touch_session.h"
+#include <string.h>
 
 volatile uint32_t g_ts_ghost_sessions;
 volatile uint32_t g_ts_multipoint_drops;
@@ -190,5 +193,120 @@ void ts_feed(ts_state_t *st, const ts_sample_t *s, uint32_t now_ms, ts_out_t *ou
     default:
         st->state = TS_IDLE;
         break;
+    }
+}
+
+/* ====== 触摸链路健康与恢复（M02-F-01；纯逻辑，驱动层执行动作）====== */
+
+/* 一轮恢复失败：退避。离线起点 t_offline_ms 不动（离线时长从掉线那一刻算）。*/
+static void tp_link_backoff(tp_link_t *st, uint32_t now_ms)
+{
+    st->state      = (uint8_t)TP_LINK_WAIT;
+    st->t_mark_ms  = now_ms;
+}
+
+/* 掉线：退避 + 记离线起点。恢复成功时用 now - t_offline_ms 结算离线时长。*/
+static void tp_link_offline(tp_link_t *st, uint32_t now_ms)
+{
+    tp_link_backoff(st, now_ms);
+    st->t_offline_ms = now_ms;
+}
+
+static void tp_link_back_online(tp_link_t *st, uint32_t now_ms)
+{
+    uint32_t dur = now_ms - st->t_offline_ms;
+    st->state  = (uint8_t)TP_LINK_ONLINE;
+    st->streak = 0;
+    st->recoveries++;
+    st->offline_last_ms = dur;
+    if (dur > st->offline_max_ms) st->offline_max_ms = dur;
+}
+
+void ts_tp_link_init(tp_link_t *st, int online, uint32_t now_ms)
+{
+    memset(st, 0, sizeof(*st));
+    if (online) st->state = (uint8_t)TP_LINK_ONLINE;
+    else        tp_link_offline(st, now_ms);
+}
+
+int ts_tp_link_poll(tp_link_t *st, int ok, uint32_t now_ms)
+{
+    if (ok) {
+        st->streak = 0;
+        return 0;
+    }
+    if (st->streak < 255u) st->streak++;      /* 饱和：不回绕成 0 */
+    st->fail_total++;
+    if (st->state != (uint8_t)TP_LINK_ONLINE) return 0;   /* 已离线：只记账 */
+    if (st->streak < TP_FAIL_MAX) return 0;
+    tp_link_offline(st, now_ms);
+    return 1;
+}
+
+void ts_tp_link_force_offline(tp_link_t *st, uint32_t now_ms)
+{
+    if (st->state == (uint8_t)TP_LINK_ONLINE) tp_link_offline(st, now_ms);
+}
+
+tp_link_act_t ts_tp_link_step(tp_link_t *st, int prev_ok, uint32_t now_ms)
+{
+    /* 刚发出的动作，结果留到下一毫秒再消费：每拍最多走一步由这里保证，不看调用方节拍。*/
+    int fresh = (now_ms == st->t_mark_ms);
+
+    switch ((tp_link_state_t)st->state) {
+    case TP_LINK_ONLINE:
+        return TP_ACT_NONE;
+
+    case TP_LINK_WAIT:
+        if ((uint32_t)(now_ms - st->t_mark_ms) < TP_RETRY_DELAY_MS) return TP_ACT_NONE;
+        st->recover_tries++;
+        st->state     = (uint8_t)TP_LINK_BUS_CLEAR;
+        st->t_mark_ms = now_ms;
+        return TP_ACT_BUS_CLEAR;
+
+    /* 清总线没过 = 两线还被拉死：不去碰 I2C 外设，退避后再试。
+     * 下一轮恢复的第一步永远从这里走，所以卡死的总线上不会出现任何 HAL I2C 事务。*/
+    case TP_LINK_BUS_CLEAR:
+        if (fresh) return TP_ACT_NONE;
+        if (!prev_ok) { tp_link_backoff(st, now_ms); return TP_ACT_NONE; }
+        st->state     = (uint8_t)TP_LINK_PERIPH;
+        st->t_mark_ms = now_ms;
+        return TP_ACT_PERIPH_INIT;
+
+    case TP_LINK_PERIPH:
+        if (fresh) return TP_ACT_NONE;
+        if (!prev_ok) { tp_link_backoff(st, now_ms); return TP_ACT_NONE; }
+        st->state     = (uint8_t)TP_LINK_RST_LOW;
+        st->t_mark_ms = now_ms;
+        return TP_ACT_RST_LOW;
+
+    case TP_LINK_RST_LOW:                    /* 等够 TP_RST_LOW_MS 再释放，期间每拍立即返回 */
+        if ((uint32_t)(now_ms - st->t_mark_ms) < TP_RST_LOW_MS) return TP_ACT_NONE;
+        st->state     = (uint8_t)TP_LINK_RST_HIGH;
+        st->t_mark_ms = now_ms;
+        return TP_ACT_RST_HIGH;
+
+    case TP_LINK_RST_HIGH:                   /* 等 ROM 加载 */
+        if ((uint32_t)(now_ms - st->t_mark_ms) < TP_RST_HIGH_MS) return TP_ACT_NONE;
+        st->state     = (uint8_t)TP_LINK_CFG;
+        st->t_mark_ms = now_ms;
+        return TP_ACT_CFG;
+
+    case TP_LINK_CFG:
+        if (fresh) return TP_ACT_NONE;
+        if (!prev_ok) { tp_link_backoff(st, now_ms); return TP_ACT_NONE; }
+        st->state     = (uint8_t)TP_LINK_VERIFY;
+        st->t_mark_ms = now_ms;
+        return TP_ACT_VERIFY;
+
+    case TP_LINK_VERIFY:
+        if (fresh) return TP_ACT_NONE;
+        if (!prev_ok) { tp_link_backoff(st, now_ms); return TP_ACT_NONE; }
+        tp_link_back_online(st, now_ms);
+        return TP_ACT_NONE;
+
+    default:                                 /* 状态字损坏：按掉线处理，从退避重来 */
+        tp_link_offline(st, now_ms);
+        return TP_ACT_NONE;
     }
 }

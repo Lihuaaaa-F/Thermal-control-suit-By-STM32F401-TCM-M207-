@@ -42,17 +42,19 @@
 
 /* 初始化：MPU+D-Cache write-through → SDRAM（PLL2 已在 SystemClock_Config 配）→
  * PLL3（LTDC PCLK=50M）→ LTDC 寄存器+引脚 → 复位序列 → 背光 → 清屏。
- * 返回 0=成功，<0=失败（SDRAM 不通/LTDC 配置失败）。失败时不点屏但协议层照跑。*/
+ * 返回 0=成功，<0=失败：-1 SDRAM 配置失败、-2 SDRAM 自检不过、-3 LTDC 配置失败、
+ * -4 PLL3 配置失败。失败时不点屏但协议层照跑。*/
 int ltdc_init(void);
 
 /* 显存是否就绪（ltdc_init 成功后为 1）。UI 层据此决定是否刷新屏幕。*/
 int lcd_ready(void);
 
-/* SDRAM 读写测试：写 0xAA55+i 模式再读回，验证 SDRAM 通。
- * 返回 1=通 0=不通。M2 点屏前先跑这个排错。 */
+/* SDRAM 读写测试：写图样 → cache 维护 → 读回，验证 SDRAM 通。
+ * 覆盖两块帧缓冲加 LVGL 渲染块（3 块帧缓冲大小），返回 1=通 0=不通。
+ * M2 点屏前先跑这个排错。 */
 int sdram_selftest(void);
 
-/* 清屏（整个 back buffer 填 color，DMA2D R2M 加速）*/
+/* 清屏（整个 back buffer 填 color，CPU 写穿透——不用 DMA2D，原因见 ltdc.c 文件末尾）*/
 void gfx_clear(uint16_t color);
 
 /* 画点（back buffer）*/
@@ -67,7 +69,7 @@ void gfx_draw_vline(int x, int y0, int y1, uint16_t color);
 /* 画矩形（边框）*/
 void gfx_draw_rect(int x0, int y0, int x1, int y1, uint16_t color);
 
-/* 填充矩形（DMA2D R2M 加速）*/
+/* 填充矩形（CPU 写穿透——不用 DMA2D，原因见 ltdc.c 文件末尾）*/
 void gfx_fill_rect(int x0, int y0, int x1, int y1, uint16_t color);
 
 /* 画 8×16 ASCII 字符（内置字库，M2 简易显示用）*/
@@ -76,7 +78,8 @@ void gfx_draw_char(int x, int y, char c, uint16_t fg, uint16_t bg);
 /* 画字符串 */
 void gfx_draw_string(int x, int y, const char *s, uint16_t fg, uint16_t bg);
 
-/* back → front 翻转（WP-C.5 真双缓冲：LTDC CFBAR 乒乓 + 消隐期重载，零拷贝）*/
+/* back → front 翻转（WP-C.5 真双缓冲：LTDC CFBAR 乒乓 + 消隐期重载，零拷贝）。
+ * 现在只有 ltdc_init 上电清屏时调用；LVGL 不走它（flush 直接写两块帧缓冲）。*/
 void gfx_flip(void);
 
 /* 整页重绘后同步另一缓冲（乒乓局部重绘语义保障；日常局部重绘勿调）*/
@@ -90,10 +93,12 @@ void gfx_sync_rect(int x0, int y0, int x1, int y1);
 void gfx_use_shown_buffer(void);
 void gfx_use_hidden_buffer(void);
 
-#endif /* LTDC_H */
-
+/* ====== LVGL 侧（TCS_USE_LVGL）====== */
 #if TCS_USE_LVGL
-/* G4：LVGL 渲染目标缓冲（LTDC 正扫描帧）+ 指定缓冲上屏 */
+/* G4：LVGL 查询"LTDC 正在扫描的那块帧缓冲"。
+ * 这里原还有一个 ltdc_show_buffer()：零调用点的死函数，已删（X05-F-08）。
+ * LVGL 的 flush（lv_port_disp.c）把像素直接写进两块帧缓冲，不切换 CFBAR。*/
 uint16_t * ltdc_display_buffer(void);
-void ltdc_show_buffer(uint16_t * p);
 #endif
+
+#endif /* LTDC_H */

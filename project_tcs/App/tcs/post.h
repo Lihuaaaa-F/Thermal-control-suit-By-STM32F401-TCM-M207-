@@ -79,6 +79,24 @@ void       post_arm_commit(post_arm_t st);   /* 目标机 poll 步进后 / 测�
 post_arm_t post_arm_state(void);
 uint8_t    post_armed(void);                 /* state != UNARMED_ABSENT */
 
+/* ====== 纯逻辑 5：单项宽限重试（M06-F-12）======
+ * 用于"上电首读没过"的立即项（TMP117 Device ID）：先不裁决，之后每隔 POST_RETRY_GAP_MS
+ * 再试一次，窗内成功即 PASS；宽限窗到点后的那次尝试仍失败才记 FAIL（同 M207 项的宽限语义）。
+ * 传感器上电慢一点不必重启也能过。全部时间比较用 (uint32_t)(now - t) 差值，回绕安全。*/
+#define POST_RETRY_GAP_MS    20u     /* 两次尝试之间的最小间隔 */
+#define POST_RETRY_WAIT_MS   2500u   /* 宽限窗（与 POST_M207_WAIT_MS 同长）*/
+
+typedef struct {
+    uint32_t t0_ms;        /* 宽限窗起点（= 上电首读那一刻）*/
+    uint32_t t_try_ms;     /* 上一次尝试的时刻 */
+    uint8_t  tries;        /* 已尝试次数（含上电首读）*/
+} post_retry_t;
+
+void    post_retry_init(post_retry_t *r, uint32_t now_ms);                 /* 上电首读失败后调用 */
+uint8_t post_retry_due(const post_retry_t *r, uint32_t now_ms);            /* 1=到下一次尝试的时间了 */
+uint8_t post_retry_judge(post_retry_t *r, uint8_t item, int ok, uint32_t now_ms);
+                                                        /* 记一次尝试并裁决；返回 1=该项已裁决 */
+
 /* ====== 目标机接口（TCS_UNIT_TEST 下不编译）====== */
 #ifndef TCS_UNIT_TEST
 
@@ -91,7 +109,12 @@ uint32_t   post_done_mask(void);          /* bit i = item i 已裁决 */
 /* 角标显示控制（UI 读）：0=未开始 1=显示中 2=已淡出 */
 uint8_t    post_badge_state(void);
 void       post_badge_reshow(uint32_t ms);     /* 重显 ms 毫秒（console post badge [ms]，默认/0=3s；取证/彩排用）*/
-void       post_sim_fail_item(uint8_t item);   /* TCS_SIM：强制单项 FAIL（演示/取证）*/
+#ifdef TCS_SIM
+/* 强制单项 FAIL（演示/取证）。只给 TCS_SIM 构建的 `sim post fail <0-5>` 用——调用点在
+ * console.c 的同一个 TCS_SIM 块里。声明、实现、调用三处同一个条件（X05-F-05 的 H743 部分：
+ * 原来只有调用点带开关，声明和实现不带，交付档里只是因为没人调用才被链接器丢掉）。*/
+void       post_sim_fail_item(uint8_t item);
+#endif
 
 #endif /* !TCS_UNIT_TEST */
 

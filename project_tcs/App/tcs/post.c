@@ -124,6 +124,34 @@ void post_arm_commit(post_arm_t st) { s_cur_state = st; }
 post_arm_t post_arm_state(void)     { return s_cur_state; }
 uint8_t    post_armed(void)         { return (s_cur_state != POST_ARM_UNARMED_ABSENT); }
 
+/* ====== 纯逻辑 5：单项宽限重试（M06-F-12；口径见 post.h）====== */
+void post_retry_init(post_retry_t *r, uint32_t now_ms)
+{
+    r->t0_ms = now_ms;          /* 宽限窗从上电首读那一刻算 */
+    r->t_try_ms = now_ms;
+    r->tries = 1;
+}
+
+uint8_t post_retry_due(const post_retry_t *r, uint32_t now_ms)
+{
+    return ((uint32_t)(now_ms - r->t_try_ms) >= POST_RETRY_GAP_MS) ? 1u : 0u;
+}
+
+uint8_t post_retry_judge(post_retry_t *r, uint8_t item, int ok, uint32_t now_ms)
+{
+    r->t_try_ms = now_ms;
+    if (r->tries < 255u) r->tries++;
+    if (ok) {
+        post_set_result(item, 1);            /* 窗内成功即 PASS */
+        return 1u;
+    }
+    if ((uint32_t)(now_ms - r->t0_ms) >= POST_RETRY_WAIT_MS) {
+        post_set_result(item, 0);            /* 窗到点仍失败 */
+        return 1u;
+    }
+    return 0u;                               /* 还在窗内：不裁决，下次再试 */
+}
+
 /* ===================================================================== */
 /*                          目标机驱动                                    */
 /* ===================================================================== */
@@ -136,6 +164,7 @@ uint8_t    post_armed(void)         { return (s_cur_state != POST_ARM_UNARMED_AB
 #include "ft5446.h"
 #include "tmp117.h"
 #include "m207.h"
+#include "tcs_profile.h"    /* TCS_H743_LINK_ONLY：交付档不探测本地 TMP117（P1-06 残余）*/
 #include "segger_rtt.h"
 #include <stdio.h>              /* snprintf：F16 浮点/长度修饰符日志预格式化 */
 #include <string.h>
@@ -144,6 +173,7 @@ uint8_t    post_armed(void)         { return (s_cur_state != POST_ARM_UNARMED_AB
 #define POST_BADGE_MS     3000u    /* 角标显示 3s 后淡出 */
 
 static post_arm_ctx_t s_arm;
+static post_retry_t   s_retry_tp;  /* TMP117：上电首读没过时的宽限重试账本（M06-F-12）*/
 static uint32_t s_t0_ms;
 static uint8_t  s_done;            /* 六项全部裁决完成 */
 static uint32_t s_badge_t0;        /* 角标起始时刻 */
@@ -168,6 +198,8 @@ uint32_t post_done_mask(void)
     return m;
 }
 
+#ifdef TCS_SIM
+/* 只在 TCS_SIM 构建：唯一的调用者是 console.c 里同样带 TCS_SIM 的 `sim post fail`。*/
 void post_sim_fail_item(uint8_t item)
 {
     if (item < POST_ITEM_N) {
@@ -175,6 +207,7 @@ void post_sim_fail_item(uint8_t item)
         SEGGER_RTT_printf(0, "[SIM] post item %d forced FAIL\n", item);
     }
 }
+#endif
 
 /* 重显自检角标（console `post badge [ms]`；彩排/出厂复查/取证用。0=默认 3s）*/
 void post_badge_reshow(uint32_t ms)
@@ -218,11 +251,22 @@ void post_init(int eeprom_cfg_invalid)
     /* 1. TMP117 Device ID（0x0F == 0x0117；TCS_SIM 假体温源恒过）*/
 #ifdef TCS_SIM
     post_set_result(POST_ITEM_TMP117, 1);
+#elif TCS_H743_LINK_ONLY
+    /* 交付档（v2）：体温传感器在主控侧，本机不探测（I2C1 也不初始化，P1-06 残余）。
+     * 该项固定记 FAIL——交付档不跑布防，它只出现在 post 命令的显示里。*/
+    post_set_result(POST_ITEM_TMP117, 0);
 #else
-    uint16_t devid = 0;
-    int ok = 0;
-    for (int t = 0; t < 3 && !ok; t++) ok = (tmp117_read_devid(&devid) == 0 && devid == 0x0117u);
-    post_set_result(POST_ITEM_TMP117, (uint8_t)ok);
+    /* 台架/仿真档：这里只读一次。没过不急着裁决——慢启动的传感器会在微秒级内连吃
+     * 几次 NAK（M06-F-12 原实现：3 次读之间没有延时，当场永久判 FAIL）。
+     * 留给 post_poll 在宽限窗内每隔 POST_RETRY_GAP_MS 再试。*/
+    {
+        uint16_t devid = 0;
+        if (tmp117_read_devid(&devid) == 0 && devid == 0x0117u) {
+            post_set_result(POST_ITEM_TMP117, 1);
+        } else {
+            post_retry_init(&s_retry_tp, HAL_GetTick());
+        }
+    }
 #endif
 
     /* 2. M207 一拍：宽限窗内裁决（post_poll）——先占位不记 decided */
@@ -244,6 +288,13 @@ void post_init(int eeprom_cfg_invalid)
 void post_poll(uint32_t now_ms)
 {
     if (s_t0_ms == 0) s_t0_ms = now_ms ? now_ms : 1u;
+
+    /* TMP117：上电首读没过的，在宽限窗内按间隔重试（M06-F-12）*/
+    if (!s_decided[POST_ITEM_TMP117] && post_retry_due(&s_retry_tp, now_ms)) {
+        uint16_t devid = 0;
+        int ok = (tmp117_read_devid(&devid) == 0 && devid == 0x0117u);
+        (void)post_retry_judge(&s_retry_tp, POST_ITEM_TMP117, ok, now_ms);
+    }
 
     /* M207 一拍裁决：在线即刻过；宽限 2.5s 到点仍离线记 FAIL */
     if (!s_decided[POST_ITEM_M207]) {

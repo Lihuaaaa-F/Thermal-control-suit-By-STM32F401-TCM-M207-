@@ -144,9 +144,10 @@ int   param_mirror_apply(uint16_t id, float v);
 uint16_t alarm_merge_peer(uint16_t remote, uint16_t local_owned, uint16_t local_now);
 
 void  param_load_defaults(void);
-/* 上电恢复：img 由 eeprom.c 读出；magic/ver/CRC 任一不符 → 默认值 + 返回 -1 */
+/* 上电恢复：img 由 eeprom.c 读出；magic/ver/CRC 任一不符 → 默认值 + 返回 -1
+ * （加载入口在 main.c：读镜像 → param_deserialize → 返回值不对外就置 ALM_EEPROM。
+ *   M05-F-16：吞返回值的 param_load_eeprom() 已删。）*/
 int   param_deserialize(const uint8_t *img);
-void  param_load_eeprom(void);               /* 目标板用：eeprom 读 256B → deserialize */
 
 /* ====== EEPROM v2 序列化（纯函数，PC 单测 §5.1）====== */
 /* 把全部 PF_PERSIST 参数打包成 256B 镜像（magic/ver/count/记录/CRC 全填）。

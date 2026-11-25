@@ -40,6 +40,7 @@
 
 
 
+
 复现命令（仓库根 `/d/Espressif/ws/tcs`，Git Bash；raw 输出路径分隔符为 `\`，表内归一为 `/`）：
 
 ```bash
@@ -66,6 +67,7 @@ vendor 域说明：`App/rtt/`（SEGGER RTT vendor 五文件）同一 pattern 单
 
 
 
+
 | # | 文件:行 | API | 语义一句话 |
 |---|---|---|---|
 | 1 | project_tcs/App/eeprom/eeprom.c:22 | HAL_GPIO_WritePin（宏封装） | 软件 I2C 宏 IIC_SCL(x)：SCL 时钟脚电平输出 |
@@ -73,8 +75,8 @@ vendor 域说明：`App/rtt/`（SEGGER RTT vendor 五文件）同一 pattern 单
 | 3 | project_tcs/App/eeprom/eeprom.c:24 | HAL_GPIO_ReadPin（宏封装） | 软件 I2C 宏 IIC_READ_SDA：读 SDA 回读 |
 | 4 | project_tcs/App/eeprom/eeprom.c:64 | HAL_GPIO_Init(IIC_SCL_PORT, &gi) | EEPROM（AT24C02）软件 I2C SCL 引脚初始化 |
 | 5 | project_tcs/App/eeprom/eeprom.c:68 | HAL_GPIO_Init(IIC_SDA_PORT, &gi) | EEPROM 软件 I2C SDA 引脚初始化 |
-| 6 | project_tcs/App/tcs/console.c:382 | HAL_GPIO_Init | pindrv 调试命令：按参数初始化指定 GPIO（真机取证用，ports 表限界） |
-| 7 | project_tcs/App/tcs/console.c:384 | HAL_GPIO_WritePin | pindrv：按参数驱动引脚电平（链路探针取证命令） |
+| 6 | project_tcs/App/tcs/console.c:384 | HAL_GPIO_Init | pindrv 调试命令：按参数初始化指定 GPIO（真机取证用，ports 表限界） |
+| 7 | project_tcs/App/tcs/console.c:386 | HAL_GPIO_WritePin | pindrv：按参数驱动引脚电平（链路探针取证命令） |
 | 8 | project_tcs/Core/Src/ft5446.c:247 | HAL_GPIO_WritePin | 重锚新增：代码摘录见左列 |
 | 9 | project_tcs/Core/Src/ft5446.c:248 | HAL_GPIO_WritePin | 重锚新增：代码摘录见左列 |
 | 10 | project_tcs/Core/Src/ft5446.c:249 | HAL_GPIO_ReadPin | 重锚新增：代码摘录见左列 |
@@ -125,7 +127,7 @@ vendor 域说明：`App/rtt/`（SEGGER RTT vendor 五文件）同一 pattern 单
 | 55 | project_tcs/Core/Src/main.c:877 | HAL_GPIO_TogglePin(LED1_GPIO_Port, LED1_Pin) | Error_Handler 死循环闪 LED1 指示故障 |
 | 56 | project_tcs/Core/Src/main.c:889 | HAL_GPIO_ReadPin(KILL_KEY_GPIO_Port, KILL_KEY_Pin) | 急停键轮询电平读（~10ms 去抖状态机） |
 | 57 | project_tcs/Core/Src/main.c:1183 | HAL_GPIO_WritePin(LED1_GPIO_Port, LED1_Pin, …) | 主循环运行心跳指示翻转 |
-| 58 | project_tcs/Core/Src/stm32h7xx_it.c:71 | HAL_GPIO_TogglePin(LED2_GPIO_Port, LED2_Pin) | Fault_Handler 死循环闪 LED2 指示（不喂 IWDG→2s 复位自恢复，WP-C） |
+| 58 | project_tcs/Core/Src/stm32h7xx_it.c:95 | HAL_GPIO_TogglePin(LED2_GPIO_Port, LED2_Pin) | Fault_Handler 死循环闪 LED2 指示（不喂 IWDG→2s 复位自恢复，WP-C） |
 
 ## ④ 对照结论
 

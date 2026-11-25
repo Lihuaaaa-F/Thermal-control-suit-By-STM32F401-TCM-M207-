@@ -161,6 +161,8 @@ def fmt_specs(fmt):
 
 svc = read(os.path.join("components", "tcs_m207", "m207_service.c"))
 core = read(os.path.join("components", "tcs_m207", "m207_core.c"))
+core_proto_src = read(os.path.join("components", "tcs_m207", "m207_proto.c"))
+core_proto_hdr = read(os.path.join("components", "tcs_m207", "include", "m207_proto.h"))
 
 # ---------------------------------------------------------------------------
 # M12-F-13 上电回环自检
@@ -249,6 +251,36 @@ check(re.search(r"fan_ws2812_black_frame\(48\);", fan_c) is not None and
       re.search(r"fan_ws2812_black_frame\(38\);", fan_c) is not None,
       "48 / 38 are still cleared at boot (on-board WS2812 on v1.0 / v1.1 boards)")
 check("FAN_GPIO" in fan_c and "gpio_num = FAN_GPIO" in fan_c, "LEDC channel is bound to FAN_GPIO, not a literal pin number")
+
+# ---------------------------------------------------------------------------
+# M12-F-12 两份协议副本逐字节一致（Q5 单向同步：H743 源侧 → ESP32 复制件）
+# ---------------------------------------------------------------------------
+H7 = os.path.normpath(os.path.join(ESP, "..", "project_tcs", "App", "tcs"))
+h7c = read(os.path.join(H7, "m207.c")).replace("\r\n", "\n")
+h7h = read(os.path.join(H7, "m207.h")).replace("\r\n", "\n")
+
+
+def region(text, start, end):
+    i = text.find(start)
+    if i < 0:
+        return None
+    j = text.find(end, i)
+    return None if j < 0 else text[i:j]
+
+
+print("[gate] M12-F-12 protocol copies are byte-identical: project_tcs m207.[ch] pure region == esp32 m207_proto.[ch]")
+c_h7 = region(h7c, "void m207_lineasm_reset(", "/* ===================================================================== */\n/*                          目标机驱动")
+c_es = region(core_proto_src, "void m207_lineasm_reset(", "/* ====== 轮询等待期 ERRCODE")
+check(c_h7 is not None and c_es is not None, "pure-logic regions found on both sides (.c)")
+check(c_h7 == c_es, ".c pure region is byte-identical (H743 %d chars vs ESP32 %d chars)"
+      % (len(c_h7 or ""), len(c_es or "")))
+h_h7 = region(h7h, "/* ====== 解析结果 ====== */", "/* ====== 目标机驱动")
+h_es = region(core_proto_hdr, "/* ====== 解析结果 ====== */", "/* ====== 纯逻辑 3")
+check(h_h7 is not None and h_es is not None, "declaration regions found on both sides (.h)")
+check(h_h7 == h_es, ".h declaration region is byte-identical (H743 %d chars vs ESP32 %d chars)"
+      % (len(h_h7 or ""), len(h_es or "")))
+for fn in ("m207_lineasm_reset", "m207_lineasm_feed", "m207_parse_line", "m207_mod_name", "m207_map_format"):
+    check(fn in (c_h7 or "") and fn in (c_es or ""), "shared function %s is inside the compared region" % fn)
 
 print("===================")
 if FAIL == 0:

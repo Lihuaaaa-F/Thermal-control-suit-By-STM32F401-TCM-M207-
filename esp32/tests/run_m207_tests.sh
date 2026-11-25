@@ -48,6 +48,11 @@ run() {  # run <name> <test.c> <sources...>
 }
 
 run m207proto tests/test_m207_proto.c  components/tcs_m207/m207_proto.c
+# S-G e2（M12-F-12）：H743 的万条模糊测试源原样拿来，对 ESP32 这一份协议副本再跑一遍
+# （tests/shim_h7/m207.h 把 "m207.h" 引到 m207_proto.h）。两份副本逐字节一致另有门禁。
+EXTRA_INC="/I..\..\tests\shim_h7"
+run fuzz_esp32 ../project_tcs/tests/fuzz_m207.c components/tcs_m207/m207_proto.c
+EXTRA_INC=""
 run m207golden tests/test_m207_golden.c components/tcs_m207/m207_proto.c
 run tmp117pure tests/test_tmp117_pure.c    components/tcs_tmp117/tmp117_pure.c
 # S-G e2（X04-F-05 ② / M13-F-06）：风扇服务的纯逻辑（头文件 inline）——命令-回读判定、弱校验

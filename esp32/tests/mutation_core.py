@@ -24,7 +24,7 @@ ESP = os.path.dirname(HERE)
 CORE = os.path.join(ESP, "components", "tcs_core")
 VARS64 = r"C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Auxiliary\Build\vcvars64.bat"
 TEST = os.path.join(HERE, "test_tcs_core.c")
-SRC = ("boot_record.c", "nvs_store.c")
+SRC = ("boot_record.c", "nvs_store.c", "svc_status.c")
 
 # 每项：(名称, 源文件名, [(原文, 替换文), ...])
 MUTATIONS = [
@@ -87,6 +87,26 @@ MUTATIONS = [
        "    if (b[1] != SAFETY_REC_VER2) return -1;")]),
     ("C26 报警位反码写错", "nvs_store.c",
      [("    out[6] = (uint8_t)~(alarm & 0xFFu);", "    out[6] = (uint8_t)(alarm & 0xFFu);")]),
+    # ---- svc_status.c：服务启动结果汇总（P1-12）----
+    ("C30 启动失败不置位", "svc_status.c",
+     [("    if (rv != 0) s->failed |= bit;", "    if (0) s->failed |= bit;")]),
+    ("C31 有失败也打成功行", "svc_status.c",
+     [("        if (s->failed == 0 && s->unverified == 0)", "        if (1)")]),
+    ("C32 报错行不说谁失败了", "svc_status.c",
+     [("            svc_names(s->failed, names, sizeof names);", "            names[0] = 0;")]),
+    ("C33 未核实项不提示", "svc_status.c",
+     [("            log(arg, SVC_LOG_W, line);", "            (void)line;")]),
+    ("C34 未核实项被当成失败", "svc_status.c",
+     [("    s->unverified |= bit;", "    s->failed |= bit;")]),
+    ("C35 成功行把未核实项也说成已起", "svc_status.c",
+     [("        uint32_t up = s->noted & ~(s->failed | s->unverified);",
+       "        uint32_t up = s->noted & ~s->failed;")]),
+    ("C36 报告不返回失败位", "svc_status.c",
+     [("    return s->failed;", "    return 0;")]),
+    ("C37 名字表错位（m207 报成 ctrl）", "svc_status.c",
+     [('    { SVC_BIT_M207,    "m207"    },', '    { SVC_BIT_M207,    "ctrl"    },')]),
+    ("C38 坏位也被登记", "svc_status.c",
+     [("    if (!s || !bit || (bit & (bit - 1u)) || (bit & ~SVC_BIT_ALL)) return -1;", "    if (!s) return -1;")]),
 ]
 
 
@@ -102,8 +122,10 @@ def compile_run(overrides):
             srcs.append(p)
         else:
             srcs.append(os.path.join(CORE, name))
+    srcs.extend(EXTRA)
     srcs.insert(0, TEST)
-    incs = ' /I"%s" /I"%s"' % (CORE, os.path.join(CORE, "include"))
+    incs = ' /I"%s" /I"%s" /I"%s"' % (CORE, os.path.join(CORE, "include"),
+                                       os.path.join(ESP, "components", "tcs_link"))
     objs = " ".join('"%s"' % s for s in srcs)
     bat = os.path.join(work, "mut_core.bat")
     with open(bat, "w", encoding="ascii", newline="\r\n") as f:

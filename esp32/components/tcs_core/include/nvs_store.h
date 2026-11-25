@@ -32,3 +32,10 @@ uint16_t safety_state_last_alarm(void);   /* 上电读回的报警位快照；v1
 /* param_registry.c 的 param_load_eeprom() 外部引用（NVS 实现）*/
 int eeprom_ready(void);
 int eeprom_read_image(uint8_t img[EE_IMG_SIZE]);
+
+#ifdef ESP_PLATFORM
+#include "esp_err.h"
+/* 上电读参数镜像（P1-12）：ESP_OK = 读到；ESP_ERR_NVS_NOT_FOUND = 首次上电（从没保存过）；
+ * 其它 = 读失败。app_main 据此把"读失败 / 镜像校验不过"与"首次上电"拆成不同的日志。*/
+esp_err_t nvs_registry_load(uint8_t img[EE_IMG_SIZE]);
+#endif

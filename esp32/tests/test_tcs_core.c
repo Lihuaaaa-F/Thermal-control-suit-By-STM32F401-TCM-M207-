@@ -11,8 +11,10 @@
 #include <stddef.h>
 #include "boot_record.h"
 #include "nvs_store.h"
+#include "svc_status.h"
 
 static int g_pass, g_fail;
+
 #define CHECK(cond, name) do { \
     if (cond) { g_pass++; } \
     else { g_fail++; printf("FAIL: %s (line %d)\n", name, __LINE__); fflush(stdout); } \
@@ -217,10 +219,126 @@ static void test_safety_record(void)
     CHECK(safety_rec_encode(0, 1, 2) == -1, "N4 null encode target rejected");
 }
 
+/* ====== S：服务启动结果汇总（svc_status，P1-12）====== */
+static char s_log_text[8][160];
+static int  s_log_level[8];
+static int  s_log_n;
+
+static void log_rec(void *arg, int level, const char *text)
+{
+    (void)arg;
+    if (s_log_n < 8) {
+        s_log_level[s_log_n] = level;
+        strncpy(s_log_text[s_log_n], text ? text : "(null)", sizeof s_log_text[0] - 1);
+        s_log_text[s_log_n][sizeof s_log_text[0] - 1] = '\0';
+    }
+    s_log_n++;
+}
+
+/* 多少条该级别的日志包含 needle（level < 0 = 任意级别）*/
+static int log_count(int level, const char *needle)
+{
+    int n = 0;
+    for (int i = 0; i < s_log_n && i < 8; i++)
+        if ((level < 0 || s_log_level[i] == level) && strstr(s_log_text[i], needle)) n++;
+    return n;
+}
+
+static void test_svc_status(void)
+{
+    svc_status_t s;
+    uint32_t f;
+
+    /* S1 全部成功：一条 I 级，带 (all up)，没有 E / W */
+    svc_init(&s);
+    (void)svc_note(&s, SVC_BIT_SOFTAP, 0);
+    (void)svc_note(&s, SVC_BIT_M207, 0);
+    (void)svc_note(&s, SVC_BIT_TMP117, 0);
+    (void)svc_note(&s, SVC_BIT_CTRL, 0);
+    (void)svc_note(&s, SVC_BIT_CONSOLE, 0);
+    (void)svc_note(&s, SVC_BIT_SNAP, 0);
+    (void)svc_note(&s, SVC_BIT_BOOTREC, 0);
+    s_log_n = 0;
+    CHECK(svc_report(&s, log_rec, NULL) == 0, "S1 nothing failed -> returns 0");
+    CHECK(s_log_n == 1 && s_log_level[0] == SVC_LOG_I, "S1 exactly one info line");
+    CHECK(log_count(SVC_LOG_I, "services up: softap m207 tmp117 ctrl console snap bootrec (all up)") == 1,
+          "S1 info line lists every service and says all up");
+    CHECK(log_count(SVC_LOG_E, "") == 0 && log_count(SVC_LOG_W, "") == 0, "S1 no error / warning lines");
+    CHECK(svc_all_up(&s), "S1 svc_all_up");
+
+    /* S2 人为让 m207 起不来、ctrl 回的是 esp_err_t：报错、点名，不再说 all up */
+    svc_init(&s);
+    (void)svc_note(&s, SVC_BIT_SOFTAP, 0);
+    (void)svc_note(&s, SVC_BIT_M207, -1);
+    (void)svc_note(&s, SVC_BIT_TMP117, 0);
+    (void)svc_note(&s, SVC_BIT_CTRL, 0x101);
+    (void)svc_note(&s, SVC_BIT_SNAP, 0);
+    s_log_n = 0;
+    f = svc_report(&s, log_rec, NULL);
+    CHECK(f == ((uint32_t)(SVC_BIT_M207 | SVC_BIT_CTRL)),
+          "S2 failed mask is returned (the caller raises ALM_SERVICE on it)");
+    CHECK(log_count(SVC_LOG_E, "") == 1, "S2 exactly one error line");
+    CHECK(log_count(SVC_LOG_E, "services FAILED to start: m207 ctrl") == 1,
+          "S2 error line names exactly the failed services");
+    CHECK(log_count(-1, "all up") == 0, "S2 never says 'all up' when something failed");
+    CHECK(log_count(SVC_LOG_I, "services up: softap tmp117 snap") == 1,
+          "S2 info line still lists what did start");
+    CHECK(!svc_all_up(&s), "S2 svc_all_up is false");
+
+    /* S3 坏参数：位为 0 / 多位 / 超范围 / 空指针——拒绝，状态不动 */
+    svc_init(&s);
+    CHECK(svc_note(&s, 0, -1) == -1 && svc_note(&s, 1u << 20, -1) == -1
+          && svc_note(&s, SVC_BIT_M207 | SVC_BIT_CTRL, -1) == -1
+          && svc_note(NULL, SVC_BIT_M207, -1) == -1, "S3 bad bits / null status are rejected");
+    svc_unverified(&s, 1u << 20);
+    svc_unverified(NULL, SVC_BIT_LINK);
+    CHECK(s.noted == 0 && s.failed == 0 && s.unverified == 0 && svc_all_up(&s),
+          "S3 rejected calls leave the status untouched");
+
+    /* S4 多个失败按固定顺序列全 */
+    svc_init(&s);
+    (void)svc_note(&s, SVC_BIT_SNAP, -1);
+    (void)svc_note(&s, SVC_BIT_CONSOLE, -1);
+    (void)svc_note(&s, SVC_BIT_M207, -1);
+    s_log_n = 0;
+    (void)svc_report(&s, log_rec, NULL);
+    CHECK(log_count(SVC_LOG_E, "services FAILED to start: m207 console snap") == 1,
+          "S4 all failed services are listed in a fixed order");
+
+    /* S5 接口是 void 的服务（link_start / web_start）：如实报"未核实"——不算失败，也不冒充成功 */
+    svc_init(&s);
+    (void)svc_note(&s, SVC_BIT_SOFTAP, 0);
+    svc_unverified(&s, SVC_BIT_LINK);
+    svc_unverified(&s, SVC_BIT_WEB);
+    (void)svc_note(&s, SVC_BIT_M207, 0);
+    s_log_n = 0;
+    CHECK(svc_report(&s, log_rec, NULL) == 0 && svc_all_up(&s), "S5 unverified is not a failure");
+    CHECK(log_count(SVC_LOG_W, "not verifiable") == 2 && log_count(SVC_LOG_W, ": link") == 1
+          && log_count(SVC_LOG_W, ": web") == 1, "S5 each unverified service gets a warning naming it");
+    CHECK(log_count(-1, "all up") == 0, "S5 no 'all up' while some results are unverifiable");
+    CHECK(log_count(SVC_LOG_I, "services up: softap m207") == 1,
+          "S5 info line lists only the verified ones (not link / web)");
+
+    /* S6 没有日志回调也安全；S7 名单截断安全 */
+    CHECK(svc_report(&s, NULL, NULL) == 0, "S6 null logger is safe");
+    {
+        char small[8];
+        memset(small, 'x', sizeof small);
+        (void)svc_names(0xFFFFFFFFu, small, sizeof small);
+        CHECK(strnlen(small, sizeof small) < sizeof small && strcmp(small, "softap") == 0,
+              "S7 names stop at the last complete name and stay NUL-terminated");
+        CHECK(svc_names(SVC_BIT_M207, NULL, 16) == 0 && svc_names(SVC_BIT_M207, small, 0) == 0,
+              "S7 null buffer / zero capacity");
+        (void)svc_names(SVC_BIT_CTRL | SVC_BIT_M207 | SVC_BIT_BOOTREC, small, sizeof small);
+        CHECK(strcmp(small, "m207") == 0, "S7 names stop before overflowing (only the first, 'm207', fits)");
+    }
+}
+
 int main(void)
 {
     test_boot_record();
     test_safety_record();
+    test_svc_status();
     printf("test_tcs_core: PASS=%d FAIL=%d\n", g_pass, g_fail);
     return g_fail ? 1 : 0;
 }

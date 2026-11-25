@@ -36,6 +36,8 @@
 #include "tcs_console.h"
 #include "tcs_snap.h"
 #include "r1e_probe.h"
+#include "svc_status.h"
+#include "esp_wifi.h"       /* P1-12：softap_probe 用 esp_wifi_get_mode */
 #include "tcs_bootrec.h"
 
 static const char *TAG = "TCS";
@@ -43,7 +45,6 @@ static const char *TAG = "TCS";
 /* control ops 适配（m207 API 返回 int，ops 签名 void；错误由服务内 NAK/重发计数承载）*/
 static void op_tec_sw(uint8_t ch, uint8_t on) { (void)m207_tec(ch, on); }
 static void op_tec_temp(uint8_t ch, float v) { (void)m207_set_temp(ch, v); }
-
 /* ====== WP-F.4 OTA：镜像实际长度（解析 image header/segments，避免整槽 3MB 拷贝）====== */
 static uint32_t ota_image_size(const esp_partition_t *p)
 {
@@ -126,6 +127,28 @@ static void esp_on_broadcast(param_desc_t *p, uint8_t src)
     (void)link_send_param(p->id, p->value);   /* 反向镜像：屏幕显示跟随 */
 }
 
+/* ====== P1-12：服务启动结果汇总 ======
+ * 此前五个服务的 int 返回值在 app_main 里被直接丢掉，末尾无条件打印 all up。现在逐个登记进
+ * svc_status，结束时由 svc_report 统一出报告：全起来才说 all up；有失败 → E 级日志 + 名单 +
+ * ALM_SERVICE。link_start / web_start 是 void（tcs_link / tcs_web，不归本批次改）：如实登记成
+ * "未核实"，不冒充成功——接口约定见 docs/results/S_G_e3a_结果.md。*/
+static void app_svc_log(void *arg, int level, const char *text)
+{
+    (void)arg;
+    if (level == SVC_LOG_E)      ESP_LOGE(TAG, "%s", text);
+    else if (level == SVC_LOG_W) ESP_LOGW(TAG, "%s", text);
+    else                         ESP_LOGI(TAG, "%s", text);
+}
+
+/* softap_start() 是 void（tcs_wifi），内部每一步都是 ESP_ERROR_CHECK：失败即 abort，不会静默没起来。
+ * 按效果核实：WiFi 已处于 AP 模式才算起了。*/
+static int softap_probe(void)
+{
+    wifi_mode_t mode = WIFI_MODE_NULL;
+    if (esp_wifi_get_mode(&mode) != ESP_OK) return -1;
+    return (mode == WIFI_MODE_AP || mode == WIFI_MODE_APSTA) ? 0 : -1;
+}
+
 /* v2：屏幕（H743）急停/报警确认 → 在本端执行（TEC/风扇在这里）*/
 static void esp_on_cmd(uint8_t cmd, uint8_t seq)
 {
@@ -200,31 +223,47 @@ void app_main(void)
                             .on_check = control_param_check };   /* 急停/超温锁存期间不得切自动 */
     param_registry_init(&hooks);
     {
+        /* P1-12：把"首次上电"与"读失败 / 镜像校验不过"拆开。原先两者合用一句
+         * "(defaults, first boot)"——参数损坏后以默认设定继续运行，日志看起来却像出厂。*/
         uint8_t img[EE_IMG_SIZE];
-        if (eeprom_read_image(img) == 0 && param_deserialize(img) == 0)
+        esp_err_t lr = nvs_registry_load(img);
+        if (lr == ESP_OK && param_deserialize(img) == 0)
             ESP_LOGI(TAG, "R1a registry: %d params restored from NVS", param_count());
+        else if (lr == ESP_ERR_NVS_NOT_FOUND)
+            ESP_LOGI(TAG, "R1a registry: %d params loaded (defaults, first boot)", param_count());
         else
-            ESP_LOGI(TAG, "R1a registry: %d params loaded (defaults, first boot)",
-                     param_count());
+            ESP_LOGE(TAG, "R1a registry: saved image unusable (%s%s) -> %d params loaded (DEFAULTS)",
+                     esp_err_to_name(lr), lr == ESP_OK ? "; image check failed" : "", param_count());
     }
     ESP_LOGI(TAG, "boot part=%s proj=%s ver=%s", run->label, desc->project_name, desc->version);
 
+    svc_status_t svc;                       /* P1-12：服务启动结果汇总 */
+    svc_init(&svc);
     softap_start();
+    svc_note(&svc, SVC_BIT_SOFTAP, softap_probe());
     link_loopback_run();          /* WP-F.1：真机自环自测（独占 UART1，~2.5s，证据=[LPBK]）*/
     link_start();
+    svc_unverified(&svc, SVC_BIT_LINK);     /* void 接口：UART 段失败即 abort，任务创建结果无从核实 */
     link_on_setparam(esp_on_setparam);   /* R2：屏写参数回调装配 */
     link_on_cmd(esp_on_cmd);             /* v2：屏急停/确认 → 本端执行 */
     web_start();
+    svc_unverified(&svc, SVC_BIT_WEB);      /* void 接口：httpd 失败即 abort，WS 推送任务的结果无从核实 */
     /* R1b：M207 服务（UART2 21/47@57600）。回环自测先行（独占 UART2 ~1s，
      * 含物理短接探测），随后常驻服务钉核 1（第八章预算）。 */
     m207_lb_boottest();
-    m207_service_start();
+    {
+        int mrv = m207_service_start();
+        svc_note(&svc, SVC_BIT_M207, mrv);
+        if (mrv != 0)   /* M12-F-16（e2 转来）：启动失败必须可见 */
+            ESP_LOGE(TAG, "M207 service did not start (see the [M207] log) — no M207 link; "
+                          "control enters SAFE after the boot grace");
+    }
     /* R1c：TMP117 服务（I2C0 8/9@100k）。自测先行（纯逻辑+健康机板上取证），
      * 随后 100ms 采样任务钉核 1（第八章预算 500µs）。硬件未接（T1-T3）=上电即
      * NACK→1s 后掉线沿 ALM_BODY_SENSOR=F4 预期行为；注入走 tmp117_sim_*（R1e console）。 */
     tmp117_lb_boottest();
-    tmp117_service_start();
-    /* R1d：风扇（GPIO48 低=开，LEDC 25kHz）。自测含两态电平回读。 */
+    svc_note(&svc, SVC_BIT_TMP117, tmp117_service_start());
+    /* R1d：风扇（GPIO42 低=开，LEDC 25kHz）。自测含两态电平回读。（M13-F-09，e2 转来：脚是 42 不是 48）*/
     fan_lb_boottest();
     /* R1e：control FSM 服务（ops→tcs_fan/tcs_m207；核 1 100ms 节拍，每拍控制评估 + 布防步进
      * （U 线 E1，原 500ms）+esp_task_wdt 3s 订阅）。console REPL（USB-Serial-JTAG，同口共存）。 */
@@ -241,8 +280,11 @@ void app_main(void)
     });
     /* R1 修复 M09-F-10 / N-01：任务创建失败必须可见，且必须 fail-safe——
      * 没有控制任务就没有闭环与执行器门控，继续跑等于"加热无人监管"。*/
-    if (control_service_start() != 0) {
-        ESP_LOGE(TAG, "control_service_start FAILED -> fail-safe (estop + TEC off + fan on)");
+    esp_err_t csr = control_service_start();
+    svc_note(&svc, SVC_BIT_CTRL, (int)csr);
+    if (csr != ESP_OK) {
+        ESP_LOGE(TAG, "control_service_start FAILED (%s) -> fail-safe (estop + TEC off + fan on)",
+                 esp_err_to_name(csr));
         tcs_emergency_stop();
         (void)m207_tec(1, 0);
         (void)m207_tec(2, 0);
@@ -256,14 +298,11 @@ void app_main(void)
                      (unsigned)saved_alarm);
     }
     /* X04-F-03 / R5-13：1Hz 把运行时长 / 报警位 / 锁存 / 控制状态刷回 RTC 记录（纯 RAM 写）*/
-    {
-        esp_err_t brc = tcs_bootrec_start_refresh();
-        if (brc != ESP_OK) ESP_LOGE(TAG, "boot record refresh timer failed: %s", esp_err_to_name(brc));
-    }
-    tcs_console_start();
+    svc_note(&svc, SVC_BIT_BOOTREC, (int)tcs_bootrec_start_refresh());
+    svc_note(&svc, SVC_BIT_CONSOLE, tcs_console_start());
     /* R2：0x20 快照（200ms 全量，核 0）+0x21 位图增量。旧屏固件对未知消息号
      * 静默丢弃（switch 无 default）→ 前向兼容；屏端读快照缓存在 R2-H743 侧接。 */
-    tcs_snap_start();
+    svc_note(&svc, SVC_BIT_SNAP, tcs_snap_start());
 #if CONFIG_TCS_M207_SELFLOOP
     m207_selfloop_run();          /* 取证构建：应答器注入全路径（[M207SL]，~20s）*/
 #endif
@@ -273,5 +312,6 @@ void app_main(void)
 #if CONFIG_TCS_R1E_PROBE
     r1e_probe_run();              /* R1e 取证构建：E-18 前 20 次+E-20/21/22 自驱（[R1E]）*/
 #endif
-    ESP_LOGI(TAG, "WiFi AP + loopback + link + web + m207 + ctrl + console all up");
+    /* P1-12：汇总报告。有服务没起来 → E 级日志 + 名单（不再说 all up）+ ALM_SERVICE。*/
+    if (svc_report(&svc, app_svc_log, NULL) != 0) tcs_alarm_raise(ALM_SERVICE);
 }

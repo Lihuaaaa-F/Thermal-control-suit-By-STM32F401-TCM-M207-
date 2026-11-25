@@ -12,6 +12,7 @@
 
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "esp_err.h"
 #include "esp_timer.h"
 #include "esp_task_wdt.h"
 #include "esp_log.h"
@@ -91,16 +92,17 @@ static void control_task(void *arg)
 uint8_t control_service_armed(void) { return post_armed(); }
 void control_service_hang_test(uint8_t on) { s_hang_test = on; }
 
-int control_service_start(void)
+esp_err_t control_service_start(void)
 {
-    if (s_started) return -1;
+    if (s_started) return ESP_ERR_INVALID_STATE;
     post_arm_init(&s_arm_ctx);
+    /* P1-12：返回值由 app_main 汇总（svc_status）；失败照旧走 fail-safe */
     if (xTaskCreatePinnedToCore(control_task, "ctrl_svc", 4096, NULL,
-                                4, &s_task, 1) != pdPASS) return -1;
+                                4, &s_task, 1) != pdPASS) return ESP_ERR_NO_MEM;
     s_started = 1;
     ESP_LOGI(TAG, "service started core=1 %ums tick (poll+arm-step), wdt 3s",
              (unsigned)CTRL_TICK_MS);
-    return 0;
+    return ESP_OK;
 }
 
 /* perf 读侧（console perf 命令用）*/

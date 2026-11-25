@@ -15,8 +15,9 @@ extern "C" {
 #endif
 
 #include <stdint.h>
+#include "esp_err.h"
 
-int  control_service_start(void);   /* control_init(ops)+起任务（核 1）+订阅 wdt。0=ok */
+esp_err_t control_service_start(void);   /* control_init(ops)+起任务（核 1）+订阅 wdt。ESP_OK / ESP_ERR_NO_MEM / ESP_ERR_INVALID_STATE（P1-12：由 app_main 汇总）*/
 uint8_t control_service_armed(void);/* post_armed() 转发（console/日志用）*/
 uint32_t control_service_poll_max_us(void);  /* control_poll 段峰值 µs（预算 100）*/
 uint32_t control_service_polls(void);        /* 评估拍计数 */

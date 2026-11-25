@@ -71,6 +71,7 @@
 #define ALM_OVERTEMP           0x0008
 #define ALM_EEPROM             0x0010
 #define ALM_SENSOR_OPEN        0x0020  /* 通道探头开路（M207 在线但该通道温度不可用；与 ALM_M207 通信失联分离）*/
+#define ALM_SERVICE            0x0040  /* 有后台服务没能启动（P1-12，S 线 e3a）：相应功能不可用，重启前不清。屏端与网页还没有这一位的文案 */
 
 /* ====== 0x10 TCS_STATUS（19B 小端）====== */
 typedef struct {

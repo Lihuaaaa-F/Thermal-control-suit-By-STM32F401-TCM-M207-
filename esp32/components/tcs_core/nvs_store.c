@@ -66,14 +66,24 @@ static const char *TAG = "tcs_nvs";
 
 int eeprom_ready(void) { return 1; }   /* NVS 在 app_main nvs_flash_init 后恒可用 */
 
-int eeprom_read_image(uint8_t img[EE_IMG_SIZE])
+/* 上电读镜像（P1-12）：ESP_OK = 读到；ESP_ERR_NVS_NOT_FOUND = 首次上电（从没保存过）；
+ * 其它 = 读失败（镜像损坏 / 长度不对 / NVS 异常）。原先这两种情况合成一句 "(defaults, first boot)"。*/
+esp_err_t nvs_registry_load(uint8_t img[EE_IMG_SIZE])
 {
     nvs_handle_t h;
-    if (nvs_open(NS_TCS, NVS_READONLY, &h) != ESP_OK) return -1;
+    esp_err_t ro = nvs_open(NS_TCS, NVS_READONLY, &h);
+    if (ro == ESP_ERR_NVS_NOT_FOUND) return ESP_ERR_NVS_NOT_FOUND;
+    if (ro != ESP_OK) return ro;
     size_t len = EE_IMG_SIZE;
     esp_err_t r = nvs_get_blob(h, KEY_IMG, img, &len);
     nvs_close(h);
-    return (r == ESP_OK && len == EE_IMG_SIZE) ? 0 : -1;
+    if (r == ESP_OK && len != EE_IMG_SIZE) r = ESP_ERR_NVS_INVALID_LENGTH;
+    return r;
+}
+
+int eeprom_read_image(uint8_t img[EE_IMG_SIZE])
+{
+    return (nvs_registry_load(img) == ESP_OK) ? 0 : -1;
 }
 
 int nvs_registry_commit(const uint8_t img[EE_IMG_SIZE])

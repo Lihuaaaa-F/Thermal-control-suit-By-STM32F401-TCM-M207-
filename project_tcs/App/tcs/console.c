@@ -241,12 +241,14 @@ static void cmd_exec(char *line)
         extern volatile uint32_t g_dbg_snap_gap_max;
         extern volatile uint32_t g_dbg_snap_gap_last;
         extern comm_link_t g_link;
-        printf("lrx=%lu snap=%lu gapmax=%lu gaplast=%lu echo=%lu wdir=%lu\n",
+        /* arq / txfail（M04-F-06 / X03-F-09）：comm 层 link_ok；没能上线的发送次数（应与 uartdrop 同源、恒 0）*/
+        printf("lrx=%lu snap=%lu gapmax=%lu gaplast=%lu echo=%lu wdir=%lu arq=%u txfail=%lu\n",
                (unsigned long)g_dbg_lrx_total,
                (unsigned long)g_dbg_snap,
                (unsigned long)g_dbg_snap_gap_max,
                (unsigned long)g_dbg_snap_gap_last,
-               (unsigned long)g_link.echo_cnt, (unsigned long)g_link.wrongdir_cnt);
+               (unsigned long)g_link.echo_cnt, (unsigned long)g_link.wrongdir_cnt,
+               (unsigned)g_link.link_ok, (unsigned long)g_link.tx_fail_cnt);
         return;
     }
 #if TCS_PROFILE >= 1

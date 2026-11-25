@@ -34,16 +34,19 @@ static void append(int side, const uint8_t *d, size_t n)
 {
     if (g_tx_n[side] + n <= sizeof(g_tx[side])) { memcpy(&g_tx[side][g_tx_n[side]], d, n); g_tx_n[side] += n; }
 }
-static void send_screen(const uint8_t *d, size_t n)
+/* send_fn（X03-F-09 起返回 int）：0 = 这一帧已上线。这里的"丢帧"是丢在线上——屏这一端
+ * 认为发出去了、对端没收到——所以照样返回 0，好让 comm 层走"超时重传"而不是"留在队头重试"。*/
+static int send_screen(const uint8_t *d, size_t n)
 {
     if (g_drop_screen || g_drop_left > 0) {
         if (g_drop_left > 0) g_drop_left--;
         g_drop_screen = 0;
-        return;                         /* 丢在线上：对端收不到 */
+        return 0;                       /* 丢在线上：对端收不到 */
     }
     append(0, d, n);
+    return 0;
 }
-static void send_ctrl(const uint8_t *d, size_t n) { append(1, d, n); }
+static int send_ctrl(const uint8_t *d, size_t n) { append(1, d, n); return 0; }
 static uint32_t now_fn(void) { return g_now; }
 static void on_down(void) { g_down_cnt++; }
 
@@ -147,6 +150,28 @@ int main(void)
     CHECK(g_down_cnt == 1, "5: 三次重传耗尽 → 报链路断（丢了要可见）");
     CHECK(comm_pending_count(&S) == 0, "5: 等待确认已清");
     CHECK(S.retry_cnt == 3, "5: 重传计数 = 3");
+
+    /* ---- 6) M04-F-04：序号 255 是合法序号，屏写到第 256 帧不得被报成失败 ----
+     * 旧实现 comm_send 用返回值 0xFF 同时表示"组帧失败"和"序号 255"：这一帧其实已登记、已发出，
+     * 调用方却当成失败（m207_redirect_send 因此回落到本地 M207 写）。*/
+    open_links();
+    S.next_seq = 255;
+    CHECK(link_send_set_param(&S, 0x06, PARAM_TYPE_F32, 1.0f) == 0, "6: 序号 255 的写入返回成功（旧实现被当成失败）");
+    CHECK(comm_pending_count(&S) == 1, "6: 已登记等待确认");
+    pump();
+    CHECK(g_ctrl.writes == 1 && g_ctrl.id == 0x06, "6: 主控收到了这一帧");
+    CHECK(comm_pending_count(&S) == 0, "6: 主控的 ACK 清掉等待确认");
+    CHECK(S.next_seq == 0, "6: 序号回绕到 0");
+    /* 连发 300 帧（跨过 255）：每一帧都报成功 */
+    {
+        int bad = 0;
+        for (int i = 0; i < 300; i++) {
+            if (link_send_set_param(&S, 0x03, PARAM_TYPE_F32, 30.0f) != 0) bad++;
+            pump();
+        }
+        CHECK(bad == 0, "6: 连发 300 帧没有一帧被报成失败");
+        CHECK(g_ctrl.writes == 301, "6: 300 帧全部到达主控");
+    }
 
     printf("test_link_send: PASS=%d FAIL=%d\n", g_pass, g_fail);
     return g_fail ? 1 : 0;

@@ -3,10 +3,12 @@
  *
  * 与 Python comm_protocol.ReliableLink 行为对齐。零 HAL 依赖。
  *
- * §0E 中断重入修复（M1.5）：所有 TX 经环形待发队列，主循环 comm_poll_tx
- * 唯一消费点串行 HAL_UART_Transmit。中断里 comm_tick 只判超时+重传入队。
- * 急停=常规尾插（队头插队函数已按 W3-A/终审 MF-8 删除：双端 0 调用死码）。
- * tx_head/tx_tail/tx_count 的读改写用 enter/exit_critical 短临界区保护。
+ * 所有 TX 经环形待发队列，由主循环的 comm_poll_tx 唯一消费（唯一一处 HAL_UART_Transmit）。
+ * 待发队列的生产模型（M04-F-07 定论，2026-11-25）见 comm.h 文件头：这一份是
+ * **"仅主循环生产，没有 ISR"**——comm_send / comm_txq_push / comm_tick / comm_poll_tx 都只在
+ * 主循环里调用，ISR 不碰 comm 层。enter/exit_critical 因此只是防御性的。
+ * 主控那一端的 comm.c（esp32/components/tcs_link）是"多任务生产 + 自旋锁"。
+ * 急停 = 常规尾插（队头插队函数已按 W3-A/终审 MF-8 删除：双端 0 调用死码）。
  */
 #include "comm.h"
 #include "tcs_proto.h"   /* R5-01：方向闸门的判定（tcs_rx_verdict 等纯函数，协议唯一源）*/
@@ -16,7 +18,7 @@
 volatile uint32_t g_comm_tx_frames;
 
 void comm_init(comm_link_t *L,
-               void (*send_fn)(const uint8_t *data, size_t len),
+               int (*send_fn)(const uint8_t *data, size_t len),
                uint32_t (*now_ms_fn)(void),
                void (*on_link_down)(void),
                void (*enter_critical)(void),
@@ -37,6 +39,9 @@ void comm_init(comm_link_t *L,
     for (int i = 0; i < 32; i++)  L->last_seen_ok[i] = 0;
     proto_rx_init(&L->rx);
 }
+
+/* M04-F-06：注册"链路恢复"回调（link_ok 由假转真时调用一次）。*/
+void comm_set_on_link_up(comm_link_t *L, void (*cb)(void)) { L->on_link_up = cb; }
 
 uint8_t comm_next_seq(comm_link_t *L)
 {
@@ -118,29 +123,37 @@ void comm_txq_push(comm_link_t *L, const uint8_t *frame, size_t len)
 
 void comm_poll_tx(comm_link_t *L)
 {
-    /* 无锁读 tx_count：容忍一拍误差（急停场景可接受）。
-     * 即使 ISR 在此刻 push，下次主循环会处理。主循环只读不改 tail。*/
+    /* 生产模型见 comm.h 文件头：本端只有主循环动待发队列（生产与消费都在这里），ISR 不碰。*/
     if (L->tx_count == 0) return;
     if (!L->send_fn) return;
-    g_comm_tx_frames++;
 
-    /* 取队头：head 是主循环独占消费索引，ISR 只 push 改 tail 不碰 head
-     * （push_front 已按 W3-A/终审 MF-8 删除）；故此处 head 无竞态。*/
+    /* X03-F-09：先发、发成功了才前移队头。原来先 send_fn 再无条件前移：HAL_UART_Transmit
+     * 返回 HAL_BUSY（句柄正被诊断用的中断发送占着）或超时的那一帧被消费掉了却从没上过线。
+     * 失败时这一帧留在队头，下一拍重试；同一帧连续 COMM_TX_MAX_FAIL 次失败才丢弃——
+     * 免得一个卡死的发送端把整条队列（急停命令也走这条队列）堵死。*/
     uint8_t h = L->tx_head;
-    L->send_fn(L->tx_queue[h], L->tx_len[h]);
+    if (L->send_fn(L->tx_queue[h], L->tx_len[h]) != 0) {
+        L->tx_fail_cnt++;
+        if (++L->tx_fail_streak < COMM_TX_MAX_FAIL) return;
+        L->tx_fail_streak = 0;
+        L->txq_drop++;
+    } else {
+        g_comm_tx_frames++;     /* 诊断：真正上线的帧数（失败的那几次不计）*/
+        L->tx_fail_streak = 0;
+    }
 
-    /* 消费后 head 前移，tx_count-- 。tx_count 被 ISR 的 push 读，故这里要
-     * 临界区保护 tx_count 的写（防 ISR 同时读到一个中间态）。
-     * head 的写仅主循环，不冲突。*/
+    /* 消费后 head 前移，tx_count--。本端没有别的上下文读写它们，不需要临界区；
+     * 留着这对钩子只为与"将来若接 ISR"的说明保持一致（见 comm.h）。*/
     if (L->enter_critical) L->enter_critical();
     L->tx_head = (uint8_t)((h + 1) % MAX_TXQ);
     L->tx_count--;
     if (L->exit_critical) L->exit_critical();
 }
 
-uint8_t comm_send(comm_link_t *L, const uint8_t *frame_bytes, size_t len, uint8_t msg_type)
+int comm_send(comm_link_t *L, const uint8_t *frame_bytes, size_t len, uint8_t msg_type,
+              uint8_t *out_seq)
 {
-    if (len < 5 || len > MAX_FRAME) return 0xFF;
+    if (len < 5 || len > MAX_FRAME) return -1;
     uint8_t seq = frame_bytes[4];  /* 起始符2+Length1+MsgType1+SeqNo1 */
 
     /* 已有同 (seq,mt) pending → 覆盖重置（理论上递增不重复） */
@@ -166,7 +179,8 @@ uint8_t comm_send(comm_link_t *L, const uint8_t *frame_bytes, size_t len, uint8_
 
     /* §0E：首传入队（不直接 send_fn），主循环 comm_poll_tx 串行消费 */
     comm_txq_push(L, frame_bytes, len);
-    return seq;
+    if (out_seq) *out_seq = seq;
+    return 0;                           /* M04-F-04：成败看返回值；序号 255 不再与"失败"同名 */
 }
 
 void comm_tick(comm_link_t *L)
@@ -209,6 +223,18 @@ int comm_on_ack(comm_link_t *L, uint8_t acked_seq, uint8_t acked_mt)
 static uint8_t s_dup_seq;
 static uint8_t s_dup_mt;
 static int s_dup_valid = 0;
+
+/* M04-F-06（2026-11-25）：判活单一口径。对端发来的任何一帧合法帧（ACK、重复帧、新帧都算）
+ * 都说明链路是通的 → link_ok 置真；由假转真时调一次 on_link_up。
+ * 原来 link_ok 置假之后只有 ACK 能把它复位：一帧等 ACK 的命令重传耗尽判死之后，对端的快照
+ * 照常每 200ms 到达、屏点也转绿，link_ok 却一直是 0，日志只有"断"没有"恢复"。
+ * 回声与方向不符的帧到不了这里（R5-01 的闸门在前）。本端只有主循环动 comm 层，不需要锁。*/
+static void comm_note_peer(comm_link_t *L)
+{
+    if (L->link_ok != COMM_LINK_OK_FALSE) return;
+    L->link_ok = COMM_LINK_OK_TRUE;
+    if (L->on_link_up) L->on_link_up();
+}
 
 /* R5-01 方向闸门。判定是 protocol/tcs_proto.h 的纯函数 tcs_rx_verdict（协议唯一源），
  * 这里只负责在"任何处理之前"调用它并分桶计数。
@@ -259,6 +285,8 @@ int comm_rx_feed_byte(comm_link_t *L, uint8_t b,
     /* R5-01：方向闸门——本端发出的帧被回送 / 对端不可能发来的消息号，在 ACK 处理、去重、
      * 交付之前丢弃。只看字节里的方向信息，不看长度、不看时刻。*/
     if (comm_rx_gate(L, payload, plen)) return 0;
+    /* M04-F-06：能走到这里的都是对端发来的合法帧——先把 link_ok 置真（如果是假）*/
+    comm_note_peer(L);
     uint8_t mt = tcs_frame_mt(payload[0]);
     uint8_t seq = payload[1];
 

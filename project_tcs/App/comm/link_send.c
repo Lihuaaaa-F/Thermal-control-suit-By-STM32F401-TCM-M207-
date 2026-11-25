@@ -33,8 +33,9 @@ int link_send_set_param(comm_link_t *L, uint16_t id, uint8_t type, float value)
     size_t n = frame_with_mt(MT_TCS_SET_PARAM, comm_next_seq(L), body, sizeof(body),
                              frame, sizeof(frame));
     if (!n) return -1;
-    /* 等 ACK：comm_send 登记 pending（500ms 超时 ×3 重传），首传经待发队列由 comm_poll_tx 发出。*/
-    return (comm_send(L, frame, n, MT_TCS_SET_PARAM) != 0xFFu) ? 0 : -1;
+    /* 等 ACK：comm_send 登记 pending（500ms 超时 ×3 重传），首传经待发队列由 comm_poll_tx 发出。
+     * 成败看返回值（M04-F-04）；序号 255 也是合法序号，不再与"失败"同名。*/
+    return (comm_send(L, frame, n, MT_TCS_SET_PARAM, NULL) == 0) ? 0 : -1;
 }
 
 int link_send_on_broadcast(comm_link_t *L, uint16_t id, uint8_t type, uint8_t flags, float value)

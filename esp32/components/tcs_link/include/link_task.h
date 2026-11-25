@@ -56,6 +56,8 @@ typedef struct {
                                     收到等长帧"的计数，口径不同。*/
     uint32_t wrongdir;           /* 方向位说是对端、但方向表不允许的消息号（坏帧或版本不匹配的对端；不是回声）*/
     uint32_t tx_wrongdir;        /* 自检：本端发出了方向表不允许自己发的消息号（应为 0）*/
+    uint32_t tx_fail;            /* X03-F-09：link_uart_send 报"没有上线"的帧数（驱动环满 / 诊断静默期；
+                                    等于 uart_txdrop + 静默期丢的帧）*/
     uint8_t  arq_ok;             /* comm 层 link_ok：1=最近一次有 ACK / 尚未判死，0=有一帧等 ACK 重传耗尽 */
     uint32_t echo_param;         /* 回声里的 0x11（参数镜像）*/
     uint32_t echo_snap;          /* 回声里的 0x20/0x21（快照/增量）*/

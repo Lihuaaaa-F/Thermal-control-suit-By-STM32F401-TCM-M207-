@@ -165,7 +165,19 @@ void link_wave_capture(void)
 }
 #endif /* TCS_PROFILE >= 1：link_wave_capture */
 
-void link_uart_error_recover(void)
+/* X03-F-09（2026-11-25）：USART2 的错误恢复只在主循环里做，ISR 只置标志。
+ * 原来 HAL_UART_ErrorCallback（ISR 上下文，stm32h7xx_it.c）直接调 link_uart_error_recover()，
+ * 与主循环 link_rx_drain() 里 100ms 限速的自愈并发操作同一个句柄：两边各自 AbortReceive 之后
+ * 再各自重挂 Receive_IT，后一次因 RxState 已是 BUSY_RX 返回 HAL_BUSY——等于丢一次重挂，
+ * 最长失聪 100ms。现在回调只调 link_uart_error_isr()，恢复统一由 link_rx_drain() 做。*/
+static volatile uint8_t g_link_err_flag;
+
+void link_uart_error_isr(void)
+{
+    g_link_err_flag = 1;                 /* ISR 上下文：只置标志，不碰句柄 */
+}
+
+void link_uart_error_recover(void)       /* 只在主循环里调（link_rx_drain）*/
 {
     if (__HAL_UART_GET_FLAG(&huart_link, UART_FLAG_ORE))
         __HAL_UART_CLEAR_OREFLAG(&huart_link);
@@ -218,14 +230,17 @@ static void link_rx_drain(void)
     /* R2 真机自愈（2026-10-30）：USART2 首次 ORE 后 HAL 会关闭 RXNEIE
      * （CR1.RXNEIE=0），而错误回调未启用 → 链路 RX 永久失聪。
      * 与 console_poll 同款轮询自愈，但**限速 100ms**——持续 ORE 风暴
-     * （如 RX 接线悬空/悬低）时逐拍 AbortReceive 会拖死主循环（真机实证）。*/
+     * （如 RX 接线悬空/悬低）时逐拍 AbortReceive 会拖死主循环（真机实证）。
+     * X03-F-09：ISR 的错误回调不再自己恢复，只置 g_link_err_flag，在这里一起做。*/
     {
         static uint32_t s_last_heal;
         uint32_t nowms = g_tick_ms;
-        if ((__HAL_UART_GET_FLAG(&huart_link, UART_FLAG_ORE) ||
+        if ((g_link_err_flag ||
+             __HAL_UART_GET_FLAG(&huart_link, UART_FLAG_ORE) ||
              (huart_link.Instance->CR1 & USART_CR1_RXNEIE_RXFNEIE) == 0u) &&
             (uint32_t)(nowms - s_last_heal) >= 100u) {
             s_last_heal = nowms;
+            g_link_err_flag = 0;
             link_uart_error_recover();
         }
     }
@@ -277,15 +292,22 @@ static void link_rx_drain(void)
 static void crit_enter(void) { __disable_irq(); }
 static void crit_exit(void)  { __enable_irq(); }
 
-static void link_uart_send(const uint8_t *data, size_t len)
+/* X03-F-09（2026-11-25）：返回 0 = 这一帧已上线；非 0 = 没有上线。
+ * comm_poll_tx 据此决定要不要前移队头——原来 send_fn 是 void，HAL_UART_Transmit 返回
+ * HAL_BUSY（句柄正被诊断用的中断发送占着）或超时的那一帧被消费掉了却从没上过线。*/
+static int link_uart_send(const uint8_t *data, size_t len)
 {
-    HAL_UART_Transmit(&huart_link, (uint8_t *)data, (uint16_t)len, 20u);
+    return (HAL_UART_Transmit(&huart_link, (uint8_t *)data, (uint16_t)len, 20u) == HAL_OK) ? 0 : -1;
 }
 
 static uint32_t now_ms_fn(void) { return g_tick_ms; }
 
 static volatile uint8_t g_link_down_flag = 0;
 static void on_link_down(void) { g_link_down_flag = 1; }
+/* M04-F-06：与上面成对的"恢复"——ARQ 判死之后，对端发来的任何一帧合法帧到达（见 comm.c 的
+ * comm_note_peer）。原来只有 ACK 能把 link_ok 复位，日志里只有"断"没有"恢复"。*/
+static volatile uint8_t g_link_up_flag = 0;
+static void on_link_up(void) { g_link_up_flag = 1; }
 
 /* ====== 0x90 TCS_ACK 发送（txq 入队，主循环串行消费）====== */
 void link_send_ack(uint8_t acked_seq, uint8_t acked_mt, uint8_t status, float ret)
@@ -410,7 +432,7 @@ static void link_send_cmd_upstream(uint8_t cmd)
     uint8_t frame[MAX_FRAME];
     size_t fn = proto_encode_frame_with_mt(MT_TCS_CMD, comm_next_seq(&g_link),
                                            pl, TCS_CMD_PL_LEN, frame, sizeof(frame));
-    if (fn) (void)comm_send(&g_link, frame, fn, MT_TCS_CMD);
+    if (fn) (void)comm_send(&g_link, frame, fn, MT_TCS_CMD, NULL);
 }
 
 static void hook_m207_set(uint8_t ch, float v)
@@ -895,6 +917,7 @@ int main(void)
 
     comm_init(&g_link, link_uart_send, now_ms_fn, on_link_down, crit_enter, crit_exit,
               TCS_SIDE_H743);
+    comm_set_on_link_up(&g_link, on_link_up);   /* M04-F-06：与 on_link_down 成对的"恢复"日志 */
 
 #ifdef ENABLE_LCD
     tcs_lvgl_init();     /* LVGL 单栈（2026-11-15：旧 tcs_ui 已删除） */
@@ -1033,6 +1056,10 @@ int main(void)
         if (g_link_down_flag) {
             g_link_down_flag = 0;
             tcs_log("[NET]", "esp link down (3 retries)");
+        }
+        if (g_link_up_flag) {
+            g_link_up_flag = 0;
+            tcs_log("[NET]", "esp link restored");
         }
         /* R2（v2.4 §13.4.6）：判活口径=快照新鲜度 500ms 窗（0x20@200ms 连续到达）；
          * comm 层 link_ok(ARQ 活性)保留内部使用，不再直接映射屏点 */

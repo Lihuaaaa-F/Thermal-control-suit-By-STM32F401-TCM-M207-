@@ -73,9 +73,11 @@ int proto_self_test(void)
 static uint8_t  wire[4096];
 static size_t   wire_len;
 static uint32_t fake_now;
-static void stub_send(const uint8_t *d, size_t n)
+/* X03-F-09：send_fn 返回 0 = 这一帧已上线；本桩永远成功 */
+static int stub_send(const uint8_t *d, size_t n)
 {
     if (wire_len + n <= sizeof(wire)) { memcpy(&wire[wire_len], d, n); wire_len += n; }
+    return 0;
 }
 static uint32_t stub_now(void) { return fake_now; }
 
@@ -202,7 +204,10 @@ int main(void)
         tcs_pl_param(pl, sizeof(pl), &pp);
         uint8_t frame[MAX_FRAME];
         size_t fn = mt_frame(MT_TCS_SET_PARAM, 7, pl, 7, frame, sizeof(frame));
-        uint8_t seq = comm_send(&L, frame, fn, MT_TCS_SET_PARAM);
+        /* M04-F-04：comm_send 返回状态（0 = 已登记并入队），序号经出参 */
+        uint8_t seq = 0xFF;
+        CHECK(comm_send(&L, frame, fn, MT_TCS_SET_PARAM, &seq) == 0, "M04-F-04: comm_send 报告成功");
+        CHECK(seq == 7, "M04-F-04: 序号经出参带回");
         CHECK(comm_pending_count(&L) == 1, "pending registered");
         comm_poll_tx(&L);   /* §0E：首传经 txq，poll_tx 才真正发出 */
 
@@ -238,7 +243,7 @@ int main(void)
         OPEN(&L2);
         fn = mt_frame(MT_TCS_CMD, 1, (const uint8_t *)"\x08", 1,
                                         frame, sizeof(frame));
-        comm_send(&L2, frame, fn, MT_TCS_CMD);
+        comm_send(&L2, frame, fn, MT_TCS_CMD, NULL);
         comm_poll_tx(&L2);   /* 首传出队 → wire */
         fake_now = 1000;
         int tx_seen = 1;   /* 首传已在 wire */
@@ -337,7 +342,7 @@ int main(void)
         for (int i = 0; i <= COMM_MAX_PENDING; i++) {
             size_t n6 = mt_frame(MT_TCS_CMD, (uint8_t)(0x40 + i),
                                  (const uint8_t *)"1", 1, f6, sizeof(f6));
-            seqs[i] = comm_send(&L6, f6, n6, MT_TCS_CMD);
+            (void)comm_send(&L6, f6, n6, MT_TCS_CMD, &seqs[i]);
             fake_now += 10;                  /* 登记时刻可区分 */
         }
         CHECK(comm_pending_count(&L6) == COMM_MAX_PENDING, "M04-F-05 pending full");
@@ -355,7 +360,7 @@ int main(void)
         fake_now = 0xFFFFFF00u;
         uint8_t f7[MAX_FRAME];
         size_t n7 = mt_frame(MT_TCS_CMD, 0x33, (const uint8_t *)"1", 1, f7, sizeof(f7));
-        comm_send(&L7, f7, n7, MT_TCS_CMD);        /* deadline 回绕到 0x000000F4 */
+        comm_send(&L7, f7, n7, MT_TCS_CMD, NULL);        /* deadline 回绕到 0x000000F4 */
         fake_now = 0x00000010u;                    /* 回绕后的 0x110ms 处 */
         comm_tick(&L7);
         CHECK(comm_pending_count(&L7) == 1, "nowrap: no premature timeout");

@@ -742,6 +742,24 @@ static void act_l1(int ph)
     CHECK(s.arq_ok == 0, "L: ACK 回声不会把 link_ok 置真");
 }
 
+/* ---- M：M04-F-06 判活单一口径——ARQ 判死之后，对端的任何一帧合法帧都把 link_ok 置回真 ---- */
+static void act_m0(int ph)
+{
+    (void)ph;
+    tcs_status_pl_t st; memset(&st, 0, sizeof(st));
+    st.ver = TCS_PROTO_VER; st.seq = 3;
+    uint8_t spl[TCS_STATUS_PL_LEN]; (void)tcs_pl_status(spl, sizeof(spl), &st);
+    peer_send(MT_TCS_STATUS, 0x50, spl, sizeof(spl));     /* 对端的 STATUS：免 ARQ，没有对应的 ACK */
+}
+static void act_m1(int ph)
+{
+    (void)ph;
+    snap_t s = snap();
+    printf("  [M] ARQ 判死之后对端 STATUS 到达：arq_ok=%u alive=%d\n", (unsigned)s.arq_ok, (int)link_alive());
+    CHECK(link_alive(), "M: 对端 STATUS 判活");
+    CHECK(s.arq_ok == 1, "M: 对端的非 ACK 帧把 link_ok 置回真（旧实现只能被 ACK 复位）");
+}
+
 /* ======================= main ======================= */
 static int cmp_act(const void *a, const void *b)
 {
@@ -778,9 +796,10 @@ int main(void)
     at(11100, act_h0, 0);  at(11400, act_h1, 0);
     at(11800, act_i0, 0);  at(12300, act_i1, 0);
     at(12600, act_l0, 0);  at(32600, act_l1, 0);
+    at(32900, act_m0, 0);  at(33200, act_m1, 0);
 
     qsort(g_act, (size_t)g_nact, sizeof(g_act[0]), cmp_act);
-    sim_until(33100);
+    sim_until(33400);
 
     printf("test_link_dir: PASS=%d FAIL=%d\n", g_pass, g_fail);
     return g_fail ? 1 : 0;

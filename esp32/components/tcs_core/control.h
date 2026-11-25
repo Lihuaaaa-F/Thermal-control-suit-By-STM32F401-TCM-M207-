@@ -58,6 +58,13 @@ typedef struct {
     void (*on_state)(ctrl_state_t st);          /* 迁移日志钩子，可 NULL */
     void    (*safety_persist)(uint8_t latch);   /* latch 变化时落盘，可 NULL */
     uint8_t (*safety_load)(void);               /* 启动读回 latch，可 NULL */
+    /* 安全关断通道（P1-09，AD-4）：SAFE 的 TCSW=0——进入沿 + 锁存期间每 500ms 的重申、以及
+     * cmd 11 的停机——都走这里。可为 NULL：退化为 tec_sw（普通命令队列）。
+     * 为什么要单独一条通道：普通队列在模块离线时拒收（m207_tec 回 -2），离线沿还会被清空，
+     * "关"就送不到执行器。实现方（tcs_m207 的 m207_tec_force，e2 批次）的约定：
+     *   不占普通队列；离线也记下意图，复联第一帧补发；每 500ms 重试到读回一致。
+     * 只有"关"走这条通道：状态机与手动的"开"永远走 tec_sw。*/
+    void    (*tec_force)(uint8_t ch, uint8_t on);
 } control_ops_t;
 
 void  control_init(const control_ops_t *ops);
@@ -91,6 +98,10 @@ void  tcs_emergency_stop(void);
 
 /* ====== 安全锁存读侧（R1 修复；console/网页/诊断用）====== */
 uint8_t control_safety_latched(void);           /* 非 0 = 仍在安全锁存 */
+/* TEC 开关状态是否"已知"（P1-09）：bit0=TC1 bit1=TC2。1 = 模块在线，开关状态可信；
+ * 0 = 未知——离线期间 g_tcs.tec*_on 只是本端的命令意图，执行器实际状态无从得知，
+ * 快照 / 界面不得把它显示成"已关"。g_tcs.tec_known 是它的缓存副本（每拍刷新，最多晚一拍）。*/
+uint8_t control_tec_known(void);
 /* N-01：设备服务层（M207 解析等）可直接置安全锁存——超温切断不得只依赖 control 任务存活。*/
 void    control_safety_trip(uint8_t bit);
 

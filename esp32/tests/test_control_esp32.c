@@ -36,6 +36,23 @@ static void stub_fan(uint8_t on)        { fan_calls++; last_fan = on; }
 static void stub_tec(uint8_t ch, uint8_t on)  { tec_calls++; last_tec_ch = ch; last_tec_on = on; }
 static void stub_temp(uint8_t ch, float v)    { temp_calls++; last_temp_ch = ch; last_temp_v = v; }
 
+/* P1-09 用：m207_tec 的主机模型——模块离线时"拒收"（回 -2、不出帧），不记送达 */
+static uint8_t  s_link_down;              /* 1 = M207 链路断（用例同步把 g_tcs.m207_online 置 0）*/
+static uint32_t s_off_delivered_ms;       /* 最近一次"关"真正送达执行器的时刻；0 = 从未 */
+static uint32_t s_stub_now_ms;            /* 桩里的时钟（拍前由用例更新）*/
+static void stub_tec_strict(uint8_t ch, uint8_t on)
+{
+    tec_calls++; last_tec_ch = ch; last_tec_on = on;
+    if (!on && !s_link_down) s_off_delivered_ms = s_stub_now_ms ? s_stub_now_ms : 1u;
+}
+/* P1-09 用：安全关断通道（m207_tec_force 的主机模型）——不依赖普通队列，断链时也记下意图 */
+static int force_calls;
+static void stub_force(uint8_t ch, uint8_t on)
+{
+    force_calls++; last_tec_ch = ch; last_tec_on = on;
+    if (!on) s_off_delivered_ms = s_stub_now_ms ? s_stub_now_ms : 1u;
+}
+
 /* P0-08 持久化钩子桩（文件作用域：MSVC 不支持嵌套函数定义）*/
 static uint8_t s_persisted;
 static void    persist_cb(uint8_t latch) { s_persisted = latch; }
@@ -47,11 +64,14 @@ static uint8_t load_stuck_cb(void)       { return SAFETY_BIT_STUCK; }
 static void reset_stubs(void)
 {
     fan_calls = tec_calls = temp_calls = 0;
+    force_calls = 0;
 }
 
 /* 推进 500ms 评估节拍 */
 static uint32_t s_now;
-static void tick(void) { s_now += 500u; control_poll(s_now); }
+static void tick(void) { s_now += 500u; s_stub_now_ms = s_now; control_poll(s_now); }
+/* 推进一拍（100ms）并同步桩时钟；P1-09 的用例用 */
+static void poll100(void) { s_now += 100u; s_stub_now_ms = s_now; control_poll(s_now); }
 
 /* S 线 e3a（卡死判据）用：推进一拍，同时让**不该被判**的那个通道保持活的读数。
  * 真实传感器的读数一直在抖（真机旁证：TCACTTEMP 相邻两次 ±0.01~0.07°C）；用例里如果让它
@@ -1055,6 +1075,124 @@ int main(void)
         param_registry_init(&(param_hooks_t){0});
         CHECK(control_safety_latched() == 0 && control_state() == CTRL_IDLE,
               "K16 a STUCK bit found in storage is dropped at boot");
+    }
+
+    /* ====== 2026-11-25 S 线 e3a（P1-09）：SAFE 必须到得了执行器 ======
+     * 普通命令队列在模块离线时拒收（m207_tec 回 -2），离线沿还会被清空——"关"送不到执行器。
+     * 控制核这边：① SAFE 的 TCSW=0（进入沿 + 锁存期间每 500ms 的重申）走单独的安全关断通道
+     * ops.tec_force（没提供时退化为 tec_sw）；② 做出 tec_known：模块离线时开关状态是"未知"，
+     * 快照不得显示"已关"。执行器那一侧（m207_tec_force：离线记下意图、复联第一帧补发）在
+     * tcs_m207（e2 批次），这里用主机模型 stub_force 代表它。变异验证见 M43 起。*/
+    {
+        /* P9-1 / P9-2 / P9-4 / P9-5：安全关断通道 */
+        control_init(&(control_ops_t){
+            .fan_set = stub_fan, .tec_sw = stub_tec, .tec_temp = stub_temp, .on_state = 0,
+            .tec_force = stub_force,
+        });
+        param_registry_init(&(param_hooks_t){0});
+        set_armed(0);
+        g_tcs.body_sensor_ok = 1; g_tcs.m207_online = 1; g_tcs.m207_sensor_open = 0;
+        g_tcs.body_temp = 37.0f; g_tcs.tc1_act = 25.0f;
+        s_now = 10000u; s_stub_now_ms = s_now; s_link_down = 0;
+        (void)param_set(PARAM_ID_MODE, 0.0f, 4);        /* 手动 */
+        reset_stubs();
+        control_manual_tec(1, 1);                       /* 手动开着 TC1 */
+        CHECK(g_tcs.tec1_on == 1 && tec_calls == 1 && force_calls == 0,
+              "P9-5 manual on goes through the normal channel only");
+        reset_stubs();
+        tcs_emergency_stop();
+        CHECK(control_state() == CTRL_SAFE, "P9-1 estop -> SAFE");
+        CHECK(force_calls == 2 && tec_calls == 0,
+              "P9-1 SAFE turns both TEC off through the force channel, not the queue");
+        CHECK(g_tcs.tec1_on == 0 && g_tcs.tec2_on == 0, "P9-1 command intent: both off");
+        CHECK(control_tec_known() == 3, "P9-7 link up: TEC state is known");
+
+        reset_stubs();
+        for (int i = 0; i < 10; i++) poll100();         /* 1000ms */
+        CHECK(force_calls == 4,
+              "P9-2 SAFE re-assert uses the force channel every 500ms (2 x 2 channels in 1 s)");
+        CHECK(tec_calls == 0, "P9-2 re-assert never touches the normal queue");
+        CHECK(control_state() == CTRL_SAFE, "P9-2 stays SAFE");
+
+        /* 解除（未布防 + 源健康 → ack 可清），下一拍离开 SAFE */
+        tcs_alarm_ack();
+        poll100();
+        CHECK(control_state() == CTRL_IDLE, "P9 precondition: SAFE left");
+
+        /* P9-4 cmd 11（屏侧观测到超温的停机请求）：同样走安全关断通道 */
+        reset_stubs();
+        CHECK(control_apply_cmd(TCS_CMD_OVERTEMP_STOP) == 0, "P9-4 cmd 11 accepted");
+        CHECK(force_calls == 2 && tec_calls == 0 && last_tec_on == 0,
+              "P9-4 cmd 11 stops both TEC through the force channel");
+        g_tcs.tc1_act = 30.0f;
+        poll100();
+        tcs_alarm_ack();
+        poll100();
+        CHECK(control_state() == CTRL_IDLE, "P9 precondition: SAFE left again");
+
+        /* P9-5 自动状态机的"开"只走普通通道（安全关断通道只留给"关"）*/
+        g_tcs.body_temp = 30.0f;
+        (void)param_set(PARAM_ID_MODE, 1.0f, 4);
+        reset_stubs();
+        tick();
+        CHECK(control_state() == CTRL_HEAT && g_tcs.tec1_on == 1, "P9-5 precondition: HEAT");
+        CHECK(tec_calls >= 1 && force_calls == 0, "P9-5 the state machine's 'on' never uses the force channel");
+
+        /* P9-3 没有提供安全关断通道（e2 接线之前）：退化为普通通道，行为与原先一致 */
+        control_init(&(control_ops_t){
+            .fan_set = stub_fan, .tec_sw = stub_tec, .tec_temp = stub_temp, .on_state = 0,
+        });
+        param_registry_init(&(param_hooks_t){0});
+        set_armed(0);
+        s_now = 10000u; s_stub_now_ms = s_now;
+        (void)param_set(PARAM_ID_MODE, 0.0f, 4);
+        reset_stubs();
+        tcs_emergency_stop();
+        CHECK(tec_calls == 2 && last_tec_on == 0 && control_state() == CTRL_SAFE,
+              "P9-3 without a force channel SAFE falls back to the normal channel");
+
+        /* P9-6（X06-F-03 ②）断链 + 急停：关断必须在 3s 内到达执行器；离线期开关状态是"未知"
+         *    主机模型：stub_tec_strict = m207_tec（离线拒收、不出帧）；stub_force = m207_tec_force
+         *    （断链时也记下意图）。s_off_delivered_ms = "关"真正送达执行器的时刻。*/
+        control_init(&(control_ops_t){
+            .fan_set = stub_fan, .tec_sw = stub_tec_strict, .tec_temp = stub_temp, .on_state = 0,
+            .tec_force = stub_force,
+        });
+        param_registry_init(&(param_hooks_t){0});
+        set_armed(0);
+        g_tcs.body_sensor_ok = 1; g_tcs.m207_online = 1; g_tcs.m207_sensor_open = 0;
+        g_tcs.body_temp = 37.0f; g_tcs.tc1_act = 25.0f;
+        s_now = 10000u; s_stub_now_ms = s_now; s_link_down = 0; s_off_delivered_ms = 0;
+        (void)param_set(PARAM_ID_MODE, 0.0f, 4);
+        poll100();                                     /* 捕获 boot 基准 */
+        reset_stubs();
+        control_manual_tec(1, 1);                      /* 加热中 */
+        CHECK(g_tcs.tec1_on == 1 && control_tec_known() == 3,
+              "P9-6 precondition: TC1 on, link up, state known");
+        s_link_down = 1;
+        g_tcs.m207_online = 0;                         /* 拔 M207 通信线（模块仍供电、TEC 负载仍在）*/
+        {
+            uint32_t t0 = s_now;
+            s_off_delivered_ms = 0;
+            tcs_emergency_stop();                      /* 离线期间触发急停 */
+            CHECK(control_state() == CTRL_SAFE && g_tcs.tec1_on == 0,
+                  "P9-6 estop while the link is down -> SAFE, command intent off");
+            CHECK(s_off_delivered_ms != 0 && (uint32_t)(s_off_delivered_ms - t0) <= 3000u,
+                  "P9-6 'off' reaches the actuator channel within 3 s even with the link down");
+        }
+        for (int i = 0; i < 10; i++) poll100();
+        CHECK(control_tec_known() == 0,
+              "P9-6 while the module is offline the TEC state is UNKNOWN, not 'off'");
+        CHECK(g_tcs.tec_known == 0, "P9-6 snapshot copy of tec_known is 0 while offline");
+        CHECK(control_state() == CTRL_SAFE, "P9-6 stays SAFE while offline");
+        s_link_down = 0;
+        g_tcs.m207_online = 1;                         /* 复联 */
+        poll100();
+        CHECK(control_tec_known() == 3 && g_tcs.tec_known == 3, "P9-6 link back -> TEC state known again");
+        reset_stubs();
+        for (int i = 0; i < 10; i++) poll100();
+        CHECK(force_calls == 4 && last_tec_on == 0,
+              "P9-6 after reconnect the off is still pushed every 500ms");
     }
 
     printf("test_control: PASS=%d FAIL=%d\n", g_pass, g_fail);

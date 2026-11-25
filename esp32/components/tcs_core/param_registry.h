@@ -86,6 +86,9 @@ typedef struct {
     uint8_t  body_sensor_ok;
     uint8_t  esp_link_ok;
     uint32_t fw_ver;              /* BCD 0x010000 = v1.0.0 */
+    uint8_t  tec_known;           /* P1-09：bit0=TC1 bit1=TC2；1=模块在线、开关状态可信，0=未知。
+                                   * control_poll 每拍刷新（取值接口 control_tec_known()）。
+                                   * 快照接线（0x20 设备信息）归 l1 批次。*/
 } tcs_state_t;
 
 extern tcs_state_t g_tcs;

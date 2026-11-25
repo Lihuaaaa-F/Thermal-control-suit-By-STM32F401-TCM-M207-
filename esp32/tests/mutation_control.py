@@ -164,6 +164,18 @@ MUTATIONS = [
        "        body_stuck = (uint8_t)((g_tcs.tec1_on || g_tcs.tec2_on)"),
       ("                               && stuck_is(&s_stuck_body, now_ms, s_tec_on_since[0]));",
        "                               && stuck_is(&s_stuck_body, now_ms, now_ms - CTRL_STUCK_WINDOW_MS));")], ""),
+    # ---- 2026-11-25 S 线 e3a：SAFE 到得了执行器（P1-09）。用例 P9-1…P9-7 在 test_control_esp32.c ----
+    ("M43 SAFE 的关断不走安全关断通道（回到只占普通队列）",
+     [("    if (force && s_ops.tec_force) s_ops.tec_force(ch, on);",
+       "    if (0 && force && s_ops.tec_force) s_ops.tec_force(ch, on);")], ""),
+    ("M44 cmd 11 的停机不走安全关断通道",
+     [("        out_tec_sw_ex(1, 0, 1);", "        out_tec_sw_ex(1, 0, 0);"),
+      ("        out_tec_sw_ex(2, 0, 1);", "        out_tec_sw_ex(2, 0, 0);")], ""),
+    ("M45 普通的“开”也走安全关断通道（通道不再只留给“关”）",
+     [("static void out_tec_sw(uint8_t ch, uint8_t on) { out_tec_sw_ex(ch, on, 0); }",
+       "static void out_tec_sw(uint8_t ch, uint8_t on) { out_tec_sw_ex(ch, on, 1); }")], ""),
+    ("M46 模块离线时开关状态仍显示“已知”",
+     [("    return (uint8_t)(g_tcs.m207_online ? 0x03u : 0x00u);", "    return 0x03u;")], ""),
 ]
 
 
@@ -249,6 +261,11 @@ def main():
                 "int control_param_check(uint16_t id, float v) { (void)id; (void)v; return 0; }\n"
                 "int control_apply_cmd_src(uint8_t cmd, uint8_t src) { (void)src; return control_apply_cmd(cmd); }\n"
                 "void tcs_emergency_stop_src(uint8_t src) { (void)src; tcs_emergency_stop(); }\n")
+    # S 线 e3a（P1-09）：更近的基线已含上面那几个函数，缺的是这个读接口。桩恒回"已知"，
+    # 所以 P9-6 的"离线 = 未知"断言在旧实现上照样是红的。
+    if "control_tec_known" not in old:
+        old += ("\n/* mutation_control.py: 基线没有 control_tec_known，为链接补上 */\n"
+                "uint8_t control_tec_known(void) { return 0x03u; }\n")
     ok, out, rc = compile_run(old)
     if ok:
         fl = fails_of(out)

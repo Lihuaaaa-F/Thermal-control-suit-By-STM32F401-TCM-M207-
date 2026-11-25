@@ -236,7 +236,7 @@ static void out_fan(uint8_t on)
     if (s_ops.fan_set) s_ops.fan_set(on);
 }
 
-static void out_tec_sw(uint8_t ch, uint8_t on)
+static void out_tec_sw_ex(uint8_t ch, uint8_t on, uint8_t force)
 {
     /* 安全门控的唯一收敛点：锁存期间任何"开"都压成 0（P0-04 的在途状态机覆写在此失效）。
      * 单字节读在 32 位 MCU 上原子；最坏情况是晚一拍看到 trip，而 trip 由 poll 同拍处理。 */
@@ -249,8 +249,20 @@ static void out_tec_sw(uint8_t ch, uint8_t on)
     }
     if (ch == 1) g_tcs.tec1_on = on ? 1u : 0u;
     else         g_tcs.tec2_on = on ? 1u : 0u;
-    if (s_ops.tec_sw) s_ops.tec_sw(ch, on);
+    /* 执行通道：安全关断（force=1）有专门的通道就走它；其余一律普通命令队列 */
+    if (force && s_ops.tec_force) s_ops.tec_force(ch, on);
+    else if (s_ops.tec_sw) s_ops.tec_sw(ch, on);
 }
+
+static void out_tec_sw(uint8_t ch, uint8_t on) { out_tec_sw_ex(ch, on, 0); }
+
+/* TEC 开关状态是否"已知"（P1-09）：模块在线才可信；离线期间 tec*_on 只是本端的命令意图 */
+static uint8_t tec_known_now(void)
+{
+    return (uint8_t)(g_tcs.m207_online ? 0x03u : 0x00u);
+}
+
+uint8_t control_tec_known(void) { return tec_known_now(); }
 
 static void out_tec_temp(uint8_t ch, float v)
 {
@@ -286,6 +298,7 @@ void control_init(const control_ops_t *ops)
     memset(s_tec_cmd_on, 0, sizeof(s_tec_cmd_on));
     s_poll_now_ms = 0;
     g_tcs.alarm_bits = 0;
+    g_tcs.tec_known = tec_known_now();  /* P1-09：模块还没上线就是"未知"，不是"已关" */
     /* N-04：落盘串行化用 mutex（只在首次 init 时创建；失败则退化为不加锁）*/
 #ifdef ESP_PLATFORM
     if (!s_persist_mtx) s_persist_mtx = xSemaphoreCreateMutex();
@@ -345,8 +358,8 @@ static void alarm_clear_bits(uint16_t mask)
  * 不经 enter_safe），以上记忆量保持 0 → 退出后输出全关。*/
 static void safe_outputs(void)
 {
-    out_tec_sw(1, 0);
-    out_tec_sw(2, 0);
+    out_tec_sw_ex(1, 0, 1);                     /* P1-09：安全关断走专门的通道，不占普通队列 */
+    out_tec_sw_ex(2, 0, 1);
     out_fan(1);                       /* 安全态风扇全开 */
     goto_state(CTRL_SAFE);
 }
@@ -514,8 +527,8 @@ int control_apply_cmd_src(uint8_t cmd, uint8_t src)
          * 屏侧 5Hz 重发且对端继续加热——P0 级回归，已补回并加单测。*/
         control_safety_trip(SAFETY_BIT_OVERTEMP);
         tcs_alarm_raise(ALM_OVERTEMP);
-        out_tec_sw(1, 0);
-        out_tec_sw(2, 0);
+        out_tec_sw_ex(1, 0, 1);                  /* P1-09：停机请求的安全关断同样走专门通道 */
+        out_tec_sw_ex(2, 0, 1);
         return 0;
     default:                    return -1;
     }
@@ -589,6 +602,7 @@ static void auto_evaluate(uint32_t now_ms)
 void control_poll(uint32_t now_ms)
 {
     s_poll_now_ms = now_ms;                /* out_tec_sw 在拍外被调时用它给 TEC 开沿计时 */
+    g_tcs.tec_known = tec_known_now();     /* P1-09：快照用的缓存副本，最多晚一拍 */
     if (!s_boot_ms_base_set) {
         s_boot_ms = now_ms;
         s_boot_ms_base_set = 1;
@@ -636,7 +650,9 @@ void control_poll(uint32_t now_ms)
     /* 锁存期间：任何模式都不再评估，直接停在 SAFE，并按 CTRL_SAFE_REASSERT_MS 重申 TCSW=0。
      * R-18：M207 离线时 m207_tec 直接返回 -2（不入队），本处重发并不产生帧；
      * 离线期的兜底是复联重同步（m207_go_online 里补发 TCSW=0）。P1-09 的彻底修法
-     * （m207_tec_force 强制归零通道）仍在待办，勿据本注释认为离线已被覆盖。*/
+     * （控制核这边 P1-09 已就位：SAFE 的关断与重申走 ops.tec_force，不占普通队列；
+     *   main 把它接到 tcs_m207 的 m207_tec_force（e2 批次）之前，这里退化为 tec_sw，
+     *   离线期仍然只是"复联重同步 + 复联后 500ms 内重申"，勿据本注释认为离线已被完全覆盖。）*/
     /* 通信类故障自动恢复（见 COMM_AUTO_RECOVER_MS 注释）。必须放在"锁存即返回"之前，
      * 且健康判据直接取 g_tcs（s_safety_ok 在锁存期间不刷新）。
      * 计时器只在"有锁存"期间累计：无锁存时清零，避免上次锁存的时间戳让下一次一进锁存

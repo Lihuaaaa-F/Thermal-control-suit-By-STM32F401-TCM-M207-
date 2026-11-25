@@ -224,6 +224,9 @@ void app_main(void)
         .fan_set = fan_set_on,
         .tec_sw = op_tec_sw,
         .tec_temp = op_tec_temp,
+        /* P1-09：这里还要接 .tec_force = op_tec_force（转调 m207_tec_force(ch, on)）。
+         * m207_tec_force 由 e2 批次在 tcs_m207 里实现，合入前不能引用（链接不过）；
+         * 合入前 SAFE 的关断退化为 tec_sw（普通队列）。接口约定见 docs/results/S_G_e3a_结果.md。*/
         .on_state = NULL,             /* 迁移沿由 post 步进日志承载 */
         .safety_persist = safety_persist_cb,   /* P0-08：锁存跨复位存活 */
         .safety_load    = safety_state_load,

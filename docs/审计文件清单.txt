@@ -49,12 +49,14 @@ esp32/main/tcs_console.c
 esp32/main/tcs_console.h
 esp32/main/tcs_snap.c
 esp32/main/tcs_snap.h
+esp32/tests/m207_core_host.c
 esp32/tests/m207_tb.h
 esp32/tests/mutation_control.py
 esp32/tests/mutation_web.py
 esp32/tests/test_control_esp32.c
 esp32/tests/test_fan_pure.c
 esp32/tests/test_m207_core.c
+esp32/tests/test_m207_fw_adv.py
 esp32/tests/test_m207_gates.py
 esp32/tests/test_m207_golden.c
 esp32/tests/test_m207_lb.c

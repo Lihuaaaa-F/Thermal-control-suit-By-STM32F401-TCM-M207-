@@ -24,6 +24,11 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 UI = ROOT / "App/lvgl_ui"
+# 参数表也要扫（审查条目 M03-F-09）：参数的中文显示名与单位会上屏，此前只扫界面目录，
+# 参数表里有 13 个字不在字库里而门禁报"缺 0 个"。两端各有一份注册表，都扫。
+# H743 这份必须存在——它是本工程的文件；找不到就把门禁判红，不能静默少扫。
+REGISTRY_H743 = ROOT / "App/tcs/param_registry.c"
+REGISTRY_ESP32 = ROOT.parent / "esp32" / "components" / "tcs_core" / "param_registry.c"
 FONTS = UI / "fonts"
 CHARSET_H = UI / "tui_charset_data.h"
 
@@ -80,14 +85,24 @@ def call_args(txt, fname):
         pos = k
 
 
+def registry_files():
+    """返回 (路径, 归因名)。H743 那份必须存在，由调用方判红；ESP32 那份是邻居工程，不在就只少扫它。"""
+    out = [(REGISTRY_H743, "param_registry.c(H743)")]
+    if REGISTRY_ESP32.exists():
+        out.append((REGISTRY_ESP32, "param_registry.c(ESP32)"))
+    return out
+
+
 def ui_literals():
     lits = []
-    for f in sorted(UI.glob("*.c")):
+    for f, name in ([(f, f.name) for f in sorted(UI.glob("*.c"))] + registry_files()):
+        if not f.exists():
+            continue
         txt = strip_comments(f.read_text(encoding="utf-8", errors="ignore"))
         for m in LIT_RE.finditer(txt):
             s = m.group(1)
             if s:
-                lits.append((f.name, s))
+                lits.append((name, s))
     return lits
 
 
@@ -110,6 +125,14 @@ def main():
     fails = []
 
     # A 字面量覆盖率（附逐文件归因，便于定位是哪段文案没进字库）
+    # 扫描范围的最小样本断言：界面目录或 H743 参数表找不到 = 这道门禁等于没扫，直接判红
+    n_ui = len(list(UI.glob("*.c")))
+    scanned_reg = [n for _, n in registry_files()]
+    print(f"[A] 扫描范围：界面 {n_ui} 个 .c；参数表 {len(scanned_reg)} 份（{'、'.join(scanned_reg) or '无'}）")
+    if n_ui < 5:
+        fails.append(("scope", ["界面目录 App/lvgl_ui/*.c 少于 5 个文件（%d）" % n_ui]))
+    if not REGISTRY_H743.exists():
+        fails.append(("scope", ["H743 参数表 App/tcs/param_registry.c 不存在，参数名/单位没有被扫到"]))
     missA = sorted(c for c in used if ord(c) > 0x20 and ord(c) not in chain24)
     print(f"[A] 字面量 {len(lits)} 条 / 字符 {len(used)} 个 → 24px 链缺 {len(missA)} 个")
     per = {}

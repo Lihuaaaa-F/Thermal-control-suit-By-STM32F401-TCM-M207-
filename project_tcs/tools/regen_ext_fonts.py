@@ -22,6 +22,11 @@ from PIL import Image, ImageDraw, ImageFont          # noqa: E402
 from tcs_font_to_lv import emit_lv_font              # noqa: E402
 
 UI = FIRMWARE / "App/lvgl_ui"
+# 参数表也要扫：参数的中文显示名与单位会上屏（调参页；连接页的模块名）。两端各有一份注册表。
+# 2026-11-24（审查条目 M03-F-09）：此前只扫界面目录，参数表里有 13 个字不在字库里
+# （压 口 地 大 微 保 流 片 终 路 输），而门禁报的是"缺 0 个"。
+REGISTRY = (FIRMWARE / "App" / "tcs" / "param_registry.c",
+            FIRMWARE.parent / "esp32" / "components" / "tcs_core" / "param_registry.c")
 FONTS = UI / "fonts"
 FONT_PATH = Path("C:/Windows/Fonts/msyh.ttc")
 SIZE = 24
@@ -42,11 +47,10 @@ def load_cp(p: Path):
 
 def scan_need():
     need = set()
-    for base in (UI,):
-        for f in sorted(base.glob("*.c")):
-            txt = strip_comments(f.read_text(encoding="utf-8", errors="ignore"))
-            for m in LIT.finditer(txt):
-                need |= set(m.group(1))
+    for f in sorted(UI.glob("*.c")) + [p for p in REGISTRY if p.exists()]:
+        txt = strip_comments(f.read_text(encoding="utf-8", errors="ignore"))
+        for m in LIT.finditer(txt):
+            need |= set(m.group(1))
     return need
 
 

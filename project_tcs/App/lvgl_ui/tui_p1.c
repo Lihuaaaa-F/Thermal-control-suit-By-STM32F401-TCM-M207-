@@ -322,7 +322,9 @@ void tui_p1_build(lv_obj_t *scr)
     s_big_plus = ui_button(body, 896, 472, 96, 96, "", UI_BTN_PRIMARY, &tcs_font_lv32,
                            clk_big, (void *)(intptr_t)1);
     make_symbol(s_big_plus.obj, 1, 36, 5, sym);
-    s_step_btn = ui_button(body, 160, 488, 180, 64, "", UI_BTN_PRIMARY, &tcs_font_lv24, clk_step, NULL);
+    /* 步进键宽 176：《现行UI规范》§底栏写的是 步进(160,488,176,64)，并把"步进 180"列为不落 8px 网格的偏差
+     * （审查条目 M03-F-13）。2026-11-24 之前是 180。 */
+    s_step_btn = ui_button(body, 160, 488, 176, 64, "", UI_BTN_PRIMARY, &tcs_font_lv24, clk_step, NULL);
     step_button_text();
     s_built = 1;
     (void)tui_p1_update();
@@ -341,7 +343,7 @@ void tui_p1_set_banner_room(int room)
     lv_obj_set_pos(s_big_plus.obj, 896, room ? 532 : 472);
     lv_obj_set_height(s_big_plus.obj, room ? 56 : 96);
     lv_obj_set_pos(s_step_btn.obj, 160, room ? 536 : 488);
-    lv_obj_set_size(s_step_btn.obj, 180, room ? 48 : 64);
+    lv_obj_set_size(s_step_btn.obj, 176, room ? 48 : 64);
 }
 
 /* 别处（网页 / 控制台 / 镜像）改了参数：只重画值变了的行；顶栏提示跟着链路状态走 */
@@ -378,7 +380,6 @@ void tui_step_param(int dir)
 }
 
 void tui_sel_next(void)    { if (!s_built || tui_current() != TUI_TUNE) return; s_sel = (s_sel + 1) % 4; select_paint(); }
-uint16_t tui_sel_param_id(void) { return s_ids[s_sel]; }
 
 void tui_slider_center(void)
 {

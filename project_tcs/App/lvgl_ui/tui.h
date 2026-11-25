@@ -72,7 +72,7 @@ extern volatile uint32_t g_ui_cmd;
 void tui_step_param(int dir);
 void tui_sel_next(void);
 void tui_slider_center(void);
-uint16_t tui_sel_param_id(void);
+/* tui_sel_param_id() 已删（审查条目 M03-F-14 死代码）：2026-11-24 核对全仓零调用者，连台架档里也没有人用。 */
 #endif
 void tui_step_toggle(void);
 

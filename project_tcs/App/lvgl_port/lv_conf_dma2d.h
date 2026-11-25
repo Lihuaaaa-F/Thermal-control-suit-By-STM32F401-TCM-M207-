@@ -16,8 +16,8 @@
 #define LV_USE_DRAW_DMA2D       1   /* G4② 变体：DMA2D 渲染后端 ON（定责用） */
 #define LV_USE_CHECK_ARG        0               /* 警告1清零：调试件关断 */
 #define LV_DRAW_LAYER_SIMPLE_BUF_SIZE (64U * 1024U)  /* 警告2清零：≥屏 1/20（60KB） */
-#define LV_USE_SYSMON           1
-#define LV_USE_PERF_MONITOR     1      /* 真机 FPS/CPU 叠层（G4① 取证口径） */
+#define LV_USE_SYSMON           (TCS_PROFILE != 0)
+#define LV_USE_PERF_MONITOR     (TCS_PROFILE != 0)   /* 真机 FPS/CPU 叠层（G4① 取证口径）；交付档不开（审查 M03-F-10，与 lv_conf.h 同口径） */
 
 #define LV_FONT_MONTSERRAT_14 1          /* 默认字体 */
 #define LV_FONT_MONTSERRAT_20 1          /* benchmark 硬性要求 */

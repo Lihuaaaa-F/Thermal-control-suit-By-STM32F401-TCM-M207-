@@ -124,7 +124,7 @@ def main():
     try:
         im0 = shot("tune_b0_before.png")
         k0, e0 = knobs(im0), value_right_edge(im0, 1)
-        exp0 = [knob_x(start[i], lo, hi) for i, (_, lo, hi) in enumerate(ROWS)]
+        exp0 = [knob_x(start[pid], lo, hi) for pid, lo, hi in ROWS]
         rows.append(("基线：圆钮位置与参数值一致",
                      all(k is not None and abs(k - e) <= 4 for k, e in zip(k0, exp0)),
                      "实测 %s，按参数算 %s" % (k0, [round(e) for e in exp0])))

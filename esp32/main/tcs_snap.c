@@ -10,6 +10,8 @@
 #include "link_task.h"
 #include "param_registry.h"
 #include "m207_service.h"
+#include "control.h"
+#include "control_manual.h"   /* m1（模式页）：control_tec_dir */
 #include "post.h"
 
 #include "freertos/FreeRTOS.h"
@@ -49,7 +51,20 @@ typedef struct {
     float    tc1_set, tc2_set;
     uint16_t fresh_ms;
     uint8_t  badge;
+    /* m1（模式页）：两路输出方向与电学量——与上面的字段同一拍取样，线格式见 protocol/tcs_proto.h */
+    uint8_t  tec_dir;       /* 半字节编码同 0x20.tec_dir */
+    int16_t  tec1_v, tec2_v;
+    uint16_t tec1_i, tec2_i;
 } snap_cycle_t;
+
+/* m1（模式页）：该通道的电学量能不能用（取到过、不太旧）→ 定点；否则"未知" */
+static void snap_elec(uint8_t ch, int16_t *v, uint16_t *i)
+{
+    m207_elec_t e;
+    (void)m207_elec_get(ch, &e);
+    *v = e.valid ? tcs_elec_pack_v(e.volt) : TCS_ELEC_V_UNKNOWN;
+    *i = e.valid ? tcs_elec_pack_i(e.cur)  : TCS_ELEC_I_UNKNOWN;
+}
 
 static void snap_sample(snap_cycle_t *c)
 {
@@ -59,6 +74,9 @@ static void snap_sample(snap_cycle_t *c)
     c->tc2_set = param_get(PARAM_ID_TC2_SET);
     c->fresh_ms = (uint16_t)m207_temp_age_ms();
     c->badge = (uint8_t)post_arm_state();
+    c->tec_dir = tcs_tec_dir_pack(control_tec_dir(1), control_tec_dir(2));   /* m1 */
+    snap_elec(1, &c->tec1_v, &c->tec1_i);                                    /* m1 */
+    snap_elec(2, &c->tec2_v, &c->tec2_i);                                    /* m1 */
     taskEXIT_CRITICAL(&s_snap_mux);
 }
 
@@ -72,6 +90,9 @@ static void build_delta_src(tcs_delta_src_t *d, const snap_cycle_t *c)
     d->mode    = c->st.mode;
     d->alarm   = c->st.alarm_bits;
     d->badge   = c->badge;
+    d->tec_dir = c->tec_dir;                          /* m1（模式页）*/
+    d->tec1_v = c->tec1_v; d->tec1_i = c->tec1_i;
+    d->tec2_v = c->tec2_v; d->tec2_i = c->tec2_i;
 }
 
 /* 现场取证（见 tcs_snap.h 的 tcs_snap_mute）：静默期内 snap_send 一帧都不发。
@@ -167,8 +188,12 @@ static void snap_task(void *arg)
             if (now.mode    != s_last.mode)    mask |= TCS_D_MODE;
             if (now.alarm   != s_last.alarm)   mask |= TCS_D_ALARM;
             if (now.badge   != s_last.badge)   mask |= TCS_D_BADGE;
+            /* m1（模式页）：输出方向 / 电学量（两个新 mask 位在高 8 位）*/
+            if (now.tec_dir  != s_last.tec_dir) mask |= TCS_D_TEC_DIR;
+            if (now.tec1_v != s_last.tec1_v || now.tec1_i != s_last.tec1_i ||
+                now.tec2_v != s_last.tec2_v || now.tec2_i != s_last.tec2_i) mask |= TCS_D_ELEC;
             if (mask) {
-                uint8_t pl[24];
+                uint8_t pl[40];                   /* 全字段 2+20，再加 m1 的 1+8 */
                 size_t n = tcs_pl_delta(pl, sizeof(pl), mask, &now);
                 snap_send(MT_TCS_DELTA, pl, n, &s_delta_cnt);
             }
@@ -192,6 +217,10 @@ static void snap_task(void *arg)
             .fresh_ms = cy.fresh_ms,
             .badge = cy.badge,
             .rfu = 0,
+            /* m1（模式页）：末尾追加的 9 字节 */
+            .tec_dir = cy.tec_dir,
+            .tec1_v = cy.tec1_v, .tec1_i = cy.tec1_i,
+            .tec2_v = cy.tec2_v, .tec2_i = cy.tec2_i,
         };
         uint8_t pl[TCS_SNAP_PL_LEN];
         size_t n = tcs_pl_snapshot(pl, sizeof(pl), &s);

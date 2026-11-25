@@ -127,25 +127,46 @@ def dec_reg_entry(b: bytes) -> dict:
 
 # ====== R2：0x20 SNAPSHOT（40B）/0x21 DELTA（变长位图）======
 D_TC1_SET, D_TC2_SET, D_TEC, D_FAN, D_MODE, D_ALARM, D_BODY, D_BADGE =     1 << 0, 1 << 1, 1 << 2, 1 << 3, 1 << 4, 1 << 5, 1 << 6, 1 << 7
+# m1"模式"页（2026-11-26，TCS_PROTO_VER 2）：mask 高 8 位里的两位
+D_TEC_DIR, D_ELEC = 1 << 8, 1 << 9
+TEC_DIR_PAUSE, TEC_DIR_COOL, TEC_DIR_HEAT, TEC_DIR_EXT = 0, 1, 2, 3
+ELEC_V_UNKNOWN, ELEC_I_UNKNOWN = -32768, 0xFFFF     # 0x8000 / 0xFFFF
 
 
-def enc_snapshot(ver=1, seq=0, ms=0, tc1_act=0.0, tc2_act=0.0, body=0.0,
+def enc_snapshot(ver=2, seq=0, ms=0, tc1_act=0.0, tc2_act=0.0, body=0.0,
                  tc1_set=0.0, tc2_set=0.0, tec1=0, tec2=0, fan=0, mode=0,
-                 alarm=0, online=0, fresh_ms=0xFFFF, badge=0, rfu=0) -> bytes:
+                 alarm=0, online=0, fresh_ms=0xFFFF, badge=0, rfu=0,
+                 tec_dir=0, tec1_v=ELEC_V_UNKNOWN, tec1_i=ELEC_I_UNKNOWN,
+                 tec2_v=ELEC_V_UNKNOWN, tec2_i=ELEC_I_UNKNOWN) -> bytes:
+    """0x20 载荷（49B，TCS_PROTO_VER 2）。末尾 9B（m1"模式"页）：tec_dir（低半字节第一路、高半字节第二路）、
+    tec1_v（i16，0.01 V，制热为负）、tec1_i（u16，0.01 A）、tec2_v、tec2_i。"""
     b = struct.pack("<BIIfffff BBBBHBHBB", ver, seq, ms,
                     tc1_act, tc2_act, body, tc1_set, tc2_set,
                     tec1, tec2, fan, mode, alarm, online, fresh_ms, badge, rfu)
     assert len(b) == 40, len(b)
+    # 电压 / 电流是定点原值（0.01 V / 0.01 A）；超出定点范围按"未知"（与 C 的 tcs_elec_pack_* 同口径：
+    # |V| ≤ 32000（320 V）、I ≤ 60000（600 A））
+    if not (-32000 <= tec1_v <= 32000): tec1_v = ELEC_V_UNKNOWN
+    if not (-32000 <= tec2_v <= 32000): tec2_v = ELEC_V_UNKNOWN
+    if not (0 <= tec1_i <= 60000): tec1_i = ELEC_I_UNKNOWN
+    if not (0 <= tec2_i <= 60000): tec2_i = ELEC_I_UNKNOWN
+    b += struct.pack("<BhHhH", tec_dir & 0xFF, tec1_v, tec1_i, tec2_v, tec2_i)
+    assert len(b) == 49, len(b)
     return b
 
 
 def dec_snapshot(b: bytes) -> dict:
     (ver, seq, ms, tc1_act, tc2_act, body, tc1_set, tc2_set,
      tec1, tec2, fan, mode, alarm, online, fresh_ms, badge, rfu) =         struct.unpack("<BIIfffff BBBBHBHBB", b[:40])
-    return dict(ver=ver, seq=seq, ms=ms, tc1_act=tc1_act, tc2_act=tc2_act,
-                body=body, tc1_set=tc1_set, tc2_set=tc2_set, tec1=tec1,
-                tec2=tec2, fan=fan, mode=mode, alarm=alarm, online=online,
-                fresh_ms=fresh_ms, badge=badge, rfu=rfu)
+    d = dict(ver=ver, seq=seq, ms=ms, tc1_act=tc1_act, tc2_act=tc2_act,
+             body=body, tc1_set=tc1_set, tc2_set=tc2_set, tec1=tec1,
+             tec2=tec2, fan=fan, mode=mode, alarm=alarm, online=online,
+             fresh_ms=fresh_ms, badge=badge, rfu=rfu)
+    if len(b) >= 49:
+        # m1"模式"页追加段：tec_dir + 两路电压（i16）/ 电流（u16），单位 0.01
+        (tec_dir, tec1_v, tec1_i, tec2_v, tec2_i) = struct.unpack_from("<BhHhH", b, 40)
+        d.update(tec_dir=tec_dir, tec1_v=tec1_v, tec1_i=tec1_i, tec2_v=tec2_v, tec2_i=tec2_i)
+    return d
 
 
 def enc_delta(mask: int, d: dict) -> bytes:
@@ -158,6 +179,8 @@ def enc_delta(mask: int, d: dict) -> bytes:
     if mask & D_ALARM:   b += struct.pack("<H", d["alarm"])
     if mask & D_BODY:    b += struct.pack("<f", d["body"])
     if mask & D_BADGE:   b += struct.pack("<B", d["badge"])
+    if mask & D_TEC_DIR: b += struct.pack("<B", d["tec_dir"])
+    if mask & D_ELEC:    b += struct.pack("<hHhH", d["tec1_v"], d["tec1_i"], d["tec2_v"], d["tec2_i"])
     return b
 
 
@@ -173,6 +196,9 @@ def dec_delta(b: bytes):
     if mask & D_ALARM:   d["alarm"] = struct.unpack_from("<H", b, o)[0]; o += 2
     if mask & D_BODY:    d["body"] = struct.unpack_from("<f", b, o)[0]; o += 4
     if mask & D_BADGE:   d["badge"] = b[o]; o += 1
+    if mask & D_TEC_DIR: d["tec_dir"] = b[o]; o += 1
+    if mask & D_ELEC:
+        d["tec1_v"], d["tec1_i"], d["tec2_v"], d["tec2_i"] = struct.unpack_from("<hHhH", b, o); o += 8
     return mask, d
 
 
@@ -263,6 +289,42 @@ def cmd_selftest():
     if "mt=0x12" not in describe(0x90, 1, bytes([7, 0x12, 0]) + struct.pack("<f", 30.5)):
         fails += 1
         print("FAIL acked mt strip")
+    # m1"模式"页（2026-11-26，TCS_PROTO_VER 2）：快照末尾 9B 与增量的两个新 mask 位。
+    # 与两端 C 用例（esp32/tests/test_tcs_proto.c、project_tcs/tests/test_proto_m1.c）同一组字节。
+    sn = enc_snapshot(seq=0x11223344, ms=0x00AABBCC, tc1_act=22.5, tc2_act=23.5, body=36.8,
+                      tc1_set=25.0, tc2_set=30.0, tec2=1, fan=1, alarm=3, online=3,
+                      fresh_ms=1234, badge=1,
+                      tec_dir=0x21, tec1_v=-823, tec1_i=310, tec2_i=ELEC_I_UNKNOWN)
+    if sn[:40] != enc_snapshot(seq=0x11223344, ms=0x00AABBCC, tc1_act=22.5, tc2_act=23.5,
+                               body=36.8, tc1_set=25.0, tc2_set=30.0, tec2=1, fan=1,
+                               alarm=3, online=3, fresh_ms=1234, badge=1)[:40] or len(sn) != 49:
+        fails += 1
+        print("FAIL snapshot (m1): first 40 bytes must be unchanged, total 49")
+    if sn[40:] != bytes.fromhex("21" + "c9fc" + "3601" + "0080" + "ffff"):
+        fails += 1
+        print(f"FAIL snapshot tail (m1): {sn[40:].hex()}")
+    ds = dec_snapshot(sn)
+    if not (ds["tec_dir"] == 0x21 and ds["tec1_v"] == -823 and ds["tec1_i"] == 310
+            and ds["tec2_v"] == ELEC_V_UNKNOWN and ds["tec2_i"] == ELEC_I_UNKNOWN):
+        fails += 1
+        print("FAIL snapshot tail roundtrip (m1)")
+    if enc_snapshot(tec1_v=1e9)[41:43] != b"\x00\x80" or enc_snapshot(tec2_i=-1)[47:49] != b"\xff\xff":
+        fails += 1
+        print("FAIL out-of-range electrical values must encode as unknown")
+    e = dict(tec_dir=0x21, tec1_v=-823, tec1_i=310, tec2_v=ELEC_V_UNKNOWN, tec2_i=ELEC_I_UNKNOWN)
+    dl = enc_delta(D_TEC_DIR | D_ELEC, e)
+    if dl != bytes.fromhex("0003" + "21" + "c9fc3601" + "0080ffff"):
+        fails += 1
+        print(f"FAIL delta (m1) bytes: {dl.hex()}")
+    mask, d = dec_delta(dl)
+    if not (mask == 0x0300 and d == e):
+        fails += 1
+        print("FAIL delta (m1) roundtrip")
+    low = enc_delta(D_FAN | D_BADGE | D_TEC_DIR, dict(fan=1, badge=2, tec_dir=0x30))
+    # mask = D_FAN(0x08) | D_BADGE(0x80) | D_TEC_DIR(0x100) = 0x0188；字段顺序：fan、badge，然后才是 tec_dir
+    if low != bytes.fromhex("8801" + "01" + "02" + "30"):
+        fails += 1
+        print(f"FAIL delta (m1) field order: {low.hex()}")
     print("proto_ref selftest:", "OK" if fails == 0 else f"{fails} FAILS")
     return fails
 

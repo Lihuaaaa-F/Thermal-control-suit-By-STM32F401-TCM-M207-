@@ -26,8 +26,24 @@ int main(void)
     CHECK(param_get(PARAM_ID_TC1_SET) == 25.0f, "default tc1");
     CHECK(param_get(PARAM_ID_BODY_HOT) == 37.5f, "default body_hot");
     CHECK(param_get(PARAM_ID_MODE) == 0.0f, "default mode manual (F9)");
-    /* P1-13：0x127（BTN 动作项）入表后 51 条；条数由初始化器决定（X01-F-06）*/
-    CHECK(param_count() == 51, "registry count=51 (incl. 0x127 BTN)");
+    /* P1-13：0x127（BTN 动作项）入表后 51 条；条数由初始化器决定（X01-F-06）
+     * m1（模式页，2026-11-26）：再加 0x09 / 0x0A 两路 TEC 手动输出 → 53 条 */
+    CHECK(param_count() == 53, "registry count=53 (incl. 0x127 BTN + 0x09/0x0A manual TEC)");
+    {
+        const param_desc_t *m1 = param_find(PARAM_ID_TEC1_MANUAL);
+        const param_desc_t *m2 = param_find(PARAM_ID_TEC2_MANUAL);
+        CHECK(m1 && m2 && m1->type == PARAM_TYPE_U8 && m2->type == PARAM_TYPE_U8,
+              "0x09/0x0A registered as U8");
+        CHECK(m1 && (m1->flags & PF_RW) && (m1->flags & PF_SCREEN)
+              && !(m1->flags & PF_PERSIST) && !(m1->flags & PF_WEB),
+              "0x09: RW + SCREEN, not persisted, not on web (mirror of the ESP32 table)");
+        CHECK(m1 && m2 && m2->flags == m1->flags, "0x0A: same flags as 0x09");
+        CHECK(param_get(PARAM_ID_TEC1_MANUAL) == 0.0f && param_get(PARAM_ID_TEC2_MANUAL) == 0.0f,
+              "manual outputs default to pause");
+        CHECK(param_set(PARAM_ID_TEC1_MANUAL, 2.0f, PARAM_SRC_TOUCH) == 0
+              && param_get(PARAM_ID_TEC1_MANUAL) == 2.0f,
+              "screen registry takes the write (it travels to the ESP32 as 0x12)");
+    }
     {
         const param_desc_t *bt = param_find(0x127);
         CHECK(bt && bt->type == PARAM_TYPE_BTN && bt->flags == 0,

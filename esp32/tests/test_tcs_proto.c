@@ -24,7 +24,8 @@ int main(void)
     };
     uint8_t buf[64];
     size_t n = tcs_pl_snapshot(buf, sizeof(buf), &s);
-    CHECK(n == TCS_SNAP_PL_LEN && n == 40, "snap len 40");
+    /* m1"模式"页（2026-11-26，TCS_PROTO_VER 2）：末尾追加 9 字节，40 → 49 */
+    CHECK(n == TCS_SNAP_PL_LEN && n == 49, "snap len 49");
     CHECK(buf[0] == 1, "snap ver@0");
     CHECK(buf[1] == 0x44 && buf[2] == 0x33 && buf[3] == 0x22 && buf[4] == 0x11,
           "snap seq 小端@1-4");
@@ -45,6 +46,62 @@ int main(void)
     CHECK(d.alarm == 3 && d.online == 3 && d.fresh_ms == 1234 && d.badge == 1,
           "snap decode scalars");
     CHECK(tcs_scan_snapshot(buf, 10, &d) == -1, "snap 短帧拒绝");
+
+    /* ---- m1"模式"页（2026-11-26，TCS_PROTO_VER 2）：末尾追加 9B。与 project_tcs/tools/proto_ref.py
+     *     的 selftest、project_tcs/tests/test_proto_m1.c 用的是同一组字节 ---- */
+    CHECK(TCS_PROTO_VER == 2, "proto ver 2");
+    CHECK(TCS_SNAP_PL_LEN == 49, "snap len 49");
+    s.ver = TCS_PROTO_VER;
+    s.tec_dir = tcs_tec_dir_pack(TCS_TEC_DIR_COOL, TCS_TEC_DIR_HEAT);
+    s.tec1_v = -823; s.tec1_i = 310;                     /* -8.23 V / 3.10 A */
+    s.tec2_v = TCS_ELEC_V_UNKNOWN; s.tec2_i = TCS_ELEC_I_UNKNOWN;
+    n = tcs_pl_snapshot(buf, sizeof(buf), &s);
+    CHECK(n == 49, "snap (m1) len 49");
+    CHECK(buf[0] == 2, "snap (m1) ver@0 = 2");
+    CHECK(buf[40] == 0x21, "snap (m1) tec_dir@40 = cool | heat<<4");
+    CHECK(buf[41] == 0xC9 && buf[42] == 0xFC, "snap (m1) tec1_v@41 = -823 (i16 LE)");
+    CHECK(buf[43] == 0x36 && buf[44] == 0x01, "snap (m1) tec1_i@43 = 310 (u16 LE)");
+    CHECK(buf[45] == 0x00 && buf[46] == 0x80, "snap (m1) tec2_v@45 = unknown 0x8000");
+    CHECK(buf[47] == 0xFF && buf[48] == 0xFF, "snap (m1) tec2_i@47 = unknown 0xFFFF");
+    CHECK(tcs_scan_snapshot(buf, n, &d) == 0 && d.ver == 2 && d.tec_dir == 0x21 && d.tec1_v == -823
+          && d.tec1_i == 310 && d.tec2_v == TCS_ELEC_V_UNKNOWN && d.tec2_i == TCS_ELEC_I_UNKNOWN,
+          "snap (m1) decode tail");
+    CHECK(d.seq == 0x11223344 && d.badge == 1 && d.rfu == 0, "snap (m1) head 40B untouched");
+    CHECK(tcs_scan_snapshot(buf, 40, &d) == -1, "snap (m1) 40B old length rejected under ver 2");
+    CHECK(tcs_tec_dir_get(0x21, 1) == TCS_TEC_DIR_COOL && tcs_tec_dir_get(0x21, 2) == TCS_TEC_DIR_HEAT
+          && tcs_tec_dir_get(0x21, 3) == TCS_TEC_DIR_HEAT, "tec_dir nibbles (ch other than 1 = high)");
+    CHECK(tcs_tec_dir_pack(0x11, 0x22) == 0x21, "tec_dir pack keeps 4 bits each");
+    CHECK(tcs_elec_pack_v(-8.23f) == -823 && tcs_elec_pack_v(0.0f) == 0
+          && tcs_elec_pack_v(-0.0f) == 0 && tcs_elec_pack_v(0.004f) == 0
+          && tcs_elec_pack_v(1e9f) == TCS_ELEC_V_UNKNOWN, "pack voltage (0.01 V, rounding toward zero)");
+    CHECK(tcs_elec_pack_i(3.10f) == 310 && tcs_elec_pack_i(-0.5f) == TCS_ELEC_I_UNKNOWN
+          && tcs_elec_pack_i(700.0f) == TCS_ELEC_I_UNKNOWN, "pack current (0.01 A, negatives unknown)");
+    {
+        tcs_delta_src_t e;
+        uint16_t emask = 0;
+        uint8_t dbm[40];   /* 本块用自己的缓冲：原文件里那两个变量在这里还没声明 */
+        size_t dnm;
+        memset(&e, 0, sizeof e);
+        e.tec_dir = 0x21; e.tec1_v = -823; e.tec1_i = 310;
+        e.tec2_v = TCS_ELEC_V_UNKNOWN; e.tec2_i = TCS_ELEC_I_UNKNOWN;
+        dnm = tcs_pl_delta(dbm, sizeof(dbm), (uint16_t)(TCS_D_TEC_DIR | TCS_D_ELEC), &e);
+        CHECK(dnm == 11, "delta (m1) tec_dir + elec = 11B");
+        CHECK(dbm[0] == 0x00 && dbm[1] == 0x03, "delta (m1) mask 0x0300 LE (0x0100 dir | 0x0200 elec)");
+        CHECK(dbm[2] == 0x21 && dbm[3] == 0xC9 && dbm[4] == 0xFC && dbm[5] == 0x36 && dbm[6] == 0x01
+              && dbm[11 - 1] == 0xFF && dbm[10] == 0xFF, "delta (m1) body bytes");
+        memset(&e, 0x55, sizeof e);
+        CHECK(tcs_scan_delta(dbm, dnm, &e, &emask) == 0 && emask == 0x0300 && e.tec_dir == 0x21
+              && e.tec1_v == -823 && e.tec1_i == 310 && e.tec2_v == TCS_ELEC_V_UNKNOWN
+              && e.tec2_i == TCS_ELEC_I_UNKNOWN, "delta (m1) decode");
+        CHECK(tcs_scan_delta(dbm, 10, &e, &emask) == -1, "delta (m1) truncated elec rejected");
+        /* 新 mask 位排在低 8 位的字段之后 */
+        memset(&e, 0, sizeof e);
+        e.fan = 1; e.tec_dir = 0x21;
+        dnm = tcs_pl_delta(dbm, sizeof(dbm), (uint16_t)(TCS_D_FAN | TCS_D_TEC_DIR | TCS_D_ELEC), &e);
+        CHECK(dnm == 2 + 1 + 1 + 8 && dbm[2] == 1 && dbm[3] == 0x21, "delta (m1) field order: low bits first");
+        dnm = tcs_pl_delta(dbm, 4, (uint16_t)(TCS_D_TEC_DIR | TCS_D_ELEC), &e);
+        CHECK(dnm == 0, "delta (m1) cap too small returns 0");
+    }
 
     /* ---- 0x21 增量：mask 紧排 + 变长 ---- */
     tcs_delta_src_t src = {

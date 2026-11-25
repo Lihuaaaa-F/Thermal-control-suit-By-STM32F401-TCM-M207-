@@ -104,12 +104,49 @@ def main():
         if '"%s"' % src not in cm:
             fails.append("tcs_core/CMakeLists.txt 没有编入 %s" % src)
 
+    # 5) m1 第 3 层（协议 TCS_PROTO_VER 2）：主控把两路输出方向与电学量装进 0x20 / 0x21
+    #    （esp32/main/tcs_snap.c 依赖 RTOS，主机编译不了）。
+    import re
+    snap = read(ESP, "main", "tcs_snap.c")
+    for needle in (
+        "tcs_tec_dir_pack(control_tec_dir(1), control_tec_dir(2))",   # 方向来自控制内核
+        "m207_elec_get(ch, &e)",                                       # 电学量来自 M207 轮询缓存
+        "e.valid ? tcs_elec_pack_v(e.volt) : TCS_ELEC_V_UNKNOWN",      # 取不到 / 太旧 → 未知
+        "e.valid ? tcs_elec_pack_i(e.cur)  : TCS_ELEC_I_UNKNOWN",
+        ".tec_dir = cy.tec_dir",                                       # 0x20 末尾的 9 字节
+        ".tec1_v = cy.tec1_v", ".tec1_i = cy.tec1_i",
+        ".tec2_v = cy.tec2_v", ".tec2_i = cy.tec2_i",
+        "mask |= TCS_D_TEC_DIR", "mask |= TCS_D_ELEC",                 # 0x21 的两个新 mask 位
+    ):
+        if needle not in snap:
+            fails.append("tcs_snap.c 缺：%s" % needle)
+    m = re.search(r"uint8_t pl\[(\d+)\];\s*/\* 全字段", snap)
+    if not m or int(m.group(1)) < 31:
+        fails.append("tcs_snap.c 的 0x21 载荷缓冲必须放得下全字段（含 m1 的 9 字节，共 31 字节）")
+
+    # 6) 屏端镜像：Core/Src/main.c 在 0x20 与 0x21 两个入口都把新字段落进镜像；POST 的 VER 自检项随版本号同改
+    #    （main.c / post.c 依赖 HAL，主机编译不了；换算本身在 link_snap.h，由 tests/test_proto_m1.c 直接编）。
+    H7 = os.path.normpath(os.path.join(ESP, "..", "project_tcs"))
+    mainc = read(H7, "Core", "Src", "main.c")
+    for needle in (
+        "tcs_link_tec_set_dirs(&s_tec, s->tec_dir)",
+        "tcs_link_tec_set_elec(&s_tec, s->tec1_v, s->tec1_i, s->tec2_v, s->tec2_i)",
+        "if (mask & TCS_D_TEC_DIR) tcs_link_tec_set_dirs(&s_tec, d.tec_dir)",
+        "if (mask & TCS_D_ELEC)    tcs_link_tec_set_elec(&s_tec, d.tec1_v, d.tec1_i, d.tec2_v, d.tec2_i)",
+        "s_last_snap.tec_dir != s.tec_dir",                           # 输出方向变化 = 看得见的状态变化
+    ):
+        if needle not in mainc:
+            fails.append("H743 Core/Src/main.c 缺：%s" % needle)
+    if "(TCS_PROTO_VER == 2u)" not in read(H7, "App", "tcs", "post.c"):
+        fails.append("屏端 POST 的 VER 自检项必须与 TCS_PROTO_VER 同步（== 2u）")
+
     if fails:
         print("[m1gates] FAIL")
         for f in fails:
             print("  - " + f)
         return 1
-    print("[m1gates] PASS (屏链路断开 3 秒 = 急停的接线：控制节拍 → 纯判定 → 急停路径；对端帧时刻在方向闸门之后)")
+    print("[m1gates] PASS (屏链路断开 3 秒 = 急停的接线：控制节拍 → 纯判定 → 急停路径；对端帧时刻在方向闸门之后；"
+          "协议 ver2：主控快照带输出方向与电学量、屏端 0x20 / 0x21 两个入口落镜像)")
     return 0
 
 

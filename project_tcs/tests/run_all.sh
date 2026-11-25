@@ -485,6 +485,11 @@ else
     echo "[mut-perf] FAIL"; grep -a "活下来\|编译失败\|锚点\|FAIL" build/mut_perf.log | head -12; FAIL=1
 fi
 
+# S-G m1（模式页，2026-11-26）：链路协议 TCS_PROTO_VER 1 → 2——0x20 快照末尾 9 字节（两路输出方向 + 电压电流）、
+# 0x21 增量的 0x0100 / 0x0200 两个 mask 位。字节向量与 esp32/tests/test_tcs_proto.c、tools/proto_ref.py 的
+# selftest 是同一组（三处互为对照）。屏端镜像的落点（Core/Src/main.c 的 snap_apply）依赖 HAL，主机编译不了。
+run proto_m1    tests/test_proto_m1.c
+
 echo "==================="
 if [ "$FAIL" = 0 ]; then echo "run_all: ALL GREEN"; else echo "run_all: HAS FAILURES"; fi
 exit $FAIL

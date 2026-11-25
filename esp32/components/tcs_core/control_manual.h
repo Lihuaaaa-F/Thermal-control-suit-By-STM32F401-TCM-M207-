@@ -19,16 +19,17 @@
 #define TCS_CONTROL_MANUAL_H
 
 #include <stdint.h>
+#include "tcs_proto.h"      /* TCS_TEC_DIR_*：快照里"输出方向"的取值（协议唯一源）；下面只是同值别名 */
 
 #ifdef __cplusplus
 extern "C" {
 #endif
 
 /* 输出方向（快照 tec_dir 的取值；3 = 通道开着但不是模式页设的，见 control_tec_dir）*/
-#define TEC_DIR_PAUSE   0u
-#define TEC_DIR_COOL    1u
-#define TEC_DIR_HEAT    2u
-#define TEC_DIR_EXT     3u
+#define TEC_DIR_PAUSE   TCS_TEC_DIR_PAUSE
+#define TEC_DIR_COOL    TCS_TEC_DIR_COOL
+#define TEC_DIR_HEAT    TCS_TEC_DIR_HEAT
+#define TEC_DIR_EXT     TCS_TEC_DIR_EXT
 
 typedef struct {
     void (*tec_sw)(uint8_t ch, uint8_t on);    /* ch = 1 / 2 */

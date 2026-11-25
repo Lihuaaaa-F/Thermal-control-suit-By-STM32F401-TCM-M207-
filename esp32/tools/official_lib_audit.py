@@ -68,6 +68,7 @@ VERIFY_COMMENT_FILES = (
     'esp32/components/tcs_link/link_task.c',
     'esp32/components/tcs_link/comm.c',
     'esp32/components/tcs_tmp117/tmp117_service.c',
+    'esp32/components/tcs_tmp117/tmp117_core.c',     # S-G e2：采样决策逻辑（自 tmp117_service.c 抽出）
     'esp32/components/tcs_fan/fan_service.c',
     'esp32/main/tcs_console.c',
 )

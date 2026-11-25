@@ -1,9 +1,13 @@
 /**
- * tmp117_service.c — TMP117 体温采样服务实现（R1c；结构与 m207_service 同型：
- * 核 1 定节拍任务+纯函数健康机/均值+掉线沿报警粘滞+注入 API+板上自测）
+ * tmp117_service.c — TMP117 体温采样服务 IDF 外壳（R1c；S-G e2 起只剩与硬件绑定的部分）
+ *
+ * 一拍的决策——读器件、样本合理性、均值窗、健康机、掉线/恢复沿——在 tmp117_core.c
+ * （主机可编译，逐拍可测）；本文件只有：I2C0 总线与器件句柄、100ms 采样任务、注入命令、上电自测。
+ * 结构与 m207_service / m207_core 同型：核 1 定节拍任务 + 纯函数健康机/均值 + 掉线沿报警粘滞。
  * 官方查证：检索 components.espressif.com 2026-10-26，组件库 TMP117 仅 solderedelectronics GPL-3.0-only 第三方件→合法拒绝（F5 证据 docs/evidence/官方库检索/2026-10-26_components_espressif_com.md）；I2C 用官方 driver/i2c_master（IDF v5.5 新 API）；实现参考 IDF examples/peripherals/i2c/i2c_basic
  */
 #include "tmp117_service.h"
+#include "tmp117_core.h"
 #include "tmp117_pure.h"
 
 #include <string.h>
@@ -21,66 +25,28 @@
 
 #define TAG "TMP117"
 
-/* 注入能力开关（R1 修复 P0-06 / AD-5）：只有 SIM 或 R1e 取证构建才编译注入实现。
- * 生产固件里 `body` 命令与 s_sim_on 分支都不存在——一条命令注入假体温的通道被移除。*/
-#if CONFIG_TCS_SIM || CONFIG_TCS_R1E_PROBE
-#define TCS_SIM_ENABLED 1
-#define SIM_ACTIVE()    (s_sim_on)
-#else
-#define TCS_SIM_ENABLED 0
-#define SIM_ACTIVE()    (0u)          /* 编译期常 0：分支与注入实现一起消失 */
-#endif
-
 #define TMP117_ADDR7        0x48
-#define TMP117_REG_TEMP     0x00
-#define TMP117_REG_DEVID    0x0F
-#define TMP117_DEVID_EXPECT 0x0117u
-#define TMP117_SAMPLE_MS    100u
 #define TMP117_I2C_TIMEOUT_MS 10
-#define TMP117_LOST_PERIOD_MS 1000u   /* 失联降频：错满 10 次后 1s 试联 */
 
 static i2c_master_bus_handle_t s_bus;
 static i2c_master_dev_handle_t s_dev;
 static TaskHandle_t s_task;
 static uint8_t s_started;
-
-static tmp117_health_t s_health;
-static tmp117_avg_t    s_avg;
-static float    s_last_valid_c;
-static uint32_t s_last_valid_ms;
-static uint8_t  s_have_valid;
-
-#if TCS_SIM_ENABLED
-static volatile float   s_sim_val;
-static volatile uint8_t s_sim_on;
-#endif
-
-static uint32_t s_tick;                 /* 100ms 拍计数（dt 计算）*/
-static uint32_t s_stat_err;             /* 累计通信/合理性错误 */
-static uint32_t s_stat_samples;         /* 累计入窗样本 */
+static tmp117_core_t s_core;
 static uint32_t s_tick_max_us;          /* 拍耗时峰值（perf 预算 500µs）*/
-static uint32_t s_lost_edges, s_recover_edges;
 
-/* ====== 掉线沿（H743 同语义：布防门=WP-A.5；未布防只记沿不报警）====== */
-static void on_sensor_lost(void)
+/* ====== I2C 出入口（交给 tmp117_core）====== */
+static int io_read_reg(void *ctx, uint8_t reg, uint8_t out[2])
 {
-    s_lost_edges++;                     /* R1 修复 M13-F-07：计数不受布防门控（原来 unarmed 时 lost=0 与事实相反）*/
-    if (!post_armed()) {
-        ESP_LOGW(TAG, "LOST (unarmed, log only)");
-        return;
-    }
-    tcs_alarm_raise(ALM_BODY_SENSOR);
-    ESP_LOGW(TAG, "LOST (%u err-run) -> ALM_BODY_SENSOR (sticky)",
-             (unsigned)TMP117_ERR_TRIP);
+    (void)ctx;
+    return (i2c_master_transmit_receive(s_dev, &reg, 1, out, 2,
+                                        TMP117_I2C_TIMEOUT_MS) == ESP_OK) ? 0 : -1;
 }
-
-/* ====== 单样本接受：H6.7 合理性（25~45°C 且 |Δ|≤2°C/s）====== */
-static int sample_accept(float c, uint32_t tick_now)
+static int io_write_reg(void *ctx, uint8_t reg, uint16_t val)
 {
-    /* R1 修复 M13-F-03：首样本也过 25–45°C 范围检查（dt=0 → 只查范围，不查变化率）*/
-    if (!s_have_valid) return post_body_sanity_ok(c, c, 0.0f);
-    float dt = (float)(tick_now - s_last_valid_ms) * (TMP117_SAMPLE_MS / 1000.0f);
-    return post_body_sanity_ok(s_last_valid_c, c, dt);
+    (void)ctx;
+    uint8_t b[3] = { reg, (uint8_t)(val >> 8), (uint8_t)val };
+    return (i2c_master_transmit(s_dev, b, 3, TMP117_I2C_TIMEOUT_MS) == ESP_OK) ? 0 : -1;
 }
 
 /* ====== 采样任务（核 1；100ms 节拍）====== */
@@ -88,77 +54,24 @@ static void tmp117_task(void *arg)
 {
     esp_task_wdt_add(NULL);   /* R1 P1-07：关键任务纳入 TWDT（原来只有 ctrl_svc）*/
     (void)arg;
-    uint8_t reg = TMP117_REG_TEMP;
-    uint8_t buf[2];
     uint32_t p_win = 0;
     for (;;) {
         esp_task_wdt_reset();
         /* 失联降频：错满 TRIP 且非 sim → 1s 试联（F4 恢复检测 ≤1s 首样，3 成 ≤1.3s）*/
-        uint32_t period = (s_health.err_run >= TMP117_ERR_TRIP && !SIM_ACTIVE())
-                          ? TMP117_LOST_PERIOD_MS : TMP117_SAMPLE_MS;
-        vTaskDelay(pdMS_TO_TICKS(period));
-        s_tick++;
-        int32_t t0 = (int32_t)esp_timer_get_time();
-        int ok = 0;
-
-#if TCS_SIM_ENABLED
-        if (s_sim_on) {
-            tmp117_avg_push(&s_avg, s_sim_val);
-            g_tcs.body_temp = tmp117_avg_mean(&s_avg);
-            s_last_valid_c = s_sim_val;
-            s_last_valid_ms = s_tick;
-            s_have_valid = 1;
-            s_stat_samples++;
-            ok = 1;
-        } else
-#endif
-        if (s_started && s_dev) {
-            if (i2c_master_transmit_receive(s_dev, &reg, 1, buf, 2,
-                                            TMP117_I2C_TIMEOUT_MS) == ESP_OK) {
-                int16_t raw = (int16_t)(((uint16_t)buf[0] << 8) | buf[1]);
-                float c = tmp117_raw_to_c(raw);
-                if (sample_accept(c, s_tick)) {
-                    tmp117_avg_push(&s_avg, c);
-                    g_tcs.body_temp = tmp117_avg_mean(&s_avg);
-                    s_last_valid_c = c;
-                    s_last_valid_ms = s_tick;
-                    s_have_valid = 1;
-                    s_stat_samples++;
-                    ok = 1;
-                } else {
-                    s_stat_err++;
-                    ESP_LOGW(TAG, "implausible sample %.2f dropped (H6.7)",
-                             (double)c);
-                }
-            } else {
-                s_stat_err++;
-            }
-        }
-        uint8_t ok_before = s_health.ok;
-        tmp117_health_step(&s_health, ok, on_sensor_lost);
-        /* M06-F-06：状态真值 = 健康机 ok 且已有有效样本。
-         * 原来只在"掉线沿/恢复沿"写，上电初值 body_sensor_ok=1 + body_temp=0.0，
-         * auto 模式首个 500ms 评估就按"体温 0°C"开始加热。*/
-        g_tcs.body_sensor_ok = (uint8_t)(s_health.ok && s_have_valid);
-        if (ok_before && !s_health.ok) {
-            /* 掉线沿：真值已由上句统一写，这里只补一条日志 */
-            ESP_LOGW(TAG, "LOST (data flow stopped; alarm raised by control)");
-        } else if (!ok_before && s_health.ok) {
-            /* 恢复沿：数据流回来了。通信类故障的锁存由 control 在源连续健康 2s 后自动清
-             * （U 线），不需要人工确认；急停/超温才需要。*/
-            s_recover_edges++;
-            ESP_LOGW(TAG, "RECOVERED (data flow back; control auto-recovers after 2s healthy)");
-        }
-        int32_t dt = (int32_t)esp_timer_get_time() - t0;
+        vTaskDelay(pdMS_TO_TICKS(tmp117_core_period_ms(&s_core)));
+        int64_t t0 = esp_timer_get_time();
+        tmp117_core_tick(&s_core, (uint32_t)((uint64_t)t0 / 1000u));
+        int32_t dt = (int32_t)esp_timer_get_time() - (int32_t)t0;
         if (dt > 0 && (uint32_t)dt > s_tick_max_us) s_tick_max_us = (uint32_t)dt;
 
         if (++p_win >= 100) {              /* 10s perf 行（第八章预算 500µs）*/
             p_win = 0;
             ESP_LOGI(TAG, "[TMP117P] tick_max=%luus (budget 500) err=%lu samples=%lu "
                      "lost=%lu rec=%lu sim=%u",
-                     (unsigned long)s_tick_max_us, (unsigned long)s_stat_err,
-                     (unsigned long)s_stat_samples, (unsigned long)s_lost_edges,
-                     (unsigned long)s_recover_edges, (unsigned)SIM_ACTIVE());
+                     (unsigned long)s_tick_max_us, (unsigned long)s_core.stat_err,
+                     (unsigned long)s_core.stat_samples, (unsigned long)s_core.lost_edges,
+                     (unsigned long)s_core.recover_edges,
+                     (unsigned)tmp117_core_sim_active(&s_core));
         }
     }
 }
@@ -202,6 +115,11 @@ int tmp117_service_start(void)
         ESP_LOGW(TAG, "DEVID probe NACK — 硬件未接（T1-T3 待接，Q12 标注）");
     }
 
+    tmp117_core_init(&s_core, &(tmp117_io_t){
+        .read_reg = io_read_reg,
+        .write_reg = io_write_reg,
+    });
+
     if (xTaskCreatePinnedToCore(tmp117_task, "tmp117_svc", 4096, NULL,
                                 5, &s_task, 1) != pdPASS) return -1;
     s_started = 1;
@@ -210,24 +128,14 @@ int tmp117_service_start(void)
 }
 
 /* ====== 读侧 ====== */
-uint8_t tmp117_body_ok(void) { return s_health.ok; }
+uint8_t tmp117_body_ok(void) { return tmp117_core_ok(&s_core); }
 float   tmp117_body_temp(void) { return g_tcs.body_temp; }
 
 /* ====== 注入（E-21/E-22；仅 SIM / R1e 取证构建）====== */
-uint8_t tmp117_sim_active(void) { return (uint8_t)SIM_ACTIVE(); }   /* 状态行永远可用 */
+uint8_t tmp117_sim_active(void) { return tmp117_core_sim_active(&s_core); }   /* 状态行永远可用 */
 #if TCS_SIM_ENABLED
-void tmp117_sim_set(float v)
-{
-    s_sim_val = v;
-    s_sim_on = 1;
-    ESP_LOGW(TAG, "[SIM] body temp forced %.2f", (double)v);
-}
-
-void tmp117_sim_disable(void)
-{
-    s_sim_on = 0;
-    ESP_LOGW(TAG, "[SIM] body temp OFF (real I2C path; absent=loss path)");
-}
+void tmp117_sim_set(float v) { tmp117_core_sim_set(&s_core, v); }
+void tmp117_sim_disable(void) { tmp117_core_sim_disable(&s_core); }
 #endif /* TCS_SIM_ENABLED */
 
 /* ====== 上电自测：纯逻辑+健康机全路径板上取证（服务启动前独占）====== */
@@ -259,7 +167,7 @@ void tmp117_lb_boottest(void)
     TB_CHECK(tmp117_avg_mean(&a) > 16.87f && tmp117_avg_mean(&a) < 16.88f,
              "avg wrap = (100,2..8)/8 = 16.875");
 
-    /* 健康机：10 错掉线沿→3 成功恢复数据→报警粘滞由 control 侧保证 */
+    /* 健康机：10 错掉线沿→3 成成功恢复数据→报警粘滞由 control 侧保证 */
     tmp117_health_t h;
     tmp117_health_init(&h);
     for (int i = 0; i < 9; i++) tmp117_health_step(&h, 0, NULL);
@@ -271,11 +179,9 @@ void tmp117_lb_boottest(void)
     tmp117_health_step(&h, 1, NULL);
     TB_CHECK(h.ok == 1, "3rd ok recovers");
 
-    /* 服务状态复位（boottest 独占于服务启动前）*/
-    tmp117_health_init(&s_health);
-    tmp117_avg_init(&s_avg);
-    s_have_valid = 0;
-    g_tcs.body_sensor_ok = 0;      /* M06-F-06：未采到样本前一律"不就绪" */
+    /* 服务状态在 tmp117_service_start → tmp117_core_init 里复位；这里先把真值置为"不就绪"
+     * M06-F-06：未采到样本前一律"不就绪" */
+    g_tcs.body_sensor_ok = 0;
     g_tcs.body_temp = 0.0f;
 
     ESP_LOGI(TAG, "[TB117] RESULT fail=%d %s", s_lb_fail,

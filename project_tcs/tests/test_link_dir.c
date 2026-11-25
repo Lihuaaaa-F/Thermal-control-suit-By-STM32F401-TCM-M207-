@@ -36,6 +36,7 @@ static uint32_t stub_now(void) { return g_now; }
 
 static void link_open(comm_link_t *L, uint8_t side)
 {
+    comm_init(L, stub_send, stub_now, NULL, NULL, NULL, side);
 }
 
 /* 组一整帧：mt_wire = 线上消息号字节（消息号 | 方向位）*/

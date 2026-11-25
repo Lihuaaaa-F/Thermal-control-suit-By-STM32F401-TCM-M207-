@@ -401,6 +401,43 @@ else
     echo "[proto_sync] SKIP: python not found"; FAIL=1
 fi
 
+# S-G l1：R5-06 残余——按**交付档**编译的主机用例，覆盖 control_link_follow（92899c2 加的 SAFE 退出判据）。
+# 上面其余用例一律按台架档（-DTCS_PROFILE=1）编译，交付档专属的这段判定在那些编译单元里不存在，
+# 此前在主机门禁里零覆盖。自带一套 CFLAGS，不改既有行。
+PROD_CFLAGS="-Wall -Wextra -std=c11 -O1 -DTCS_UNIT_TEST -DTCS_PROFILE=0 $IFLAGS"
+PROD_SRCS="tests/test_link_follow_prod.c App/tcs/control.c App/tcs/param_registry.c App/tcs/post.c App/proto/proto.c"
+if [ "$MODE" = gcc ]; then
+    if $GCC $PROD_CFLAGS $PROD_SRCS -o build/tests_linkfollow_prod.exe 2> build/tests_linkfollow_prod.err \
+       && ./build/tests_linkfollow_prod.exe; then
+        echo "[linkfollow_prod] PASS"
+    else
+        echo "[linkfollow_prod] FAIL"; cat build/tests_linkfollow_prod.err 2>/dev/null | head -20; FAIL=1
+    fi
+else
+    PROD_CMD='cl /nologo /W4 /std:c11 /utf-8 /D_CRT_SECURE_NO_WARNINGS /DTCS_UNIT_TEST /DTCS_PROFILE=0 /I..\App\tcs /I..\App\proto /I..\App\comm'
+    for s in $PROD_SRCS; do PROD_CMD="$PROD_CMD \"$(cygpath -w "$PWD/$s")\""; done
+    PROD_CMD="$PROD_CMD /Fe:tests_linkfollow_prod.exe"
+    {
+        echo '@echo off'
+        echo 'call "C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Auxiliary\Build\vcvars64.bat" >nul 2>&1'
+        echo "cd /d \"$(cygpath -w "$PWD/build")\""
+        echo "$PROD_CMD"
+        echo 'exit /b %ERRORLEVEL%'
+    } > build/prod_compile.bat
+    if cmd //c "build\\prod_compile.bat" > build/prod_compile.log 2>&1 && ./build/tests_linkfollow_prod.exe; then
+        echo "[linkfollow_prod] PASS"
+    else
+        echo "[linkfollow_prod] FAIL"; cat build/prod_compile.log | head -20; FAIL=1
+    fi
+fi
+# 它的回滚式验证：把判据逐个改回错误写法（不看四个标志 / 不看安全类报警 / 去掉"只在 SAFE 才判"…），
+# 上面那个用例必须每次都变红。control.c 本身不改（归 h1a 批次），变异体在 build/ 下的副本里。
+if [ -n "$PYBIN" ] && PYTHONUTF8=1 "$PYBIN" tests/mutation_link_follow.py > build/mut_follow.log 2>&1; then
+    echo "[mut-follow] PASS（$(tail -1 build/mut_follow.log)）"
+else
+    echo "[mut-follow] FAIL"; grep -a "活下来\|编译失败\|锚点\|FAIL" build/mut_follow.log | head -12; FAIL=1
+fi
+
 echo "==================="
 if [ "$FAIL" = 0 ]; then echo "run_all: ALL GREEN"; else echo "run_all: HAS FAILURES"; fi
 exit $FAIL

@@ -7,6 +7,8 @@
  */
 #include "control_service.h"
 #include "control.h"
+#include "link_loss_guard.h"   /* m1（模式页）：屏链路断开 3 秒 = 急停 */
+#include "link_task.h"         /* m1：link_peer_age_ms */
 #include "post.h"
 #include "param_registry.h"
 
@@ -24,6 +26,7 @@ static volatile uint8_t s_hang_test;   /* E-20：置 1 后本任务停喂狗（F
 static uint32_t s_poll_max_us;      /* control_poll 段耗时峰值（预算 100µs）*/
 static uint32_t s_polls;
 static post_arm_ctx_t s_arm_ctx;    /* H6 布防三态机上下文 */
+static void link_loss_check(uint32_t now_ms);   /* m1（模式页）：屏链路断开 3 秒 = 急停，定义在下方 */
 
 /* 节拍：任务 100ms 一拍（U 线 E1，原 500ms）。
  *   每拍：control_poll（故障发现 / 自愈计时 / 退出 SAFE 都是 100ms 粒度）+ 布防步进；
@@ -76,6 +79,7 @@ static void control_task(void *arg)
         int64_t t0_us = esp_timer_get_time();
         uint32_t now_ms = control_ms_from_us(t0_us);
         control_poll(now_ms);
+        link_loss_check(now_ms);   /* m1（模式页）：屏链路断开 3 秒 = 急停，见下方 */
         post_step(now_ms);
         if (++div >= CTRL_PERSIST_DIV) {
             div = 0;
@@ -86,6 +90,26 @@ static void control_task(void *arg)
         s_polls++;
         if (!s_hang_test) esp_task_wdt_reset();   /* 100ms 间隙 <1s 铁律；E-20 停喂 */
     }
+}
+
+/* ====== m1（模式页，用户 2026-11-26 裁决）：屏链路断开满 3 秒 = 急停 ======
+ * "断链时必须安全优先，等于发送急停。" 取代 2026-11 的旧裁决"断链只报告、不进安全态"。
+ * 判定是纯逻辑（link_loss_guard.c，主机可测）；这里每个控制节拍问一次，要触发就走和屏上急停
+ * 同一条路径（tcs_emergency_stop_src：两路 TEC 全停、风扇全开、锁存、要确认才解除）。
+ * 只对"上电后连上过、然后断开"生效；已在安全态不重复触发；链路恢复后保持安全态直到屏上确认。
+ * 逐字核对在 esp32/tests/test_m1_gates.py（本文件依赖 RTOS，主机编译不了）。*/
+static link_loss_guard_t s_link_loss;
+
+static void link_loss_check(uint32_t now_ms)
+{
+    uint32_t age = 0u;
+    int seen = link_peer_age_ms(&age);
+    if (link_loss_guard_step(&s_link_loss, seen, age, control_state() == CTRL_SAFE)
+        != TCS_LINK_LOSS_ESTOP) return;
+    ESP_LOGE(TAG, "SCREEN LINK LOST: no frame from the display for %lums (connected before) "
+             "-> ESTOP now=%lu (user ruling 2026-11-26: link loss = estop)",
+             (unsigned long)age, (unsigned long)now_ms);
+    tcs_emergency_stop_src(PARAM_SRC_KERNEL);
 }
 
 uint8_t control_service_armed(void) { return post_armed(); }

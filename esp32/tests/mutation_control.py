@@ -139,6 +139,7 @@ def run_cl(work, control_c):
            os.path.join(ESP, "components", "tcs_link")]
     srcs = [TEST, control_c,
             os.path.join(CORE, "param_registry.c"),
+            os.path.join(CORE, "control_manual.c"),   # m1（模式页）：control.c 调用它
             os.path.join(CORE, "post_pure.c"),
             os.path.join(ESP, "components", "tcs_link", "proto.c")]
     objs = " ".join('"%s"' % s for s in srcs)

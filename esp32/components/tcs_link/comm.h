@@ -101,6 +101,10 @@ typedef struct {
     uint32_t wrongdir_cnt;      /* 方向位说是对端、但方向表不允许的消息号（含 ACK 确认了本端不会发的消息号）*/
     uint32_t tx_wrongdir_cnt;   /* 自检：本端发出了方向表不允许自己发的消息号（编程错误，应为 0）*/
     uint16_t echo_by_mt[COMM_MT_BUCKETS];   /* 回声按消息号分计（下标 = 消息号去掉方向位）*/
+    /* —— m1（模式页，2026-11-26）：最近一帧**对端方向**合法帧的时刻——"屏链路断开 3 秒 = 急停"
+     * 的计时起点。只在方向闸门之后记（comm_note_peer）：本端回送帧、方向不符的帧、坏帧都不算。*/
+    uint32_t peer_ms;                      /* peer_seen = 1 时才有意义（now_ms_fn 的时基）*/
+    uint8_t  peer_seen;                    /* 上电后收到过对端合法帧 */
 } comm_link_t;
 
 
@@ -208,5 +212,11 @@ int comm_pending_count(const comm_link_t *L);
  * 当前待发队列帧数（§0E 压测验收用，读 tx_count 判 TX 是否卡死）。
  */
 int comm_txq_count(const comm_link_t *L);
+
+/**
+ * m1（模式页）：上电后收到过对端合法帧 → 返回 1，并把最近一帧的时刻（now_ms_fn 时基）写进 *out_ms；
+ * 从未收到 → 返回 0。整组读在锁里做，不会读到"已见过 + 旧时刻"的半截。
+ */
+int comm_peer_last_ms(comm_link_t *L, uint32_t *out_ms);
 
 #endif /* GROUND_STATION_COMM_H */

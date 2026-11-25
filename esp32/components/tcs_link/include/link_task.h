@@ -83,6 +83,12 @@ typedef struct { uint16_t id; float v; int64_t us; } link_param_change_t;
 void link_last_param_copy(link_param_change_t *out);
 float link_param_value(uint16_t id);       /* 注册表初值（无缓存则 NaN→前端用 min）*/
 
+/* m1（模式页，2026-11-26）：屏链路是否断开的事实来源——"屏链路断开 3 秒 = 急停"由它计时
+ * （判定在 tcs_core/link_loss_guard.c，调用在 control_service.c）。
+ * 上电后收到过屏（对端方向）的合法帧 → 返回 1，*age_ms = 距最近一帧的毫秒数；从未收到 → 返回 0。
+ * 只有过了方向闸门的帧才算：本端回送帧、方向不符的帧、坏帧都不刷新。*/
+int link_peer_age_ms(uint32_t *age_ms);
+
 void link_on_event(link_event_cb_t cb);   /* 注册 ws 推送回调（单播即可）*/
 void link_demo_note_param(uint16_t id, float v);   /* 演示模型同步（CONFIG_TCS_DEMO 时有效）*/
 uint8_t link_demo_running(void);   /* 演示态接管中（网页 stale 判据要放过它）*/

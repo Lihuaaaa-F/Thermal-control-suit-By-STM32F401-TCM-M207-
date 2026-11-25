@@ -41,6 +41,12 @@ static param_desc_t s_params[] = {
       PF_RW|PF_WEB|PF_PERSIST,                                38.0f, 45.0f, 0.5f, 40.0f, 0 },
     { 0x08, "commissioned", "布防模式",     "",   PARAM_TYPE_U8,
       PF_RW|PF_SCREEN|PF_WEB|PF_PERSIST|PF_DANGER,            0.0f,  2.0f,  1.0f, 0.0f, 0 },
+    /* ====== m1（模式页，2026-11-26）：两路 TEC 的手动输出。0=暂停 1=制冷 2=制热，上电一律暂停。
+     * 不持久化（无 PF_PERSIST）、不带 PF_WEB（网页端这次不改）。输出映射在 control_manual.c。====== */
+    { 0x09, "tec1_manual",  "TEC1 手动输出",   "",   PARAM_TYPE_U8,
+      PF_RW|PF_SCREEN,                                        0.0f,  2.0f,  1.0f, 0.0f, 0 },
+    { 0x0A, "tec2_manual",  "TEC2 手动输出",   "",   PARAM_TYPE_U8,
+      PF_RW|PF_SCREEN,                                        0.0f,  2.0f,  1.0f, 0.0f, 0 },
     /* ====== H10 映射全表（v1.2 §2.5；所有权矩阵=模块 EEPROM 唯一真值，本地不持久）======
      * flags：PF_RW|PF_WEB|PF_M207（无 PF_SCREEN=屏不显红线；无 PF_PERSIST=不落本地 EEPROM）。
      * 值域/默认按《现行M207协议_v1.md》字典；危险参数加 PF_DANGER（网页二次确认）。
@@ -150,6 +156,7 @@ _Static_assert(sizeof(s_params) / sizeof(s_params[0]) <= PARAM_CAPACITY,
 /* 默认初值（与表 value 列同序；param_load_defaults 用）*/
 static const float s_defaults[PARAM_N_REGISTERED] = {
     25.0f, 25.0f, 37.5f, 36.5f, 0.2f, 0.0f, 40.0f, 0.0f,
+    0.0f, 0.0f,                        /* m1：0x09 / 0x0A 手动输出，上电一律暂停 */
     0.4f, 40.0f, 0.1f, 30.0f, 15.0f, 1.0f, 0.0f, 5.0f, 9.0f, 100.0f, -20.0f,
     -10.0f, 120.0f, 8.0f, 1.0f, 0.01f,
     0.4f, 40.0f, 0.1f, 30.0f, 15.0f, 1.0f, 0.0f, 5.0f, 9.0f, 100.0f, -20.0f,
@@ -240,6 +247,14 @@ static void side_effects(param_desc_t *p)
     }
 }
 
+/* m1（模式页）：是不是内核自己把两路手动输出清回暂停——只可能是"值 0 + 来源 PARAM_SRC_KERNEL"。
+ * 这样的写入不经任何校验：暂停永远是安全的那一侧（进安全态 / 急停 / 切自动时必须清得掉）。*/
+static int param_kernel_pause(const param_desc_t *p, float v, uint8_t src)
+{
+    return (p->id == PARAM_ID_TEC1_MANUAL || p->id == PARAM_ID_TEC2_MANUAL)
+           && v == 0.0f && src == PARAM_SRC_KERNEL;
+}
+
 int param_set(uint16_t id, float v, uint8_t src)
 {
     param_desc_t *p = param_find(id);
@@ -249,6 +264,19 @@ int param_set(uint16_t id, float v, uint8_t src)
     /* R1 P1-05：NaN/Inf 必须在钳制之前拒绝——NaN 与任何数比较都为假，
      * 会穿过 clamp 写入注册表并持久化，之后 POST 参数表检查恒失败。*/
     if (!isfinite(v)) return -2;
+
+    /* ===== m1（模式页，2026-11-26）：两路 TEC 手动输出（0x09 / 0x0A）的前置校验 =====
+     * 这两个参数不钳制：取值不是 0 / 1 / 2 直接拒绝（PARAM_REJECT_RANGE）。
+     * 非手动模式、安全态下拒绝——问 on_check 钩子（固件接的是 control_param_check），
+     * 钩子给出的具体原因码（≤ -3）原样往上带，屏端据此提示。
+     * 只有内核自己清回暂停（值 0、来源 PARAM_SRC_KERNEL）不经校验：暂停永远是安全的那一侧。*/
+    if ((p->id == PARAM_ID_TEC1_MANUAL || p->id == PARAM_ID_TEC2_MANUAL) &&
+        !param_kernel_pause(p, v, src)) {
+        int rc;
+        if (!(v >= p->min && v <= p->max) || v != (float)(uint8_t)v) return PARAM_REJECT_RANGE;
+        if (s_hooks.on_check && (rc = s_hooks.on_check(p->id, v)) != 0)
+            return (rc <= -3) ? rc : -2;
+    }
 
     /* clamp（任务书：越界返回 clamp 后值经 src 通道回显 → 返回 1 由调用方回显）*/
     float c = v;
@@ -267,7 +295,8 @@ int param_set(uint16_t id, float v, uint8_t src)
     if (p->id == PARAM_ID_BODY_COLD && c >= param_get(PARAM_ID_BODY_HOT)) return -2;
     /* 板级写前校验（如：急停/超温锁存期间不得切自动）。所有写路径都经过这里——
      * 网页、屏幕、控制台、链路镜像，谁都不能绕过。*/
-    if (s_hooks.on_check && s_hooks.on_check(p->id, c) != 0) return -2;
+    if (s_hooks.on_check && !param_kernel_pause(p, c, src)
+        && s_hooks.on_check(p->id, c) != 0) return -2;
 
     p->value = c;
     side_effects(p);

@@ -46,7 +46,20 @@ typedef enum {
 #define PARAM_ID_MODE           0x06
 #define PARAM_ID_SET_CONFIRM    0x07   /* 高温二次确认阈值 */
 #define PARAM_ID_COMMISSIONED   0x08   /* 布防（WP-A.5）：0=未布防传感器报警只记日志，1=完整 FMEA */
+/* ===== m1（模式页，2026-11-26 用户定的新功能）：两路 TEC 的手动输出 =====
+ * 取值 0 = 暂停、1 = 制冷、2 = 制热；初值 0；不持久化（上电一律暂停）、不带 PF_WEB（网页端这次不改）。
+ * 只在手动模式、非安全态下可写；写前校验见 param_set 的前置检查块，输出映射见 control_manual.c。*/
+#define PARAM_ID_TEC1_MANUAL    0x09
+#define PARAM_ID_TEC2_MANUAL    0x0A
 #define PARAM_ID_M207_BASE      0x100  /* M207 底层参数段（文档到后启用，WP9）*/
+
+/* m1（模式页）：内核自己把 0x09 / 0x0A 清回暂停时用的来源标记（内核只会写 0）。
+ * 网页事件日志对不认识的来源记"系统"。*/
+#define PARAM_SRC_KERNEL   6
+/* m1（模式页）：param_set 对 0x09 / 0x0A 的拒绝原因码（屏端据此提示）。-2 仍是通用的约束拒绝。*/
+#define PARAM_REJECT_NOT_MANUAL  (-3)   /* 不在手动模式 */
+#define PARAM_REJECT_SAFE       (-4)    /* 安全态 / 急停 / 超温未解除 */
+#define PARAM_REJECT_RANGE      (-5)    /* 取值不是 0 / 1 / 2 */
 
 #define PARAM_CAPACITY      64    /* 注册表数组容量（条数不再手写：见 param_registry.c 的 PARAM_N_REGISTERED 与 _Static_assert）*/
 #define PARAM_EEPROM_MAX    31    /* EEPROM count 字段上限（u8 纪录数；物理布局另限 30，见 param_serialize）*/

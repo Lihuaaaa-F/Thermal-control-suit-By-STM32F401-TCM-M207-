@@ -130,6 +130,41 @@ if(TCS_SIM)
     message(STATUS "TCS_SIM=ON: simulation build (M207 responder / TMP117 inject / touch inject)")
 endif()
 
+# ====== 构建标识：可复现构建（2026-11-24 S 线，审查条目 X05-F-06）======
+# 版本串里的构建时间此前用编译器宏 __DATE__/__TIME__，同一份源码两次构建的固件必然不同。
+# 现在：时间优先取环境变量 SOURCE_DATE_EPOCH；没给就取 HEAD 提交的时间——同一提交两次从零构建产物相同
+# （tools/build_matrix.sh --twice 核对）。提交号取 git 短号，工作树有未提交改动时加 -dirty。
+# 都是 configure 时定下的：提交之后要重新 configure 才会更新（发布构建一律从零）。
+set(TCS_BUILD_GIT "n/a")
+# 直接试 git，不看"目录里有没有 .git"：本工程在仓库的子目录里，.git 在上一级；
+# 链接工作树（git worktree）里它还是一个文件而不是目录。（2026-11-24 第一版就是这么写错的，结果 git=n/a。）
+execute_process(COMMAND git rev-parse --short=9 HEAD
+                WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
+                OUTPUT_VARIABLE _tcs_git_rev OUTPUT_STRIP_TRAILING_WHITESPACE
+                RESULT_VARIABLE _tcs_git_rc ERROR_QUIET)
+if(_tcs_git_rc EQUAL 0 AND _tcs_git_rev)
+    execute_process(COMMAND git status --porcelain
+                    WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
+                    OUTPUT_VARIABLE _tcs_git_dirty ERROR_QUIET)
+    if(NOT "${_tcs_git_dirty}" STREQUAL "")
+        set(TCS_BUILD_GIT "${_tcs_git_rev}-dirty")
+    else()
+        set(TCS_BUILD_GIT "${_tcs_git_rev}")
+    endif()
+    if(NOT DEFINED ENV{SOURCE_DATE_EPOCH})
+        execute_process(COMMAND git log -1 --format=%ct
+                        WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
+                        OUTPUT_VARIABLE _tcs_git_ct OUTPUT_STRIP_TRAILING_WHITESPACE ERROR_QUIET)
+        if(_tcs_git_ct MATCHES "^[0-9]+$")
+            set(ENV{SOURCE_DATE_EPOCH} "${_tcs_git_ct}")    # string(TIMESTAMP) 认这个环境变量
+        endif()
+    endif()
+endif()
+string(TIMESTAMP TCS_BUILD_STAMP "%Y-%m-%d %H:%M" UTC)
+message(STATUS "build id: git=${TCS_BUILD_GIT} stamp=${TCS_BUILD_STAMP}")
+configure_file(App/tcs/build_info.h.in "${CMAKE_BINARY_DIR}/generated/build_info.h" @ONLY)
+target_include_directories(tcs_main.elf PRIVATE "${CMAKE_BINARY_DIR}/generated")
+
 # ====== UI 栈：LVGL 为唯一交付栈（2026-11-15 R1：旧 tcs_ui 栈已删除）======
 # 历史：v12.5 曾用 TCS_USE_LVGL=OFF/ON 双栈共存；审查 M03/X05 证明 ON 产物仍链接旧栈
 # 63KB（"一套半活"）。现改为单一栈：不再提供 OFF 构建，回滚走 tag `pre-ui-switch`。

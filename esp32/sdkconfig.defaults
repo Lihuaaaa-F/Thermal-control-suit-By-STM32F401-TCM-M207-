@@ -42,3 +42,9 @@ CONFIG_FREERTOS_GENERATE_RUN_TIME_STATS=y
 # --- 任务看门狗：任一下述订阅任务饿死即 panic 重启（P1-07；R-13 教训：必须入库）---
 CONFIG_ESP_TASK_WDT_PANIC=y
 CONFIG_ESP_TASK_WDT_TIMEOUT_S=3
+
+# --- 可复现构建（2026-11-24 S 线，审查条目 X05-F-06）---
+# 此前同一份源码从零构建两次，app 与 bootloader 的 sha256 都不同（镜像里带了编译日期、时间和源文件路径）。
+# 打开后日期、时间、路径都不再进镜像；调试需要的路径映射由构建自动写进 build/.gdbinit。
+# 现场档的 sdkconfig.site 是本地文件，要重新生成一次才带上这一项。
+CONFIG_APP_REPRODUCIBLE_BUILD=y

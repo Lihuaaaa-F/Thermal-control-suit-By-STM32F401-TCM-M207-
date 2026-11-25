@@ -20,9 +20,10 @@
 # 判定：任一档 build 失败、或告警数超过 tools/build_matrix_baseline.txt 里的基线 → 退出码 1。
 #       基线文件第一次由本脚本生成（--init-baseline），之后新增告警必须显式更新基线并在提交里说明。
 # 可复现 md5：对 ELF 做 arm-none-eabi-objcopy -O binary 之前，先把 .comment 段与含路径的调试段丢掉
-#       （objcopy --remove-section=.comment --strip-debug），并固定 SOURCE_DATE_EPOCH。
-#       固件里的版本字符串用 __DATE__/__TIME__，跨天构建必然不同——所以只在同一天内可比；
-#       脚本两次构建是背靠背做的，天不换就应一致，不一致会如实报出来。
+#       （objcopy --remove-section=.comment --strip-debug）。
+#       2026-11-24（审查 X05-F-06）起本脚本不再强设 SOURCE_DATE_EPOCH：CMake 在没有这个环境变量时
+#       取 HEAD 提交时间生成构建标识（App/tcs/build_info.h.in），所以这里核对的就是默认路径——
+#       同一提交两次从零构建，产物必须相同。工作树有未提交改动时版本串带 -dirty，内容相同仍然可比。
 # 用法：bash tools/build_matrix.sh [--esp32] [--diag] [--site] [--twice] [--init-baseline] [--clean]
 #       产物目录 project_tcs/build-matrix/<档>/（已被 .gitignore 的 build-*/ 覆盖），日志在同目录 build.log
 set -u
@@ -45,7 +46,6 @@ for a in "$@"; do
     esac
 done
 mkdir -p "$OUT"
-export SOURCE_DATE_EPOCH="${SOURCE_DATE_EPOCH:-1792989165}"   # 与 scripts/tl17_alternate.sh 同一锚点
 
 declare -A BASE_N=()
 if [ -f "$BASE" ] && [ "$INIT_BASE" = 0 ]; then

@@ -1,0 +1,11 @@
+/* build_info.h — 由 CMake 从 build_info.h.in 生成到构建目录的 generated/ 下。不要手改生成物。 */
+
+/* 2026-11-24（S 线，审查条目 X05-F-06）：此前版本串直接用编译器宏 __DATE__ / __TIME__，
+ * 同一份源码两次构建的固件必然不同，没法回答"板子上烧的是不是这份源码编出来的"。
+ * 现在：
+ *   - 构建时间：环境变量 SOURCE_DATE_EPOCH 给了就用它；没给就取 HEAD 提交的时间 → 同一提交恒相同。
+ *     （时间取的是提交时间，不是按下编译键的时间。）
+ *   - 提交号：git 短号；工作树有未提交改动时加 -dirty——这种构建本来就不可能复现，如实标出来。
+ *   - 两者都是 configure 时定下的：提交之后要重新 configure（从零构建，或删 CMakeCache.txt）才会更新。 */
+#define TCS_BUILD_STAMP  "@TCS_BUILD_STAMP@"
+#define TCS_BUILD_GIT    "@TCS_BUILD_GIT@"

@@ -6,6 +6,7 @@
  * CLI 行缓冲 \r 或 \n 结尾；命令表见 §3.8。
  */
 #include "console.h"
+#include "build_info.h"      /* 构建时间与提交号：CMake 生成在构建目录的 generated/ 下 */
 #include "ft5446.h"
 #include "param_registry.h"
 #include "proto.h"
@@ -209,11 +210,13 @@ static void cmd_exec(char *line)
 
     /* --- ver --- */
     if (strcmp(argv[0], "ver") == 0) {
-        printf("tcs v%lu.%lu.%lu build=%s %s params=v1(8+0x100resv) proto=v%u\n",
+        /* 构建时间与提交号来自 CMake 生成的 build_info.h（可复现构建，审查条目 X05-F-06）：
+         * 时间是提交时间（或 SOURCE_DATE_EPOCH），不是按下编译键的时间；工作树有未提交改动时提交号带 -dirty。 */
+        printf("tcs v%lu.%lu.%lu build=%s git=%s params=v1(8+0x100resv) proto=v%u\n",
                (unsigned long)(g_tcs.fw_ver >> 16) & 0xFFu,
                (unsigned long)(g_tcs.fw_ver >> 8) & 0xFFu,
                (unsigned long)(g_tcs.fw_ver) & 0xFFu,
-               __DATE__, __TIME__, 1);
+               TCS_BUILD_STAMP, TCS_BUILD_GIT, 1);
         return;
     }
     /* --- stat --- */

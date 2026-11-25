@@ -117,7 +117,7 @@ typedef struct {
 void  param_registry_init(const param_hooks_t *h);   /* 建表+装配钩子+装默认值 */
 int   param_count(void);                     /* 已注册参数条数 */
 const param_desc_t *param_at(int idx);       /* 按序访问（注册表遍历/网页列表）*/
-param_desc_t *param_find(uint16_t id);       /* O(N) 线性（≤32 项）*/
+param_desc_t *param_find(uint16_t id);       /* O(N) 线性（N = PARAM_N_REGISTERED，现 51 项）*/
 const param_desc_t *param_find_by_key(const char *key);
 
 /**
@@ -152,7 +152,6 @@ int   param_deserialize(const uint8_t *img);
 /* 同上，另报告跳过了几条记录（M10-F-04）：类型与本固件的参数表不符、参数本不持久化、值为 NaN/Inf
  * 的记录一律跳过并计数；两条 body 记录加载成 body_cold >= body_hot → 整份不采信（回默认）、返回 -1。*/
 int   param_deserialize_ex(const uint8_t *img, int *skipped);
-void  param_load_eeprom(void);               /* 目标板用：eeprom 读 256B → deserialize */
 
 /* ====== EEPROM v2 序列化（纯函数，PC 单测 §5.1）====== */
 /* 把全部 PF_PERSIST 参数打包成 256B 镜像（magic/ver/count/记录/CRC 全填）。

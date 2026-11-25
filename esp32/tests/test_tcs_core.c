@@ -17,10 +17,6 @@
 
 static int g_pass, g_fail;
 
-/* param_registry.c 的 param_load_eeprom()（零调用死函数）引用的 NVS 桩：nvs_store.c 的读写段
- * 在 ESP_PLATFORM 下才编译，主机上由测试提供同名符号（与 test_control_esp32.c 同款）。*/
-int eeprom_ready(void) { return 0; }
-int eeprom_read_image(uint8_t img[EE_IMG_SIZE]) { (void)img; return -1; }
 #define CHECK(cond, name) do { \
     if (cond) { g_pass++; } \
     else { g_fail++; printf("FAIL: %s (line %d)\n", name, __LINE__); fflush(stdout); } \

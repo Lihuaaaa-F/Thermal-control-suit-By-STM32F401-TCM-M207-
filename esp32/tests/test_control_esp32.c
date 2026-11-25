@@ -17,11 +17,6 @@ static int g_pass, g_fail;
     else { g_fail++; printf("FAIL: %s (line %d)\n", name, __LINE__); fflush(stdout); } \
 } while (0)
 
-/* param_load_eeprom 引用的 eeprom 桩（本测试不调用，仅满足链接）*/
-int eeprom_ready(void) { return 0; }
-int eeprom_read_image(uint8_t img[EE_IMG_SIZE]) { (void)img; return -1; }
-
-/* H6：布防判据已迁移到 post 三态机（control 经 post_armed() 读取），测试直写状态 */
 static void set_armed(uint8_t a)
 {
     post_arm_commit(a ? POST_ARM_ARMED_ONLINE : POST_ARM_UNARMED_ABSENT);

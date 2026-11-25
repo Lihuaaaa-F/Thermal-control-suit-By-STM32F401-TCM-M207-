@@ -387,17 +387,6 @@ void param_load_defaults(void)
     g_tcs.mode = 0;                       /* F9：上电默认手动 */
 }
 
-void param_load_eeprom(void)
-{
-    /* 目标板入口：读 256B 镜像 → deserialize。eeprom.c 在目标工程提供，
-     * PC 单测提供同名桩（不调本函数即可）。离线/读失败由 main 置 ALM_EEPROM。 */
-    extern int eeprom_ready(void);
-    extern int eeprom_read_image(uint8_t img[EE_IMG_SIZE]);
-    uint8_t img[EE_IMG_SIZE];
-    if (eeprom_ready() && eeprom_read_image(img) == 0)
-        (void)param_deserialize(img);
-}
-
 int param_persist_now(void)
 {
     uint8_t img[EE_IMG_SIZE];

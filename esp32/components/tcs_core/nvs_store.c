@@ -1,7 +1,11 @@
 /**
  * nvs_store.c — NVS 持久化实现（R1a）
  * 键：命名空间 "tcs"、key "reg_img"（blob 256B；与 softap 的 ssid/pass 同命名空间不同键）。
- * 写放大：每次 commit 全量 256B blob 重写（NVS 磨损均衡分页）；审计表见 docs/results/R1.md。
+ * 写放大（M10-F-07，照 IDF v5.5.5 源码改正；原注释写的是"每次 commit 全量 256B blob 重写"）：
+ *   一次 nvs_registry_commit = nvs_set_blob 写 1 个 BLOB_DATA item（跨 9 个 entry：1 个头 + 8×32B 数据）
+ *   + 1 个 BLOB_IDX entry，共 10 个 entry。nvs_commit() 在 v5.5.5 是 no-op（nvs_api.cpp:411-414
+ *   "no-op for now, to be used when intermediate cache is added"），写失败只会由 nvs_set_blob 返回，
+ *   所以这里不再调用它、日志也不再把它说成错误来源。审计表见 docs/results/R1.md。
  *
  * 文件分两段：安全记录的编解码是纯函数（主机单测 tests/test_tcs_core.c 的 N 系列），
  * 只有 ESP_PLATFORM 段里的读写用到 NVS 与日志——与 control.c 同样的零 HAL 纪律。
@@ -64,8 +68,6 @@ static const char *TAG = "tcs_nvs";
 #define NS_TCS   "tcs"
 #define KEY_IMG  "reg_img"
 
-int eeprom_ready(void) { return 1; }   /* NVS 在 app_main nvs_flash_init 后恒可用 */
-
 /* 上电读镜像（P1-12）：ESP_OK = 读到；ESP_ERR_NVS_NOT_FOUND = 首次上电（从没保存过）；
  * 其它 = 读失败（镜像损坏 / 长度不对 / NVS 异常）。原先这两种情况合成一句 "(defaults, first boot)"。*/
 esp_err_t nvs_registry_load(uint8_t img[EE_IMG_SIZE])
@@ -81,11 +83,6 @@ esp_err_t nvs_registry_load(uint8_t img[EE_IMG_SIZE])
     return r;
 }
 
-int eeprom_read_image(uint8_t img[EE_IMG_SIZE])
-{
-    return (nvs_registry_load(img) == ESP_OK) ? 0 : -1;
-}
-
 int nvs_registry_commit(const uint8_t img[EE_IMG_SIZE])
 {
     nvs_handle_t h;
@@ -94,10 +91,9 @@ int nvs_registry_commit(const uint8_t img[EE_IMG_SIZE])
         return -1;
     }
     esp_err_t r = nvs_set_blob(h, KEY_IMG, img, EE_IMG_SIZE);
-    if (r == ESP_OK) r = nvs_commit(h);
     nvs_close(h);
     if (r != ESP_OK) {
-        ESP_LOGE(TAG, "nvs commit fail=%s", esp_err_to_name(r));
+        ESP_LOGE(TAG, "nvs write fail=%s", esp_err_to_name(r));
         return -1;
     }
     return 0;
@@ -118,8 +114,7 @@ int safety_state_save(uint8_t latch, uint16_t alarm)
     nvs_handle_t h;
     (void)safety_rec_encode(b, latch, alarm);
     if (nvs_open(NS_TCS, NVS_READWRITE, &h) != ESP_OK) return -1;
-    esp_err_t r = nvs_set_blob(h, KEY_SAFETY, b, sizeof(b));
-    if (r == ESP_OK) r = nvs_commit(h);
+    esp_err_t r = nvs_set_blob(h, KEY_SAFETY, b, sizeof(b));   /* nvs_commit 在 v5.5.5 是 no-op，不调 */
     nvs_close(h);
     if (r != ESP_OK) {
         ESP_LOGE(TAG, "safety save fail=%s", esp_err_to_name(r));

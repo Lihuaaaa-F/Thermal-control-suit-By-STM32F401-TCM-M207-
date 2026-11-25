@@ -3,7 +3,8 @@
  *
  * 256B 镜像格式与 AT24C02 v2 布局完全同构（magic 0xA6/ver 2/记录/CRC8@0xF8），
  * 校验逻辑复用 param_serialize/param_deserialize——NVS 只当"一片不磨损超限的 EEPROM"。
- * eeprom_* 别名满足 param_registry.c 的 param_load_eeprom 外部引用（双向同源，Q5）。
+ * （原先这里还有一套 eeprom_* 别名，只为 param_registry.c 的 param_load_eeprom() 而存在；
+ *   后者零调用，两者已随 M10-F-07 删除。）
  */
 #pragma once
 #include <stdint.h>
@@ -28,10 +29,6 @@ int      safety_rec_decode(const uint8_t *b, size_t len, uint8_t *latch, uint16_
 int     safety_state_save(uint8_t latch, uint16_t alarm);
 uint8_t safety_state_load(void);      /* 无记录（首次上电）→ 0；读失败 / 校验失败 → 0xFF（"未知"），并留日志 */
 uint16_t safety_state_last_alarm(void);   /* 上电读回的报警位快照；v1 记录 / 读失败 / 无记录 → 0 */
-
-/* param_registry.c 的 param_load_eeprom() 外部引用（NVS 实现）*/
-int eeprom_ready(void);
-int eeprom_read_image(uint8_t img[EE_IMG_SIZE]);
 
 #ifdef ESP_PLATFORM
 #include "esp_err.h"

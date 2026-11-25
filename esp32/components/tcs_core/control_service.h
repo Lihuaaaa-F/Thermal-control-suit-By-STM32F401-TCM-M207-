@@ -1,9 +1,10 @@
 /**
  * control_service.h — control FSM 服务任务（R1e；任务书 v11.3 第十一章）
  *
- * 核 1，100ms 节拍（U 线 E1，原 500ms）：每拍 control_poll + 一次布防步进，每 5 拍参数落盘
- * 冲洗（R1e perf 预算 ≤0.1ms）。自动模式的状态机迁移间隔与锁存期重申间隔由 control.c
- * 自己限制，不随本节拍变密。同任务步进 H6 布防三态机（H743 post_poll 同语义；
+ * 核 1，100ms 节拍（U 线 E1，原 500ms）：每拍 control_poll + 一次布防步进；参数落盘
+ * 由同文件里的 persist_worker（优先级 2，每 500ms）做（M09-F-07），控制任务里没有 NVS 调用。
+ * 自动模式的状态机迁移间隔与锁存期重申间隔由 control.c 自己限制，不随本节拍变密。
+ * 同任务步进 H6 布防三态机（H743 post_poll 同语义；
  * post_pass:=双源健康——ESP32 无全量 POST 电池，偏差已记录 R1.md）；
  * esp_task_wdt 订阅+喂狗（CONFIG_ESP_TASK_WDT_TIMEOUT_S，本工程 3 s；控制任务 100ms 一拍，每拍喂）。
  */

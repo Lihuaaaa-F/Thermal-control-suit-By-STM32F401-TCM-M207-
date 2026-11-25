@@ -110,6 +110,22 @@ MUTATIONS = [
     ("D01 置位不作废 + 逐拍检查不看别的锁存位（两道防线一起删）",
      [("    if (bit & (uint8_t)~SAFETY_BIT_BODY_LOST) s_restore_tec2_ok = 0;", "    ;"),
       (_SAFE_CHECK, "if (!g_tcs.m207_online || g_tcs.m207_sensor_open) {")], ""),
+    # ---- 2026-11-25 S 线：未布防时体温源不计入"解除急停 / 退出 SAFE"（真机发现：交付固件上急停解除不了）----
+    ("M27 未布防时解除急停仍要求体温源恢复（回到修前的口径）",
+     [("    need = (uint8_t)(commissioned() ? SAFETY_SENSOR_MASK\n"
+       "                                    : (SAFETY_SENSOR_MASK & (uint8_t)~SAFETY_BIT_BODY_LOST));",
+       "    need = (uint8_t)SAFETY_SENSOR_MASK;")], ""),
+    ("M28 未布防时退出 SAFE 仍要求体温源恢复",
+     [("    if (commissioned() && !g_tcs.body_sensor_ok) return 0;",
+       "    if (!g_tcs.body_sensor_ok) return 0;")], ""),
+    ("M29 已布防时解除急停不再要求体温源",
+     [("    need = (uint8_t)(commissioned() ? SAFETY_SENSOR_MASK\n"
+       "                                    : (SAFETY_SENSOR_MASK & (uint8_t)~SAFETY_BIT_BODY_LOST));",
+       "    need = (uint8_t)(!commissioned() ? SAFETY_SENSOR_MASK\n"
+       "                                    : (SAFETY_SENSOR_MASK & (uint8_t)~SAFETY_BIT_BODY_LOST));")], ""),
+    ("M30 退出 SAFE 时的布防判断写反（未布防才要求体温源）",
+     [("    if (commissioned() && !g_tcs.body_sensor_ok) return 0;",
+       "    if (!commissioned() && !g_tcs.body_sensor_ok) return 0;")], ""),
 ]
 
 

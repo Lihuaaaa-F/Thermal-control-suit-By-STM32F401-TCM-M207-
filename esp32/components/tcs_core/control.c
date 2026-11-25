@@ -59,7 +59,8 @@ static uint32_t s_safe_assert_ms;      /* 上次重申安全输出的时刻 */
 static volatile uint8_t s_safety_latch;
 static uint8_t s_safety_ok = 0xFF;
 
-/* 传感器类源（除急停外）的集合：ack 清急停要求这三者全部恢复 */
+/* 传感器类源（除急停外）的集合。ack 清急停要求"需要的那几个"全部恢复：
+ * 已布防 = 三个都要；未布防 = 不含体温源（见 safety_ack_latched）。*/
 #define SAFETY_SENSOR_MASK (SAFETY_BIT_OVERTEMP | SAFETY_BIT_BODY_LOST | SAFETY_BIT_M207_LOST)
 
 /* 2026-11-19（实测阻碍）：通信类故障（体温/M207 失联、探头开路）不是安全事件，
@@ -121,17 +122,28 @@ static void safety_set_ok(uint8_t bit, uint8_t ok)
     SAFETY_UNLOCK();
 }
 
-/* 人工确认：只清"源已恢复"的位；急停额外要求其余源全部恢复且无其它锁存。*/
+static uint8_t commissioned(void);   /* 定义在下方"控制节拍"附近；这里只做前置声明 */
+
+/* 人工确认：只清"源已恢复"的位；急停额外要求其余源全部恢复且无其它锁存。
+ * 2026-11-25（S 线，交付固件真机发现）：解除急停所需的"其余源"按布防态取——
+ *   已布防：体温、模块、水温三个源都要恢复（原口径不变）；
+ *   未布防：不含体温源。设备从开机起就没有体温探头时本来就允许手动运行（规格："未布防只记沿"），
+ *   若仍要求体温源恢复，急停在这类设备上永远解除不了——而锁存存在 NVS，断电重启也出不来。
+ *   "已布防后探头丢了"不受影响：那时 SAFETY_BIT_BODY_LOST 已经锁存，它自己要等探头恢复才清，
+ *   所以下面"无其它锁存"这一条会挡住急停的解除。
+ * 判别性用例：tests/test_control_esp32.c 的 N1–N4（N1/N3/N4 的解除断言在旧实现上必红）。*/
 static void safety_ack_latched(void)
 {
-    uint8_t lat, ok, drop, after;
+    uint8_t lat, ok, drop, after, need;
+    /* 布防态在锁外读：post 三态机有自己的状态，不在安全锁里调别的模块。*/
+    need = (uint8_t)(commissioned() ? SAFETY_SENSOR_MASK
+                                    : (SAFETY_SENSOR_MASK & (uint8_t)~SAFETY_BIT_BODY_LOST));
     SAFETY_LOCK();
     lat = s_safety_latch;
     ok  = s_safety_ok;
     drop = (uint8_t)(lat & ok & (uint8_t)~SAFETY_BIT_ESTOP);
     after = (uint8_t)(lat & (uint8_t)~drop);   /* R-07：用"清位后"判断急停，避免两次 ack */
-    if ((after & (uint8_t)~SAFETY_BIT_ESTOP) == 0
-        && (ok & SAFETY_SENSOR_MASK) == SAFETY_SENSOR_MASK) {
+    if ((after & (uint8_t)~SAFETY_BIT_ESTOP) == 0 && (ok & need) == need) {
         drop |= (uint8_t)(after & SAFETY_BIT_ESTOP);
     }
     s_safety_latch = (uint8_t)(lat & (uint8_t)~drop);
@@ -283,9 +295,13 @@ static void leave_safe(uint32_t now_ms)
     if (auto_now) auto_evaluate(now_ms);
 }
 
+/* 退出 SAFE 所需的"源恢复"：已布防 = 体温 + 模块 + 水温；未布防 = 模块 + 水温。
+ * 2026-11-25（S 线）：未布防时体温探头缺失不计入——规格"未布防只记沿"，这类设备本来就允许手动运行；
+ * 口径与 safety_ack_latched 一致（那边的"无其它锁存"会挡住"已布防后探头丢了"的情况）。
+ * 退出后在自动模式下的保护另有其人：下方 M06-F-06"没有有效体温样本不得启动自动冷热输出"。*/
 static uint8_t safe_sources_recovered(void)
 {
-    if (!g_tcs.body_sensor_ok) return 0;
+    if (commissioned() && !g_tcs.body_sensor_ok) return 0;
     if (!g_tcs.m207_online) return 0;
     if (g_tcs.m207_sensor_open) return 0;   /* 复核 B4：探头开路不算"源恢复" */
     if (g_tcs.tc1_act > ALM_OVERTEMP_HARD_C) return 0;

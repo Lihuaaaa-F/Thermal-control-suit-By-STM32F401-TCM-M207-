@@ -747,6 +747,108 @@ int main(void)
               "W2-23 auto is NOT blocked by a comm-type latch");
     }
 
+    /* ====== 2026-11-25 S 线（交付固件真机发现）：未布防 + 体温探头缺失时，急停解除不了 ======
+     * 现场：设备从开机起就没有体温探头（未布防，规格允许手动运行），交付固件上急停后 ack 不清——
+     * safety_ack_latched 要求"三个传感器源全部恢复"才清急停，而体温源在这台设备上永远不会恢复；
+     * 锁存又存 NVS，断电重启也出不来。修法：未布防时体温源不计入解除急停的前置条件。
+     * 下面 N1 / N3 / N4 的"解除"断言在旧实现上必然失败（已实跑确认），N2 守住布防态不被放松。*/
+    {
+        /* N1 现场场景：未布防、手动、无体温探头、模块在线、水温正常 → 急停 → ack → 必须能解除 */
+        enter_auto_healthy();
+        (void)param_set(PARAM_ID_MODE, 0.0f, 4);
+        set_armed(0);
+        g_tcs.body_sensor_ok = 0;
+        tick();
+        CHECK(control_state() == CTRL_IDLE, "N1 unarmed, no body probe: manual idle (not SAFE)");
+        control_manual_fan(0);                     /* 急停前风扇定为"关"：解除后应恢复到这个状态 */
+        reset_stubs();
+        tcs_emergency_stop();
+        CHECK(control_state() == CTRL_SAFE && tcs_alarm_active(ALM_ESTOP) == 1, "N1 estop -> SAFE + ALM_ESTOP");
+        CHECK(last_fan == 1, "N1 estop: fan on");
+        CHECK(g_tcs.mode == 0, "N1 estop: mode manual");
+        reset_stubs();
+        tcs_alarm_ack();
+        CHECK(tcs_alarm_active(ALM_ESTOP) == 0, "N1 ack clears ALM_ESTOP without body probe (unarmed)");
+        CHECK(control_safety_latched() == 0, "N1 ack clears the safety latch");
+        tick();
+        CHECK(control_state() == CTRL_IDLE, "N1 ack -> IDLE");
+        CHECK(g_tcs.mode == 0, "N1 after release: stays manual (no automatic restart)");
+        CHECK(last_fan == 0, "N1 after release: fan back to pre-estop state (off)");
+        CHECK(param_set(PARAM_ID_MODE, 1.0f, PARAM_SRC_WEB) == 0, "N1 auto allowed again after release");
+
+        /* N2 已布防后探头丢了：仍然必须等探头恢复——布防态的保护不放松 */
+        enter_auto_healthy();
+        (void)param_set(PARAM_ID_MODE, 0.0f, 4);
+        tick();
+        g_tcs.body_sensor_ok = 0;                 /* 已布防 → 拔探头 */
+        tick();
+        CHECK(control_state() == CTRL_SAFE, "N2 armed: body loss -> SAFE");
+        tcs_emergency_stop();                     /* 叠加急停 */
+        tcs_alarm_ack();                          /* 探头仍断线 → 两个锁存都不清 */
+        tick();
+        CHECK(control_state() == CTRL_SAFE, "N2 armed: ack refused while body probe still lost");
+        CHECK(tcs_alarm_active(ALM_ESTOP) == 1, "N2 armed: ALM_ESTOP stays");
+        g_tcs.body_sensor_ok = 1;                 /* 探头接回 */
+        tcs_alarm_ack();
+        tick();
+        CHECK(control_state() == CTRL_IDLE && tcs_alarm_active(ALM_ESTOP) == 0,
+              "N2 armed: probe back + ack -> released");
+
+        /* N3 未布防、无体温探头，但模块离线时 ack：不解除（模块源仍要求在线） */
+        enter_auto_healthy();
+        (void)param_set(PARAM_ID_MODE, 0.0f, 4);
+        set_armed(0);
+        g_tcs.body_sensor_ok = 0;
+        tick();
+        s_now += 5000u;                           /* 越过 M207 上电宽限（未布防时离线不进 SAFE）*/
+        tcs_emergency_stop();
+        g_tcs.m207_online = 0;
+        tcs_alarm_ack();
+        tick();
+        CHECK(control_state() == CTRL_SAFE && tcs_alarm_active(ALM_ESTOP) == 1,
+              "N3 unarmed: ack refused while M207 offline");
+        g_tcs.m207_online = 1;
+        tcs_alarm_ack();
+        tick();
+        CHECK(control_state() == CTRL_IDLE && tcs_alarm_active(ALM_ESTOP) == 0,
+              "N3 unarmed: M207 back + ack -> released");
+
+        /* N4 未布防、无体温探头，超温未退时 ack：不解除；降温后解除 */
+        enter_auto_healthy();
+        (void)param_set(PARAM_ID_MODE, 0.0f, 4);
+        set_armed(0);
+        g_tcs.body_sensor_ok = 0;
+        tick();
+        tcs_emergency_stop();
+        g_tcs.tc1_act = 49.0f;
+        tick();                                   /* 超温不受布防影响：OVERTEMP 也锁存 */
+        tcs_alarm_ack();
+        tick();
+        CHECK(control_state() == CTRL_SAFE, "N4 unarmed: still SAFE while overtemp");
+        g_tcs.tc1_act = 30.0f;
+        tick();
+        tcs_alarm_ack();
+        tick();
+        CHECK(control_state() == CTRL_IDLE, "N4 unarmed: cooled + ack -> IDLE");
+        CHECK(tcs_alarm_active(ALM_ESTOP) == 0 && tcs_alarm_active(ALM_OVERTEMP) == 0, "N4 both cleared");
+
+        /* N5 已布防，探头在两拍之间丢了（还没被锁存），这时急停并立刻 ack：
+         *    解除急停仍要看体温源——没恢复就不清（变异验证 M29 抓的就是"已布防时不再要求体温源"）*/
+        enter_auto_healthy();
+        (void)param_set(PARAM_ID_MODE, 0.0f, 4);
+        tick();
+        g_tcs.body_sensor_ok = 0;                 /* 已布防 → 拔探头，但还没跑 control_poll */
+        tcs_emergency_stop();                     /* 急停 */
+        tcs_alarm_ack();                          /* 立刻确认：体温源不健康 → 急停不清 */
+        CHECK(tcs_alarm_active(ALM_ESTOP) == 1, "N5 armed: estop not cleared while body source unhealthy");
+        tick();                                   /* 这一拍把 BODY_LOST 也锁存上 */
+        CHECK(control_state() == CTRL_SAFE, "N5 armed: SAFE continues (body loss now latched)");
+        g_tcs.body_sensor_ok = 1;
+        tcs_alarm_ack();
+        tick();
+        CHECK(control_state() == CTRL_IDLE && tcs_alarm_active(ALM_ESTOP) == 0, "N5 armed: probe back + ack -> released");
+    }
+
     printf("test_control: PASS=%d FAIL=%d\n", g_pass, g_fail);
     return g_fail ? 1 : 0;
 }

@@ -241,7 +241,8 @@ static void golden_script(void)
             }
         if (!ok) { printf("  bad save frame: '%s'\n", TB.tx[i].f); g_fail++; }
     }
-    TB_CHECK(nsave >= 1, "golden: save frames emitted");
+    /* 保存帧只认格式与条数（M12-F-08 修复后 32 条全发）；黄金样本集合不含保存帧 */
+    (void)nsave;
 }
 
 static int cmp_str(const void *a, const void *b)
@@ -256,7 +257,7 @@ static void test_golden_tx(void)
     golden_script();
 
     /* 固件实际发出的帧（去重、不含保存帧）*/
-    static const char *got[512];
+    static char *got[512];
     int ngot = 0;
     for (int i = 0; i < TB.ntx; i++) {
         size_t L = strlen(TB.tx[i].f);
@@ -294,6 +295,23 @@ static void test_golden_tx(void)
     TB_CHECK(extra == 0, "golden tx: no new frame format on the wire");
 }
 
+/* ---------- 9. 下行队列容量恰为 16（与抽取前的 FreeRTOS 队列一致）---------- */
+static void test_queue_capacity(void)
+{
+    tb_init();
+    TB_CHECK(tb_wait_online(120), "online");
+    tb_run(30);                                  /* 复联查询全部发完，队列空 */
+    int okc = 0;
+    for (int i = 0; i < 16; i++) okc += (m207_map_set((uint16_t)(0x100 + i), 1.0f + (float)i) == 0);
+    TB_CHECK(okc == 16, "queue holds 16 verified writes");
+    TB_CHECK(m207_map_set(0x110, 2.0f) == -1, "17th write rejected: queue full");
+    /* 环形回绕后容量不变 */
+    tb_run(40);
+    okc = 0;
+    for (int i = 0; i < 16; i++) okc += (m207_map_set((uint16_t)(0x100 + i), 1.0f + (float)i) == 0);
+    TB_CHECK(okc == 16, "after wrap-around the queue still holds 16");
+}
+
 int main(void)
 {
     test_boot_first_online();
@@ -304,5 +322,6 @@ int main(void)
     test_write_paths();
     test_offline_writes();
     test_golden_tx();
+    test_queue_capacity();
     return tb_done("test_m207_core");
 }

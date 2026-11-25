@@ -93,6 +93,7 @@ typedef struct {
 static m207_core_io_t s_io;
 static m207_msg_t s_ring[M207_Q_LEN];   /* 下行命令队列（环形，容量 M207_Q_LEN）*/
 static uint8_t  s_q_head, s_q_tail;     /* head 仅生产者推进，tail 仅消费者推进 */
+static uint8_t  s_q_count;              /* 当前条数（判满用）*/
 static uint8_t  s_started;
 static uint8_t  s_online;
 static uint8_t  s_probing;           /* 0=常规轮询 FSM（含上电首联）1=离线探测 */
@@ -143,16 +144,18 @@ static void m207_core_tx(const char *cmd, size_t len)
     s_stat.tx++;
 }
 
-/* ====== 下行队列（环形；生产者任意任务）====== */
+/* ====== 下行队列（环形；生产者任意任务）======
+ * 容量与抽取前的 FreeRTOS 队列一致：恰好 M207_Q_LEN 条。用计数判满——
+ * "留空一格判满"的环形只能放 N-1 条（第一版就错在这里，主机差分的队列桩同错，没照出来）。*/
 static int m207_enqueue(const m207_msg_t *msg)
 {
     int rc = -1;
     if (!s_started) return -1;
     M207_Q_LOCK();
-    uint8_t next = (uint8_t)((s_q_head + 1u) % M207_Q_LEN);
-    if (next != s_q_tail) {
+    if (s_q_count < M207_Q_LEN) {
         s_ring[s_q_head] = *msg;
-        s_q_head = next;
+        s_q_head = (uint8_t)((s_q_head + 1u) % M207_Q_LEN);
+        s_q_count++;
         rc = 0;
     }
     M207_Q_UNLOCK();
@@ -163,9 +166,10 @@ static int m207_dequeue(m207_msg_t *msg)
 {
     int rc = 0;
     M207_Q_LOCK();
-    if (s_q_tail != s_q_head) {
+    if (s_q_count > 0) {
         *msg = s_ring[s_q_tail];
         s_q_tail = (uint8_t)((s_q_tail + 1u) % M207_Q_LEN);
+        s_q_count--;
         rc = 1;
     }
     M207_Q_UNLOCK();
@@ -577,6 +581,7 @@ void m207_core_init(const m207_core_io_t *io)
 {
     s_io = io ? *io : (m207_core_io_t){0};
     s_q_head = s_q_tail = 0;
+    s_q_count = 0;
     s_online = 0;
     s_probing = 0;
     s_ever_online = 0;

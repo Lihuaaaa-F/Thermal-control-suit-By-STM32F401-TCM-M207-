@@ -13,6 +13,7 @@
 #include "nvs_store.h"
 #include "svc_status.h"
 #include "param_registry.h"
+#include "proto.h"         /* proto_crc8：改坏镜像里的记录后重算 CRC */
 
 static int g_pass, g_fail;
 
@@ -405,12 +406,102 @@ static void test_param_set(void)
     CHECK(param_restore_alarm_needed(0, 1) == 0, "E2 a good image is not an alarm");
 }
 
+/* ====== V：param_deserialize 的校验（M10-F-04）======
+ * 原先只验 magic/ver/CRC8：同 magic/ver 但记录类型不同的镜像会把 U8 按位型当 F32 写进注册表；
+ * 两条 body 记录可以加载成 cold >= hot，绕过 param_set 的写时约束。*/
+static int rec_off(const uint8_t *img, uint16_t id)      /* 记录在镜像里的偏移；找不到 = -1 */
+{
+    for (int i = 0; i < img[2]; i++) {
+        int o = 4 + i * 8;
+        if ((uint16_t)(img[o] | (img[o + 1] << 8)) == id) return o;
+    }
+    return -1;
+}
+static void rec_fix_crc(uint8_t *img) { img[EE_CRC_ADDR] = proto_crc8(img, EE_CRC_ADDR); }
+static void rec_put_f32(uint8_t *img, int o, float v)
+{
+    uint32_t b;
+    memcpy(&b, &v, 4);
+    img[o + 4] = (uint8_t)b; img[o + 5] = (uint8_t)(b >> 8);
+    img[o + 6] = (uint8_t)(b >> 16); img[o + 7] = (uint8_t)(b >> 24);
+}
+
+static void test_deserialize(void)
+{
+    uint8_t img[EE_IMG_SIZE], bad[EE_IMG_SIZE];
+    int skipped = -1, o;
+    param_registry_init(&(param_hooks_t){0});
+    (void)param_set(PARAM_ID_BODY_HOT, 38.0f, 4);
+    (void)param_set(PARAM_ID_HYST, 0.5f, 4);
+    CHECK(param_serialize(img) == 0, "V0 serialize ok");
+    param_load_defaults();
+    CHECK(param_deserialize_ex(img, &skipped) == 0 && skipped == 0
+          && param_get(PARAM_ID_BODY_HOT) == 38.0f && param_get(PARAM_ID_HYST) == 0.5f,
+          "V1 a good image restores the values");
+    o = rec_off(img, PARAM_ID_HYST);
+    CHECK(o > 0, "V precondition: hyst record found");
+
+    /* V2 类型不符：F32 记录被标成 U8 → 跳过该条（保持默认），其余照常加载，计 1 条 */
+    img[o + 2] = PARAM_TYPE_U8;
+    rec_fix_crc(img);
+    skipped = -1;
+    CHECK(param_deserialize_ex(img, &skipped) == 0 && skipped == 1, "V2 type mismatch: record skipped and counted");
+    CHECK(param_get(PARAM_ID_HYST) == 0.2f && param_get(PARAM_ID_BODY_HOT) == 38.0f,
+          "V2 the skipped record keeps its default, the others load");
+
+    /* V3 PF 不符：这条记录改成"本不持久化"的参数 0x103 → 跳过 */
+    img[o + 2] = PARAM_TYPE_F32;
+    img[o] = 0x03; img[o + 1] = 0x01;
+    rec_fix_crc(img);
+    skipped = -1;
+    CHECK(param_deserialize_ex(img, &skipped) == 0 && skipped == 1, "V3 a record for a non-persistent parameter is skipped");
+    CHECK(param_get(0x103) == 30.0f, "V3 the non-persistent parameter keeps its default");
+
+    /* V4 NaN → 跳过 */
+    param_load_defaults();
+    (void)param_set(PARAM_ID_HYST, 0.5f, 4);
+    (void)param_serialize(img);
+    o = rec_off(img, PARAM_ID_HYST);
+    rec_put_f32(img, o, 1.0f);
+    img[o + 7] = 0x7F; img[o + 6] = 0xC0; img[o + 5] = 0x00; img[o + 4] = 0x00;   /* 0x7FC00000 = NaN */
+    rec_fix_crc(img);
+    skipped = -1;
+    CHECK(param_deserialize_ex(img, &skipped) == 0 && skipped == 1 && param_get(PARAM_ID_HYST) == 0.2f,
+          "V4 NaN is rejected");
+
+    /* V5 跨参数反序：hot 改到 36.0（< cold 36.5）→ 整份不采信、全部回默认（不只是那一对）*/
+    param_load_defaults();
+    (void)param_set(PARAM_ID_HYST, 0.5f, 4);          /* hot 保持默认 37.5 */
+    (void)param_serialize(img);
+    o = rec_off(img, PARAM_ID_BODY_HOT);
+    rec_put_f32(img, o, 36.0f);
+    rec_fix_crc(img);
+    skipped = -1;
+    CHECK(param_deserialize_ex(img, &skipped) == -1, "V5 cold >= hot in the image: whole image rejected");
+    CHECK(param_get(PARAM_ID_BODY_HOT) == 37.5f && param_get(PARAM_ID_BODY_COLD) == 36.5f
+          && param_get(PARAM_ID_HYST) == 0.2f, "V5 everything back to defaults");
+    CHECK(skipped >= 1, "V5 the rejected pair shows up in the skip count");
+
+    /* V6 既有的整份拒绝（钉住）*/
+    param_load_defaults();
+    (void)param_serialize(img);
+    memcpy(bad, img, sizeof bad); bad[EE_CRC_ADDR] ^= 1u;
+    CHECK(param_deserialize(bad) == -1, "V6 bad CRC rejected");
+    memcpy(bad, img, sizeof bad); bad[0] = 0;
+    CHECK(param_deserialize(bad) == -1, "V6 bad magic rejected");
+    memcpy(bad, img, sizeof bad); bad[1] = 3; rec_fix_crc(bad);
+    CHECK(param_deserialize(bad) == -1, "V6 unknown version rejected");
+    memcpy(bad, img, sizeof bad); bad[2] = 31; rec_fix_crc(bad);
+    CHECK(param_deserialize(bad) == -1, "V6 too many records rejected");
+}
+
 int main(void)
 {
     test_boot_record();
     test_safety_record();
     test_svc_status();
     test_param_set();
+    test_deserialize();
     printf("test_tcs_core: PASS=%d FAIL=%d\n", g_pass, g_fail);
     return g_fail ? 1 : 0;
 }

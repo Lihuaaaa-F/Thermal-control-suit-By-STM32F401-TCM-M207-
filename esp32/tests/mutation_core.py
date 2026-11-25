@@ -128,6 +128,23 @@ MUTATIONS = [
      [("        s_persist_fail++;", "        ;")]),
     ("C46 首次上电也报 EEPROM 报警", "param_registry.c",
      [("    return (load_not_found || deser_ok) ? 0u : 1u;", "    return 1u;")]),
+    # ---- param_registry.c：反序列化校验（M10-F-04）----
+    ("C50 类型不符的记录也采信", "param_registry.c",
+     [("        if (ty != p->type || !(p->flags & PF_PERSIST)) { nsk++; continue; }",
+       "        if (!(p->flags & PF_PERSIST)) { nsk++; continue; }")]),
+    ("C51 不该持久化的参数的记录也采信", "param_registry.c",
+     [("        if (ty != p->type || !(p->flags & PF_PERSIST)) { nsk++; continue; }",
+       "        if (ty != p->type) { nsk++; continue; }")]),
+    ("C52 跨参数反序不校验", "param_registry.c",
+     [("    int cross_bad = (param_get(PARAM_ID_BODY_COLD) >= param_get(PARAM_ID_BODY_HOT));",
+       "    int cross_bad = 0;")]),
+    ("C53 NaN 不拒", "param_registry.c",
+     [("        if (!isfinite(v)) { nsk++; continue; }", "        ;")]),
+    ("C54 跳过的记录不计数", "param_registry.c",
+     [("        if (ty != p->type || !(p->flags & PF_PERSIST)) { nsk++; continue; }",
+       "        if (ty != p->type || !(p->flags & PF_PERSIST)) { continue; }")]),
+    ("C55 跨参数失败只回退那一对", "param_registry.c",
+     [("    if (cross_bad) param_load_defaults();", "    ;")]),
 ]
 
 

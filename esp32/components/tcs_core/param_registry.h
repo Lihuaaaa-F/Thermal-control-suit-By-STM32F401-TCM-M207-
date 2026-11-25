@@ -149,6 +149,9 @@ void  param_broadcast(param_desc_t *p, uint8_t src);
 void  param_load_defaults(void);
 /* 上电恢复：img 由 eeprom.c 读出；magic/ver/CRC 任一不符 → 默认值 + 返回 -1 */
 int   param_deserialize(const uint8_t *img);
+/* 同上，另报告跳过了几条记录（M10-F-04）：类型与本固件的参数表不符、参数本不持久化、值为 NaN/Inf
+ * 的记录一律跳过并计数；两条 body 记录加载成 body_cold >= body_hot → 整份不采信（回默认）、返回 -1。*/
+int   param_deserialize_ex(const uint8_t *img, int *skipped);
 void  param_load_eeprom(void);               /* 目标板用：eeprom 读 256B → deserialize */
 
 /* ====== EEPROM v2 序列化（纯函数，PC 单测 §5.1）====== */

@@ -337,8 +337,10 @@ int param_serialize(uint8_t img[EE_IMG_SIZE])
     return 0;
 }
 
-int param_deserialize(const uint8_t *img)
+int param_deserialize_ex(const uint8_t *img, int *skipped)
 {
+    int nsk = 0;
+    if (skipped) *skipped = 0;
     if (img[0] != EE_MAGIC_V2 || img[1] != EE_LAYOUT_VER) return -1;
     if (proto_crc8(img, EE_CRC_ADDR) != img[EE_CRC_ADDR]) return -1;
     int n = img[2];
@@ -352,16 +354,29 @@ int param_deserialize(const uint8_t *img)
                      | ((uint32_t)r[6] << 16) | ((uint32_t)r[7] << 24);
         param_desc_t *p = param_find(id);
         if (!p) continue;                /* 未知 id（旧固件残留）→ 跳过 */
+        /* M10-F-04：原先只验 magic/ver/CRC8。同 magic/ver 但类型不同的镜像、或给不该持久化的参数
+         * 伪造的记录，会把 U8 按位型解释成 F32 写进注册表。只认"类型对得上、本就持久化"的记录，
+         * 其余跳过并计数（调用方据此报警）。*/
+        if (ty != p->type || !(p->flags & PF_PERSIST)) { nsk++; continue; }
         float v;
         if (ty == PARAM_TYPE_F32) memcpy(&v, &v32, 4);
         else v = (float)v32;
+        if (!isfinite(v)) { nsk++; continue; }
         if (v < p->min) v = p->min;      /* 防御：EEPROM 里被改坏的越界值 */
         if (v > p->max) v = p->max;
         p->value = v;
         if (p->id == PARAM_ID_MODE) g_tcs.mode = (uint8_t)v;
     }
-    return 0;
+    /* 跨参数约束（M10-F-04）：param_set 写入时强制 body_cold < body_hot，加载时却不查——
+     * 两条 body 记录可以加载成 cold >= hot，绕过写时约束，控制判据落进矛盾区间。
+     * 不满足就整份不采信（回默认），返回 -1。*/
+    int cross_bad = (param_get(PARAM_ID_BODY_COLD) >= param_get(PARAM_ID_BODY_HOT));
+    if (cross_bad) param_load_defaults();
+    if (skipped) *skipped = nsk + (cross_bad ? 1 : 0);
+    return cross_bad ? -1 : 0;
 }
+
+int param_deserialize(const uint8_t *img) { return param_deserialize_ex(img, NULL); }
 
 void param_load_defaults(void)
 {

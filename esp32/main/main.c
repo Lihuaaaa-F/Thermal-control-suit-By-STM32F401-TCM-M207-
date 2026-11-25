@@ -233,10 +233,13 @@ void app_main(void)
          * "(defaults, first boot)"——参数损坏后以默认设定继续运行，日志看起来却像出厂。*/
         uint8_t img[EE_IMG_SIZE];
         esp_err_t lr = nvs_registry_load(img);
-        int dr = (lr == ESP_OK) ? param_deserialize(img) : -1;
-        registry_alarm = param_restore_alarm_needed(lr == ESP_ERR_NVS_NOT_FOUND, (uint8_t)(dr == 0));
-        if (dr == 0)
-            ESP_LOGI(TAG, "R1a registry: %d params restored from NVS", param_count());
+        int skipped = 0;
+        int dr = (lr == ESP_OK) ? param_deserialize_ex(img, &skipped) : -1;
+        registry_alarm = param_restore_alarm_needed(lr == ESP_ERR_NVS_NOT_FOUND,
+                                                    (uint8_t)(dr == 0 && skipped == 0));
+        if (dr == 0)   /* skipped > 0：有记录因类型 / 持久化标志 / 数值不符被拒（M10-F-04），那些参数回默认 → 同样报警 */
+            ESP_LOGI(TAG, "R1a registry: %d params restored from NVS (%d record(s) skipped)",
+                     param_count(), skipped);
         else if (lr == ESP_ERR_NVS_NOT_FOUND)
             ESP_LOGI(TAG, "R1a registry: %d params loaded (defaults, first boot)", param_count());
         else

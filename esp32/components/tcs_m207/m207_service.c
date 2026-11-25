@@ -165,14 +165,17 @@ static void m207_task(void *arg)
             ESP_LOGI(TAG,
                      "[M207P] tick_max=%luous (fsm_max=%luous; budget 1000/300) "
                      "tx=%lu rxline=%lu perr=%lu nak=%u vok=%u rsend=%u off=%u "
-                     "qdrop=%u wdrop=%u stk=%uW",
+                     "qdrop=%u wdrop=%u stk=%uW | unexpected=%u txdrop=%lu linedrop=%u",
                      (unsigned long)pf.tick_max_us,
                      (unsigned long)pf.fsm_max_us,
                      (unsigned long)pf.tx, (unsigned long)pf.rx_lines,
                      (unsigned long)pf.parse_err, (unsigned)pf.nak,
                      (unsigned)pf.verify_ok, (unsigned)pf.resend,
                      (unsigned)pf.offline, (unsigned)pf.qdrop,
-                     (unsigned)pf.wdrop, (unsigned)stk);
+                     (unsigned)pf.wdrop, (unsigned)stk,
+                     /* M12-F-14：这三项原来不可见（unexpected 只有字面量、txdrop 是函数内静态、
+                      * linedrop 没有出口）——它们恰恰是"发出去的没到 / 回来的没懂"的痕迹 */
+                     (unsigned)pf.unexpected, (unsigned long)pf.txdrop, (unsigned)pf.linedrop);
         }
     }
 }

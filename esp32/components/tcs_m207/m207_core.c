@@ -850,6 +850,7 @@ int m207_core_perf_take(m207_core_perf_t *out)
         out->offline = s_stat.offline; out->qdrop = s_stat.qdrop; out->wdrop = s_stat.wdrop;
         out->superseded = s_stat.superseded; out->unexpected = s_stat.unexpected;
         out->txdrop = s_txdrop;
+        out->linedrop = s_stat.linedrop;
     }
     s_stat.tick_max_us = 0;
     s_stat.fsm_max_us = 0;

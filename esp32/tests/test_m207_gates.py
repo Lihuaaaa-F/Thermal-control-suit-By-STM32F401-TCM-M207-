@@ -46,6 +46,75 @@ def check(cond, name):
         FAIL += 1
 
 
+
+def c_call_text(src, start):
+    """取从 src[start] 处的函数调用括号内的文本（跳过字符串字面量，括号配平）。"""
+    j = src.find("(", start)
+    depth = 0
+    in_str = False
+    k = j
+    while k < len(src):
+        c = src[k]
+        if in_str:
+            if c == "\\":
+                k += 2
+                continue
+            if c == '"':
+                in_str = False
+        else:
+            if c == '"':
+                in_str = True
+            elif c in "([{":
+                depth += 1
+            elif c in ")]}":
+                depth -= 1
+                if depth == 0:
+                    return src[j + 1:k]
+        k += 1
+    return src[j + 1:]
+
+
+def split_args(text):
+    """按顶层逗号切分实参（跳过字符串与括号，剥掉注释）。"""
+    args, cur, depth, in_str, k = [], [], 0, False, 0
+    while k < len(text):
+        c = text[k]
+        if in_str:
+            cur.append(c)
+            if c == "\\":
+                cur.append(text[k + 1])
+                k += 2
+                continue
+            if c == '"':
+                in_str = False
+        else:
+            if c == '"':
+                in_str = True
+                cur.append(c)
+            elif c in "([{":
+                depth += 1
+                cur.append(c)
+            elif c in ")]}":
+                depth -= 1
+                cur.append(c)
+            elif c == "," and depth == 0:
+                args.append("".join(cur))
+                cur = []
+            else:
+                if text[k:k + 2] == "/*":
+                    e = text.find("*/", k + 2)
+                    k = (e + 2) if e >= 0 else len(text)
+                    continue
+                cur.append(c)
+        k += 1
+    args.append("".join(cur))
+    return [a for a in args if a.strip()]
+
+
+def fmt_specs(fmt):
+    return re.findall(r"%(?!%)[0-9]*(?:ll|l)?[a-zA-Z]", fmt)
+
+
 svc = read(os.path.join("components", "tcs_m207", "m207_service.c"))
 core = read(os.path.join("components", "tcs_m207", "m207_core.c"))
 
@@ -68,6 +137,39 @@ check("m207_lb_echo_ok(" in boottest and "m207_lb_wire_frame(" in boottest,
       "wire frames come from the core table and are judged by m207_lb_echo_ok")
 check(not re.search(r"strtol|atoi", function_body(core, "int m207_lb_echo_ok(")),
       "the echo check does not depend on numeric parsing")
+
+# ---------------------------------------------------------------------------
+# M12-F-14 unexpected 计数
+# ---------------------------------------------------------------------------
+console = read(os.path.join("main", "tcs_console.c"))
+hdr = read(os.path.join("components", "tcs_m207", "include", "m207_service.h"))
+print("[gate] M12-F-14 unexpected counter: accessor exists; console perf line prints the number")
+check("uint16_t m207_stats_unexpected(void)" in core and "return s_stat.unexpected;" in core,
+      "core provides m207_stats_unexpected()")
+check("uint16_t m207_stats_unexpected(void);" in hdr, "declared in m207_service.h")
+perf_cmd = function_body(console, "static int cmd_perf(")
+check("m207_stats_unexpected()" in perf_cmd, "console perf line calls m207_stats_unexpected()")
+i = console.find('printf("[perf] m207')
+if i < 0:
+    check(False, "console perf printf found")
+else:
+    a = split_args(c_call_text(console, i))
+    specs = fmt_specs(a[0])
+    check("unexpected=%u" in a[0], "console perf line format has unexpected=%u")
+    check("rx?unexpected" not in a[0],
+          "console perf line format no longer carries the literal rx?unexpected")
+    check(len(specs) == len(a) - 1,
+          "console perf printf: %d conversion specs vs %d args (must match)" % (len(specs), len(a) - 1))
+j = svc.find('"[M207P] tick_max=')
+if j < 0:
+    check(False, "[M207P] periodic line found")
+else:
+    k = svc.rfind("ESP_LOGI(", 0, j)
+    a = split_args(c_call_text(svc, k))
+    specs = fmt_specs(a[1])
+    check("unexpected=%u" in a[1], "[M207P] periodic line has unexpected=%u")
+    check(len(specs) == len(a) - 2,
+          "[M207P] ESP_LOGI: %d conversion specs vs %d args (must match)" % (len(specs), len(a) - 2))
 
 print("===================")
 if FAIL == 0:

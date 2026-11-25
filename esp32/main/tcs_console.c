@@ -187,11 +187,17 @@ static int cmd_status(int argc, char **argv)
 static int cmd_perf(int argc, char **argv)
 {
     (void)argc; (void)argv;
-    printf("[perf] m207 nak=%u vok=%u rsend=%u off=%u wdrop=%u rx?unexpected | "
+    m207_qstats_t mq;                     /* M12-F-14：队列 / 发送侧计数一次取全 */
+    m207_stats_queue(&mq);
+    printf("[perf] m207 nak=%u vok=%u rsend=%u off=%u wdrop=%u qdrop=%u unexpected=%u "
+           "superseded=%u txdrop=%lu linedrop=%u save_ok=%u save_rej=%u | "
            "ctrl pollmax=%luus polls=%lu armed=%u\n",
            (unsigned)m207_stats_nak(), (unsigned)m207_stats_verify_ok(),
            (unsigned)m207_stats_resend(), (unsigned)m207_stats_offline(),
-           (unsigned)m207_stats_wdrop(),
+           (unsigned)m207_stats_wdrop(), (unsigned)mq.qdrop,
+           (unsigned)m207_stats_unexpected(),      /* M12-F-14：原来这里只打印字面量 rx?unexpected；现在是真实计数 */
+           (unsigned)mq.superseded, (unsigned long)mq.txdrop, (unsigned)mq.linedrop,
+           (unsigned)mq.save_ok, (unsigned)mq.save_rej,
            (unsigned long)control_service_poll_max_us(),
            (unsigned long)control_service_polls(),
            (unsigned)control_service_armed());

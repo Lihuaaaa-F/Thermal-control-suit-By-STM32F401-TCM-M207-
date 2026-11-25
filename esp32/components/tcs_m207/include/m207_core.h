@@ -58,6 +58,7 @@ typedef struct {
     uint16_t nak, verify_ok, resend, offline, qdrop, wdrop;
     uint16_t superseded;      /* 被更新的同类写取代、没上线路的帧（X03-F-07）*/
     uint16_t unexpected;      /* 无事务、非等待窗的 CMD:REPLY（M12-F-14）*/
+    uint16_t linedrop;        /* 没进解析器的行（M12-F-10）*/
     uint32_t txdrop;          /* 发送环满被丢的帧 */
 } m207_core_perf_t;
 /* perf 汇报窗（200 拍）满：返回 1 并把窗口峰值填入 out、清零；否则返回 0。*/

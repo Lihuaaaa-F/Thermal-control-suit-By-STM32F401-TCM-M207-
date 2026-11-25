@@ -1,0 +1,103 @@
+S 线 C06 — 台架档真机回归（合入 h1a + l1 + e2 之后）— 证据
+日期：2026-11-26 02:27–03:08    设备：调温服 v2 样机（H743 屏 + ESP32-S3 + M207）。体温探头没接，风扇未装。
+固件：集成分支 fix/s-u-int2 @ 3936d1d（已合入 h1a、l1 全部、e2）。
+      H743 交付档 build=2026-11-25 18:04 UTC git=fddfe5745；台架档的版本串写着 git=2e6e24649（台架档脚本是增量构建，
+      版本串是上次 configure 时留下的，不代表内容旧——这一点本身是台架档脚本的小毛病，见第七节）；
+      ESP32 交付档 / 诊断档由 3936d1d 的源码从零构建；取证档 = 诊断档 + CONFIG_TCS_M207_SELFLOOP=y（专门构建，0 error 0 warning）。
+约束：不做任何驱动 TEC / 加热的操作；对 M207 只发只读查询。收尾状态：两端交付档，status 正常。
+
+一、交付档（两端）
+  交付档下应被拒的命令（l1 d8c8a1c）：`p defaults Y` → ? ? ?；`p save` → ? ?；`ee` → ?。符合预期（只在台架及以上档存在）。
+  引脚寄存器与触摸：GPIOB_MODER=0xFFFFF6B5（PB14 / PB11 / PB10 / PB9 / PB8 高阻）、ODR=0x22、AFRL / AFRH=0；
+    GPIOH_MODER=0xAAAA1FAF、ODR=0x40；RCC_APB1LENR=0x00020000；s_tp_link.state=0（在线）。与 C04 / C05 相同。
+  经屏端邮箱：急停 → 解除 → 审计回放（M07-F-08 的关单条件：执行 5 类命令后审计环有记录）
+    mb estop  → ESTOP done alarm=0x0004；[AUDIT] 73711 estop rv=0；[SAFE] estop unconfirmed: retry=1 (link up, peer silent)
+    ESP32     → fan=100% alarm=0x0004 state=3 latch=0x08；H743 stat：alarm=0x0004 fan=1 ctrl=3
+    mb ack    → ack alarm=0x0000；[AUDIT] 85404 ack rv=0
+    ESP32     → fan=0% alarm=0x0000 state=0 latch=0x00
+    mb audit  → audit: total=2 kept=2 shown=2 ／ 73711 estop rv=0 ／ 85404 ack rv=0
+    → 交付档上审计环能记、能回放（这里只敲了急停与解除两类；改参 / 驱动引脚两类在交付档没有入口，无法在交付档上敲）。
+    "[SAFE] estop unconfirmed: retry=1 (link up, peer silent)"：屏端发完急停后 200ms 内没等到主控的执行回执，按设计重发了一次意图，
+    随后主控的快照带到了 ESTOP。不是异常。
+
+二、M207 回环自测（e2 重构 M207 服务后的首次上机；取证档启动时自动跑）
+  [M207SL] 1 online-first PASS            2 temp-cache tc1/tc2 PASS       3 verify-ok set 30.5 PASS
+  [M207SL] 4 mismatch-resend-then-ok PASS 5 nak-after-retry PASS           6 offline-5fails-ALM_M207 PASS
+  [M207SL] 7 recover-alarm-sticky PASS     8 ack-clears-ALM_M207 PASS      9 write-rejected-while-offline PASS
+  [M207SL] RESULT pass=9 fail=0 PASS
+  与参照日志 docs/evidence/R1b_selfloop.log 逐步对照：步骤名一个不少。
+  链路层上电回环自测（同一份启动日志）：[LPBK] frame loopback / dup dedup / bad-crc drop / ARQ retransmit 四项 PASS，RESULT pass=4 fail=0。
+  自测结束后的状态：status → alarm=0x0002 armed=0 state=0。模块已在线，ALM_M207 还挂着——自测第 6 步制造过"5 连败离线"，
+  按设计要人工确认才清（第 7 步验证的就是"恢复后报警仍在"）。取证档专有，不影响交付档。
+
+三、诊断档：M207 只读查询、网页端点自测
+  TC1:TCRTOCPHT?   → TCRTOCPHT=120.000        （开路保护上限是 120°C，不是 10 月事故时被误写的 1°C——那次损伤已不在模块里）
+  TC1:TCRTOCPLT?   → TCRTOCPLT=-30.000
+  TC1 / TC2:TCACTVOL?、TCACTCUR? → 0.022 V / 0.000 A、0.022 V / -0.000 A（TEC 关着）
+  TC1 / TC2:TCERRORSTATUS?、TCOTPSTATUS?：发出去了（rc=0 已入队），但日志里没有对应的应答行——
+    e2 合入后服务在线时每 60 秒自己轮询这两项并把应答吃掉，应答不再逐条打日志。要在真机上读到这两个值，得走控制台的取值命令，
+    这次没有找到对应的命令 → 未读到（见第七节）。
+  webtest：HTTP 9/9（/ 、index.html、style.css、app.js、chart.js、api/status、api/registry、api/log、api/linkstats 全 200），
+           WS 16/16 → ALL PASS。日志里那几行 httpd 警告是自测故意制造的异常断连。
+
+四、台架档
+  急停入口矩阵（规则 v2）：17/17 PASS（C04 里那 1 条"调参 + 冻结 LVGL 点一下 → 触发"是工具注入时长失真，改成固件侧 150ms 自动松开后 PASS）。
+    首页按住 → 609 / 600ms 触发；按钮 0x9D15 → 确认后 0xD924；三个二级页按住 2 秒不触发；首页界面卡死 10ms 触发；
+    其它弹窗挡不住；确认急停弹窗让位。矩阵跑完后 ESP32：alarm=0x0000 state=0 latch=0x00。
+  调参页量测（tune_refresh_check 新版）：没跑成——我的脚本取参数值时用了行号，真机上 KeyError: 0。已改（提交 880b5b8），待重跑。
+  触摸强制恢复 ×20：没跑成——我让另一个进程同时连续读 RTT，两个进程抢探针，20 次写标志全部失败（0/20）。
+    已改成同一个进程边写边排空 RTT，待重跑。
+  故障记录器受控触发（先清记录、再注入 0x08000000）：
+    清零后 g_fault_rec 全 0 ✓；s_ops.tec_sw=0x08000000（回读一致）✓；邮箱 estop 5 秒内无应答；5.8 秒检出复位、6.5 秒恢复运行；
+    复位后 s_ops.tec_sw 回到 0x08004E41；主控随即进入急停态（fan=100% alarm=0x0004 state=3），ack 后回零。
+    读出的记录：magic=0x54434641 PC=0x00000000 LR=0xFFFFFFE9 CFSR=0x00020000 HFSR=0x40000000 BFAR=0x00000000
+    → 不符合预期：注入的是 0x08000000，记录里的 PC 应当是 0x08000000，却是 0；CFSR=0x00020000 是 UNALIGNED，不是 INVSTATE(0x00010000)。
+    连同 11-25 19:30（注入 0x60000001：CFSR=0x00000100 = IBUSERR，PC 同样是 0）和这次，三次受控触发的记录 PC 全是 0。
+    → 记录器有缺陷，当场追查（见下一段）。
+    更正 C04 第十节的一处判读：那里把 CFSR=0x100 写成 INVSTATE，是 IBUSERR（取指总线错误）。
+
+  故障记录器缺陷的根因与修复（03:30–03:43，集成分支提交见 git log："HardFault 入口改成 naked 汇编…"）
+  追查过程：先给记录加字段（栈指针、栈内的 LR / xPSR、ICSR、SHCSR、FPCCR、序号），再触发三次（注入 0x08000000 / 0x60000001 / 0x00000001）。
+    三次的栈内 LR、xPSR、SP 一模一样（0x08007BFB / 0x2000081C / 0x2001FC20），可三个注入地址引起的故障完全不同——
+    说明这几个字根本不是硬件压进去的现场，是别处残留的数据。EXC_RETURN=0xFFFFFFE9 的含义是"回到线程模式、用 MSP、扩展帧"。
+  根因：本工程没有 RTOS，主循环用的就是 MSP；异常进入时硬件把被打断的现场压在 MSP 上。原处理函数是普通 C 函数，
+    一进来先 push 寄存器，之后才去读 MSP——读到的已经是压过寄存器的位置，于是记下的是处理函数自己压进去的东西。
+    （它按 EXC_RETURN 的 bit2 分 MSP / PSP 两条路，走的正是 MSP 那条。）
+  修法：入口改成 naked 汇编——先取 SP 与 EXC_RETURN，再尾调用 C 函数 hardfault_c(frame, lr)；记录逻辑不变，多留上面那几个字段和序号；
+    新增只读命令 fault，随时可以重打记录（原来只在上电时打进 RTT，事后读不到）。
+  修后同一套触发（判别性证据）：
+    注入 0x08000000 → PC=0x08000000（= 注入地址）stk_lr=0x0800A687（out_tec_sw 的调用者）xPSR=0x60000000（T 位=0：试图切到 ARM 态）
+                      CFSR=0x00020000（UNALIGNED）HFSR=0x40000000 SP=0x2001FC50 seq=1；固件自己的打印与探针读的一致
+    注入 0x60000001 → PC=0x60000000（= 注入地址，最低位是 Thumb 位）xPSR=0x610B0000（T 位=1）CFSR=0x00000100（IBUSERR）seq=2
+    注入 0x00000001 → 跳到地址 0 去执行（那是向量表，当指令执行是随机行为）：这一次没有复位、记录没有更新、屏没把急停发出去、
+                      邮箱也不再应答——执行垃圾代码后的不确定结果，不属于记录器的问题，如实记下。
+    每次触发后板子都在约 2 秒后自行复位并恢复运行；主控随即进入急停态（fan=100% alarm=0x0004 state=3），ack 后回零。
+    → X04-F-03 的关单条件"人为 HardFault，复位后能读出故障 PC"：屏端现在成立。掉电仍会丢（H743 没有不掉电的存储），这一点不变。
+  perf（M01-F-09 ①，台架档）：work avg=3224us max=96112us ovf=56 | touch max=0us | loop=1029 rate=93/s | up=11s
+                              win1s: n=90 p50=128us p99=65536us max=67654us over=5(budget 8000us)
+    → 1 秒窗口的直方图读数有了。刚复位后那 1 秒里 max 96ms 是开机首帧的整屏重绘。
+  邮箱 `m207 send <31 字符>` 与 `m207 send TC1:TCACTTEMP?`：两条都回 "?"，审计环记了 "m207 rv=-1"——我用的命令格式不对
+    （M07-F-10 的对象是 H743 控制台的 M207 下发队列），正确的写法没查到，待重跑。
+  曲线页：历史环 s_hist_n=49（不是 60）。原因是我自己的故障记录器测试在 02:40 让屏复位了一次，历史环从零重数，
+    到截图时只运行了 24.5 分钟。30 分钟满 60 点的截图仍没有。"点卡片进曲线页"的走查命令可用（页=2），截图 d5_chart_full.png。
+  诊断档运行 33 分钟后的 linkstat：rx_f=4044 crc=13 dup=3 retry=47 gap=3643ms echo=0 wdir=0。
+    crc=13 集中在哪个时刻没有时间戳（这 33 分钟里屏被烧录两次、复位一次），静置条件下的链路误码率要单独量一次。
+
+五、两端复位原因与运行时长（开头 / 结尾）
+  开头：ESP32 rst=11 up=5s（烧录后的正常复位）；H743 版本串 git=fddfe5745 loop=1106。
+  结尾：ESP32 rst=11 up=5s；H743 loop=4200。中间没有不明复位（屏的两次复位都是我自己烧录 / 受控触发）。
+
+六、没有做（如实）
+  1. 调参页量测、触摸强制恢复 ×20、`m207 send` 超长指令、满 30 分钟曲线：见第四节，工具或时序原因没做成，已改工具待重跑。
+  2. M207 保护状态（TCERRORSTATUS / TCOTPSTATUS）的真机读数：没有找到控制台取值命令。
+  3. l1 的 6 条待真机项里，这次只覆盖了 audit 回放与 perf 的 1 秒窗口；拔线日志、噪声注入、示波器测急停响应时序没做。
+  4. 真手指触摸、手机经热点开网页、TEC 相关真机路径。
+
+七、这次带出来的问题
+  1. 【已修并验证】HardFault 记录器读出的 PC 是残留数据（三次受控触发 PC 均为 0）：根因是处理函数先压栈再读 MSP。
+     已改成 naked 入口 + 尾调用；修后两次受控触发的 PC 都等于注入地址，固件自己的打印与探针读一致（见第四节）。
+     还没做的：迁移环（最近 8 条状态迁移）与"交付档 ELF 里必须有记录器"的正向门禁，见 docs/results/S_G_e3a_结果.md 第五节的方案。
+  2. 【缺口】M207 保护状态在真机上没有读取入口（服务每 60 秒轮询、应答不打日志、控制台没有取值命令）。e3a 整理"哪些位算故障"的清单需要这几个真机读数。
+  3. 【小】tools/build_bench.sh 是增量构建，版本串停留在上次 configure 时的提交号；台架档证据里的提交号要以构建时间 + 集成分支当时的位置为准，或者让这个脚本每次重新 configure。
+  4. 【小】M207 的开路保护上限：模块里是 120°C，我们的注册表初值是 100°C（m207_t1_rtoch）。两边不一致，目前不影响运行；哪边算对需要定（厂商默认值待查）。
+  5. 【待量】链路 CRC 计数在静置条件下是否增长。

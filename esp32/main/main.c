@@ -247,6 +247,8 @@ void app_main(void)
                      esp_err_to_name(lr), lr == ESP_OK ? "; image check failed" : "", param_count());
     }
     ESP_LOGI(TAG, "boot part=%s proj=%s ver=%s", run->label, desc->project_name, desc->version);
+    if (strcmp(desc->version, TCS_VER_STR) != 0)   /* X06-F-09：两处都来自 protocol/tcs_version.h，不该不一致 */
+        ESP_LOGE(TAG, "version mismatch: app=%s, protocol/tcs_version.h=" TCS_VER_STR, desc->version);
 
     svc_status_t svc;                       /* P1-12：服务启动结果汇总 */
     svc_init(&svc);

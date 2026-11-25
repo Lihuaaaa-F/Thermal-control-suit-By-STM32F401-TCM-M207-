@@ -64,6 +64,8 @@ fi
 
 # S-G e3a：分区表布局与现场故障证据配置的源码门禁（X04-F-03：coredump 分区 / 配置 / 现有偏移不变）
 python tests/check_layout.py || FAIL=1
+# S-G e3a：版本单一源（X06-F-09）——头文件可解析、CMake / 注册表都从它推导、没有第二处写死的版本号
+python ../tools/version_bump.py --check || FAIL=1
 
 [ $FAIL = 0 ] && echo "esp32-tests: ALL GREEN" || echo "esp32-tests: HAS FAILURES"
 exit $FAIL

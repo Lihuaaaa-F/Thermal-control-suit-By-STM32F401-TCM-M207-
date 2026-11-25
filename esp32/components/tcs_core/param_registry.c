@@ -41,7 +41,7 @@ tcs_state_t g_tcs = {
     .tc1_act = 0.0f, .tc2_act = 0.0f, .body_temp = 0.0f,
     .tec1_on = 0, .tec2_on = 0, .fan_on = 0, .mode = 0,
     .alarm_bits = 0, .m207_online = 0, .body_sensor_ok = 0,
-    .esp_link_ok = 0, .fw_ver = 0x010200u,   /* v1.2.0 BCD（第六阶段：触摸会话重写+UI 工艺）*/
+    .esp_link_ok = 0, .fw_ver = TCS_FW_VER_BCD,   /* 从 protocol/tcs_version.h 推导（X06-F-09；原先是手写的 0x010200）*/
 };
 
 /* ====== 参数表 v1（初值/[min,max]/step/flags 严格按任务书 §3.3 表）====== */

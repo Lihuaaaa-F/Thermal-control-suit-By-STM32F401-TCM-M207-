@@ -16,6 +16,7 @@
 
 #include <stdint.h>
 #include <stddef.h>
+#include "../../../protocol/tcs_version.h"   /* 版本唯一源（X06-F-09）：fw_ver 从它推导 */
 
 #ifdef __cplusplus
 extern "C" {

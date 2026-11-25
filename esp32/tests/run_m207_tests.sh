@@ -56,6 +56,9 @@ run m207core  tests/test_m207_core.c components/tcs_m207/m207_core.c components/
 # S-G e2（X03-F-07 / M12-F-08）：安全关断旁路（队列满也下一拍上线路、作废过期的开）、
 # 队列满计数、"保存到模块"32 条不丢
 run m207queue tests/test_m207_queue.c components/tcs_m207/m207_core.c components/tcs_m207/m207_proto.c components/tcs_core/control.c components/tcs_core/param_registry.c components/tcs_core/post_pure.c components/tcs_link/proto.c
+# S-G e2（M12-F-03 后半）：探测期 / 开机首联的等待窗里，任意合法 CMD:REPLY 都是链路活证据——
+# 两路传感器同时开路时链路仍回到 online，ALM_M207 可确认
+run m207link  tests/test_m207_link.c components/tcs_m207/m207_core.c components/tcs_m207/m207_proto.c components/tcs_core/control.c components/tcs_core/param_registry.c components/tcs_core/post_pure.c components/tcs_link/proto.c
 
 # U 线 W1：网页 WS 契约（st / log 消息，真实 cJSON）
 if [ -f "$CJSON_DIR/cJSON.c" ]; then

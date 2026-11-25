@@ -425,18 +425,47 @@ static void m207_handle_line(const char *line)
             } else {
                 pend_nak(p, "module rejected", (int)r.errcode);  /* 协议拒绝，重发无益 */
             }
-        } else if (s_waiting) {
-            /* 轴分离（R1b 修复）：CMD:REPLY 应答=链路双向活的证据，永不计 comm fail；
+        } else {
+            /* 没有在途设定事务：这条回码应答的是一条查询（轮询 / 离线探测 / 控制台 raw / 保存帧）。
+             * 轴分离（R1b 修复）：CMD:REPLY 应答=链路双向活的证据，永不计 comm fail；
              * errcode=2 等温度查询=参数族被固件隐藏=该通道传感器断线（FMEA F6）。 */
+            uint8_t qch = 0;                 /* 被应答的查询通道；0=没有查询在途 */
+            if (s_waiting) { qch = s_wait_ch; s_waiting = 0; }
+            else if (s_probing) qch = s_wait_ch;   /* 探测期：最近一条探测问的通道 */
+
+            if (!qch && (s_save_active || s_save_summary_due)) {
+                /* 保存序列进行中（或末帧应答窗内）。保存期间不发轮询，无事务的回码只会是
+                 * `!` 帧的应答：正典——可设参数保存 → 8；只读 / 不可存 → 3。 */
+                if (r.errcode == 8) {
+                    s_save_ack_ok++;
+                } else {
+                    s_save_ack_other++;
+                    M207_LOGW("save frame rejected: CMD:REPLY=%u", (unsigned)r.errcode);
+                }
+                return;
+            }
+            if (!qch) {
+                s_stat.unexpected++;     /* 没有查询在途的回码（注入 / 迟到）→ 留痕可见，不当链路证据 */
+                M207_LOGI("unexpected CMD:REPLY=%u (no poll wait)",
+                          (unsigned)r.errcode);
+                return;
+            }
+
             m207_pollerr_act_t a =
                 m207_classify_poll_errcode(r.errcode, 1, "TCACTTEMP");
-            s_waiting = 0;
             if (a == M207_POLLERR_SENSOR_OPEN) {
-                uint8_t ch = s_wait_ch;
+                uint8_t ch = qch;
                 if (ch >= 1 && ch <= 2) {
-                    /* 去抖：探测帧/console 帧的 =2 可能落进轮询等待窗被误归属，
-                     * 连续 ≥3 次才判断线（真拔线时每 500ms 一次，1.5s 内坐实）*/
-                    if (s_open_cnt[ch] < 255) s_open_cnt[ch]++;
+                    if (!s_online) {
+                        /* M12-F-03：链路还没建立（开机首联 / 离线探测），这条 =2 只可能是应答
+                         * 我们刚发的那一条查询——归属确定，立即坐实，不去抖。*/
+                        s_open_cnt[ch] = M207_OPEN_DEBOUNCE;
+                    } else if (s_open_cnt[ch] < 255) {
+                        /* 去抖：在线时 console / 探测帧的 =2 可能落进轮询等待窗被误归属，
+                         * 连续 ≥3 次才判断线。轮询 500ms 一拍、TC1/TC2 交替，
+                         * 同一通道 1s 才被问一次，所以从第一次 =2 到坐实 ≥2s（不是 1.5s）。*/
+                        s_open_cnt[ch]++;
+                    }
                     if (!s_ch_open[ch] && s_open_cnt[ch] >= M207_OPEN_DEBOUNCE) {
                         s_ch_open[ch] = 1;
                         /* M12-F-01：镜像到 g_tcs，让控制层按「温度源丢失」处理 */
@@ -449,21 +478,19 @@ static void m207_handle_line(const char *line)
             } else {
                 s_stat.unexpected++;   /* 链路活但应答语义意外 → 留痕取证 */
                 M207_LOGI("unexpected CMD:REPLY=%u (poll ch=%u)",
-                          (unsigned)r.errcode, (unsigned)s_wait_ch);
+                          (unsigned)r.errcode, (unsigned)qch);
             }
-        } else if (s_save_active || s_save_summary_due) {
-            /* 保存序列进行中（或末帧应答窗内）。保存期间不发轮询，无事务的回码只会是 `!` 帧的应答：
-             * 正典——可设参数保存 → 8；只读 / 不可存 → 3。 */
-            if (r.errcode == 8) {
-                s_save_ack_ok++;
-            } else {
-                s_save_ack_other++;
-                M207_LOGW("save frame rejected: CMD:REPLY=%u", (unsigned)r.errcode);
+            if (!s_online) {
+                /* M12-F-03（后半）：模块回了合法的 CMD:REPLY，就是"它收到了我们的帧并应答"
+                 * ——链路双向活。原来只在轮询等待窗里清等待，离线探测期只计 unexpected；
+                 * 于是两路传感器同时开路（模块只回 =2）时链路永远回不到 online，
+                 * ALM_M207 也就永远确认不掉。传感器开路另走 F6 位，不阻断链路恢复。*/
+                char why[48];
+                snprintf(why, sizeof why, "reply code=%u ch=%u",
+                         (unsigned)r.errcode, (unsigned)qch);
+                s_ever_online = 1;
+                m207_go_online(why);
             }
-        } else {
-            s_stat.unexpected++;         /* 无事务 ACK/注入回码 → 留痕可见 */
-            M207_LOGI("unexpected CMD:REPLY=%u (no poll wait)",
-                      (unsigned)r.errcode);
         }
         return;
     }
@@ -606,10 +633,13 @@ static const char *m207_fsm_poll(void)
         /* 离线/恢复：1s 探测，TC1/TC2 交替（M12-F-03）。
          * 原来只问 TC1：TC1 传感器开路时模块回 ERRCODE=2，链路永远回不到 online，
          * ALM_M207 也就永远 ack 不掉。任一通道能回温度即证明模块/链路活着；
-         * 单通道传感器开路由 s_ch_open/m207_sensor_open 单独表达（control 进 SAFE）。*/
+         * 单通道传感器开路由 s_ch_open/m207_sensor_open 单独表达（control 进 SAFE）。
+         * 两路都开路时模块只回 CMD:REPLY=2——那也是链路活的证据（M12-F-03 后半，
+         * 见 m207_handle_line）：上线，两通道标传感器开路。*/
         if (s_tick >= s_next_probe) {
             s_next_probe = s_tick + M207_PROBE_TICKS;
             s_probe_ch = (s_probe_ch == 1) ? 2u : 1u;
+            s_wait_ch = s_probe_ch;            /* M12-F-03：这条探测问的通道（回码归属用）*/
             snprintf(cmd, sizeof(cmd), "TC%u:TCACTTEMP?\r", (unsigned)s_probe_ch);
             return cmd;
         }

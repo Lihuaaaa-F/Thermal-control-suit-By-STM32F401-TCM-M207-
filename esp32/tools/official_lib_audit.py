@@ -209,6 +209,9 @@ def main():
                 b = 'C 测试脚本(网页前端逻辑, node)'
             elif '/mock/' in f:
                 b = 'C 素材/mock'
+            elif fn.endswith('.h.in'):
+                # CMake 头文件模板（configure_file 的输入），不是源文件：project_tcs/App/tcs/build_info.h.in
+                b = 'E 工程/构建配置(CMake/Keil/Cube/脚本)'
             elif fn.endswith(('.ninja_deps', '.ninja_log', 'build.ninja', '.log',
                               '.bin', '.elf', '.hex', '.map', '.o', '.yaml')):
                 b = 'C 构建产物/日志'

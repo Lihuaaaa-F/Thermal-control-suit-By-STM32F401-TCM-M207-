@@ -303,6 +303,7 @@ void app_main(void)
     }
     /* X04-F-07：上电时 NVS 读失败 / 镜像校验不过 → ALM_EEPROM（屏端与网页都有现成文案"参数校验失败"）。
      * 必须放在 control_init 之后：它会把报警位清零。首次上电不算。*/
+    if (registry_alarm) param_set_image_ok(0);   /* M09-F-06：镜像坏过，自动布防要先等一次成功落盘 */
     if (registry_alarm) tcs_alarm_raise(ALM_EEPROM);
     /* X04-F-03：随锁存落盘的报警位快照——上一轮出事时屏上 / 网页上亮着什么。只作证据，不回灌。*/
     {

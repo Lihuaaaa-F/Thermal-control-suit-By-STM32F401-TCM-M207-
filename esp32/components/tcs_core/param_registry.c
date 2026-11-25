@@ -191,6 +191,10 @@ static uint8_t  s_flush_armed;
 /* 模块侧受理结果（X02-F-05），与 s_params 同下标。不进 param_desc_t：那张表有 51 行位置初始化器，
  * 给结构体加字段会让每一行都报 -Wmissing-field-initializers。取值 param_apply_err()。*/
 static uint8_t  s_apply_err[PARAM_N_REGISTERED];
+/* 上电参数镜像是否完好（M09-F-06 的"可布防"条件之一）。初值 1：默认值自洽、首次上电不算坏；
+ * param_deserialize_ex() 有记录被拒 / 整份拒绝 → 0；之后一次成功落盘 → 1（存进去的镜像已是好的）；
+ * app_main 在 NVS 读失败时用 param_set_image_ok(0) 标坏。*/
+static uint8_t  s_image_ok = 1;
 
 /* ====== 基础 ====== */
 void param_registry_init(const param_hooks_t *h)
@@ -201,6 +205,7 @@ void param_registry_init(const param_hooks_t *h)
 #endif
     REG_LOCK();
     param_load_defaults();
+    s_image_ok = 1;
     memset(s_apply_err, 0, sizeof(s_apply_err));   /* X02-F-05：受理结果随注册表一起复位 */
     s_armed_at_ms = 0;
     s_flush_armed = 0;
@@ -381,10 +386,10 @@ int param_deserialize_ex(const uint8_t *img, int *skipped)
 {
     int nsk = 0;
     if (skipped) *skipped = 0;
-    if (img[0] != EE_MAGIC_V2 || img[1] != EE_LAYOUT_VER) return -1;
-    if (proto_crc8(img, EE_CRC_ADDR) != img[EE_CRC_ADDR]) return -1;
+    if (img[0] != EE_MAGIC_V2 || img[1] != EE_LAYOUT_VER) { s_image_ok = 0; return -1; }
+    if (proto_crc8(img, EE_CRC_ADDR) != img[EE_CRC_ADDR]) { s_image_ok = 0; return -1; }
     int n = img[2];
-    if (n > 30) return -1;
+    if (n > 30) { s_image_ok = 0; return -1; }
     param_load_defaults();               /* 先全默认，再用记录覆盖（缺记录=默认）*/
     const uint8_t *r = &img[4];
     for (int i = 0; i < n; i++, r += 8) {
@@ -413,6 +418,7 @@ int param_deserialize_ex(const uint8_t *img, int *skipped)
     int cross_bad = (param_get(PARAM_ID_BODY_COLD) >= param_get(PARAM_ID_BODY_HOT));
     if (cross_bad) param_load_defaults();
     if (skipped) *skipped = nsk + (cross_bad ? 1 : 0);
+    s_image_ok = (uint8_t)(cross_bad || nsk) ? 0u : 1u;   /* M09-F-06：有记录被拒 = 镜像不完好 */
     return cross_bad ? -1 : 0;
 }
 
@@ -440,6 +446,7 @@ static int persist_now_locked(void)
     for (int i = 0; i < PARAM_N_REGISTERED; i++) s_params[i].dirty_persist = 0;
     s_flush_armed = 0;
     s_armed_at_ms = 0;
+    s_image_ok = 1;                     /* 这次写进去的镜像是通过校验的值 */
     return 0;
 }
 
@@ -486,6 +493,9 @@ uint32_t param_persist_fail_count(void) { return s_persist_fail; }
 /* 上电恢复的结果要不要报 ALM_EEPROM（X04-F-07）。
  * load_not_found = NVS 里没有镜像（首次上电）；deser_ok = param_deserialize 的结果（读失败时传 0）。
  * 首次上电是正常现象，不报；读失败 / 镜像校验不过意味着用户的设定已经丢了，必须报。*/
+uint8_t param_boot_image_ok(void) { return s_image_ok; }
+void param_set_image_ok(uint8_t ok) { s_image_ok = ok ? 1u : 0u; }
+
 uint8_t param_restore_alarm_needed(uint8_t load_not_found, uint8_t deser_ok)
 {
     return (load_not_found || deser_ok) ? 0u : 1u;

@@ -145,6 +145,11 @@ MUTATIONS = [
        "        if (ty != p->type || !(p->flags & PF_PERSIST)) { continue; }")]),
     ("C55 跨参数失败只回退那一对", "param_registry.c",
      [("    if (cross_bad) param_load_defaults();", "    ;")]),
+    # ---- param_registry.c：上电镜像完好 = 自动布防的前置条件（M09-F-06）----
+    ("C56 镜像被拒仍算完好", "param_registry.c",
+     [("    s_image_ok = (uint8_t)(cross_bad || nsk) ? 0u : 1u;", "    s_image_ok = 1;")]),
+    ("C57 落盘成功后镜像不恢复为完好", "param_registry.c",
+     [("    s_image_ok = 1;                     /* 这次写进去的镜像是通过校验的值 */", "    ;")]),
 ]
 
 

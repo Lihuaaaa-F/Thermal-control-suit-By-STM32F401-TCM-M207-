@@ -58,7 +58,10 @@ static void post_step(uint32_t now)
                      !(g_tcs.alarm_bits & ALM_M207) &&
                      !(g_tcs.alarm_bits & ALM_SENSOR_OPEN)) ? 1u : 0u;
     uint8_t mode08 = (uint8_t)param_get(PARAM_ID_COMMISSIONED);
-    uint8_t post_pass = healthy;   /* ESP32 偏差：无 POST 电池，pass:=双源健康（R1.md）*/
+    /* M09-F-06：可布防 = 双源健康 **且** 上电参数镜像校验通过。ESP32 没有 H743 的六项 POST 电池，
+     * 以"镜像完好 + 双源健康"替代正典的"POST 过"（正典 0x08 那一行同提交注明）。
+     * 原先 post_pass := healthy：镜像损坏 / 版本不匹配的机器照样开启完整 FMEA 布防。*/
+    uint8_t post_pass = (uint8_t)(healthy && param_boot_image_ok());
     post_arm_t prev = post_arm_state();
     post_arm_t st = post_arm_step(&s_arm_ctx, mode08, post_pass, healthy, acked);
     post_arm_commit(st);

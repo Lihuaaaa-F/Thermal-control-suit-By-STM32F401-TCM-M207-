@@ -489,6 +489,28 @@ static void test_deserialize(void)
     CHECK(param_deserialize(bad) == -1, "V6 unknown version rejected");
     memcpy(bad, img, sizeof bad); bad[2] = 31; rec_fix_crc(bad);
     CHECK(param_deserialize(bad) == -1, "V6 too many records rejected");
+
+    /* G（M09-F-06）：上电镜像是否完好 = 自动布防的前置条件之一 */
+    param_registry_init(&(param_hooks_t){ .eeprom_commit = commit_stub });
+    CHECK(param_boot_image_ok() == 1, "G1 defaults / first boot count as an intact image");
+    (void)param_deserialize(bad);                    /* 上一条留下的坏 count 镜像 */
+    CHECK(param_boot_image_ok() == 0, "G2 a rejected image is not intact");
+    param_load_defaults();
+    (void)param_set(PARAM_ID_HYST, 0.5f, 4);
+    (void)param_serialize(img);
+    CHECK(param_deserialize(img) == 0 && param_boot_image_ok() == 1, "G3 a good image is intact");
+    o = rec_off(img, PARAM_ID_HYST);
+    img[o + 2] = PARAM_TYPE_U8;
+    rec_fix_crc(img);
+    (void)param_deserialize(img);
+    CHECK(param_boot_image_ok() == 0, "G4 an image with a rejected record is not intact");
+    param_set_image_ok(0);                           /* app_main：NVS 读失败 */
+    CHECK(param_boot_image_ok() == 0, "G5 app_main can mark the image bad");
+    s_commit_rc = 0;
+    (void)param_set(PARAM_ID_HYST, 0.6f, 4);
+    param_persist_flush(1000u);
+    param_persist_flush(1000u + PARAM_PERSIST_DEBOUNCE_MS);
+    CHECK(param_boot_image_ok() == 1, "G6 one successful save makes the stored image good again");
 }
 
 int main(void)

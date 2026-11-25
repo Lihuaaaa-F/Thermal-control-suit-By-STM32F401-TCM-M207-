@@ -145,6 +145,11 @@ int   param_persist_now(void);
 uint32_t param_persist_fail_count(void);   /* R1 P1-04：连续落盘失败次数 */
 /* X04-F-07：上电恢复后要不要报 ALM_EEPROM（首次上电不报；NVS 读失败 / 镜像校验不过要报）*/
 uint8_t param_restore_alarm_needed(uint8_t load_not_found, uint8_t deser_ok);
+/* 上电参数镜像是否完好（M09-F-06）：自动布防的前置条件之一（ESP32 没有 H743 的六项 POST 电池，
+ * 以"镜像完好 + 双源健康"替代"POST 过"）。默认值 / 首次上电 = 1；加载时有记录被拒 = 0；
+ * 之后一次成功落盘 = 1。param_set_image_ok() 供 app_main 在 NVS 读失败时标坏。*/
+uint8_t param_boot_image_ok(void);
+void    param_set_image_ok(uint8_t ok);
 
 /* 广播（param_set 内部已调；模式等非参数变更可手动调）*/
 void  param_broadcast(param_desc_t *p, uint8_t src);

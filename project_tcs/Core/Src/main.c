@@ -956,8 +956,9 @@ int main(void)
         comm_tick(&g_link);              /* 重传检查（主循环上下文）*/
 
 #ifdef ENABLE_LCD
-        tcs_lvgl_estop_watch();   /* D-L7② 屏入口兜底：先于 LVGL 的原始坐标判定 */
-        tcs_lvgl_poll();
+    ft5446_service();        /* S-G h1a（M02-F-01）：触摸链路掉线后每拍恢复一小步，不阻塞；在线时立即返回 */
+    tcs_lvgl_estop_watch();   /* D-L7② 屏入口兜底：先于 LVGL 的原始坐标判定 */
+    tcs_lvgl_poll();
 #endif
 #if TCS_H743_LINK_ONLY
         /* v2/AD-1（2026-11-19）：PROD=纯显示终端。本地 M207/TMP117/POST 在 v2 无机载外设，

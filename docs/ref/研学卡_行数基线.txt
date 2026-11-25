@@ -2,12 +2,12 @@
 # 口径：在 project_tcs/ 目录下执行 grep -rnE <模式> <目录列表> --include=*.c | wc -l
 # （=run_all 的 cwd；目录=App Core/Src），HEAD 实测 2026-10-27 终审整改后
 # UART 37→38（R2 自愈+1）→40（2026-10-30 v2 迁移重锚）
-研学卡_HAL_I2C;;App Core/Src;;HAL_I2C_;;10
+研学卡_HAL_I2C;;App Core/Src;;HAL_I2C_;;11   # S-G h1a(2026-11-25)：触摸掉线恢复里的 HAL_I2C_DeInit +1
 研学卡_HAL_UART;;App Core/Src;;HAL_UART_;;40
-研学卡_HAL_GPIO_EXTI;;App Core/Src;;HAL_GPIO_|HAL_EXTI_;;58
+研学卡_HAL_GPIO_EXTI;;App Core/Src;;HAL_GPIO_|HAL_EXTI_;;67   # S-G h1a(2026-11-25)：触摸清总线 / 两线电平预检（ft5446.c）+9
 # GPIO 54→58（2026-10-30 v2 迁移重锚：main/it/console 新增调用面）
 研学卡_HAL_LTDC;;App Core/Src;;HAL_LTDC_;;6
 研学卡_HAL_DMA2D;;App Core/Src;;DMA2D_;;1
-研学卡_HAL_PWR_RCC;;App Core/Src;;HAL_RCC_|HAL_PWR_;;59   # R1(2026-11-15)：pindrv/pinscan 改 HAL 时钟宏 +17
+研学卡_HAL_PWR_RCC;;App Core/Src;;HAL_RCC_|HAL_PWR_;;63   # R1(2026-11-15)：pindrv/pinscan 改 HAL 时钟宏 +17；S-G h1a(2026-11-25)：I2C4 外设复位 +2、GPIOD 时钟使能挪进引脚函数 +2
 # IWDG 28→29：G 合并后 App/lvgl_port/tcs_lvgl.c:203 注释引用 +1（2026-10-30 重锚）
 研学卡_HAL_IWDG;;App Core/Src;;IWDG;;32   # R1(2026-11-23)：P1-14 启动窗口补喂注释 +1（iwdg_refresh 调用本身为小写不计）

@@ -16,6 +16,14 @@
 #include <stdint.h>
 #include <stddef.h>
 
+/* 本头文件里有按构建档条件声明的接口（CONFIG_TCS_M207_SELFLOOP）。目标机上 sdkconfig.h 是经
+ * FreeRTOS 等头文件间接带进来的，而这个头文件在 m207_core.c 里排在最前——不显式包含的话，
+ * 头文件里的 #if 按"未定义=0"求值，声明被编掉，而文件后部的实现（那时 sdkconfig 已在）被编入：
+ * 默认档不出事，取证档（SELFLOOP=y）编译失败。主机构建没有 sdkconfig，宏按 0 求值。 */
+#ifdef ESP_PLATFORM
+#include "sdkconfig.h"
+#endif
+
 #ifdef __cplusplus
 extern "C" {
 #endif

@@ -358,7 +358,9 @@ else
         echo 'tests_prodlink.exe'
         echo 'exit /b %ERRORLEVEL%'
     } > build/prodlink_compile.bat
-    if cmd //c "build\\prodlink_compile.bat" > build/prodlink.log 2>&1; then :; else
+    if cmd //c "build\\prodlink_compile.bat" > build/prodlink.log 2>&1; then
+        echo "[prodlink] PASS（$(tail -1 build/prodlink.log)）"   # 成功也留一行：否则看不出这一段跑过
+    else
         echo "[prodlink] FAIL"; grep -a "FAIL" build/prodlink.log | head -20; FAIL=1
     fi
 fi

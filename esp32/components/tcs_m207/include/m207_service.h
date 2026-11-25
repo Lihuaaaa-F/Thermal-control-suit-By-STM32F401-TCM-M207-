@@ -60,6 +60,25 @@ void     m207_stats_queue(m207_qstats_t *out);       /* 一次取全 */
 uint16_t m207_stats_unexpected(void);                /* M12-F-14：控制台 perf 行用 */
 uint8_t  m207_save_busy(void);                       /* 1=保存序列进行中（此时再按"保存"应答 BUSY）*/
 
+/* ====== 模块自带保护状态（S-G e2：X04-F-05 ①）======
+ * 服务在线时每 60s 读一次 TCx:TCERRORSTATUS? 与 TCx:TCOTPSTATUS?（只读查询，排普通队列）；
+ * 复联后马上读一次。这里只做"如实取值"：不报警、不进 SAFE。
+ * 为什么不在这里接报警：TCERRORSTATUS 含上电锁存位，要模块断电重启才清；真机实录里 TC1 恒回
+ * 239 / 253（传感器开路 / 过压位锁存）。把它直接接成 SAFE，设备一上电就永久停机。
+ * 要不要、按哪些位、锁存位怎么对待，由 control 决定（批次 e3a）。*/
+typedef struct {
+    uint16_t errstat;      /* TC1/TC2:TCERRORSTATUS 原值（8 位：正常=1 故障=0）；0xFFFF=尚未取到 */
+    uint16_t otpstat;      /* TCx:TCOTPSTATUS 原值（极性未在真机核实，只透传）；0xFFFF=尚未取到 */
+    uint8_t  fault_mask;   /* = m207_errstat_fault_mask(errstat)；尚未取到时为 0 */
+    uint8_t  valid;        /* 1=本通道取到过至少一次 */
+    uint32_t age_ms;       /* 距最近一次取到的真实毫秒（掉线后继续增长）；0xFFFFFFFF=从未取到 */
+} m207_mod_status_t;
+int         m207_module_status(uint8_t ch, m207_mod_status_t *out);  /* 0=ok；-1=通道非法或 out 为空 */
+uint8_t     m207_errstat_fault_mask(uint16_t errstat);   /* 纯解码：(~errstat)&0x7F —— 置位=该位保护触发或锁存 */
+const char *m207_fault_bit_name(uint8_t bit);            /* bit0 external / 1 over-voltage / 2 over-current /
+                                                         * 3 over-temp / 4 sensor-open / 5 load-short / 6 load-open
+                                                         * （位义取自厂商帮助文件 tc_hlp.xml，未逐位上机核实）*/
+
 /* ====== 报警（F5：置位在服务内；清除走 tcs_alarm_ack 人工确认）====== */
 uint8_t m207_alarm_active(void);                     /* ALM_M207 位 */
 

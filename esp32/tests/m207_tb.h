@@ -56,6 +56,8 @@ static struct {
         float adj[3];           /* TCADJTEMP */
         int   sw[3];            /* TCSW */
         int   sw_stuck[3];      /* 1=该通道"关不动"：设定照回 REPLY=1，回读仍是原值 */
+        float errstat[3];     /* TCERRORSTATUS 原值：8 位，正常=1 故障=0；默认 255 全正常 */
+        float otpstat[3];     /* TCOTPSTATUS 原值 */
         float act[3];           /* TCACTTEMP 基值 */
         float ramp[3];          /* 每次应答的增量（造渐变到超温区，过的了合理性滤波）*/
         int   n[3];             /* 基值之外的小抖动计数 */
@@ -82,6 +84,8 @@ static void tb_reset(void)
     TB.m.present = 1;
     TB.m.act[1] = 25.0f; TB.m.act[2] = 24.0f;
     TB.m.adj[1] = 25.0f; TB.m.adj[2] = 25.0f;
+    TB.m.errstat[1] = TB.m.errstat[2] = 255.0f;
+    TB.m.otpstat[1] = TB.m.otpstat[2] = 1.0f;
     control_init(NULL);
 }
 
@@ -162,6 +166,16 @@ static void tb_mod_frame(const char *f)
         if (TB.m.reject_set || v > 80.0f || v < -20.0f) { tb_reply("CMD:REPLY=4\r"); return; }
         TB.m.adj[ch] = v;
         tb_reply("CMD:REPLY=1\r");
+        return;
+    }
+    if (ch && !strcmp(p, "TCERRORSTATUS?")) {
+        snprintf(line, sizeof line, "TC%d:TCERRORSTATUS=%.3f\r", ch, (double)TB.m.errstat[ch]);
+        tb_reply(line);
+        return;
+    }
+    if (ch && !strcmp(p, "TCOTPSTATUS?")) {
+        snprintf(line, sizeof line, "TC%d:TCOTPSTATUS=%.3f\r", ch, (double)TB.m.otpstat[ch]);
+        tb_reply(line);
         return;
     }
     if (ch && !strncmp(p, "TCSW=", 5)) {

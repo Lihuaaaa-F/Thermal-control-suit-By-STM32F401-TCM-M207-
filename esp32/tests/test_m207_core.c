@@ -35,8 +35,11 @@ static void test_boot_first_online(void)
     TB_CHECK(tb_tx_at(5, "TC1:TCSW?") && tb_tx_at(6, "TC2:TCSW?"),
              "resync: read back TCSW once per channel");
     tb_tick(); tb_tick();
-    TB_CHECK(tb_tx_at(7, "TC1:TCADJTEMP?") && tb_tx_at(8, "TC2:TCADJTEMP?") && TB.ntx == 9,
-             "resync: then TCADJTEMP? x2, nothing else");
+    TB_CHECK(tb_tx_at(7, "TC1:TCADJTEMP?") && tb_tx_at(8, "TC2:TCADJTEMP?"),
+             "resync: then TCADJTEMP? x2");
+    /* X04-F-05：复联后马上读一次模块自带保护状态（4 条只读查询，排普通队列）*/
+    TB_CHECK(tb_tx_at(9, "TC1:TCERRORSTATUS?") && TB.ntx == 10,
+             "then the first module-status query follows");
     /* 50ms 铁律：相邻两帧不同拍 */
     for (int i = 1; i < TB.ntx; i++)
         TB_CHECK(TB.tx[i].tick > TB.tx[i - 1].tick, "one frame per tick (50ms rule)");

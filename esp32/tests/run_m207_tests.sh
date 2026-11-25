@@ -73,6 +73,8 @@ run m207link  tests/test_m207_link.c components/tcs_m207/m207_core.c components/
 # S-G e2（M12-F-13 / M12-F-15）：上电回环自检的帧表与判定（主机可测）——过线帧只能是查询，
 # 不许带写命令；去抖时延由常量推算并钉住
 run m207lb tests/test_m207_lb.c components/tcs_m207/m207_core.c components/tcs_m207/m207_proto.c components/tcs_core/control.c components/tcs_core/param_registry.c components/tcs_core/post_pure.c components/tcs_link/proto.c
+# S-G e2（X04-F-05 ①）：模块自带保护状态的生产路径轮询与取值——如实可取、不报警不进 SAFE
+run m207status tests/test_m207_status.c components/tcs_m207/m207_core.c components/tcs_m207/m207_proto.c components/tcs_core/control.c components/tcs_core/param_registry.c components/tcs_core/post_pure.c components/tcs_link/proto.c
 
 # U 线 W1：网页 WS 契约（st / log 消息，真实 cJSON）
 if [ -f "$CJSON_DIR/cJSON.c" ]; then

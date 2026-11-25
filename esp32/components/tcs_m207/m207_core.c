@@ -66,6 +66,7 @@ static portMUX_TYPE s_qmux = portMUX_INITIALIZER_UNLOCKED;
 #define M207_PEND_MAX    4       /* 在途写确认事务（FIFO）*/
 #define M207_PERF_WIN    200u    /* perf 汇报窗 = 200 拍 = 10s */
 #define M207_SAVE_N      32u     /* "保存到模块"的帧数：TC1/TC2 各 16 个参数（映射表前 32 项）*/
+#define M207_STATUS_POLL_TICKS 1200u   /* 模块自带保护状态轮询：60s（X04-F-05 ①）*/
 #define M207_LINE_IDLE_MS 500u   /* M12-F-10：半行空闲超过这么久就丢弃（一行在 57600 下最长 11ms 到齐）*/
 
 /* ====== 队列消息（生产者：任意任务 API/内部；消费者：服务任务）====== */
@@ -133,6 +134,20 @@ static struct {
 } s_stat;
 static uint32_t s_txdrop;                /* 发送环满丢帧（服务出口报 -1 的次数）*/
 static uint8_t  s_perf_due;
+
+/* ====== 模块自带保护状态（X04-F-05 ①）======
+ * 在线时每 60s 读一次 TCx:TCERRORSTATUS? 与 TCx:TCOTPSTATUS?（只读查询，排普通队列），
+ * 原值入缓存、经 m207_module_status() 取值。只做"如实取值"：不报警、不进 SAFE。
+ * TCERRORSTATUS 含上电锁存位（要模块断电重启才清），真机实录里 TC1 恒回 239 / 253；
+ * 把它直接接成 SAFE，设备一上电就永久停机——接不接、按哪些位，由 control 决定（批次 e3a）。 */
+typedef struct {
+    uint16_t errstat;                     /* 原值；0xFFFF=尚未取到 */
+    uint16_t otpstat;                     /* 原值；0xFFFF=尚未取到 */
+    uint32_t ms;                          /* 最近一次取到的真实毫秒 */
+    uint8_t  valid;
+} m207_modst_t;
+static m207_modst_t s_modst[3];           /* [1]=TC1 [2]=TC2 */
+static uint32_t s_next_status_tick;       /* 下一次状态轮询的拍号；0=一上线就轮询 */
 
 /* ====== 安全关断旁路（X03-F-07）======
  * TCSW=0 不进普通队列：每通道一个单槽，最新值覆盖，下一拍优先上线路（排在重发与队列帧之前），
@@ -364,6 +379,7 @@ static void m207_go_online(const char *why)
     s_online = 1;
     g_tcs.m207_online = 1;
     M207_LOGI("online (%s)", why);
+    s_next_status_tick = 0;                /* X04-F-05：复联后马上读一次模块保护状态 */
     /* 复联重同步（E-08 预研）：目标温度只读回；TEC 该关的通道经安全关断旁路补发 TCSW=0
      * （X03-F-07：先于只读查询上线路，且自带一次回读确认），该开的通道只读回 TCSW?。
      * 不在这里开环恢复 TEC：模块侧是什么就镜像什么，要不要重开由 control 裁决。*/
@@ -403,6 +419,50 @@ static void m207_go_offline(void)
         s_stat.save_rej = (uint16_t)(s_stat.save_rej + s_save_ack_other);
     }
     s_next_probe = s_tick + M207_PROBE_TICKS;
+}
+
+/* ====== 模块保护状态：解码与取值（X04-F-05 ①）====== */
+uint8_t m207_errstat_fault_mask(uint16_t errstat)
+{
+    /* 厂商帮助文件（tc_hlp.xml）：8 位，正常=1 故障=0；bit0 外部 / bit1 过压 / bit2 过流 /
+     * bit3 过温 / bit4 传感器开路 / bit5 负载短路 / bit6 负载开路；bit7 不用（全正常时回 255）。 */
+    return (uint8_t)((~(uint32_t)errstat) & 0x7Fu);
+}
+
+const char *m207_fault_bit_name(uint8_t bit)
+{
+    static const char *const names[7] = {
+        "external", "over-voltage", "over-current", "over-temp",
+        "sensor-open", "load-short", "load-open",
+    };
+    return bit < 7 ? names[bit] : "?";
+}
+
+/* 把故障位拼成人话（如 "sensor-open|over-temp"）；buf 至少 96 字节 */
+static const char *m207_fault_names(uint8_t mask, char *buf, size_t cap)
+{
+    size_t o = 0;
+    buf[0] = '\0';
+    for (int b = 0; b < 7 && o + 2 < cap; b++)
+        if (mask & (1u << b)) {
+            int n = snprintf(buf + o, cap - o, "%s%s", o ? "|" : "", m207_fault_bit_name((uint8_t)b));
+            if (n < 0) break;
+            o += (size_t)n;
+        }
+    return buf;
+}
+
+int m207_module_status(uint8_t ch, m207_mod_status_t *out)
+{
+    const m207_modst_t *m;
+    if (!out || ch < 1 || ch > 2) return -1;
+    m = &s_modst[ch];
+    out->errstat = m->valid ? m->errstat : 0xFFFFu;
+    out->otpstat = m->valid ? m->otpstat : 0xFFFFu;
+    out->fault_mask = m->valid ? m207_errstat_fault_mask(m->errstat) : 0u;
+    out->valid = m->valid;
+    out->age_ms = m->valid ? (s_now_ms - m->ms) : 0xFFFFFFFFu;   /* 掉线后继续增长：旧值带龄可辨 */
+    return 0;
 }
 
 /* ====== 应答行处理 ====== */
@@ -570,6 +630,35 @@ static void m207_handle_line(const char *line)
     } else if (r.kind == M207_KIND_REPLY && strcmp(r.param, "TCSW") == 0) {
         if (r.module == 1) g_tcs.tec1_on = (r.value != 0.0f);
         else               g_tcs.tec2_on = (r.value != 0.0f);
+    } else if (r.kind == M207_KIND_REPLY &&
+               (strcmp(r.param, "TCERRORSTATUS") == 0 || strcmp(r.param, "TCOTPSTATUS") == 0)) {
+        /* 模块自带保护状态（X04-F-05 ①）：原值入缓存并留痕。不在这里报警、不进 SAFE。 */
+        m207_modst_t *m = &s_modst[r.module];
+        int is_err = strcmp(r.param, "TCERRORSTATUS") == 0;
+        if (!(r.value >= 0.0f && r.value <= 65535.0f)) {
+            s_stat.parse_err++;
+            M207_LOGW("module ch%u %s out of range (%.3f) — ignored",
+                      (unsigned)r.module, r.param, (double)r.value);
+        } else {
+            uint16_t v = (uint16_t)(r.value + 0.5f);
+            uint16_t prev = is_err ? m->errstat : m->otpstat;
+            if (is_err) m->errstat = v; else m->otpstat = v;
+            m->ms = s_now_ms;
+            m->valid = 1;
+            if (v != prev) {
+                uint8_t f = is_err ? m207_errstat_fault_mask(v) : 0u;
+                if (is_err && f) {
+                    char nb[96];
+                    M207_LOGW("module ch%u TCERRORSTATUS=%u fault-bits=0x%02X (%s) — "
+                              "reported only, NOT wired to SAFE",
+                              (unsigned)r.module, (unsigned)v, (unsigned)f,
+                              m207_fault_names(f, nb, sizeof nb));
+                    (void)nb;
+                } else {
+                    M207_LOGI("module ch%u %s=%u", (unsigned)r.module, r.param, (unsigned)v);
+                }
+            }
+        }
     } else if (r.kind == M207_KIND_REPLY && strcmp(r.param, "TCADJTEMP") == 0) {
         M207_LOGI("module TCADJTEMP ch=%u = %.2f (cache mirror at R5)",
                   (unsigned)r.module, (double)r.value);
@@ -753,6 +842,17 @@ static int m207_lane_step(void)
 static void m207_arbitrate(void)
 {
     m207_pend_t *rp = NULL;
+    /* 模块自带保护状态轮询（X04-F-05 ①）：每 60s 一次，在线、此刻没有轮询在等应答、
+     * 没有保存在进行时才排。4 条都是只读查询，走普通队列（排在重发之后，每拍一帧）。 */
+    if (s_online && !s_waiting && !s_save_active &&
+        (s_next_status_tick == 0u ||
+         (int32_t)(s_tick - s_next_status_tick) >= 0)) {
+        s_next_status_tick = s_tick + M207_STATUS_POLL_TICKS;
+        m207_enqueue_simple("TC1:TCERRORSTATUS?\r");
+        m207_enqueue_simple("TC2:TCERRORSTATUS?\r");
+        m207_enqueue_simple("TC1:TCOTPSTATUS?\r");
+        m207_enqueue_simple("TC2:TCOTPSTATUS?\r");
+    }
     for (int i = 0; i < M207_PEND_MAX; i++)
         if (s_pend[i].in_use && s_pend[i].resend_due) { rp = &s_pend[i]; break; }
     if (rp) {
@@ -893,6 +993,8 @@ void m207_core_init(const m207_core_io_t *io)
     memset(&s_stat, 0, sizeof(s_stat));
     s_txdrop = 0;
     s_perf_due = 0;
+    memset(s_modst, 0, sizeof(s_modst));
+    s_next_status_tick = 0;
     g_tcs.m207_online = 0;               /* 上电默认值 */
     g_tcs.m207_sensor_open = 0;
     s_started = 1;

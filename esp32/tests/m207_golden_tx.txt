@@ -7,6 +7,9 @@
 # 用途：任何改动之后，固件实际发出的帧必须仍然逐字节等于这里的内容（集合相等：
 #       少一条=某条帧发不出来了；多一条=线上出现了新格式，必须更新本文件并说明）。
 #       `!` 保存帧不在本文件里：抽取前的实现受队列容量限制发不全（M12-F-08），保存帧在用例里单独断言。
+# 更新（S-G e2，X04-F-05 ①，提交 G2）：多出 3 种帧——TC2:TCERRORSTATUS? / TC1:TCOTPSTATUS? /
+#   TC2:TCOTPSTATUS?。模块自带保护状态改为生产路径每 60s 读一次（TC1:TCERRORSTATUS? 原本就在表里，
+#   来自 send_raw）。都是只读查询，帧格式与既有查询相同。
 TC1:TCSW=0
 TC2:TCSW=0
 TC1:TCACTTEMP?
@@ -97,3 +100,6 @@ PCRS232:COMADDR?
 TC1:TCERRORSTATUS?
 TC1:TCSW=1@0#7D
 ABC
+TC2:TCERRORSTATUS?
+TC1:TCOTPSTATUS?
+TC2:TCOTPSTATUS?

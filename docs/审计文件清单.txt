@@ -61,6 +61,7 @@ esp32/tests/test_m207_lb.c
 esp32/tests/test_m207_link.c
 esp32/tests/test_m207_proto.c
 esp32/tests/test_m207_queue.c
+esp32/tests/test_m207_status.c
 esp32/tests/test_tcs_proto.c
 esp32/tests/test_tmp117_core.c
 esp32/tests/test_tmp117_pure.c

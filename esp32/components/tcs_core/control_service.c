@@ -21,7 +21,11 @@
 
 static TaskHandle_t s_task;
 static uint8_t s_started;
+/* M09-F-12 / X05-F-05（S 线 e3a）：停喂狗的注入口只在取证构建里存在。此前实现体无条件编译，
+ * 只是因为没人调用才被链接器丢掉；现在变量、使用点、函数与头文件声明四处同一个条件。*/
+#if CONFIG_TCS_R1E_PROBE
 static volatile uint8_t s_hang_test;   /* E-20：置 1 后本任务停喂狗（F12 注入口）*/
+#endif
 static uint32_t s_poll_max_us;      /* control_poll 段耗时峰值（预算 100µs）*/
 static uint32_t s_polls;
 static post_arm_ctx_t s_arm_ctx;    /* H6 布防三态机上下文 */
@@ -85,12 +89,20 @@ static void control_task(void *arg)
         int32_t dt = (int32_t)(esp_timer_get_time() - t0_us);
         if (dt > 0 && (uint32_t)dt > s_poll_max_us) s_poll_max_us = (uint32_t)dt;
         s_polls++;
-        if (!s_hang_test) esp_task_wdt_reset();   /* 100ms 间隙 <1s 铁律；E-20 停喂 */
+        /* 任务看门狗 CONFIG_ESP_TASK_WDT_TIMEOUT_S（本工程 3 s，PANIC=y：超时即 panic 复位）。
+         * 控制任务 100ms 一拍、每拍喂一次，离超时还有 30 倍余量。*/
+#if CONFIG_TCS_R1E_PROBE
+        if (!s_hang_test) esp_task_wdt_reset();   /* E-20：取证构建里置 1 后停喂，验证 TWDT 复位 */
+#else
+        esp_task_wdt_reset();
+#endif
     }
 }
 
 uint8_t control_service_armed(void) { return post_armed(); }
+#if CONFIG_TCS_R1E_PROBE
 void control_service_hang_test(uint8_t on) { s_hang_test = on; }
+#endif
 
 esp_err_t control_service_start(void)
 {

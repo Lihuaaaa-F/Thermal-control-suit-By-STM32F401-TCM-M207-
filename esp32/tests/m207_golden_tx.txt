@@ -103,3 +103,12 @@ ABC
 TC2:TCERRORSTATUS?
 TC1:TCOTPSTATUS?
 TC2:TCOTPSTATUS?
+#
+# 更新（m1 模式页，2026-11-26）：多出 4 种帧——TC1:TCACTVOL? / TC1:TCACTCUR? / TC2:TCACTVOL? /
+#   TC2:TCACTCUR?。"模式"页显示每路 TEC 的功率，在线时每秒问一遍这两条只读状态
+#   （厂商参数字典 TCx:TCACTVOL / TCx:TCACTCUR，真机 2026-11-26 实测模块认）。
+#   只借温度轮询的空档（应答窗早于下一次温度轮询结束），不占温度轮询的位置。
+TC1:TCACTVOL?
+TC1:TCACTCUR?
+TC2:TCACTVOL?
+TC2:TCACTCUR?

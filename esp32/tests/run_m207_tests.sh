@@ -84,6 +84,9 @@ run m207link  tests/test_m207_link.c components/tcs_m207/m207_core.c components/
 run m207lb tests/test_m207_lb.c components/tcs_m207/m207_core.c components/tcs_m207/m207_proto.c components/tcs_core/control.c components/tcs_core/control_manual.c components/tcs_core/param_registry.c components/tcs_core/post_pure.c components/tcs_link/proto.c
 # S-G e2（X04-F-05 ①）：模块自带保护状态的生产路径轮询与取值——如实可取、不报警不进 SAFE
 run m207status tests/test_m207_status.c components/tcs_m207/m207_core.c components/tcs_m207/m207_proto.c components/tcs_core/control.c components/tcs_core/control_manual.c components/tcs_core/param_registry.c components/tcs_core/post_pure.c components/tcs_link/proto.c
+# S-G m1（模式页，2026-11-26）：TCx:TCACTVOL? / TCx:TCACTCUR? 电学量轮询——正常值 / 负电压 / 负零、
+# 温度轮询节奏一步不让、模块不认（回码）或不应答三次即停、数据龄、复联重试、与别的帧交错不误归属
+run m207elec tests/test_m207_elec.c components/tcs_m207/m207_core.c components/tcs_m207/m207_proto.c components/tcs_core/control.c components/tcs_core/control_manual.c components/tcs_core/param_registry.c components/tcs_core/post_pure.c components/tcs_link/proto.c
 
 # S-G l1（2026-11-25）：R5-01 / R5-10 的 ESP32 侧用例——components/tcs_link/link_task.c 原样编译
 # （IDF / FreeRTOS 用 tests/host_stubs 里的桩，按诊断档），在虚拟时钟上跑一条时间线：

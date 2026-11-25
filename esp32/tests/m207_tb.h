@@ -67,6 +67,8 @@ static struct {
         tb_kv_t kv[64];         /* 其它参数：<名> → 最近设定值 */
         int   nkv;
         int   nreply;
+        float volt[3], cur[3];  /* m1（模式页）：TCACTVOL / TCACTCUR 的回值 */
+        int   elec_mode;        /* m1：0=正常回值 1=模块不认这两条（回 CMD:REPLY=2）2=不应答（超时）*/
     } m;
     /* selfloop 应答器语义：应答在"下一拍开头"才写出（m207_rsp_flush）*/
 } TB;
@@ -175,6 +177,16 @@ static void tb_mod_frame(const char *f)
     }
     if (ch && !strcmp(p, "TCOTPSTATUS?")) {
         snprintf(line, sizeof line, "TC%d:TCOTPSTATUS=%.3f\r", ch, (double)TB.m.otpstat[ch]);
+        tb_reply(line);
+        return;
+    }
+    /* m1（模式页）：电学量查询——正常回值（电压可为负、电流可回负零）/ 模块不认（=2）/ 不应答（超时）*/
+    if (ch && (!strcmp(p, "TCACTVOL?") || !strcmp(p, "TCACTCUR?"))) {
+        int is_cur = (p[5] == 'C');
+        if (TB.m.elec_mode == 2) return;
+        if (TB.m.elec_mode == 1) { tb_reply("CMD:REPLY=2\r"); return; }
+        snprintf(line, sizeof line, "TC%d:%.*s=%.3f\r", ch, (int)strlen(p) - 1, p,
+                 (double)(is_cur ? TB.m.cur[ch] : TB.m.volt[ch]));
         tb_reply(line);
         return;
     }

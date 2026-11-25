@@ -1,0 +1,96 @@
+S 线 C03 — 交付固件（两端都是 PROD 档）首次上机冒烟 — 证据
+日期：2026-11-25 11:50–13:20    记录方式：命令输出原样摘录；屏幕画面是探针读帧缓冲得到的 PNG。
+设备：调温服 v2 样机（H743 屏 + ESP32-S3 + M207）。体温探头没接（屏上显示"体温 失联"），风扇未装（只走固件路径）。
+固件：H743 PROD 档，集成分支 fix/s-u-int2 @ 341eeed；
+      ESP32 默认配置档（=交付档），@ 341eeed + 急停解除修复（提交 ffd8378，见第六节）。
+约束：不做任何驱动 TEC / 加热的操作；急停只走关断方向。
+
+一、烧录
+H743：bash tools/flash_lvgl.sh build-matrix/PROD/tcs_main.elf        （重写后的烧录脚本第一次在真机上完整跑通）
+  镜像 7472080 字节  md5=39c53477e0f8c0ee3ace2cb731b548ee
+  == 下载（probe-rs，擦写后自带校验）==  Finished in 54.70s
+  == 复位 ==
+  == 多点回读校验（Flash 内容对 ELF 的 bin）==
+    0x08000000  OK    0x08020000  OK    0x08040000  OK    0x08060000  OK    0x0806DF0C  OK
+  == 运行态核对（版本串 + 主循环计数）==
+  tcs v1.2.0 build=2026-11-25 03:53 git=341eeeddc params=v1(8+0x100resv) proto=v1
+  tc1=18.0 tc2=23.3 body=0.0 tec1=0 tec2=0 fan=0 mode=0 alarm=0x0000 m207=1 sensor=0 esp=1 ctrl=0 arm=0(0x08=0) loop=1364 drops=0
+  lrx=3875 snap=70 gapmax=376 gaplast=213
+  [flash] PASS
+  → 版本串里的提交号就是烧的那次提交（可复现构建生成的构建标识）；主循环在跑；与 ESP32 链路通；两路 TEC 关；手动；无报警。
+
+ESP32：idf.py -B build-matrix-default -D SDKCONFIG=sdkconfig.matrix.default -p COM3 -b 921600 flash
+  Chip is ESP32-S3 (QFN56) (revision v0.2)    MAC: 3c:0f:02:d6:a8:a0
+  Wrote 22224 bytes at 0x00000000 ... Hash of data verified.      （引导程序）
+  Wrote 1010208 bytes at 0x00020000 ... Hash of data verified.    （应用，占 3MB 分区 32%）
+  Wrote 3072 bytes at 0x00008000 ... Hash of data verified.       （分区表）
+  Wrote 8192 bytes at 0x0000f000 ... Hash of data verified.       （启动选择数据）
+  烧之前只读核对过启动选择数据区：两条记录 CRC 都无效 → 从第一个应用分区启动，正是烧录写入的位置。
+  启动后 status：
+  tc1=17.97 tc2=23.28 body=0.00(ok=0) fan=0% mode=0 m207=1 alarm=0x0000 armed=0 state=0 sim=0 latch=0x00 heap=8513892 up=70s rst=11
+  linkstat：link rx_b=16393 rx_f=362 crc=0 len=0 gap=130 dup=0 retry=10 txqdrop=3 uartdrop=0 echo=0 evict=0 verg=0
+  → M207 在线、手动、无报警、无锁存；链路在收帧，CRC 错 0、回声丢 0。gap / retry / txqdrop 的少量计数发生在烧录重启期间。
+
+二、固件身份核对（tools/mb_console.py 写 RAM 之前回读 Flash 对 ELF）——真机上的正反两个方向
+反向（板上还是另一份固件时，用新构建的 ELF 发命令）：
+  板上固件与 ELF 不是同一份，拒绝写入。
+    ELF：D:\Espressif\ws\tcs-int2\project_tcs\build-matrix\PROD\tcs_main.elf
+    回读 Flash 0x08000000：期望 20020000 08000D5D 080060C1 080060D1 …
+                        实得 20020000 08000D5D 080060ED 080060FD …
+  → 拒绝，退出码 1。这就是 2026-11-24 那次"按另一份 ELF 的地址往 RAM 写了 16 字节"本该被拦下的情形。
+正向（烧录后）：同一条命令放行，读到上面的版本串与 stat。
+又拦了一次（意外收获）：之后我跑了 ESP32 的构建矩阵，它会顺带把 H743 四档从零重建，磁盘上的 PROD ELF 换成了
+  带未提交改动的新构建（版本串多了 "-dirty"，后面的地址整体移位）。再用它发命令 → 再次"拒绝写入"；
+  flash_lvgl.sh --check-only 回读：前 3 点一致，后 2 点不一致。板上固件没变，是磁盘上的 ELF 变了。
+  → 新 ELF 的符号地址已经与板上的不同；没有这道核对，这次就会写错地址。
+
+三、交付档不含台架命令（逐条发送，看固件的回应）
+ESP32（经串口桥）：13 条全部 "Unrecognized command"：
+  body 36.5 / sim body 36.5 / linkmute 5 / linkloop 1 / webtest / webtest dump / m207 raw TC1:TCSW? /
+  mode 1 / tec 1 1 / fan 100 / gedge 2 100 / linkrepin / ltx
+  （烧录之前已经在二进制上核对过这些命令的帮助文本不存在，所以发送 tec / mode 不会真的驱动 TEC。）
+H743（邮箱控制台）：11 条回复 "?"（固件对不认识的命令的回应）：
+  wave / txwave / rxraw / pinscan / pindrv / pinrel / wdttest / mode / tec / fan / sim touch 100 100
+  更正一处：`p defaults Y` 在交付档里**仍能执行**，回复 "defaults restored+saved rv=1"。
+  它只把屏本地的参数镜像重置（下一帧镜像到达就被覆盖），保存必然失败，恢复不了 ESP32 里的参数。
+  2026-11-24 我在 tools/factory_reset.sh 的说明里写"得到的是 unknown command"，不对，已在该脚本里更正。
+
+四、首页（C03_交付固件_首页.png）
+  顶栏：● 手动 | ⚠ 体温传感器未连接 / 体温不显示 · 接好后自动恢复 | ● 主控已连接 | ● 模块在线
+  贴身水箱 18.0 °C · 停止 · 设定 5.0 °C      环境水箱 23.3 °C · 停止 · 设定 26.0 °C
+  体温 --.- °C · 失联                         风扇 已停止 · 关
+  底栏：调参 / 切自动 / 连接 / 急停（红色）
+  → 与 ESP32 status 读数一致（tc1=17.97 tc2=23.28，tc1_set=5.0）；没有任何调试叠层。
+
+五、急停 → 解除（关断方向；C03_交付固件_急停后.png、C03_交付固件_解除后.png）
+下发（ESP32 控制台 estop）：ESTOP: TCSW x0 + fan on + mode=manual + ALM_ESTOP (ack to clear)
+  ESP32：fan=100% mode=0 alarm=0x0004 state=3 latch=0x08
+  H743：tc1=18.0 tc2=23.3 tec1=0 tec2=0 fan=1 mode=0 alarm=0x0004 m207=1 … drops=0
+  屏幕：红色横幅"急停已触发 / TEC 已停 · 风扇全速 · 点击解除"；两路 TEC"停止"；风扇"运行中 / 开"；急停键灰色。
+解除（ack）：alarm=0x0000 state=0 latch=0x00 fan=0%
+  屏幕：急停键内 (790,482) 像素  平时 RGB565=0xD924（红）→ 急停后 0x9D15（灰）→ 解除后 0xD924（红）；
+        解除后整屏与急停前逐像素比对（抽样子像素）差异数 = 0。
+  → 用户点名的两件事在交付固件上成立：急停后按钮变灰；解除后回红。
+
+六、真机发现与处置：交付固件上急停解除不了（已修，提交 ffd8378）
+第一次做第五节时，ack 没有解除：回复 "ack: alarm=0x0004 armed=0 state=3"，状态不变。
+  根因：ESP32 的 safety_ack_latched() 清急停锁存要求"体温、模块、水温三个源全部恢复"，control_poll() 退出 SAFE
+  也要求体温源恢复。这台设备体温探头从开机起就不在（未布防），体温源永远不会恢复。锁存存在 NVS，重启也出不来。
+  以前没发现：R1 与 U 线在真机上验证"急停 → 确认解除"用的是现场档固件，可以注入假体温。
+  修法（按"其余按默认完成"的授权，已列入待决清单）：未布防时体温源不计入解除条件；已布防后探头丢了不受影响。
+  验证：主机用例 N1–N5 修前 7 条断言失败、修后全过；变异 M27–M30 全部被抓住；真机结果见下。
+  重启后锁存恢复（顺带验了 F05 的前半）：status → fan=100% alarm=0x0004 state=3 latch=0x08 up=35s
+  ack（修复后的固件）→ ack: alarm=0x0000 armed=0 state=3 → status：fan=0% alarm=0x0000 state=0 latch=0x00
+  再走一遍完整的急停 → 解除：结果即第五节。
+
+七、顺带看到的、还没处理的
+  1. 版本号不一致：H743 的版本串打印 "tcs v1.2.0"（来自快照里的 fw_ver 字段），而 ESP32 应用版本是 1.3.0-rc1。
+     归 e3 批次（审查条目 X06-F-09 版本单一源）。
+  2. H743 的 ver 里还写着 "params=v1(8+0x100resv)"，是 v1 时代的口径（现在注册表 50 条、真值在 ESP32）。同上。
+
+八、没有做（如实）
+  1. 交付固件上的触摸操作：交付档没有触摸注入钩子，冒烟里的急停是从 ESP32 控制台下发的，没有真手指按屏幕。
+  2. 屏幕上点横幅解除：同样需要触摸，没有做；它和 ESP32 控制台 ack 是同一个函数（本次修的）。
+  3. 网页（手机连热点）、二维码扫码、断电冷启动、改参后掉电保持。
+  4. 分区表删掉 www / user 之后在设备上的核对：烧录写入的分区表就是新的那一份（应用能正常启动并工作），
+     还没有把设备上的分区表读回来逐字节比对。

@@ -50,6 +50,9 @@ extern UART_HandleTypeDef huart_link;      /* USART2 */
 extern UART_HandleTypeDef huart_m207;      /* USART3（交付档不初始化，保持零值）*/
 extern I2C_HandleTypeDef  hi2c_tmp117;     /* I2C1（交付档不初始化，保持零值）*/
 
+/* 堆水位（syscalls_stub.c 的 _sbrk 维护）：开机以来堆最多用到过多少字节。只读遥测。*/
+extern volatile uint32_t g_heap_used_max;
+
 void Error_Handler(void);
 
 #ifdef __cplusplus

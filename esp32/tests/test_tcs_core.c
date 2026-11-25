@@ -12,9 +12,14 @@
 #include "boot_record.h"
 #include "nvs_store.h"
 #include "svc_status.h"
+#include "param_registry.h"
 
 static int g_pass, g_fail;
 
+/* param_registry.c 的 param_load_eeprom()（零调用死函数）引用的 NVS 桩：nvs_store.c 的读写段
+ * 在 ESP_PLATFORM 下才编译，主机上由测试提供同名符号（与 test_control_esp32.c 同款）。*/
+int eeprom_ready(void) { return 0; }
+int eeprom_read_image(uint8_t img[EE_IMG_SIZE]) { (void)img; return -1; }
 #define CHECK(cond, name) do { \
     if (cond) { g_pass++; } \
     else { g_fail++; printf("FAIL: %s (line %d)\n", name, __LINE__); fflush(stdout); } \
@@ -334,11 +339,59 @@ static void test_svc_status(void)
     }
 }
 
+/* ====== P：参数写入 param_set（X02-F-05 / M12-F-08 的 param_set 一半）======
+ * 模块服务没受理（离线 / 队列满 / 忙）时，"成功"只代表 RAM 注册表被改：原先钩子的返回值被丢，
+ * param_set 回 0，网页 / 屏幕都显示成功。现在经返回值上抛（2 = 已记录、模块没受理）。
+ * PF_M207 参数的同值重写原先被相等短路——模块离线时写过的值，用户重写同一个值正是为了补发。*/
+static int s_hook_rc, s_hook_calls, s_bcast;
+static uint16_t s_hook_id;
+static int hook_map(uint16_t pid, float v) { (void)v; s_hook_calls++; s_hook_id = pid; return s_hook_rc; }
+static int hook_set(uint8_t ch, float v)   { (void)v; s_hook_calls++; s_hook_id = ch; return s_hook_rc; }
+static void bcast_cnt(param_desc_t *p, uint8_t src) { (void)p; (void)src; s_bcast++; }
+
+static void test_param_set(void)
+{
+    int rv;
+    param_registry_init(&(param_hooks_t){ .on_m207_map_set = hook_map, .on_m207_set = hook_set,
+                                          .on_broadcast = bcast_cnt });
+    /* P1 模块离线（服务回 -2）：值进注册表、照常广播，但返回 2，apply_err 对回调可见 */
+    s_hook_rc = -2; s_hook_calls = 0; s_bcast = 0;
+    rv = param_set(0x103, 150.0f, PARAM_SRC_WEB);
+    CHECK(rv == 2 && param_get(0x103) == 150.0f, "P1 module did not take it: value stored, rv=2 (not 0)");
+    CHECK(s_hook_calls == 1 && s_bcast == 1, "P1 side effect attempted once, change broadcast once");
+    CHECK(param_apply_err(0x103) == 2, "P1 apply_err is visible to the broadcast callback (the receipt)");
+    /* P2 模块受理：返回 0 */
+    s_hook_rc = 0;
+    rv = param_set(0x103, 30.0f, PARAM_SRC_WEB);
+    CHECK(rv == 0 && param_apply_err(0x103) == 0, "P2 module accepted: rv=0");
+    /* P3 同值重写（M12-F-08）：补发给模块，不当作一次变更广播 */
+    s_hook_rc = -2;
+    (void)param_set(0x103, 20.0f, PARAM_SRC_CONSOLE);      /* 离线时写：注册表 20，模块还是旧值 */
+    s_hook_calls = 0; s_bcast = 0;
+    rv = param_set(0x103, 20.0f, PARAM_SRC_WEB);           /* 用户重写同一个值 */
+    CHECK(s_hook_calls == 1, "P3 same-value rewrite of an M207 param is re-sent to the module");
+    CHECK(s_bcast == 0, "P3 same-value rewrite is not broadcast as a change");
+    CHECK(rv == 2, "P3 rewrite while the module is away reports rv=2 (no fake success)");
+    s_hook_rc = 0;
+    rv = param_set(0x103, 20.0f, PARAM_SRC_WEB);
+    CHECK(rv == 0 && s_hook_calls == 2, "P3 rewrite once the module takes it: rv=0");
+    /* P4 非 M207 参数的同值写仍然短路（M05-F-19 的口径不变）*/
+    (void)param_set(PARAM_ID_HYST, 0.3f, PARAM_SRC_WEB);
+    s_bcast = 0;
+    rv = param_set(PARAM_ID_HYST, 0.3f, PARAM_SRC_WEB);
+    CHECK(rv == 0 && s_bcast == 0, "P4 non-M207 same-value write still short-circuits");
+    /* P5 老签名那一路（tc1_set / tc2_set）：同样把结果带回来 */
+    s_hook_rc = -1; s_hook_calls = 0; s_hook_id = 0;
+    rv = param_set(PARAM_ID_TC1_SET, 26.0f, PARAM_SRC_WEB);
+    CHECK(rv == 2 && s_hook_calls == 1 && s_hook_id == 1, "P5 setpoint path reports 'not taken' with the channel");
+}
+
 int main(void)
 {
     test_boot_record();
     test_safety_record();
     test_svc_status();
+    test_param_set();
     printf("test_tcs_core: PASS=%d FAIL=%d\n", g_pass, g_fail);
     return g_fail ? 1 : 0;
 }

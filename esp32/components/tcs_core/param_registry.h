@@ -96,8 +96,8 @@ extern tcs_state_t g_tcs;
 /* ====== 板级副作用注入（main 里装配；PC 测试不装=NULL 全跳过）====== */
 typedef struct {
     void (*on_broadcast)(param_desc_t *p, uint8_t src);
-    void (*on_m207_set)(uint8_t ch, float v);
-    void (*on_m207_map_set)(uint16_t pid, float v);  /* H10：0x100+ 映射表参数下发 */
+    int  (*on_m207_set)(uint8_t ch, float v);          /* 返回 0=模块服务已受理；非 0=没受理（离线 -2 / 队列满或忙 -1）*/
+    int  (*on_m207_map_set)(uint16_t pid, float v);    /* H10：0x100+ 映射表参数下发；返回值同上 */
     void (*on_mode_change)(uint8_t m);
     int  (*eeprom_commit)(const uint8_t *img);   /* 传整 256B 镜像（含 CRC），物理写 */
     uint8_t src_touch, src_console, src_web;     /* src 标记（回显来源用）*/
@@ -125,8 +125,14 @@ const param_desc_t *param_find_by_key(const char *key);
  * clamp→相等短路→写→置脏→广播→返回 0。
  * 返回：0=ok；1=clamp 生效（回显 clamp 后值）；-1=坏 id；-2=约束拒绝
  *      （body_cold<body_hot 强制：写任一侧校验另一侧，违反拒写）。
+ *      2 = 已记录、模块没受理（X02-F-05）：值进了注册表并已广播，但温控模块离线 / 忙——调用方不得
+ *          当成功显示（屏幕链路回 BUSY，网页回执 ok=0）。PF_M207 参数的同值重写不再被相等短路：
+ *          只补发模块、不广播（M12-F-08）。
  */
 int   param_set(uint16_t id, float v, uint8_t src);
+/* 最近一次写入里模块侧的结果（X02-F-05）：0=已受理 / 该参数没有模块侧效应；2=没受理（离线 / 忙）。
+ * 广播回调（网页回执）据此如实回执。与参数表分开存放，不进 param_desc_t。*/
+uint8_t param_apply_err(uint16_t id);
 float param_get(uint16_t id);
 
 /* 2s 防抖增量写 EEPROM：主循环节拍调用。有脏参且到点 → 序列化 → eeprom_commit。 */

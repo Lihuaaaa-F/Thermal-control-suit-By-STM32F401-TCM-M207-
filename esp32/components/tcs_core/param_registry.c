@@ -166,12 +166,16 @@ _Static_assert(sizeof(s_defaults) / sizeof(s_defaults[0]) ==
 static param_hooks_t s_hooks;
 static uint32_t s_armed_at_ms;    /* 首个脏参出现后由 flush 起算的 2s 防抖窗口 */
 static uint8_t  s_flush_armed;
+/* 模块侧受理结果（X02-F-05），与 s_params 同下标。不进 param_desc_t：那张表有 51 行位置初始化器，
+ * 给结构体加字段会让每一行都报 -Wmissing-field-initializers。取值 param_apply_err()。*/
+static uint8_t  s_apply_err[PARAM_N_REGISTERED];
 
 /* ====== 基础 ====== */
 void param_registry_init(const param_hooks_t *h)
 {
     if (h) s_hooks = *h;
     param_load_defaults();
+    memset(s_apply_err, 0, sizeof(s_apply_err));   /* X02-F-05：受理结果随注册表一起复位 */
     s_armed_at_ms = 0;
     s_flush_armed = 0;
 }
@@ -219,17 +223,24 @@ static float type_quantize(const param_desc_t *p, float v)
     return v;
 }
 
-static void side_effects(param_desc_t *p)
+/* 板级侧效应（X02-F-05 / M12-F-08）。返回 0 = 没有模块侧效应，或模块服务已受理；
+ * 2 = 模块服务没受理（离线 / 队列满 / 忙）：值已经写进注册表（注册表是唯一真值），模块上还是旧值。
+ * 结果同时留在 s_apply_err 上（取值 param_apply_err），广播回调（网页回执）据此如实回执。
+ * redo = 同值重写：只把值再下发一次模块，不改模式镜像、不置脏。*/
+static int side_effects(param_desc_t *p, uint8_t redo)
 {
+    int err = 0;
     if (p->flags & PF_M207) {
         if (p->id >= PARAM_ID_M207_BASE) {
             /* H10：映射表参数（0x100+）走通用模板通道 */
-            if (s_hooks.on_m207_map_set) s_hooks.on_m207_map_set(p->id, p->value);
+            if (s_hooks.on_m207_map_set) err = s_hooks.on_m207_map_set(p->id, p->value);
         } else {
             uint8_t ch = (p->id == PARAM_ID_TC1_SET) ? 1u : 2u;
-            if (s_hooks.on_m207_set) s_hooks.on_m207_set(ch, p->value);
+            if (s_hooks.on_m207_set) err = s_hooks.on_m207_set(ch, p->value);
         }
     }
+    s_apply_err[p - s_params] = (uint8_t)(err ? 2u : 0u);
+    if (redo) return err ? 2 : 0;
     if (p->id == PARAM_ID_MODE) {
         g_tcs.mode = (uint8_t)p->value;
         if (s_hooks.on_mode_change) s_hooks.on_mode_change((uint8_t)p->value);
@@ -238,6 +249,7 @@ static void side_effects(param_desc_t *p)
         p->dirty_persist = 1;
         s_flush_armed = 1;    /* 防抖窗口起点在首次 flush 调用时锁定 */
     }
+    return err ? 2 : 0;
 }
 
 int param_set(uint16_t id, float v, uint8_t src)
@@ -257,9 +269,12 @@ int param_set(uint16_t id, float v, uint8_t src)
     c = type_quantize(p, c);
     int clamped = (c != v);
 
-    /* 相等短路：值没变就什么都不做（R1 修复 M05-F-19：原来仍广播，与"变更即推"不符）*/
+    /* 相等短路：值没变就什么都不做（R1 修复 M05-F-19：原来仍广播，与"变更即推"不符）。
+     * 例外（M12-F-08）：PF_M207 参数的同值重写仍要下发模块——注册表与模块可能已经不一致
+     * （离线时写过 / 首次上电模块 EEPROM 是别的值），用户重写同一个值正是为了补发。只补发，不广播。*/
     if (c == p->value) {
-        return clamped ? 1 : 0;
+        if (!(p->flags & PF_M207)) return clamped ? 1 : 0;
+        return clamped ? 1 : side_effects(p, 1);
     }
 
     /* 跨参数约束：body_cold < body_hot（写任一侧校验另一侧，违反拒写）*/
@@ -270,9 +285,17 @@ int param_set(uint16_t id, float v, uint8_t src)
     if (s_hooks.on_check && s_hooks.on_check(p->id, c) != 0) return -2;
 
     p->value = c;
-    side_effects(p);
-    param_broadcast(p, src);
-    return clamped ? 1 : 0;
+    {
+        int se = side_effects(p, 0);     /* X02-F-05：模块没受理（2）要盖过"clamp 生效"（1），如实上报 */
+        param_broadcast(p, src);
+        return se ? se : (clamped ? 1 : 0);
+    }
+}
+
+uint8_t param_apply_err(uint16_t id)
+{
+    param_desc_t *p = param_find(id);
+    return p ? s_apply_err[p - s_params] : 0u;
 }
 
 /* ====== EEPROM v2 序列化（纯函数，PC 单测 §5.1）====== */

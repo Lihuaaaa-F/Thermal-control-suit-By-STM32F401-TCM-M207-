@@ -51,7 +51,7 @@ run tmp117pure tests/test_tmp117_pure.c    components/tcs_tmp117/tmp117_pure.c
 run tcsproto  tests/test_tcs_proto.c
 run control   tests/test_control_esp32.c   components/tcs_core/control.c components/tcs_core/param_registry.c components/tcs_core/post_pure.c components/tcs_link/proto.c
 # S-G e3a：tcs_core 里 control.c 之外的纯逻辑（上次运行记录、安全记录 v2，以及后面本批次补的参数用例）
-run tcscore   tests/test_tcs_core.c       components/tcs_core/boot_record.c components/tcs_core/nvs_store.c components/tcs_core/svc_status.c
+run tcscore   tests/test_tcs_core.c       components/tcs_core/boot_record.c components/tcs_core/nvs_store.c components/tcs_core/svc_status.c components/tcs_core/param_registry.c components/tcs_link/proto.c
 
 # U 线 W1：网页 WS 契约（st / log 消息，真实 cJSON）
 if [ -f "$CJSON_DIR/cJSON.c" ]; then

@@ -45,6 +45,11 @@ static const char *TAG = "TCS";
 /* control ops 适配（m207 API 返回 int，ops 签名 void；错误由服务内 NAK/重发计数承载）*/
 static void op_tec_sw(uint8_t ch, uint8_t on) { (void)m207_tec(ch, on); }
 static void op_tec_temp(uint8_t ch, float v) { (void)m207_set_temp(ch, v); }
+/* X02-F-05 / M12-F-08：参数钩子要把模块服务的结果带回来（离线 -2 / 队列满或忙 -1）。
+ * 原先接的是 tcs_m207 里的 void 包装（m207_hook_*），返回值在那里就被丢了。*/
+static int op_m207_set_temp(uint8_t ch, float v) { return m207_set_temp(ch, v); }
+static int op_m207_map_set(uint16_t pid, float v) { return m207_map_set(pid, v); }
+
 /* ====== WP-F.4 OTA：镜像实际长度（解析 image header/segments，避免整槽 3MB 拷贝）====== */
 static uint32_t ota_image_size(const esp_partition_t *p)
 {
@@ -179,7 +184,7 @@ static void esp_on_setparam(uint16_t id, float v, uint8_t seq)
     uint8_t st = TCS_ACK_OK;
     if (rv == 1) st = TCS_ACK_CLAMP;
     else if (rv == -1) st = TCS_ACK_BAD_ID;
-    else if (rv < 0) st = TCS_ACK_BUSY;
+    else if (rv < 0 || rv == 2) st = TCS_ACK_BUSY;   /* rv==2（X02-F-05）：值已记下，但模块没受理（离线 / 忙）——不回"成功" */
     ESP_LOGI(TAG, "H743 SET id=0x%02x v=%.2f rv=%d -> ack st=%u val=%.2f",
              id, v, rv, st, param_get(id));
     link_send_ack(seq, MT_TCS_SET_PARAM, st, param_get(id));
@@ -216,8 +221,8 @@ void app_main(void)
      * 链路/网页数据源切换在 R2，屏端语义不变。
      * R1b（v11.3）：PF_M207 写入口接 m207 服务（50ms 节流+写后读回）。 */
     param_hooks_t hooks = { .eeprom_commit = nvs_registry_commit,
-                            .on_m207_set = m207_hook_set_temp,
-                            .on_m207_map_set = m207_hook_map_set,
+                            .on_m207_set = op_m207_set_temp,
+                            .on_m207_map_set = op_m207_map_set,
                             .on_mode_change = control_on_mode_change,
                             .on_broadcast = esp_on_broadcast,
                             .on_check = control_param_check };   /* 急停/超温锁存期间不得切自动 */

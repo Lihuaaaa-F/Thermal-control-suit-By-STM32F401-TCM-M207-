@@ -24,7 +24,8 @@ ESP = os.path.dirname(HERE)
 CORE = os.path.join(ESP, "components", "tcs_core")
 VARS64 = r"C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Auxiliary\Build\vcvars64.bat"
 TEST = os.path.join(HERE, "test_tcs_core.c")
-SRC = ("boot_record.c", "nvs_store.c", "svc_status.c")
+SRC = ("boot_record.c", "nvs_store.c", "svc_status.c", "param_registry.c")
+EXTRA = (os.path.join(ESP, "components", "tcs_link", "proto.c"),)   # 不变异、但要一起链接的源
 
 # 每项：(名称, 源文件名, [(原文, 替换文), ...])
 MUTATIONS = [
@@ -107,6 +108,21 @@ MUTATIONS = [
      [('    { SVC_BIT_M207,    "m207"    },', '    { SVC_BIT_M207,    "ctrl"    },')]),
     ("C38 坏位也被登记", "svc_status.c",
      [("    if (!s || !bit || (bit & (bit - 1u)) || (bit & ~SVC_BIT_ALL)) return -1;", "    if (!s) return -1;")]),
+    # ---- param_registry.c：param_set 的侧效应结果上抛（X02-F-05 / M12-F-08）----
+    ("C40 模块没受理也回成功", "param_registry.c",
+     [("    return err ? 2 : 0;", "    return 0;")]),
+    ("C41 apply_err 不留给回调（回执只能说成功）", "param_registry.c",
+     [("    s_apply_err[p - s_params] = (uint8_t)(err ? 2u : 0u);", "    s_apply_err[p - s_params] = 0;")]),
+    ("C42 同值重写被相等短路（回到修前）", "param_registry.c",
+     [("        return clamped ? 1 : side_effects(p, 1);", "        return clamped ? 1 : 0;")]),
+    ("C43 同值重写补发后仍当作变更广播", "param_registry.c",
+     [("        return clamped ? 1 : side_effects(p, 1);",
+       "        { (void)side_effects(p, 1); param_broadcast(p, src); return 0; }")]),
+    ("C44 同值补发时模块没受理也回成功", "param_registry.c",
+     [("    if (redo) return err ? 2 : 0;", "    if (redo) return 0;")]),
+    ("D01 全部回退到修前写法（不上抛 + 同值短路）", "param_registry.c",
+     [("    return err ? 2 : 0;", "    return 0;"),
+      ("        return clamped ? 1 : side_effects(p, 1);", "        return clamped ? 1 : 0;")]),
 ]
 
 

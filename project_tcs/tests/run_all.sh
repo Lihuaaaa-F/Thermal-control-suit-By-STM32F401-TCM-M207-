@@ -363,6 +363,9 @@ else
     fi
 fi
 
+# S-G h1a（M01-F-08 / M02-F-05）：驱动层纯逻辑——_sbrk 堆上界、SDRAM 自检图样（故障注入）
+run drvpure     tests/test_drv_pure.c     Core/Src/ltdc.c
+
 echo "==================="
 if [ "$FAIL" = 0 ]; then echo "run_all: ALL GREEN"; else echo "run_all: HAS FAILURES"; fi
 exit $FAIL

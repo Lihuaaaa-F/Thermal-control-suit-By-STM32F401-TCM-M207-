@@ -5,19 +5,59 @@
  *   - SDRAM 时序：CAS2/刷新839/列9行13/ReadPipeDelay=1/ModeReg 0x0220（§2.2，抄 sdram.c）
  *   - SDRAM 引脚：FMC 全 AF12（GPIOC PIN0 / GPIOD 7pin / GPIOE 11pin / GPIOF 11pin /
  *     GPIOG 7pin / GPIOH 2pin，抄 HAL_SDRAM_MspInit 原文）
- *   - LTDC 时序：HSync=19/VSync=2/AccHBP=159/AccVBP=22/AccActiveW=1183/AccActiveH=621/
- *     TotalW=1343/TotalH=633（vfp=12，抄 ltdc.c 0x7016 分支）
+ *   - LTDC 时序：HSync=19/VSync=2/AccHBP=159/AccVBP=22/AccActiveW=1183/AccActiveH=622/
+ *     TotalW=1343/TotalHeigh=634（vfp=12，抄 ltdc.c 0x7016 分支；M02-F-09 勘正：旧注释写
+ *     621/633，比代码少 1）。像素时钟 50MHz ÷ (1344×635) = 58.59Hz，比 60Hz 低 2.3%，
+ *     在面板 ±5% 容差内。
  *   - LTDC 引脚：RGB 全 AF14（PA8=AF13），PCLK=PG7/HSYNC=PI10/VSYNC=PI9/DE=PF10，
  *     背光 PB5 推挽，复位 PD11（抄 HAL_LTDC_MspInit 原文）
  *   - PLL3：M25/N300/R6→PLL3R=50M 给 LTDC PCLK（抄 ltdc_clk_set，在 ltdc_init 开头配）
  *   - MPU：SDRAM 0xC0000000 区 Cacheable+Bufferable + SCB->CACR|=1<<2 write-through（§2.8，抄 mpu.c+sys.c）
- *   - DMA2D R2M：gfx_clear/gfx_fill_rect 抄 ltdc_fill 寄存器直写（§0C.2）
+ *   - 填充：CPU 写穿透 32 位 store（gfx_fill_rect）。DMA2D 没有启用——文件末尾"历史记录"
+ *     有本片的实测结论（M02-F-08：旧注释写"DMA2D R2M 加速"，与实现不符）
  *
  * 屏 = 1024×600 RGB565 纯 RGB 直驱（HX8282，ID=0x7016），不需 SPI/I2C 初始化命令。
+ *
+ * S-G h1a（2026-11-25）：
+ *   - 文件分两段：上段纯逻辑（SDRAM 自检图样，主机单测直接编译），下段硬件。
+ *   - SDRAM 自检读回前做 cache 维护，覆盖范围从 1MB 扩到两块帧缓冲 + LVGL 渲染块（M02-F-05）。
+ *   - PLL3 / 刷新率配置的 HAL 返回值要判（M02-F-11）。
+ *   - 直接写 LTDC 寄存器的地方集中到 ltdc_set_fb()；死函数 ltdc_show_buffer 已删
+ *     （M02-F-10 / X05-F-08）。
  */
+#ifdef TCS_UNIT_TEST
+/* ====== 纯逻辑段（PC 单测直接编译）：SDRAM 自检图样 ====== */
+#include <stdint.h>
+#define LCD_WIDTH        1024
+#define LCD_HEIGHT       600
+#define LCD_PIXELBYTES   2
+#define LCD_FBSIZE       (LCD_WIDTH * LCD_HEIGHT * LCD_PIXELBYTES)
+#else
 #include "ltdc.h"
 #include "segger_rtt.h"
 #include <string.h>
+#endif
+
+/* 自检覆盖范围 = 3 块帧缓冲大小的区域：front / back 两块帧缓冲，加上紧随其后的 LVGL 渲染块
+ * （App/lvgl_port/lv_port_disp.c 的 CHUNK_BUF，同样大小）。原来只测前 1MB——背缓冲和
+ * 渲染块根本没碰，而 LTDC 和 LVGL 每天都在用它们。*/
+#define SDRAM_SELFTEST_FRAMES  3u
+/* 每 4KB 取一个探测点（正好一条 32B cache line 的首地址）*/
+#define SDRAM_SELFTEST_STEP    0x1000u
+
+uint32_t sdram_selftest_span(void) { return (uint32_t)LCD_FBSIZE * SDRAM_SELFTEST_FRAMES; }
+uint32_t sdram_selftest_step(void) { return SDRAM_SELFTEST_STEP; }
+
+/* 第 k 个探测点（k = 0, 1, …, span/step-1）：字节偏移与期望值。
+ * 偏移 = 32 + k×4KB：开头 32 字节留给 16 字连续探测，第一个探测点紧跟其后，
+ * 最后一个落在范围末尾那 4KB 之内。
+ * 期望值 = k 的 16 位散列（奇数乘法，k < 2^16 内单射）：任何两个探测点的值都不一样，
+ * 地址线卡死把两点叠在一起时一定读得出矛盾。原来的 (偏移 & 0xFFFF) 每 64KB 重复一次，
+ * A16 及以上卡死时两点同值，查不出来（见 tests/test_drv_pure.c 的故障注入）。*/
+uint32_t sdram_probe_off(uint32_t k) { return 32u + k * SDRAM_SELFTEST_STEP; }
+uint16_t sdram_probe_val(uint32_t k) { return (uint16_t)(k * 40503u + 1u); }
+
+#ifndef TCS_UNIT_TEST
 
 /* ====== 全局句柄 ====== */
 static SDRAM_HandleTypeDef hsdram;
@@ -37,22 +77,25 @@ static uint16_t *s_back = LCD_BACK_BUF;
  * LTDC 寄存器经调试口读数不可靠——WP-C.5 实测恒 0）*/
 volatile uint32_t g_shown_fb = (uint32_t)LCD_BACK_BUF;
 
+/* G4：LVGL 侧查询渲染目标帧（LTDC 正扫描的那块）。
+ * 注意（X05-F-08）：这里原还有一个 ltdc_show_buffer()——"CFBAR+VBR 上屏"。它零调用点：
+ * LVGL 的 flush_cb（lv_port_disp.c）把像素直接 memcpy 进两块帧缓冲，不翻页。
+ * 已删；本工程里切帧缓冲的唯一入口是下面的 ltdc_set_fb()。*/
 #if TCS_USE_LVGL
-/* G4：LVGL DIRECT 双缓冲——渲染目标查询 + 指定缓冲上屏（CFBAR+VBR 重载，无撕裂） */
 uint16_t * ltdc_display_buffer(void) { return LCD_FRONT_BUF; }
-void ltdc_show_buffer(uint16_t * p)
-{
-    /* G4-Z21 闪频根因修复：VBR 重载在下一消隐期才生效，此前立即放行 LVGL 会把
-     * 下一帧渲染进「正在扫描的缓冲」（LVGL 16ms 与 LTDC 16.6ms 拍频使重叠周期性
-     * 出现）→ 撕裂带/闪频。修复=等 SRCR.VBR 硬件自清（RM0433：重载完成后清零）
-     * 作为会合点，保证放行时新缓冲必已上屏。有界等待防消隐期写入死等。 */
-    LTDC_Layer1->CFBAR = (uint32_t)p;
-    LTDC->SRCR = LTDC_SRCR_VBR;
-    uint32_t guard = 0;
-    while ((LTDC->SRCR & LTDC_SRCR_VBR) && ++guard < 2000000U) { }
-    g_shown_fb = (uint32_t)p;
-}
 #endif
+
+/* 唯一一处直接写 LTDC 寄存器的地方（M02-F-10）。
+ * 为什么不走 HAL：HAL_LTDC_SetAddress 不是"只改 CFBAR"——它经 LTDC_SetConfig 用句柄里的
+ * 图层参数重写整组图层寄存器（WHPCR/WVPCR/PFCR/DCCR/CFBAR/CFBLR/CFBLNR/CFCR），并触发
+ * 立即重载（IMR）；HAL_LTDC_Reload 还会打开重载中断 RRIE，而本工程没有 LTDC 中断处理。
+ * 这里要的只是"消隐期把 CFBAR 换成另一块帧缓冲"，两条写就够了。*/
+static void ltdc_set_fb(const uint16_t *fb)
+{
+    LTDC_Layer1->CFBAR = (uint32_t)fb;
+    LTDC->SRCR = LTDC_SRCR_VBR;   /* 垂直消隐期重载，防撕裂 */
+    g_shown_fb = (uint32_t)fb;
+}
 
 /* ====== 内置 8×16 ASCII 字库（ASCII 0x20-0x7E）======
  * 16 行 × 8 位，每字节一行（bit7=最左像素）。仅含可见 ASCII。*/
@@ -101,7 +144,7 @@ static void mpu_dcache_init(void)
 /* ===================================================================== */
 /* 抄官方例程 ltdc.c ltdc_clk_set（M25/N300/P2/Q2/R6 → PLL3R=50M）。
  * H743 经 HAL_RCCEx_PeriphCLKConfig(RCC_PERIPHCLK_LTDC) 内部自动接 PLL3R 给 LTDC。*/
-static void ltdc_clk_set(void)
+static int ltdc_clk_set(void)
 {
     RCC_PeriphCLKInitTypeDef p = {0};
     p.PeriphClockSelection = RCC_PERIPHCLK_LTDC;
@@ -110,7 +153,9 @@ static void ltdc_clk_set(void)
     p.PLL3.PLL3P = 2;
     p.PLL3.PLL3Q = 2;
     p.PLL3.PLL3R = 6;       /* VCO=25/25*300=300M, /6=50M 给 LTDC PCLK */
-    HAL_RCCEx_PeriphCLKConfig(&p);
+    /* 返回值要判（M02-F-11）：PLL3 参数被 HAL 拒绝（VCO 范围/时钟源/等锁超时）时像素时钟
+     * 就不是 50MHz——黑屏或帧率不对，而初始化原来照样报成功。0=成功。*/
+    return (HAL_RCCEx_PeriphCLKConfig(&p) == HAL_OK) ? 0 : -1;
 }
 
 /* ===================================================================== */
@@ -169,24 +214,37 @@ static int sdram_init(void)
     sdcmd.ModeRegisterDefinition = 0x0220;
     if (HAL_SDRAM_SendCommand(&hsdram, &sdcmd, 100) != HAL_OK) return -1;
 
-    /* 刷新率计数器=839（64ms/8192行，SDCLK=110M）*/
-    HAL_SDRAM_ProgramRefreshRate(&hsdram, 839);
+    /* 刷新率计数器=839（64ms/8192行，SDCLK=110M）。返回值要判（M02-F-11）：没写进去 =
+     * 刷新周期不对，高温下显存丢数据/花屏，而初始化原来照样报成功。*/
+    if (HAL_SDRAM_ProgramRefreshRate(&hsdram, 839) != HAL_OK) return -1;
 
     return 0;
 }
 
+/* 自检：写 → cache 维护 → 读回。返回 1=通 0=不通。
+ * 覆盖范围与图样见文件开头的纯逻辑段（M02-F-05）。*/
 int sdram_selftest(void)
 {
     volatile uint16_t *p = (volatile uint16_t *)SDRAM_BASE_ADDR;
-    /* 写 0xAA00+i 到前 16 地址再读回 */
-    for (int i = 0; i < 16; i++) p[i] = (uint16_t)(0xAA00 + i);
-    for (int i = 0; i < 16; i++) {
+    const uint32_t n = sdram_selftest_span() / sdram_selftest_step();
+
+    /* 1. 开头 16 个连续地址：写 0xAA00+i */
+    for (uint32_t i = 0; i < 16; i++) p[i] = (uint16_t)(0xAA00 + i);
+    /* 2. 步进图样：整个显示区（两块帧缓冲 + LVGL 渲染块）每 4KB 一个点 */
+    for (uint32_t k = 0; k < n; k++) p[sdram_probe_off(k) / 2u] = sdram_probe_val(k);
+
+    /* 读回之前做 cache 维护：SDRAM 区是 Cacheable 的，刚写过的行还留在 D-Cache 里，
+     * 紧接着读回读到的是 cache——SDRAM 数据线/地址线坏了也查不出来，LTDC 拿到的却是
+     * 物理显存里的错像素。clean+invalidate 之后下面的读才真正走 FMC。
+     * （现在靠 CACR 强制写透，clean 是空操作；留着，不依赖那一位。）*/
+    SCB_CleanInvalidateDCache_by_Addr((uint32_t *)SDRAM_BASE_ADDR, (int32_t)sdram_selftest_span());
+
+    /* 3. 读回 */
+    for (uint32_t i = 0; i < 16; i++) {
         if (p[i] != (uint16_t)(0xAA00 + i)) return 0;
     }
-    /* 写递增模式到大范围验证地址线 */
-    for (uint32_t i = 0; i < 0x100000; i += 0x1000) p[i] = (uint16_t)(i & 0xFFFF);
-    for (uint32_t i = 0; i < 0x100000; i += 0x1000) {
-        if (p[i] != (uint16_t)(i & 0xFFFF)) return 0;
+    for (uint32_t k = 0; k < n; k++) {
+        if (p[sdram_probe_off(k) / 2u] != sdram_probe_val(k)) return 0;
     }
     return 1;
 }
@@ -195,8 +253,10 @@ int sdram_selftest(void)
 /*                            LTDC 初始化                                */
 /* ===================================================================== */
 /* 时序照抄官方例程 ltdc.c 0x7016 分支（§2.3 原文，vfp=12）：
- *   HSync=19/VSync=2/AccHBP=159/AccVBP=22/AccActiveW=1183/AccActiveH=621/
- *   TotalW=1343/TotalH=633，极性全 AL+IPC */
+ *   HSync=19/VSync=2/AccHBP=159/AccVBP=22/AccActiveW=1183/AccActiveH=622/
+ *   TotalW=1343/TotalHeigh=634，极性全 AL+IPC
+ * （M02-F-09：旧注释写 AccActiveH=621/TotalH=633，比下面的表达式少 1。
+ *   LCD_HEIGHT=600 → 3+20+600-1=622、3+20+600+12-1=634；HAL 写寄存器时各 +1。）*/
 static int ltdc_hw_init(void)
 {
     LTDC_LayerCfgTypeDef layer = {0};
@@ -213,9 +273,9 @@ static int ltdc_hw_init(void)
     hltdc.Init.AccumulatedHBP   = 20 + 140 - 1;  /* =159 */
     hltdc.Init.AccumulatedVBP   = 3 + 20 - 1;    /* =22 */
     hltdc.Init.AccumulatedActiveW = 20 + 140 + LCD_WIDTH - 1;   /* =1183 */
-    hltdc.Init.AccumulatedActiveH = 3 + 20 + LCD_HEIGHT - 1;    /* =621 (vfp=12) */
+    hltdc.Init.AccumulatedActiveH = 3 + 20 + LCD_HEIGHT - 1;    /* =622 (vfp=12) */
     hltdc.Init.TotalWidth       = 20 + 140 + LCD_WIDTH + 160 - 1;  /* =1343 */
-    hltdc.Init.TotalHeigh       = 3 + 20 + LCD_HEIGHT + 12 - 1;    /* =633 (vfp=12) */
+    hltdc.Init.TotalHeigh       = 3 + 20 + LCD_HEIGHT + 12 - 1;    /* =634 (vfp=12) */
     hltdc.Init.Backcolor.Red    = 0;
     hltdc.Init.Backcolor.Green  = 0;
     hltdc.Init.Backcolor.Blue   = 0;
@@ -249,7 +309,10 @@ int ltdc_init(void)
     mpu_dcache_init();
     SEGGER_RTT_WriteString("RTT: mpu+d-cache write-through ok\n");
 
-    ltdc_clk_set();   /* PLL3 → LTDC PCLK=50M */
+    if (ltdc_clk_set() != 0) {          /* PLL3 → LTDC PCLK=50M；失败就不往下点屏 */
+        SEGGER_RTT_WriteString("RTT: pll3 ltdc FAIL (HAL_RCCEx_PeriphCLKConfig rejected)\n");
+        return -4;
+    }
     SEGGER_RTT_WriteString("RTT: pll3 ltdc pclk=50M ok\n");
 
     if (sdram_init() != 0) {
@@ -526,10 +589,9 @@ void gfx_flip(void)
     if (!g_lcd_ok) return;
     /* WP-C.5 真双缓冲：CFBAR 指向刚画完的缓冲 + 垂直消隐期重载（零拷贝、无撕裂）。
      * 原 memcpy 版 1.2MB 写穿透实测 ~100ms/次，是"UI 全屏 ≤25ms"预算的元凶；
-     * flip 后 s_back 指向旧帧（=屏上上一帧），脏区增量重绘语义不变。*/
-    LTDC_Layer1->CFBAR = (uint32_t)s_back;
-    LTDC->SRCR = LTDC_SRCR_VBR;   /* 垂直消隐期重载，防撕裂 */
-    g_shown_fb = (uint32_t)s_back;
+     * flip 后 s_back 指向旧帧（=屏上上一帧），脏区增量重绘语义不变。
+     * 现在只有 ltdc_init 上电清屏时调两次（两块帧缓冲各清一次再切过去）。*/
+    ltdc_set_fb(s_back);
     s_back = (s_back == LCD_FRONT_BUF) ? LCD_BACK_BUF : LCD_FRONT_BUF;
 }
 
@@ -590,4 +652,7 @@ void gfx_sync_rect(int x0, int y0, int x1, int y1)
  *  - 单次多行 R2M（scrtest raw 实验）会挂死系统总线（LTDC 同时在跑时），
  *    主循环假死由 IWDG 复位救回；
  *  - DMA2D M2M 同样 +32px/行，且小搬运 ~18µs/次开销不可接受。
- *  → 显示写路径全部改 CPU 写穿透（gfx_fill_rect）+ CFBAR 乒乓（gfx_flip）。*/
+ *  → 显示写路径全部改 CPU 写穿透（gfx_fill_rect）+ CFBAR 乒乓（ltdc_set_fb）。
+ *  现在全工程对 DMA2D 只有 MspInit 里一处时钟使能，没有任何一次传输调用。*/
+
+#endif /* !TCS_UNIT_TEST */

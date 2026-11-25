@@ -6,7 +6,7 @@
 研学卡_HAL_UART;;App Core/Src;;HAL_UART_;;40
 研学卡_HAL_GPIO_EXTI;;App Core/Src;;HAL_GPIO_|HAL_EXTI_;;67   # S-G h1a(2026-11-25)：触摸清总线 / 两线电平预检（ft5446.c）+9
 # GPIO 54→58（2026-10-30 v2 迁移重锚：main/it/console 新增调用面）
-研学卡_HAL_LTDC;;App Core/Src;;HAL_LTDC_;;6
+研学卡_HAL_LTDC;;App Core/Src;;HAL_LTDC_;;8   # S-G h1a(2026-11-25)：ltdc_set_fb 的说明引用 HAL_LTDC_SetAddress/Reload +2（调用数不变）
 研学卡_HAL_DMA2D;;App Core/Src;;DMA2D_;;1
 研学卡_HAL_PWR_RCC;;App Core/Src;;HAL_RCC_|HAL_PWR_;;63   # R1(2026-11-15)：pindrv/pinscan 改 HAL 时钟宏 +17；S-G h1a(2026-11-25)：I2C4 外设复位 +2、GPIOD 时钟使能挪进引脚函数 +2
 # IWDG 28→29：G 合并后 App/lvgl_port/tcs_lvgl.c:203 注释引用 +1（2026-10-30 重锚）

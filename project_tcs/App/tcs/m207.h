@@ -84,6 +84,8 @@ typedef struct {
 /* 模板格式化（纯函数）：`TC{ch}:{cmd}=%.{}f\r`。返回 0=ok，-1=cap 不足/表项非法 */
 int m207_map_format(const m207_map_entry_t *e, float v, char *out, size_t cap);
 
+/* ====== 目标机驱动（TCS_UNIT_TEST 下不编译）====== */
+
 /* 原始指令透传（console 调试期专用，BENCH 及以上）。指令原样入队，需要结尾的 \r 由调用方带上。
  * 返回 0 = 已入队（还没发出：目标机上 m207_poll 每 50ms 送一条，应答见日志）；
  * -1 = 空指令 / NULL / 队列满；-2 = 指令超过 M207_CMD_MAX 字符——不入队、不截断（M07-F-10）。
@@ -91,7 +93,6 @@ int m207_map_format(const m207_map_entry_t *e, float v, char *out, size_t cap);
  * （tests/test_m207_txq.c），所以放在下面的目标机驱动段之外。*/
 int m207_send_raw(const char *cmd);
 
-/* ====== 目标机驱动（TCS_UNIT_TEST 下不编译）====== */
 #ifndef TCS_UNIT_TEST
 
 #include "stm32h7xx_hal.h"

@@ -1196,6 +1196,29 @@ int main(void)
               "P9-6 after reconnect the off is still pushed every 500ms");
     }
 
+    /* ====== 2026-11-26 S 线 e3a（X03-F-08）：命令意图 ≠ 模块回显 ======
+     * g_tcs.tec1_on 原先一个字段两种语义：控制写命令意图，M207 服务回 TCSW? 时写回显。
+     * 现在命令意图另有取值接口 control_tec_cmd()（只有 out_tec_sw 写），卡死判据读它。*/
+    {
+        enter_auto_healthy();
+        (void)param_set(PARAM_ID_MODE, 0.0f, 4);
+        tick();
+        control_manual_tec(1, 1);
+        CHECK(control_tec_cmd(1) == 1 && control_tec_act(1) == 1, "K18 precondition: command on, echo on");
+        g_tcs.tec1_on = 0;                            /* 晚到的回显：模块回的是"关" */
+        CHECK(control_tec_cmd(1) == 1 && control_tec_act(1) == 0,
+              "K18 command intent and module echo are two different quantities");
+        g_tcs.tc1_act = 30.0f; tick();                /* 喂进第一个水温样本 */
+        for (int i = 0; i < 299; i++) tick100();
+        CHECK(control_state() == CTRL_IDLE, "K18 no trip before the window");
+        tick100();
+        CHECK(control_state() == CTRL_SAFE && (control_safety_latched() & SAFETY_BIT_STUCK) != 0,
+              "K18 a late 'off' echo cannot hide a frozen water reading while TC1 is commanded on");
+        /* 关断后两个量一致：都是"关" */
+        control_manual_tec(2, 1);                     /* SAFE 期被拒 */
+        CHECK(control_tec_cmd(2) == 0 && control_tec_act(2) == 0, "K18 in SAFE both channels read off");
+    }
+
     /* ====== 2026-11-26 S 线 e3a（X06-F-03）：5 条 P0 安全路径的判别性用例 ======
      * 审查指出"超温用例只断言报警位"。每条 P0 配一句直接断言执行器与状态的话；"回退则红"由
      * tests/mutation_control.py 的 M47–M50 给出（把修复回退成修前写法，必须被抓住）。

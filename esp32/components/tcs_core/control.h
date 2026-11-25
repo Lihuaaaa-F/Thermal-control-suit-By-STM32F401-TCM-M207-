@@ -102,6 +102,11 @@ uint8_t control_safety_latched(void);           /* 非 0 = 仍在安全锁存 */
  * 0 = 未知——离线期间 g_tcs.tec*_on 只是本端的命令意图，执行器实际状态无从得知，
  * 快照 / 界面不得把它显示成"已关"。g_tcs.tec_known 是它的缓存副本（每拍刷新，最多晚一拍）。*/
 uint8_t control_tec_known(void);
+/* 命令意图（只有控制写）与模块回显（M207 服务写）分开取（X03-F-08）：
+ * control_tec_cmd() = 控制要 TEC 开关是什么；control_tec_act() = 模块上次回显的 TCSW。两者可以不一致
+ * （回显晚到 / 模块离线期间的旧值），"复联判据""卡死判据"读 cmd，界面要显示"实际"读 act。*/
+uint8_t control_tec_cmd(uint8_t ch);
+uint8_t control_tec_act(uint8_t ch);
 /* N-01：设备服务层（M207 解析等）可直接置安全锁存——超温切断不得只依赖 control 任务存活。*/
 void    control_safety_trip(uint8_t bit);
 

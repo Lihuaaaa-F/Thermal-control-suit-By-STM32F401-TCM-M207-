@@ -135,8 +135,11 @@ MUTATIONS = [
      [("        body_stuck = (uint8_t)(g_tcs.mode != 0 && (s_state == CTRL_HEAT || s_state == CTRL_COOL)",
        "        body_stuck = (uint8_t)(commissioned() && g_tcs.mode != 0 && (s_state == CTRL_HEAT || s_state == CTRL_COOL)")], ""),
     ("M34 水温卡死不看 TEC 是否开着",
-     [("        tc1_stuck  = (uint8_t)(g_tcs.tec1_on && stuck_is(&s_stuck_tc1, now_ms, s_tec_on_since[0]));",
+     [("        tc1_stuck  = (uint8_t)(s_tec_cmd_on[0] && stuck_is(&s_stuck_tc1, now_ms, s_tec_on_since[0]));",
        "        tc1_stuck  = (uint8_t)(m207_src_ok && stuck_is(&s_stuck_tc1, now_ms, now_ms - CTRL_STUCK_WINDOW_MS));")], ""),
+    ("M51 卡死判据读模块回显（晚到的“关”回显会掩盖卡死；X03-F-08）",
+     [("        tc1_stuck  = (uint8_t)(s_tec_cmd_on[0] && stuck_is(&s_stuck_tc1, now_ms, s_tec_on_since[0]));",
+       "        tc1_stuck  = (uint8_t)(g_tcs.tec1_on && stuck_is(&s_stuck_tc1, now_ms, s_tec_on_since[0]));")], ""),
     ("M35 卡死窗口不把 TEC 开沿算在内（读数冻够了立刻判）",
      [("    if (!c->last_change || stuck_live(c, now_ms) || !on_since) return 0;",
        "    if (!c->last_change || stuck_live(c, now_ms)) return 0;"),
@@ -276,6 +279,11 @@ def main():
     if "control_tec_known" not in old:
         old += ("\n/* mutation_control.py: 基线没有 control_tec_known，为链接补上 */\n"
                 "uint8_t control_tec_known(void) { return 0x03u; }\n")
+    # S 线 e3a（X03-F-08）：命令 / 回显取值接口；桩回到修前的口径（两者都是那个混用字段）
+    if "control_tec_cmd" not in old:
+        old += ("\n/* mutation_control.py: 基线没有 control_tec_cmd / control_tec_act，为链接补上 */\n"
+                "uint8_t control_tec_cmd(uint8_t ch) { (void)ch; return g_tcs.tec1_on; }\n"
+                "uint8_t control_tec_act(uint8_t ch) { (void)ch; return g_tcs.tec1_on; }\n")
     ok, out, rc = compile_run(old)
     if ok:
         fl = fails_of(out)

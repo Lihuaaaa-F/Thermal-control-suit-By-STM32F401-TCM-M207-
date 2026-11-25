@@ -102,7 +102,7 @@ typedef struct {
 static stuck_src_t s_stuck_body, s_stuck_tc1;
 static volatile uint8_t s_stuck_chn;   /* 本轮 STUCK 锁存由谁引起：bit0=体温 bit1=水温（随锁存位一起清）*/
 static uint32_t   s_tec_on_since[2];   /* TCx 有效命令最近一次 0→1 的时间（out_tec_sw 里记）*/
-static uint8_t    s_tec_cmd_on[2];
+static uint8_t    s_tec_cmd_on[2];       /* TEC 命令意图（只有 out_tec_sw 写；取值 control_tec_cmd，X03-F-08）*/
 static uint32_t   s_poll_now_ms;       /* 最近一拍的时间戳：out_tec_sw 在拍外被调时用它给 TEC 开沿计时*/
 
 static void stuck_feed(stuck_src_t *c, float v, uint32_t now_ms, uint8_t src_ok)
@@ -263,6 +263,14 @@ static uint8_t tec_known_now(void)
 }
 
 uint8_t control_tec_known(void) { return tec_known_now(); }
+
+/* 命令意图与模块回显是两个量（X03-F-08）。此前只有 g_tcs.tecN_on 一个字段：控制写命令意图，
+ * M207 服务在回 TCSW? 时写模块回显——"控制已判定关闭、执行器实际还开着"时它说哪个都不对。
+ *   control_tec_cmd()：命令意图，只有 out_tec_sw() 写（锁存期间被压成 0 的"开"也算"关"）。
+ *   control_tec_act()：模块回显 = g_tcs.tecN_on（M207 服务写；e2 把回显挪到独立字段之前两者共用）。
+ * 复联判据（m207_go_online 里"命令是关就补发 TCSW=0"）应当读 cmd；快照两个字段都带是 tcs_snap.c 的事。*/
+uint8_t control_tec_cmd(uint8_t ch) { return (ch == 2) ? s_tec_cmd_on[1] : s_tec_cmd_on[0]; }
+uint8_t control_tec_act(uint8_t ch) { return (ch == 2) ? (g_tcs.tec2_on ? 1u : 0u) : (g_tcs.tec1_on ? 1u : 0u); }
 
 static void out_tec_temp(uint8_t ch, float v)
 {
@@ -630,7 +638,7 @@ void control_poll(uint32_t now_ms)
         uint8_t tc1_stuck, body_stuck, stuck_chn;
         stuck_feed(&s_stuck_body, g_tcs.body_temp, now_ms, g_tcs.body_sensor_ok);
         stuck_feed(&s_stuck_tc1, g_tcs.tc1_act, now_ms, m207_src_ok);
-        tc1_stuck  = (uint8_t)(g_tcs.tec1_on && stuck_is(&s_stuck_tc1, now_ms, s_tec_on_since[0]));
+        tc1_stuck  = (uint8_t)(s_tec_cmd_on[0] && stuck_is(&s_stuck_tc1, now_ms, s_tec_on_since[0]));   /* X03-F-08：读命令意图，不读回显 */
         body_stuck = (uint8_t)(g_tcs.mode != 0 && (s_state == CTRL_HEAT || s_state == CTRL_COOL)
                                && stuck_is(&s_stuck_body, now_ms, s_tec_on_since[0]));
         if (tc1_stuck || body_stuck) {

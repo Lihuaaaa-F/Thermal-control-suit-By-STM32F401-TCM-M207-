@@ -408,7 +408,10 @@ static void cmd_exec(char *line)
         return;
     }
 #endif /* TCS_PROFILE >= 1: wave / rxraw / pinscan */
-    /* --- ee：EEPROM 镜像现场重读+校验（诊断）--- */
+#if TCS_PROFILE >= 1
+    /* --- ee：EEPROM 镜像现场重读+校验（诊断）。只在台架及以上（S-G l1，2026-11-25）：
+     * 交付档的屏不初始化本地 EEPROM（参数真值在主控），这条命令在交付档上恒回 "ee offline"，
+     * 是误导——现在交付档回 "?"，实现体不编译。--- */
     if (strcmp(argv[0], "ee") == 0) {
         extern int eeprom_ready(void);
         extern int eeprom_read_image(uint8_t img[EE_IMG_SIZE]);
@@ -422,6 +425,7 @@ static void cmd_exec(char *line)
                    ? "VALID" : "INVALID");
         return;
     }
+#endif /* TCS_PROFILE >= 1: ee */
     /* --- post：六项自检结果 + 布防三态（H6）--- */
     if (strcmp(argv[0], "post") == 0) {
         if (argc >= 2 && strcmp(argv[1], "badge") == 0) {
@@ -487,6 +491,15 @@ static void cmd_exec(char *line)
             else              printf("bad id\n");
             return;
         }
+#if TCS_PROFILE >= 1
+        /* p save / p defaults：只在台架及以上（S-G l1，2026-11-25，交付固件上机时发现）。
+         * 交付档的屏是纯显示终端：参数真值在主控（NVS），本机既不读也不写参数区。
+         * 原来这两条在交付档也在——`p defaults Y` 回 "defaults restored+saved rv=1"，
+         * 实际只把屏本地的参数镜像重置了一下（下一帧快照 / 镜像就盖回去），保存必然失败；
+         * `p save` 回 "save rv=1"，其实什么都没保存。回复是误导性的，交付档现在回 "?"。
+         * 实现体与声明之外的调用点（param_persist_now / param_persist_all）仍被注册表自己引用，
+         * 这里只是不让交付档够得着它们。要"经链路让主控恢复默认"是另一件事：需要新的协议消息、
+         * 主控侧处理与二次确认，不在本批次。*/
         if (strcmp(argv[1], "save") == 0) {
             int rv = param_persist_now();
             printf("save rv=%d\n", rv);
@@ -502,6 +515,7 @@ static void cmd_exec(char *line)
             }
             return;
         }
+#endif /* TCS_PROFILE >= 1: p save / p defaults */
     }
 #if TCS_PROFILE >= 1
     /* --- 控制命令（与 UI 同路径；BENCH 档：手动直控会绕过网页/屏的权威链）--- */

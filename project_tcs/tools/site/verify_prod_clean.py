@@ -42,6 +42,17 @@ H743_SYMBOL_PREFIXES = {"LVGL demos": ["lv_demo_", "lvgl_demo"]}   # 只查"不�
 # ---- H743：PROD 档不该有的控制台命令名。只查 .rodata 里 NUL 分隔的字符串字面量 ----
 H743_CMDS = ["txwave", "pindrv", "pinrel", "pinscan", "wdttest", "rxraw", "wave"]
 
+# ---- H743：PROD 档不该有的回复文本（S-G l1，2026-11-25：审查 C03-新发现、M01-F-05 残余）。
+# 交付档上这些命令只回 "?"，实现体不编译，所以它们的回复文本 / 日志标签不得再出现在产物里。
+# 按子串查；--expect-hooks 时反过来看它们在台架档里还在（证明本工具查得出来）。----
+H743_STRINGS = {
+    "p defaults（交付档没有本地参数真值，恢复默认只会动屏的镜像、保存必然失败）":
+        ["defaults restored+saved", "confirm: p defaults"],
+    "p save（交付档不做本地持久化，真值在主控）": ["save rv="],
+    "ee（交付档没有本地 EEPROM，恒回 offline）": ["ee offline"],
+    "TEMP-DIAG2 首帧取证日志（M01-F-05）：上电往控制台打 [R8] / [A1..A4]": ["[R8]", "[A1]"],
+}
+
 # ---- ESP32：键 → (说明, 帮助文本里独有的片段)。bin 里没有符号表，只能查文本 ----
 ESP32_STRINGS = {
     "linkmute": ("链路静默；SIM 或 DIAG 档", ["linkmute"]),
@@ -122,6 +133,12 @@ def check_h743(elf, expect):
         present = any(t == c.encode() or t.endswith(c.encode()) for t in strs)
         if present != expect:
             bad.append("  [台架控制台命令] 命令名 \"%s\"：%s" % (c, "在" if present else "不在"))
+    # 回复文本按子串查（S-G l1）：这些命令在交付档只回 "?"，回复文本本身就是实现体还在的证据。
+    for why, needles in H743_STRINGS.items():
+        hit = sorted(n for n in needles if any(n.encode() in t for t in strs))
+        present = bool(hit)
+        if present != expect:
+            bad.append("  [%s] 回复文本 %s：%s" % (why, hit or needles, "在" if present else "不在"))
     return bad
 
 

@@ -255,7 +255,10 @@ static void link_rx_drain(void)
         g_dbg_rx_ring[g_dbg_rx_pos & 63u] = b;
         g_dbg_rx_pos++;
 #endif
-        /* TEMP-DIAG2（2026-10-30）：原始首 8 字节 + 首 0xAA 帧 32 字节取证 */
+#if TCS_PROFILE >= 1
+        /* TEMP-DIAG2（2026-10-30）：原始首 8 字节 + 首 0xAA 帧 32 字节取证。
+         * M01-F-05 残余（2026-11-25，S-G l1）：这是取证用的实现体，此前三档都编译——交付档每次上电
+         * 都往控制台 / RTT 打一行 [R8] 和四行 [A1..A4]。与 wave / txwave / rxraw 同一个条件。*/
         {
             static uint8_t raw8[8]; static int rn; static int rdone;
             static uint8_t win[32]; static int wl; static int wdone;
@@ -276,6 +279,7 @@ static void link_rx_drain(void)
                 }
             }
         }
+#endif /* TCS_PROFILE >= 1：TEMP-DIAG2 首帧取证日志 */
 
         const uint8_t *pl; size_t plen; int dup;
         if (comm_rx_feed_byte(&g_link, b, &pl, &plen, &dup)) {

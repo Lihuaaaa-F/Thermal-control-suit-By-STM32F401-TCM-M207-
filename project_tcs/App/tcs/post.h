@@ -109,7 +109,12 @@ uint32_t   post_done_mask(void);          /* bit i = item i 已裁决 */
 /* 角标显示控制（UI 读）：0=未开始 1=显示中 2=已淡出 */
 uint8_t    post_badge_state(void);
 void       post_badge_reshow(uint32_t ms);     /* 重显 ms 毫秒（console post badge [ms]，默认/0=3s；取证/彩排用）*/
-void       post_sim_fail_item(uint8_t item);   /* TCS_SIM：强制单项 FAIL（演示/取证）*/
+#ifdef TCS_SIM
+/* 强制单项 FAIL（演示/取证）。只给 TCS_SIM 构建的 `sim post fail <0-5>` 用——调用点在
+ * console.c 的同一个 TCS_SIM 块里。声明、实现、调用三处同一个条件（X05-F-05 的 H743 部分：
+ * 原来只有调用点带开关，声明和实现不带，交付档里只是因为没人调用才被链接器丢掉）。*/
+void       post_sim_fail_item(uint8_t item);
+#endif
 
 #endif /* !TCS_UNIT_TEST */
 

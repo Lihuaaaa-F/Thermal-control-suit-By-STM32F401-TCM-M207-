@@ -198,6 +198,8 @@ uint32_t post_done_mask(void)
     return m;
 }
 
+#ifdef TCS_SIM
+/* 只在 TCS_SIM 构建：唯一的调用者是 console.c 里同样带 TCS_SIM 的 `sim post fail`。*/
 void post_sim_fail_item(uint8_t item)
 {
     if (item < POST_ITEM_N) {
@@ -205,6 +207,7 @@ void post_sim_fail_item(uint8_t item)
         SEGGER_RTT_printf(0, "[SIM] post item %d forced FAIL\n", item);
     }
 }
+#endif
 
 /* 重显自检角标（console `post badge [ms]`；彩排/出厂复查/取证用。0=默认 3s）*/
 void post_badge_reshow(uint32_t ms)

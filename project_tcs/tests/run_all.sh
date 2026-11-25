@@ -381,6 +381,11 @@ else
     echo "[mut-txq] FAIL"; grep -a "活下来\|编译失败\|锚点\|FAIL" build/mut_txq.log | head -12; FAIL=1
 fi
 
+# S-G l1（2026-11-25）：M03-F-04——屏上急停入口不被主循环里的阻塞型工作挡住。这条入口的时序没法在主机上测
+# （要触摸、要屏），用源码门禁钉住两件事：主循环最先看屏急停入口（在 comm_poll_tx / console_poll 之前）；
+# console.c / main.c 里每个循环体不为空的 while 循环要么体内让位（console_estop_yield），要么登记了例外。
+if [ -n "$PYBIN" ] && PYTHONUTF8=1 "$PYBIN" -X utf8 tests/check_estop_yield.py; then :; else echo "[estop_yield] FAIL"; FAIL=1; fi
+
 echo "==================="
 if [ "$FAIL" = 0 ]; then echo "run_all: ALL GREEN"; else echo "run_all: HAS FAILURES"; fi
 exit $FAIL

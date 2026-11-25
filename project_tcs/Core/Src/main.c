@@ -4,7 +4,7 @@
  * H743 = 唯一数据源（参数注册表），ESP32 = 纯桥 + Web 服务器，屏与网页皆为视图。
  *
  * 主循环 10ms 节拍（SysTick 1ms 分频），时序预算 ≤8ms/节拍（§3.2 铁律）：
- *   喂狗 → comm_poll_tx → console_poll → m207_poll → 链路 RX 喂 comm → comm_tick
+ *   喂狗 → 屏急停入口兜底（最先看，M03-F-04）→ comm_poll_tx → console_poll → m207_poll → 链路 RX 喂 comm → comm_tick
  *   → tcs_lvgl_poll → control_poll(500ms) → tmp117_poll(100ms) → post_poll(100ms,H6)
  *   → param_persist_flush(2s) → STATUS 帧(500ms) → KEY0 急停 → LED 心跳 → 等下一节拍
  * ISR 只做：UART RX 单字节入环形缓冲（USART1 console / USART2 link / USART3 m207）。
@@ -154,6 +154,7 @@ void link_wave_capture(void)
     uint32_t t0 = DWT->CYCCNT;
     uint32_t limit = SystemCoreClock / 4u;         /* 250 ms */
     while (g_wave_n < 512u) {
+        console_estop_yield();                     /* M03-F-04：最长 250ms 的忙等里每 10ms 看一眼屏上的急停入口 */
         uint32_t lv = (GPIOA->IDR >> 3) & 1u;
         if (lv != last) { g_wave_ts[g_wave_n++] = DWT->CYCCNT - t0; last = lv; }
         if ((DWT->CYCCNT - t0) > limit) break;
@@ -946,6 +947,15 @@ int main(void)
         g_stat_loop_passes++;
 
         iwdg_refresh();
+#ifdef ENABLE_LCD
+        /* D-L7② 屏入口兜底：先于 LVGL 的原始坐标判定。
+         * M03-F-04（2026-11-25，S-G l1）：挪到主循环最前面。原来在 console_poll() 之后——一条阻塞型
+         * 控制台命令（台架档的 pinscan 最长 1s / wdttest 5s；三档都有的 p list 约 180ms）占住主循环
+         * 期间，屏上的急停键没人看，入口被拖到命令结束。现在每拍最先看一眼；阻塞型命令的循环体内
+         * 再每 10ms 经 console_estop_yield() 回到同一个入口。放在 comm_poll_tx 之前：这一拍触发的
+         * 急停命令当拍就能上线。*/
+        tcs_lvgl_estop_watch();
+#endif
         comm_poll_tx(&g_link);           /* 链路 TX 串行消费（唯一 HAL_UART_Transmit 处之一）*/
         console_poll();
 #if !TCS_H743_LINK_ONLY
@@ -959,7 +969,6 @@ int main(void)
         comm_tick(&g_link);              /* 重传检查（主循环上下文）*/
 
 #ifdef ENABLE_LCD
-        tcs_lvgl_estop_watch();   /* D-L7② 屏入口兜底：先于 LVGL 的原始坐标判定 */
         tcs_lvgl_poll();
 #endif
 #if TCS_H743_LINK_ONLY

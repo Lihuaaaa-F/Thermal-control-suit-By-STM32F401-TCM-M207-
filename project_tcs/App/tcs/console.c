@@ -76,8 +76,32 @@ static void tx_drain(void)
             break;                      /* 发送失败：保留 tail 下次重试 */
         s_tx_tail = (uint16_t)((s_tx_tail + chunk) & CON_TX_MASK);
         n = (uint16_t)(n - chunk);
+        /* M03-F-04：环里连着有 2KB 时这一次要连发 32 块（约 180ms）——每发完一块看一眼屏上的急停入口。*/
+        console_estop_yield();
     }
 }
+
+/* ====== 阻塞型命令让位给急停兜底入口（M03-F-04，2026-11-25，S-G l1）======
+ * 主循环每 10ms 看一次屏上的急停入口（tcs_lvgl_estop_watch）。一条命令把主循环占住的时候
+ * （pinscan 最长 1s、wdttest 5s、wave 250ms、p list 的串口排空…），这个入口在这段时间里没人看：
+ * 审查条目 M03-F-04 测到急停被延迟 3–5s，而屏入口的门槛是 ≤500ms。
+ * 这里让这些循环体每 CONSOLE_ESTOP_YIELD_MS 回到同一个入口。
+ * 交付档里没有阻塞型台架命令（C01），但 p list 三档都在，对它同样适用。
+ * 注意：阻塞期间 LVGL 没被轮询、心跳不前进——这时按在首页急停键上，estop_gate 会按"LVGL 卡死"
+ * 立即触发、不弹确认。方向是安全的（宁停勿漏），而且这些命令只在台架及以上档。*/
+#if TCS_USE_LVGL
+#define CONSOLE_ESTOP_YIELD_MS  10u
+void console_estop_yield(void)
+{
+    static uint32_t s_last;
+    uint32_t now = HAL_GetTick();
+    if ((uint32_t)(now - s_last) < CONSOLE_ESTOP_YIELD_MS) return;
+    s_last = now;
+    tcs_lvgl_estop_watch();
+}
+#else
+void console_estop_yield(void) { }        /* 不带屏的构建：没有屏入口 */
+#endif
 
 /* ====== 日志 / printf 重定向 ====== */
 void tcs_log(const char *prefix, const char *fmt, ...)
@@ -369,7 +393,11 @@ static void cmd_exec(char *line)
     }
     /* --- pinscan：全端口 GPIO 边沿普查（BENCH 档；屏蔽 MHz 级显示总线）---
      * R1：原实现 3s 忙等且循环内 iwdg_refresh()——既阻塞急停键轮询，又让看门狗假活。
-     * 现改为：上限 1s（< IWDG 2s，不再需要喂狗）、去掉 iwdg_refresh、时钟走 HAL 宏。*/
+     * 现改为：上限 1s（< IWDG 2s，不再需要喂狗）、去掉 iwdg_refresh、时钟走 HAL 宏。
+     * M03-F-04（2026-11-25）：循环体内每 10ms 经 console_estop_yield() 回到屏上的急停入口——
+     * 原来这 1s 里屏上的急停键没人看。让位期间要读触摸控制器（I2C4：PD12=SCL / PD13=SDA），
+     * 这两脚上会出现 I2C 边沿：从普查里屏蔽掉，否则每次都报出假边沿。读 I2C 的那约 1ms 里
+     * 别的边沿数不到（每 10ms 一段，约占一成），这是 pinscan 的已知盲区。*/
     if (strcmp(argv[0], "pinscan") == 0) {
         int secs = (argc >= 2) ? atoi(argv[1]) : 1;
         if (secs < 1) secs = 1;
@@ -384,15 +412,19 @@ static void cmd_exec(char *line)
                                     GPIOG, GPIOH, GPIOI, GPIOJ, GPIOK };
         static uint16_t last[11];
         static uint32_t edge[11][16];
+        const uint16_t touch_i2c = (uint16_t)(GPIO_PIN_12 | GPIO_PIN_13);   /* PD12 / PD13 */
         for (int i = 0; i < 11; i++) {
             last[i] = (uint16_t)ports[i]->IDR;
+            if (i == 3) last[i] &= (uint16_t)~touch_i2c;
             for (int b = 0; b < 16; b++) edge[i][b] = 0u;
         }
         uint32_t t0 = DWT->CYCCNT;
         uint32_t dur = (uint32_t)secs * (SystemCoreClock / 1u);
         while ((DWT->CYCCNT - t0) < dur) {
+            console_estop_yield();
             for (int i = 0; i < 11; i++) {
                 uint16_t cur = (uint16_t)ports[i]->IDR;
+                if (i == 3) cur &= (uint16_t)~touch_i2c;
                 uint16_t ch = (uint16_t)(cur ^ last[i]);
                 if (ch) {
                     last[i] = cur;
@@ -401,7 +433,7 @@ static void cmd_exec(char *line)
                 }
             }
         }
-        printf("pinscan %ds edges(2..400 shown):\n", secs);
+        printf("pinscan %ds edges(2..400 shown; PD12/PD13 masked, estop watch runs every 10ms):\n", secs);
         for (int i = 0; i < 11; i++)
             for (int b = 0; b < 16; b++)
                 if (edge[i][b] >= 2u && edge[i][b] <= 400u)
@@ -471,14 +503,16 @@ static void cmd_exec(char *line)
     /* --- p ... --- */
     if (strcmp(argv[0], "p") == 0 && argc >= 2) {
         if (strcmp(argv[1], "list") == 0) {
-            /* 50 条 ≈2KB 输出 > TX 环 2KB → 边打印边排空（防尾部被丢弃）*/
+            /* 50 条 ≈2KB 输出 > TX 环 2KB → 边打印边排空（防尾部被丢弃）
+             * M03-F-04：排空是阻塞的串口发送（整张表约 180ms），每排一次就回到屏上的急停入口看一眼。*/
             for (int i = 0; i < param_count(); i++) {
                 const param_desc_t *p = param_at(i);
                 printf("0x%02x %s %.2f [%.1f,%.1f] 0x%02x\n",
                        p->id, p->key, (double)p->value,
                        (double)p->min, (double)p->max, p->flags);
-                if ((i & 7) == 7) tx_drain();
+                if ((i & 7) == 7) { console_estop_yield(); tx_drain(); }
             }
+            console_estop_yield();
             tx_drain();
             return;
         }
@@ -638,7 +672,9 @@ static void cmd_exec(char *line)
     if (strcmp(argv[0], "wdttest") == 0) {
         tcs_log("[SYSTEM]", "IWDG test: busy-loop 5s (timeout=2s)");
         uint32_t t0 = HAL_GetTick();
-        while (HAL_GetTick() - t0 < 5000u) { }
+        /* M03-F-04：这 5 秒里屏上的急停入口照旧每 10ms 看一次（不喂狗——那才是这条命令要测的）。
+         * 急停命令在下一次复位之前就能发给主控。*/
+        while (HAL_GetTick() - t0 < 5000u) { console_estop_yield(); }
         return;
     }
 #endif /* TCS_PROFILE >= 1: wdttest */

@@ -1,13 +1,23 @@
 /**
  * main.c — 调温服 STM32H743IIT6 主程序（project_tcs，任务书 §3）
  *
- * H743 = 唯一数据源（参数注册表），ESP32 = 纯桥 + Web 服务器，屏与网页皆为视图。
+ * v2 分工（M01-F-12 勘正：这里原来写"H743 = 唯一数据源（参数注册表），ESP32 = 纯桥 +
+ * Web 服务器"，那是 v1 的分工，和下面"屏=唯一操作载体，显示全部取自 ESP32 权威快照"矛盾）：
+ *   H743 = 显示终端：LVGL 界面 + 触摸 + 屏端急停入口。参数注册表在本机只是主控的镜像缓存
+ *          （上电从默认值起步，随后由链路全量镜像覆盖），本机不读写本地参数存储。
+ *   ESP32 = 权威：温控闭环、M207、体温传感器、风扇、参数真值（NVS）、WiFi 网页。
+ * 档位（tcs_profile.h）：交付档 PROD（TCS_PROFILE=0，即 TCS_H743_LINK_ONLY）只做显示终端；
+ * 台架档 BENCH / 仿真档 SIM 才跑本地闭环——下表里标〔台架〕的那几步。
  *
  * 主循环 10ms 节拍（SysTick 1ms 分频），时序预算 ≤8ms/节拍（§3.2 铁律）：
- *   喂狗 → comm_poll_tx → console_poll → m207_poll → 链路 RX 喂 comm → comm_tick
- *   → tcs_lvgl_poll → control_poll(500ms) → tmp117_poll(100ms) → post_poll(100ms,H6)
- *   → param_persist_flush(2s) → STATUS 帧(500ms) → KEY0 急停 → LED 心跳 → 等下一节拍
- * ISR 只做：UART RX 单字节入环形缓冲（USART1 console / USART2 link / USART3 m207）。
+ *   喂狗 → comm_poll_tx → console_poll →〔台架〕m207_poll → 链路 RX 喂 comm → comm_tick
+ *   → ft5446_service → tcs_lvgl_estop_watch → tcs_lvgl_poll
+ *   →〔台架〕control_poll(500ms) → tmp117_poll(100ms) → post_poll(100ms,H6)
+ *   →〔台架〕param_persist_flush(2s) → KEY0 急停 → STATUS 帧(500ms) → LED 心跳 → 等下一节拍
+ * ISR 只做：UART RX 单字节入环形缓冲（USART1 console / USART2 link /〔台架〕USART3 m207）。
+ *
+ * 上电初始化里属于 v1 本地外设的部分（M207 串口、TMP117 的 I2C1、EEPROM、风扇 GPIO）按档位
+ * 门控：交付档不初始化、不碰引脚（P1-06 残余，见 main() 里的装配处）。
  *
  * keypad 不初始化：KP_COL2=PD5 与 USART2_TX(ESP32) 冲突（接线表 #3），只编译不链接执行。
  */
@@ -272,8 +282,26 @@ static void link_rx_drain(void)
 }
 
 /* ====== 临界区 + UART 发送钩子（comm 层注入）====== */
-static void crit_enter(void) { __disable_irq(); }
-static void crit_exit(void)  { __enable_irq(); }
+/* X03-F-10：comm.h 允许"临界区里再进临界区"（中断里也可以调 comm_txq_push）。
+ * 原实现 enter = 关中断、exit = 无条件开中断：嵌套时内层 exit 把外层还没做完的
+ * 读改写提前暴露给中断。现在 enter 记下进来的那一刻中断是不是本来就已经关着（PRIMASK），
+ * exit 只在最外层把它恢复成原样——嵌套、以及"本来就在关中断里调用"都正确。
+ * 当前调用点都在主循环、无嵌套（走查见 docs/results/S_G_h1a_结果.md），这是把契约做实。*/
+static uint8_t s_crit_primask;    /* 最外层进入前的 PRIMASK */
+static uint8_t s_crit_depth;      /* 嵌套深度 */
+static void crit_enter(void)
+{
+    uint32_t pm = __get_PRIMASK();
+    __disable_irq();
+    if (s_crit_depth == 0u) s_crit_primask = (uint8_t)pm;
+    s_crit_depth++;
+}
+static void crit_exit(void)
+{
+    if (s_crit_depth == 0u) return;               /* 没配对的 exit：不动中断状态 */
+    s_crit_depth--;
+    if (s_crit_depth == 0u) __set_PRIMASK(s_crit_primask);
+}
 
 static void link_uart_send(const uint8_t *data, size_t len)
 {
@@ -797,8 +825,12 @@ static void MX_I2C1_Init(void)
     hi2c_tmp117.Init.GeneralCallMode = I2C_GENERALCALL_DISABLE;
     hi2c_tmp117.Init.NoStretchMode = I2C_NOSTRETCH_DISABLE;
     if (HAL_I2C_Init(&hi2c_tmp117) != HAL_OK) Error_Handler();
-    HAL_NVIC_SetPriority(I2C1_EV_IRQn, 6, 0);
-    HAL_NVIC_EnableIRQ(I2C1_EV_IRQn);
+    /* M01-F-10：原来这里还有两行——在 NVIC 里给 I2C1_EV 设优先级并使能。本工程的 I2C 全是
+     * 阻塞式（Mem_Read 轮询），从不开 I2C1 的事件中断源；而 stm32h7xx_it.c 里并没有
+     * I2C1_EV_IRQHandler。一旦哪天真有这个中断进来，弱符号落到 Default_Handler 的死循环：
+     * 主循环停摆 → 约 2s 后看门狗复位，看起来像"莫名复位"而不是 I2C 错误。已删。
+     * 以后若改用 HAL 的 *_IT 中断式收发，必须同一次提交里补上 I2C1_EV_IRQHandler
+     * （run_all.sh 末尾的 [irq_handler] 门禁会查"使能了但没有处理函数"的 IRQ）。*/
 }
 
 void Error_Handler(void)
@@ -854,7 +886,9 @@ int main(void)
     /* H3 发现的总线怪象根因：探针会话挂起 CPU 时 IWDG 继续计数 → 2s 打狗复位
      * （EEPROM/触摸位 bang NAK、丢保存、M207 瞬断、wp_check 计数跳变同源）。
      * 调试停顿期冻结 IWDG（仅 halt 时生效，现场运行不受影响）。 */
-    DBGMCU->APB4FZ1 |= DBGMCU_APB4FZ1_DBG_IWDG1;
+    /* M01-F-11：原来这里是裸写 DBGMCU->APB4FZ1。HAL 头（stm32h7xx_hal.h 的 DBGMCU 小节）
+     * 已有做同一件事的宏，写的是同一个寄存器的同一个位：*/
+    __HAL_DBGMCU_FREEZE_IWDG1();
 
     /* P1-14（2026-11-23）：IWDG 2.0s 已启动，而触摸初始化最坏 2.9s、EEPROM 也走 I2C
      * ——启动窗口里超过 2s 不喂狗会"上电反复复位"。每个阶段之间补喂一次。*/

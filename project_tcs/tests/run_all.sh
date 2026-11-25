@@ -301,6 +301,38 @@ else
     echo "[esp32_tests] SKIP: ../esp32/tests/run_m207_tests.sh 缺失"
 fi
 
+# S-G h1a（M01-F-10）：出现过的每个 IRQ 都必须有处理函数。
+# 背景：main.c 曾在 NVIC 里使能 I2C1_EV_IRQn，而 stm32h7xx_it.c 里没有 I2C1_EV_IRQHandler——
+# 真有这个中断进来会落到 Default_Handler 的死循环，主循环停摆，约 2s 后看门狗复位，
+# 看起来像"莫名复位"而不是 I2C 错误。
+# 口径：App 与 Core/Src 下的 *.c 里凡出现 <名字>_IRQn，<名字>_IRQHandler 就必须在同一范围里
+# 有函数定义。按"出现过"查，不只查 EnableIRQ 的字面参数：串口的 IRQ 号是经变量传进去的。
+if [ -n "$PYBIN" ]; then
+    if "$PYBIN" - <<'PYEOF'
+import io, os, re, sys
+text = []
+for root in ('App', 'Core/Src'):
+    for d, _, fs in os.walk(root):
+        for f in fs:
+            if f.endswith('.c'):
+                text.append(io.open(os.path.join(d, f), encoding='utf-8', errors='replace').read())
+irqs = set()
+handlers = set()
+for s in text:
+    irqs.update(re.findall(r'\b([A-Za-z0-9_]+)_IRQn\b', s))
+    handlers.update(re.findall(r'\b([A-Za-z0-9_]+)_IRQHandler\s*\([^)]*\)\s*\{', s))
+bad = sorted(i for i in irqs if i not in handlers)
+for i in bad:
+    print('[irq_handler] FAIL: %s_IRQn 被引用，但没有 %s_IRQHandler' % (i, i))
+print('[irq_handler] %s (%d 个 IRQ 被引用，%d 个没有处理函数)' %
+      ('FAIL' if bad else 'PASS', len(irqs), len(bad)))
+sys.exit(1 if bad else 0)
+PYEOF
+    then :; else FAIL=1; fi
+else
+    echo "[irq_handler] SKIP: python not found"; FAIL=1
+fi
+
 echo "==================="
 if [ "$FAIL" = 0 ]; then echo "run_all: ALL GREEN"; else echo "run_all: HAS FAILURES"; fi
 exit $FAIL

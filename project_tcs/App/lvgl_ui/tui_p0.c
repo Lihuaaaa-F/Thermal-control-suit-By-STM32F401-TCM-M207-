@@ -69,17 +69,12 @@ static void clk_chart(lv_event_t *e) { LV_UNUSED(e); tui_request(TUI_CHART); }
 static void clk_conn(lv_event_t *e)  { LV_UNUSED(e); tui_request(TUI_CONN); }
 static void clk_fan(lv_event_t *e)   { LV_UNUSED(e); control_fan_toggle(); }   /* v2：0x15 由主控执行 */
 
+/* m1（模式页，用户 2026-11-26）：首页的模式键只显示当前模式，点击进模式页——不再在首页直接切换。
+ * （原先：切手动即时、切自动弹二次确认。二次确认框 tui_dlg_mode 留给模式页"切换到自动"用。）*/
 static void clk_mode(lv_event_t *e)
 {
     LV_UNUSED(e);
-    const ui_in_t *in;
-    const ui_link_view_t *lv;
-    tui_input(&in, &lv);
-    /* 按模型快照里的模式分支，不读 g_tcs.mode：主控断了以后 g_tcs.mode 是断开那一刻的旧值，
-     * 会和键上的文字对不上（写着"切自动"却去切手动）。主控断着时这个键是灰的，这里只是兜底。*/
-    if (lv->link != UI_LINK_UP) { ui_toast("主控连接中断，现在不能切换模式"); return; }
-    if (in->mode) (void)param_set(PARAM_ID_MODE, 0.0f, PARAM_SRC_TOUCH);   /* 切手动=即时 */
-    else          tui_dlg_mode();                                          /* 切自动=二次确认 */
+    tui_request(TUI_MODE);
 }
 
 static void clk_estop(lv_event_t *e)
@@ -118,10 +113,15 @@ static void paint_mode(uint8_t online, uint8_t mode)
     if (online) ui_pill_set(&H.mode, mode ? "自动" : "手动", TKS_CARD, TKS_TX, UI_PILL_DOT_R,
                             mode ? TKS_GREEN : TKS_GRAY);
     else        ui_pill_set(&H.mode, "离线", TKS_CARD, TKS_TX2, UI_PILL_DOT_R, TKS_GRAY);
-    /* 主控断了：模式键变灰不可点。帧发不出去，本地模式会被下一次镜像泵打回去，
-     * 让人白点一次（独立复核 P2-4）。键上的文字保持上一次的，链路回来再改。*/
-    ui_button_set_style(&H.b_mode, online ? UI_BTN_PRIMARY : UI_BTN_DISABLED);
-    if (online) ui_button_set_text(&H.b_mode, mode ? "切手动" : "切自动");
+    /* 主控断了：模式键变灰不可点（进不了模式页，也就无从切换）。
+     * 键上的文字是当前模式（"手动" / "自动"，m1 起不再写"切自动 / 切手动"）；断了保持上一次的。*/
+    {
+        char text[16];
+        uint8_t enabled = 0;
+        ui_mode_key(online, mode, text, sizeof text, &enabled);
+        ui_button_set_style(&H.b_mode, enabled ? UI_BTN_PRIMARY : UI_BTN_DISABLED);
+        if (online) ui_button_set_text(&H.b_mode, text);
+    }
 }
 
 static void paint_fan(uint8_t online, uint8_t fan)

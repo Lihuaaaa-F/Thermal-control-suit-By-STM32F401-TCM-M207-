@@ -276,3 +276,181 @@ uint32_t ui_home_diff(const ui_home_t *was, const ui_home_t *now)
     if (was->estop != now->estop) m |= UI_H_ESTOP;
     return m;
 }
+
+/* ====== m1"模式"页（用户 2026-11-26 定的新功能）====== */
+
+void ui_mode_key(uint8_t online, uint8_t mode, char *text, size_t cap, uint8_t *enabled)
+{
+    snprintf(text, cap, "%s", mode ? "自动" : "手动");
+    *enabled = online ? 1u : 0u;
+}
+
+ui_tec_dir_t ui_mode_dir_of(uint8_t d)
+{
+    switch (d) {
+        case TCS_TEC_DIR_PAUSE: return UI_TD_PAUSE;
+        case TCS_TEC_DIR_COOL:  return UI_TD_COOL;
+        case TCS_TEC_DIR_HEAT:  return UI_TD_HEAT;
+        default:                return UI_TD_EXT;   /* 3 以及任何没见过的码：开着，但不是模式页设的 */
+    }
+}
+
+/* 主控在安全态（或急停 / 超温 / 模块、探头报警未解除）：主控会拒绝手动输出（control_param_check）*/
+#define UI_SAFE_ALARMS  (ALM_ESTOP | ALM_OVERTEMP | ALM_M207 | ALM_SENSOR_OPEN | ALM_BODY_SENSOR)
+
+/* 点击之后链路断了没有（与 ui_ack_poll 同一口径；写成函数是为了不重复 mutation_ui_model.py 的锚点原文）*/
+static int link_is_stale(const ui_in_t *in) { return in->snap_age_ms > UI_LINK_STALE_MS; }
+
+static uint8_t tec_running(const ui_mode_state_t *s)
+{
+    return (uint8_t)(s->dir[0] == UI_TD_COOL || s->dir[0] == UI_TD_HEAT ||
+                     s->dir[1] == UI_TD_COOL || s->dir[1] == UI_TD_HEAT);
+}
+
+void ui_mode_state(const ui_in_t *in, const ui_link_view_t *lv, ui_mode_state_t *out)
+{
+    memset(out, 0, sizeof *out);
+    out->link = lv->link;
+    out->estop = (uint8_t)(in->estop_local != 0u);
+    /* 主控不在：方向、电学量、模式都是断开那一刻的旧值——一律"未知 / 不可点"，不抢先也不假装实时 */
+    if (out->link != UI_LINK_UP) return;
+    out->manual = (uint8_t)(in->mode == 0);
+    out->safe = (uint8_t)((in->alarm & UI_SAFE_ALARMS) != 0);
+    out->dir[0] = ui_mode_dir_of(in->dir1);
+    out->dir[1] = ui_mode_dir_of(in->dir2);
+    out->elec_ok[0] = (uint8_t)(in->tec_valid & 1u);
+    out->elec_ok[1] = (uint8_t)((in->tec_valid >> 1) & 1u);
+    out->keys_on = (uint8_t)(out->manual && !out->safe);
+    out->fan = in->fan ? 1u : 0u;
+    /* 风扇联动只在手动模式（自动模式的风扇归状态机管，与首页的风扇键口径一致）*/
+    out->fan_locked = (uint8_t)(out->manual && tec_running(out));
+}
+
+uint32_t ui_mode_diff(const ui_mode_state_t *was, const ui_mode_state_t *now)
+{
+    uint32_t m = 0;
+    if (was->link != now->link)     m |= UI_M_LINK;
+    if (was->manual != now->manual) m |= UI_M_MODE;
+    if (was->safe != now->safe)     m |= UI_M_SAFE;
+    if (was->estop != now->estop)   m |= UI_M_ESTOP;
+    if (was->dir[0] != now->dir[0]) m |= UI_M_DIR1;
+    if (was->dir[1] != now->dir[1]) m |= UI_M_DIR2;
+    if (was->elec_ok[0] != now->elec_ok[0]) m |= UI_M_ELEC1;
+    if (was->elec_ok[1] != now->elec_ok[1]) m |= UI_M_ELEC2;
+    if (was->fan != now->fan || was->fan_locked != now->fan_locked) m |= UI_M_FAN;
+    return m;
+}
+
+int ui_mode_btn_style(const ui_mode_state_t *s, ui_tec_dir_t btn)
+{
+    uint8_t i;
+    if (s->link != UI_LINK_UP) return UI_MD_BTN_OFF;
+    /* 高亮的是主控回读里"当前生效"的那个方向；通道开着但不是模式页设的 → 三个都不高亮 */
+    for (i = 0; i < 2u; i++)
+        if (s->dir[i] == btn) return UI_MD_BTN_ON;
+    return UI_MD_BTN_NORMAL;
+}
+
+const char *ui_mode_dir_text(ui_tec_dir_t d)
+{
+    switch (d) {
+        case UI_TD_PAUSE:   return "暂停";
+        case UI_TD_COOL:    return "制冷中";
+        case UI_TD_HEAT:    return "制热中";
+        case UI_TD_EXT:     return "输出中";
+        default:            return "未知";
+    }
+}
+
+/* 小字里的电压 / 电流：各两位；不出现 -0.00 */
+static float tidy2(float v)
+{
+    return (v > -0.005f && v < 0.005f) ? 0.0f : v;
+}
+
+int ui_mode_power(const ui_in_t *in, const ui_mode_state_t *s, int ch,
+                  char *power, size_t pcap, char *vi, size_t vcap)
+{
+    float v, i, p;
+    if (!s->elec_ok[ch ? 1 : 0]) {
+        snprintf(power, pcap, "未知");
+        snprintf(vi, vcap, "未知");
+        return 0;
+    }
+    v = ch ? in->tec_v2 : in->tec_v1;
+    i = ch ? in->tec_i2 : in->tec_i1;
+    if (!(v == v) || !(i == i) || i < 0.0f) {     /* NaN / 负电流：当没数 */
+        snprintf(power, pcap, "未知");
+        snprintf(vi, vcap, "未知");
+        return 0;
+    }
+    p = (v < 0.0f ? -v : v) * i;
+    if (p > 999.0f) p = 999.0f;                    /* 主数字最多四位：再大就不像读数了 */
+    snprintf(power, pcap, "%.1f W", (double)p);
+    snprintf(vi, vcap, "%.2f V · %.2f A", (double)tidy2(v), (double)i);
+    return 1;
+}
+
+const char *ui_mode_tap_block(const ui_mode_state_t *s)
+{
+    if (s->link != UI_LINK_UP) return "主控连接中断，现在不能操作";
+    if (s->safe)               return "安全态下不可操作，请先解除报警";
+    if (!s->manual)            return "只能在手动模式下调节";
+    return NULL;
+}
+
+const char *ui_mode_fan_block(const ui_mode_state_t *s)
+{
+    /* 只有"想关"才拦：联动期间风扇本来就是开的，点它就是想关 */
+    if (s->link == UI_LINK_UP && s->fan_locked && s->fan) return "TEC 工作时风扇保持开启";
+    return NULL;
+}
+
+void ui_mode_cmd_start(ui_mode_cmd_t *c, const ui_in_t *in, uint8_t dir)
+{
+    c->waiting = 1;
+    c->sent_ms = in->now_ms;
+    c->seq_at_send = in->snap_seq;
+    c->dir = dir;
+}
+
+ui_mode_cmd_result_t ui_mode_cmd_poll(ui_mode_cmd_t *c, const ui_in_t *in, ui_tec_dir_t now)
+{
+    uint32_t dt;
+    if (!c->waiting) return UI_MC_DONE;
+    dt = in->now_ms - c->sent_ms;
+    /* 主控回读已经是这个方向（而且是点击之后来的新快照）：成了。不用等满静置时间——
+     * 快照 200ms 一帧，高亮越早跟上手指越好。*/
+    if (now == ui_mode_dir_of(c->dir) && in->snap_seq != c->seq_at_send) {
+        c->waiting = 0;
+        return UI_MC_DONE;
+    }
+    if (dt < UI_ACK_SETTLE_MS) return UI_MC_WAIT;      /* 与"点确认"同一个静置口径 */
+    /* 点击之后链路断了：屏上残留的方向是断开那一刻的旧值，说明不了"没改成" */
+    if (link_is_stale(in)) {
+        c->waiting = 0;
+        return UI_MC_NO_REPLY;
+    }
+    if (in->snap_seq == c->seq_at_send) {              /* 一帧新快照都没来 */
+        if (dt < UI_ACK_TIMEOUT_MS) return UI_MC_WAIT;
+        c->waiting = 0;
+        return UI_MC_NO_REPLY;
+    }
+    /* 来了新快照、方向还是没变：按主控当前状态说原因（主控的拒绝码不透传到屏端，
+     * 报警位与模式是同一帧里的事实）*/
+    c->waiting = 0;
+    if (in->alarm & UI_SAFE_ALARMS) return UI_MC_SAFE;
+    if (in->mode != 0)               return UI_MC_NOT_MANUAL;
+    return UI_MC_REJECTED;
+}
+
+const char *ui_mode_cmd_hint(ui_mode_cmd_result_t r)
+{
+    switch (r) {
+        case UI_MC_NO_REPLY:   return "主控没有响应，请检查连接";
+        case UI_MC_SAFE:       return "安全态下不可操作，请先解除报警";
+        case UI_MC_NOT_MANUAL: return "只能在手动模式下调节";
+        case UI_MC_REJECTED:   return "主控没有接受这次操作，请重试";
+        default:               return NULL;           /* 成了 / 还在等：不出提示 */
+    }
+}

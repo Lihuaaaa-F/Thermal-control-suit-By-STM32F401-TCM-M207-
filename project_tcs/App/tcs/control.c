@@ -46,6 +46,7 @@ void control_estop_clear(void)
 #include <string.h>
 #include <math.h>
 static float s_hist_tc1[60], s_hist_tc2[60];
+static float s_hist_body[60];   /* m1（模式页，2026-11-26）：体温线，与两路水温同一套格子（30s × 60）*/
 static uint32_t s_hist_head, s_hist_n, s_hist_last, s_hist_total;
 void tcs_hist_tick(uint32_t now_ms)
 {
@@ -62,6 +63,9 @@ void tcs_hist_tick(uint32_t now_ms)
 #endif
     s_hist_tc1[s_hist_head] = live ? g_tcs.tc1_act : NAN;
     s_hist_tc2[s_hist_head] = live ? g_tcs.tc2_act : NAN;
+    /* m1（模式页）：体温线。链路不在，或体温探头没接 / 失联（body_sensor_ok=0）的那一格记 NaN——
+     * 图上在这里断开，不画成一个假的 0°C。*/
+    s_hist_body[s_hist_head] = (live && g_tcs.body_sensor_ok) ? g_tcs.body_temp : NAN;
     s_hist_head = (s_hist_head + 1u) % 60u;
     if (s_hist_n < 60u) s_hist_n++;
     s_hist_total++;                       /* 开机以来的格子总数：只增，曲线页据此判断"来没来新点" */
@@ -74,6 +78,14 @@ void tcs_hist_snapshot(float out1[60], float out2[60], uint32_t * n)
         out1[i] = s_hist_tc1[idx];
         out2[i] = s_hist_tc2[idx];
     }
+    *n = cnt;
+}
+/* m1（模式页）：体温那一串，线性序（旧→新，前 n 个有效）与 tcs_hist_snapshot 相同 */
+void tcs_hist_snapshot_body(float out[60], uint32_t * n)
+{
+    uint32_t cnt = s_hist_n > 60u ? 60u : s_hist_n;
+    for (uint32_t i = 0; i < cnt; i++)
+        out[i] = s_hist_body[(s_hist_head - cnt + i + 60u) % 60u];
     *n = cnt;
 }
 uint32_t tcs_hist_count(void) { return s_hist_total; }

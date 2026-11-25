@@ -425,6 +425,12 @@ void tcs_link_tec_copy(tcs_link_tec_t *out)
     if (out) *out = s_tec;
 }
 
+/* m1（模式页）：屏写参数的补发入口（说明见 link_snap.h）；与 hook_broadcast 同一条 0x12 路径 */
+int tcs_link_write_param(uint16_t id, uint8_t type, float value)
+{
+    return link_send_set_param(&g_link, id, type, value);
+}
+
 /* 界面只读的快照接收状态（U 线 S2：页面靠它区分"实时数据"与"陈旧数据"）*/
 void tcs_link_snap_info(uint32_t *age_ms, uint32_t *seq, uint8_t *have)
 {

@@ -16,7 +16,8 @@
 #include "ui_model.h"
 #include "tcs_profile.h"   /* TCS_PROFILE：诊断页与走查钩子只在台架/仿真档（2026-11-24 S 线 C01）*/
 
-typedef enum { TUI_HOME = 0, TUI_TUNE, TUI_CHART, TUI_CONN, TUI_DIAG } tui_page_t;
+/* TUI_MODE（m1"模式"页，2026-11-26）排在 TUI_DIAG 之前：诊断页的走查命令用的是 100–103，不受枚举值变化影响 */
+typedef enum { TUI_HOME = 0, TUI_TUNE, TUI_CHART, TUI_CONN, TUI_MODE, TUI_DIAG } tui_page_t;
 
 #define UI_TICK_MS   200u     /* 刷新节拍：状态最坏 200ms + 一帧上屏 */
 
@@ -30,6 +31,8 @@ int         tui_last_was_rebuild(void);  /* 读取并清零"上一拍做过整�
 
 /* 当前输入与连接视图（tui_tick 每拍刷新一次；页面 update() 从这里取）*/
 void tui_input(const ui_in_t **in, const ui_link_view_t **lv);
+/* m1"模式"页：点击回调里要"此刻"的输入（不用上一拍留下的）——与点横幅发确认时的做法相同 */
+void tui_input_refresh(void);
 
 /* ---- 页面接口（各页文件实现）----
  * 二级页另有 set_banner_room(room)：横幅占 y 64..120，会压住页面内容；room=1 时页面把内容
@@ -38,6 +41,8 @@ void tui_p0_build(lv_obj_t *scr);   int tui_p0_update(void);   /* 主页 */
 void tui_p1_build(lv_obj_t *scr);   int tui_p1_update(void);   void tui_p1_set_banner_room(int room);
 void tui_p2_build(lv_obj_t *scr);   int tui_p2_update(void);   void tui_p2_set_banner_room(int room);
 void tui_p3_build(lv_obj_t *scr);   int tui_p3_update(void);   void tui_p3_set_banner_room(int room);
+/* m1"模式"页（2026-11-26）：手动模式下两路 TEC 各点"制冷 / 暂停 / 制热"，手动 / 自动两页都显示功率 */
+void tui_p4_build(lv_obj_t *scr);   int tui_p4_update(void);   void tui_p4_set_banner_room(int room);
 #if TCS_PROFILE >= 1
 void tui_diag_build(lv_obj_t *scr, int mode);                   /* 诊断页（只走查用；交付档不编译）*/
 void tui_diag_set_mode(int mode);
@@ -52,7 +57,7 @@ void tui_diag_set_mode(int mode);
 /* ---- 弹窗 ---- */
 typedef enum { TUI_DLG_NONE = 0, TUI_DLG_ESTOP, TUI_DLG_MODE } tui_dlg_kind_t;
 void tui_dlg_estop(void);            /* 急停二次确认 */
-void tui_dlg_mode(void);             /* 切自动二次确认 */
+void tui_dlg_mode(void);             /* 切自动二次确认（m1 起：只在"模式"页用；首页的模式键不再切换）*/
 /* 当前开的是哪个弹窗（没有 = TUI_DLG_NONE）。屏上急停的长按直触发只在"急停确认框"开着时
  * 才让位：开着的是别的弹窗时，按住急停键照样直接急停（独立复核 P2-8）。*/
 tui_dlg_kind_t tui_dlg_kind(void);
@@ -64,7 +69,7 @@ void ui_toast(const char *text);
 /* ---- 走查钩子（probe 写 g_ui_cmd；只在台架/仿真档，2026-11-24 S 线 C01）----
  * 1=dlg_estop 2=dlg_mode 3=goto 调参 4=goto 曲线 5=goto 连接 6=风扇切换 7=切手动
  * 8=点击横幅 9=TUNE +step 10=TUNE -step 11=TUNE 步进切换 12=TUNE 行选择+1 13=HOME
- * 14=TUNE 滑条中点 15=关弹窗 16=关旧弹窗→开急停弹窗 100..103=诊断页
+ * 14=TUNE 滑条中点 15=关弹窗 16=关旧弹窗→开急停弹窗 100..103=诊断页 17=goto 模式页（m1，2026-11-26）
  * 审查条目 M03-F-12：g_ui_cmd 能开弹窗、切页、切风扇、切手动——交付档里没有这个变量，
  * 也没有消费它的代码。tui_step_toggle 不在此列：调参页自己的步进按钮在用。 */
 #if TCS_PROFILE >= 1

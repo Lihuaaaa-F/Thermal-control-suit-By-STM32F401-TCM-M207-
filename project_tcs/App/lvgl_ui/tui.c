@@ -30,6 +30,9 @@ static ui_link_view_t s_lv;
 
 static void input_refresh(void);
 
+/* m1（模式页）：点击回调里要"此刻"的输入（同上，给页面文件用）*/
+void tui_input_refresh(void) { input_refresh(); }
+
 /* ---- 横幅 ---- */
 #define BN_X      208
 #define BN_W      440      /* 右边给顶栏状态条留出 660..1000 */
@@ -162,6 +165,7 @@ static void page_banner_room(int room)
         case TUI_TUNE:  tui_p1_set_banner_room(room); break;
         case TUI_CHART: tui_p2_set_banner_room(room); break;
         case TUI_CONN:  tui_p3_set_banner_room(room); break;
+        case TUI_MODE:  tui_p4_set_banner_room(room); break;   /* m1（模式页）*/
         default: break;
     }
 }
@@ -264,7 +268,8 @@ static void ack_poll(void)
                 if (s_lv.link == UI_LINK_UP && s_in.mode)
                     ui_toast("急停已解除 · 已恢复自动温控");
                 else
-                    ui_toast("急停已解除 · 现在是手动模式，点 切自动 恢复自动温控");
+                    /* m1（模式页）：首页的模式键不再切换，提示改指模式页 */
+                    ui_toast("急停已解除 · 现在是手动模式，到模式页可切回自动温控");
             }
             else if (s_ack_kind == UI_BN_OVERTEMP)
                 ui_toast("超温已解除，可以继续使用");
@@ -378,6 +383,7 @@ void tui_goto(tui_page_t p)
         case TUI_TUNE:  tui_p1_build(s_scr); break;
         case TUI_CHART: tui_p2_build(s_scr); break;
         case TUI_CONN:  tui_p3_build(s_scr); break;
+        case TUI_MODE:  tui_p4_build(s_scr); break;   /* m1（模式页）*/
 #if TCS_PROFILE >= 1
         case TUI_DIAG:  tui_diag_build(s_scr, s_diag_mode); break;   /* 诊断页：只走查用，交付档到不了这一页 */
 #endif
@@ -418,6 +424,7 @@ static void ui_cmd_dispatch(uint32_t cmd)
         case 14: tui_slider_center(); tui_request_rebuild(); break;
         case 15: tui_dlg_close(); break;
         case 16: tui_dlg_close(); tui_dlg_estop(); break;
+        case 17: tui_request(TUI_MODE); break;      /* m1（模式页）：走查 / estop_matrix 用 */
         /* —— 诊断页（只走查用）—— */
         case 100: tui_diag_set_mode(0); tui_request(TUI_DIAG); break;
         case 101: tui_diag_set_mode(1); tui_request(TUI_DIAG); break;
@@ -455,6 +462,15 @@ static void input_refresh(void)
      * 是两件事，横幅文案据此区分"已发出/已执行/没送到"。*/
     s_in.estop_local = (control_estop_latched() || (g_tcs.alarm_bits & ALM_ESTOP)) ? 1u : 0u;
     s_in.estop_peer = tcs_link_snap_peer_estop();
+    /* m1（模式页）：两路 TEC 的输出方向与电学量（main.c 从 0x20 / 0x21 落下来的镜像）*/
+    {
+        tcs_link_tec_t t;
+        tcs_link_tec_copy(&t);
+        s_in.dir1 = t.dir1; s_in.dir2 = t.dir2;
+        s_in.tec_valid = t.valid;
+        s_in.tec_v1 = t.v1; s_in.tec_i1 = t.i1;
+        s_in.tec_v2 = t.v2; s_in.tec_i2 = t.i2;
+    }
     s_lv = ui_link_view(&s_in);
 }
 
@@ -465,6 +481,7 @@ static int page_update(void)
         case TUI_TUNE:  return tui_p1_update();
         case TUI_CHART: return tui_p2_update();
         case TUI_CONN:  return tui_p3_update();
+        case TUI_MODE:  return tui_p4_update();     /* m1（模式页）*/
         default:        return 0;
     }
 }

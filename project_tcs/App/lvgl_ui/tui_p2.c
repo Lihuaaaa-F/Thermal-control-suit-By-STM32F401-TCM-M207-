@@ -25,10 +25,10 @@
 #define Y_MAX    60                  /* 纵轴 0..60°C：水温全量程，阈值线在图内 */
 #define THRESH_C ((int)ALM_OVERTEMP_HARD_C)   /* 图上那条线就是固件的硬切断阈值，不另立口径 */
 
-static lv_obj_t *s_chart, *s_over, *s_v1, *s_v2, *s_now;
+static lv_obj_t *s_chart, *s_over, *s_v1, *s_v2, *s_now, *s_v3;
 static lv_obj_t *s_body;             /* 图表区容器：有横幅时整体下移（tui_p2_set_banner_room）*/
-static lv_chart_series_t *s_ser1, *s_ser2;
-static float s_h1[HIST_N], s_h2[HIST_N];   /* tcs_hist_snapshot 的线性序（旧→新，前 n 个有效）*/
+static lv_chart_series_t *s_ser1, *s_ser2, *s_ser3;   /* ser3 = 体温（m1 模式页，2026-11-26）*/
+static float s_h1[HIST_N], s_h2[HIST_N], s_hb[HIST_N];   /* tcs_hist_snapshot(_body) 的线性序（旧→新，前 n 个有效）*/
 static uint32_t s_drawn;             /* 上次画上去时的格子总数（来了新格子就变）*/
 static uint8_t s_built, s_grayed;    /* grayed：折线当前是否转灰（主控断开）*/
 
@@ -63,6 +63,11 @@ static void redraw_series(uint32_t n, uint32_t total)
         }
         lv_chart_set_value_by_id(s_chart, s_ser1, (uint16_t)i, v1);
         lv_chart_set_value_by_id(s_chart, s_ser2, (uint16_t)i, v2);
+        /* m1（模式页）：体温线。探头没接 / 失联的格子是 NaN，同样断开；体温 35–40 落在 0–60 纵轴的上部 */
+        if (k >= 0 && s_hb[k] >= 0.0f)
+            lv_chart_set_value_by_id(s_chart, s_ser3, (uint16_t)i, (int)(s_hb[k] + 0.5f));
+        else
+            lv_chart_set_value_by_id(s_chart, s_ser3, (uint16_t)i, LV_CHART_POINT_NONE);
     }
     lv_chart_refresh(s_chart);
     s_drawn = total;
@@ -92,6 +97,7 @@ void tui_p2_build(lv_obj_t *scr)
     ui_card(body, CARD_X, CARD_Y, CARD_W, CARD_H, TKS_CARD, TKS_BORDER);
     legend(body, PLOT_X, TKS_BLUE, "贴身水箱", &s_v1);
     legend(body, PLOT_X + 300, TKS_TX2, "环境水箱", &s_v2);
+    legend(body, PLOT_X + 600, TKS_YELLOW, "体温", &s_v3);   /* m1（模式页）：体温卡点进来也有曲线 */
 
     /* 纵轴刻度：0 / 15 / 30 / 45 / 60 */
     for (int v = 0; v <= Y_MAX; v += 15) {
@@ -131,6 +137,7 @@ void tui_p2_build(lv_obj_t *scr)
     lv_obj_set_clickable(s_chart, false);
     s_ser1 = lv_chart_add_series(s_chart, TKS_BLUE, LV_CHART_AXIS_PRIMARY_Y);
     s_ser2 = lv_chart_add_series(s_chart, TKS_TX2, LV_CHART_AXIS_PRIMARY_Y);
+    s_ser3 = lv_chart_add_series(s_chart, TKS_YELLOW, LV_CHART_AXIS_PRIMARY_Y);   /* m1：体温 */
 
     ui_text24(body, PLOT_X, PLOT_Y + PLOT_H + 4, "30 分钟前", TKS_TX2);
     s_now = ui_text24(body, PLOT_X + PLOT_W - ui_text24_w("现在"), PLOT_Y + PLOT_H + 4, "现在", TKS_TX2);
@@ -151,8 +158,9 @@ void tui_p2_build(lv_obj_t *scr)
 int tui_p2_update(void)
 {
     if (!s_built) return 1;
-    uint32_t n, total = tcs_hist_count();
+    uint32_t n, total = tcs_hist_count(), nb = 0;
     tcs_hist_snapshot(s_h1, s_h2, &n);
+    (void)tcs_hist_snapshot_body(s_hb, &nb);      /* m1（模式页）：与两路水温同一套格子，total 一起推进 */
     /* 折线：格子总数变了才重设（原来每 500ms 全量重设 120 个点并整图刷新）。
      * 不能比"最后一个样本的数值"：水温稳定时数值不变，新点要等它变了才出现。*/
     if (total != s_drawn) redraw_series(n, total);
@@ -172,6 +180,13 @@ int tui_p2_update(void)
         ui_lab_set(s_v1, "--.-");
         ui_lab_set(s_v2, "--.-");
     }
+    /* 体温当前值（m1）：探头没接 / 失联 → --.- */
+    if (lv->body == UI_SRC_OK) {
+        snprintf(b, sizeof b, "%.1f", (double)in->body);
+        ui_lab_set(s_v3, b);
+    } else {
+        ui_lab_set(s_v3, "--.-");
+    }
     lv_obj_set_hidden(s_over, !(ok && (in->tc1_act >= THRESH_C || in->tc2_act >= THRESH_C)));
 
     /* 主控断开：折线转灰；右端不再写"现在"，改说数据停在多久前（不把旧数据贴在"现在"上）*/
@@ -179,6 +194,7 @@ int tui_p2_update(void)
         s_grayed = lv->stale;
         lv_chart_set_series_color(s_chart, s_ser1, s_grayed ? TKS_GRAY : TKS_BLUE);
         lv_chart_set_series_color(s_chart, s_ser2, s_grayed ? TKS_GRAY : TKS_TX2);
+        lv_chart_set_series_color(s_chart, s_ser3, s_grayed ? TKS_GRAY : TKS_YELLOW);   /* m1：体温线 */
     }
     if (lv->stale) {
         uint32_t s = lv->down_ms / 1000u;

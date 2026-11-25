@@ -30,6 +30,11 @@ typedef struct {
 } tcs_link_tec_t;
 void tcs_link_tec_copy(tcs_link_tec_t *out);
 
+/* m1（模式页）：屏写参数的"补发"入口——同一帧等 ACK 的 0x12（策略在 App/comm/link_send.c），
+ * 不经本地注册表的相等短路。只在"镜像里已经是这个值、但主控回读不是"时用（tui_p4_mode.c 的 mode_write）。
+ * 返回 0 = 已入队并登记等待确认；-1 = 组帧失败。交付档以外（台架 / 仿真）同样走这一条。*/
+int tcs_link_write_param(uint16_t id, uint8_t type, float value);
+
 /* 下面两条是纯逻辑（主机用例 tests/test_proto_m1.c 直接编）：main.c 收到 0x20 / 0x21 时调用。 */
 /* 输出方向：0x20.tec_dir / 0x21 的 TCS_D_TEC_DIR 字段（低半字节第一路、高半字节第二路）*/
 static inline void tcs_link_tec_set_dirs(tcs_link_tec_t *t, uint8_t tec_dir)

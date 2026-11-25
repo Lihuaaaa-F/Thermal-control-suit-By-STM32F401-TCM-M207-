@@ -57,6 +57,10 @@ lv_obj_t *ui_text_center(lv_obj_t *parent, const lv_font_t *f, lv_color_t c, con
 #define UI_BTN_LATCHED  6     /* 灰底白字：急停已锁存，解除后回红 */
 #define UI_BTN_CARD     7     /* 卡片外观的整块可点区（按下变浅蓝底）*/
 #define UI_BTN_CARD_SEL 8     /* 卡片被选中：浅蓝底 + 蓝边 */
+/* m1"模式"页（2026-11-26）：当前生效的方向键高亮——制冷蓝、制热暖色、暂停灰；可点（点了就是重选它）*/
+#define UI_BTN_ON_COOL   9
+#define UI_BTN_ON_HEAT   10
+#define UI_BTN_ON_PAUSE  11
 
 typedef struct { lv_obj_t *obj; lv_obj_t *label; uint8_t style; } ui_button_t;
 

@@ -405,6 +405,18 @@ else
     echo "[mut-audit] FAIL"; grep -a "活下来\|编译失败\|锚点\|FAIL" build/mut_audit.log | head -12; FAIL=1
 fi
 
+# S-G l1（2026-11-26）：M01-F-09——perf 的 1 秒窗口 P50 / P99 / max（App/tcs/perf_hist.c，纯逻辑）。
+# 关单条件"perf 输出 p50/p99/max 三个数"里的三个数由这个模块算；一个尖峰不挪动 P99、两个尖峰会、
+# 窗口清空、大 n 不溢出都在用例里。链路 TX 那一半（屏端最长的一帧在线上占多久、comm_poll_tx 一拍只发一帧）
+# 在上面的 linkdir 一行里（[tx budget]）。
+run perfhist    tests/test_perf_hist.c  App/tcs/perf_hist.c
+# 它的变异验证（脚手架 tests/mutkit.py）：分桶差一 / 百分位用 32 位乘法 / 不向上取整 / 超预算不含等于 / 清窗口连预算一起清。
+if [ -n "$PYBIN" ] && PYTHONUTF8=1 "$PYBIN" tests/mutation_perf_hist.py > build/mut_perf.log 2>&1; then
+    echo "[mut-perf] PASS（$(tail -1 build/mut_perf.log)）"
+else
+    echo "[mut-perf] FAIL"; grep -a "活下来\|编译失败\|锚点\|FAIL" build/mut_perf.log | head -12; FAIL=1
+fi
+
 echo "==================="
 if [ "$FAIL" = 0 ]; then echo "run_all: ALL GREEN"; else echo "run_all: HAS FAILURES"; fi
 exit $FAIL

@@ -15,6 +15,7 @@
 #include "m207.h"
 #include "m207_txq.h"   /* M207_CMD_MAX：m207 send 的长度上限（M07-F-10）*/
 #include "audit_ring.h" /* M07-F-08：关键命令的审计留痕环 */
+#include "perf_hist.h"  /* M01-F-09：perf 读最近一个 1 秒窗口 */
 #include "post.h"
 #include "segger_rtt.h"
 #include "ltdc.h"
@@ -545,6 +546,16 @@ static void cmd_exec(char *line)
                (unsigned long)g_stat_touch_us_max,
                (unsigned long)g_stat_loop_passes, (unsigned long)rate,
                (unsigned long)up_s);
+        /* M01-F-09：最近一个**已经结束**的 1 秒窗口的分布。上面的 max 是开机以来的终身值——
+         * 一个几小时前的尖峰会一直占着它；这里看的是"现在"：P50 / P99（按桶下界报，桶宽 2 倍）、
+         * 窗口最大值、超预算（8ms）的拍数。开机的第一秒还没有结束的窗口，n=0。*/
+        {
+            const perf_hist_t *w = tcs_perf_last_window();
+            printf("win1s: n=%lu p50=%luus p99=%luus max=%luus over=%lu(budget %luus)\n",
+                   (unsigned long)w->n, (unsigned long)perf_hist_pctl(w, 50u),
+                   (unsigned long)perf_hist_pctl(w, 99u), (unsigned long)w->max,
+                   (unsigned long)w->over, (unsigned long)w->over_thresh);
+        }
         return;
     }
     /* --- p ... --- */

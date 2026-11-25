@@ -35,6 +35,7 @@
 #include "eeprom.h"
 #include "iwdg.h"
 #include "post.h"
+#include "perf_hist.h"  /* M01-F-09：单拍耗用的 1 秒窗口直方图（perf 命令读）*/
 #include "tcs_profile.h"   /* TCS_PROFILE：屏链波形采集与 RX 环只在台架/仿真档（S 线 C01，2026-11-24）*/
 #include <string.h>
 
@@ -57,12 +58,34 @@ volatile uint32_t g_stat_ui_ms_x10 = 0;
 volatile uint32_t g_stat_touch_us_max = 0;
 volatile uint32_t g_stat_tick_ovf = 0;
 
+/* M01-F-09（2026-11-26，S-G l1）：按窗口（1 秒）统计单拍耗用——P50 / P99 / 窗口最大值 / 超预算的拍数。
+ * 原来只有"终身最大值"和一条指数平均：看得出历史上有没有超预算，看不出最近超得勤不勤。
+ * 采样口径不变（仍然含中断时间，见 perf_sample_work）。*/
+#define TCS_TICK_BUDGET_US  8000u          /* §3.2 铁律：≤8ms / 节拍 */
+static perf_hist_t s_perf_win;             /* 正在统计的窗口 */
+static perf_hist_t s_perf_last;            /* 最近一个结束的窗口（perf 命令读）*/
+const perf_hist_t *tcs_perf_last_window(void) { return &s_perf_last; }
+
 static void perf_sample_work(uint32_t cy)
 {
     uint32_t us = cy / (SystemCoreClock / 1000000u);
     if (us > g_stat_work_us_max) g_stat_work_us_max = us;
     g_stat_work_us_avg = (g_stat_work_us_avg * 7u + us) / 8u;
     if (us > 10000u) g_stat_tick_ovf++;
+    perf_hist_add(&s_perf_win, us);
+}
+
+static void perf_window_tick(uint32_t now_ms)
+{
+    static uint32_t s_win_start;
+    if (s_win_start == 0u) {                 /* 第一个窗口的起点 */
+        s_win_start = now_ms ? now_ms : 1u;
+        return;
+    }
+    if (now_ms - s_win_start < 1000u) return;
+    s_win_start = now_ms;
+    s_perf_last = s_perf_win;
+    perf_hist_reset_window(&s_perf_win);
 }
 
 /* SysTick 1ms 双递增覆盖（GS 工程移植时曾丢失本函数 → 主循环卡死在节拍等待，
@@ -940,6 +963,7 @@ int main(void)
     CoreDebug->DEMCR |= CoreDebug_DEMCR_TRCENA_Msk;
     DWT->CYCCNT = 0;
     DWT->CTRL |= DWT_CTRL_CYCCNTENA_Msk;
+    perf_hist_init(&s_perf_win, TCS_TICK_BUDGET_US);   /* M01-F-09：1 秒窗口，预算 8ms */
 
     while (1) {
         uint32_t now = g_tick_ms;
@@ -1066,6 +1090,7 @@ int main(void)
         }
 
         perf_sample_work(DWT->CYCCNT - cy0);
+        perf_window_tick(now);
         if (g_link_down_flag) {
             g_link_down_flag = 0;
             tcs_log("[NET]", "esp link down (3 retries)");

@@ -455,6 +455,82 @@ static void test_link_ok(void)
     CHECK(L.link_ok == COMM_LINK_OK_TRUE && g_up_cnt == 3 && comm_pending_count(&L) == 0, "K: ACK 把 link_ok 置回真");
 }
 
+/* ---- M01-F-09 子项②（链路 TX 阻塞）的守卫 ----------------------------------------------
+ * 审查记录的"253 B 帧 10.98ms"是 MAX_FRAME 的理论上限，不是哪一种真实帧。屏这一端会发的帧型
+ * （0x90 ACK、0x14 急停/确认、0x12 写参数、0x15 STATUS、0x22 注册表条目）里最长的是把
+ * key / name / unit 顶满的注册表条目（只有台架/仿真档才发；交付档屏端只发前三种）。
+ * comm_poll_tx 一拍只发一帧，所以一拍被 TX 阻塞的上限 = 最长的一帧上线的时间。这里把它钉住：
+ * 帧型加长到 8ms 预算装不下（230400 8N1，每字 10 bit ≈ 43us）就变红。
+ * 守卫只管已知的这几种帧型；新增帧型时要来这里加一行。*/
+#define LINK_BAUD          230400u
+#define TICK_BUDGET_US     8000u
+static uint32_t wire_us(size_t frame_bytes)
+{
+    /* 每字 10 bit（起始 + 8 数据 + 停止），四舍五入到微秒 */
+    return (uint32_t)(((uint64_t)frame_bytes * 10u * 1000000u + LINK_BAUD / 2u) / LINK_BAUD);
+}
+
+static void test_tx_budget(void)
+{
+    comm_link_t L;
+    uint8_t f[MAX_FRAME];
+    uint8_t body[MAX_PAYLOAD];
+    size_t n, biggest;
+    const char *big_name = "";
+
+    /* 每种帧型按真实发送点用的同一个组包函数、取最长的样子 */
+    biggest = ack_frame(MT_TCS_ACK, 0, 0, MT_TCS_SET_PARAM, f);   /* main.c 的 ACK 应答 */
+    big_name = "ACK";
+    body[0] = 0;
+    n = wire_frame(MT_TCS_CMD, 0, body, TCS_CMD_PL_LEN, f);       /* link_send_cmd_upstream：定长 */
+    if (n > biggest) { biggest = n; big_name = "CMD"; }
+    {
+        tcs_param_pl_t p = { .id = 0xFFFF, .type = 0, .value = tcs_f2b(1.0f) };
+        uint8_t b[TCS_PARAM_PL_LEN];
+        (void)tcs_pl_param(b, sizeof(b), &p);                     /* link_send_set_param */
+        n = wire_frame(MT_TCS_SET_PARAM, 0, b, sizeof(b), f);
+        if (n > biggest) { biggest = n; big_name = "SET_PARAM"; }
+    }
+    {
+        tcs_status_pl_t s;
+        size_t sn;
+        memset(&s, 0, sizeof(s));
+        sn = tcs_pl_status(body, sizeof(body), &s);                /* STATUS 帧 */
+        CHECK(sn == TCS_STATUS_PL_LEN, "Q: STATUS 组包长度是定长");
+        n = wire_frame(MT_TCS_STATUS, 0, body, sn, f);
+        if (n > biggest) { biggest = n; big_name = "STATUS"; }
+    }
+    {
+        /* registry_dump_tick：strncpy(dst, src, sizeof(dst) - 1)，所以三个串最长是容量减一 */
+        tcs_reg_entry_t e;
+        size_t en;
+        memset(&e, 0, sizeof(e));
+        memset(e.key, 'k', sizeof(e.key) - 1);
+        memset(e.name, 'N', sizeof(e.name) - 1);
+        memset(e.unit, 'u', sizeof(e.unit) - 1);
+        e.count = 0xFF; e.idx = 0xFF; e.id = 0xFFFF; e.type = 0xFF; e.flags = 0xFF;
+        en = tcs_pl_registry_entry(body, sizeof(body), &e);
+        CHECK(en > 0, "Q: 注册表条目三个串都顶满也组得出来（不超过 MAX_PAYLOAD）");
+        n = wire_frame(MT_TCS_REGISTRY_ENTRY, 0, body, en, f);
+        if (n > biggest) { biggest = n; big_name = "REGISTRY_ENTRY"; }
+    }
+    CHECK(biggest == 104u, "Q: 屏端最长的一帧是顶满的注册表条目：104 字节");
+    CHECK(wire_us(biggest) <= TICK_BUDGET_US, "Q: 最长的一帧上线时间不超过 8ms 预算");
+
+    /* 一拍只发一帧：队列里压三帧，poll 一次只上线一帧 */
+    link_open(&L, TCS_SIDE_H743);
+    g_wire_n = 0;
+    n = wire_frame(MT_TCS_SET_PARAM, 0x30, body, TCS_PARAM_PL_LEN, f);
+    for (int i = 0; i < 3; i++) comm_txq_push(&L, f, n);
+    CHECK(L.tx_count == 3, "Q: 三帧都在队列里");
+    comm_poll_tx(&L);
+    CHECK(g_wire_n == n && L.tx_count == 2, "Q: comm_poll_tx 一拍只发一帧（队列里还剩 2 帧）");
+
+    printf("  [tx budget] H743 longest frame = %s %u B = %lu us @%lu 8N1 (budget %lu us/beat)\n",
+           big_name, (unsigned)biggest, (unsigned long)wire_us(biggest), (unsigned long)LINK_BAUD,
+           (unsigned long)TICK_BUDGET_US);
+}
+
 int main(void)
 {
     test_pure();
@@ -464,6 +540,7 @@ int main(void)
     test_peer();
     test_wrongdir();
     test_link_ok();
+    test_tx_budget();
     printf("test_link_dir(H743): PASS=%d FAIL=%d\n", g_pass, g_fail);
     return g_fail ? 1 : 0;
 }

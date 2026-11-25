@@ -2,11 +2,13 @@
 # 口径：在 project_tcs/ 目录下执行 grep -rnE <模式> <目录列表> --include=*.c | wc -l
 # （=run_all 的 cwd；目录=App Core/Src），HEAD 实测 2026-10-27 终审整改后
 # UART 37→38（R2 自愈+1）→40（2026-11-25 重锚）
-研学卡_HAL_I2C;;App Core/Src;;HAL_I2C_;;10
+# 2026-11-25 重锚：10→11（h1a 批次：ft5446.c 恢复流程新增 HAL_I2C_DeInit（+1）；ltdc.c 新增两行注释提及 HAL_LTDC_SetAddress / HAL_LTDC_Reload（+2，是注释不是调用））
+研学卡_HAL_I2C;;App Core/Src;;HAL_I2C_;;11
 研学卡_HAL_UART;;App Core/Src;;HAL_UART_;;40
 # GPIO 54→58（2026-10-30 v2 迁移重锚：main/it/console 新增调用面）→58（2026-11-25 重锚）
 研学卡_HAL_GPIO_EXTI;;App Core/Src;;HAL_GPIO_|HAL_EXTI_;;58
-研学卡_HAL_LTDC;;App Core/Src;;HAL_LTDC_;;6
+# 2026-11-25 重锚：6→8（h1a 批次：ft5446.c 恢复流程新增 HAL_I2C_DeInit（+1）；ltdc.c 新增两行注释提及 HAL_LTDC_SetAddress / HAL_LTDC_Reload（+2，是注释不是调用））
+研学卡_HAL_LTDC;;App Core/Src;;HAL_LTDC_;;8
 研学卡_HAL_DMA2D;;App Core/Src;;DMA2D_;;1
 # PWR/RCC →61（2026-11-25 重锚）
 研学卡_HAL_PWR_RCC;;App Core/Src;;HAL_RCC_|HAL_PWR_;;61   # R1(2026-11-15)：pindrv/pinscan 改 HAL 时钟宏 +17

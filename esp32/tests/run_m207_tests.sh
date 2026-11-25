@@ -17,7 +17,7 @@ EXTRA_DEF=""        # run 可按用例追加预处理定义（见下方 tmp117si
 
 cl_run() {  # cl_run <out.exe> <src...> — bat 内 cd 到 OUT，产物/对象全落 OUT
     local exe="$1"; shift
-    local cmd_line='cl /nologo /W4 /std:c11 /utf-8 /D_CRT_SECURE_NO_WARNINGS /DTCS_UNIT_TEST /I..\..\components\tcs_m207\include /I..\..\components\tcs_tmp117\include /I..\..\components\tcs_core /I..\..\components\tcs_link\include /I..\..\components\tcs_link /I..\..\components\tcs_web\include'
+    local cmd_line='cl /nologo /W4 /std:c11 /utf-8 /D_CRT_SECURE_NO_WARNINGS /DTCS_UNIT_TEST /I..\..\components\tcs_m207\include /I..\..\components\tcs_tmp117\include /I..\..\components\tcs_fan\include /I..\..\components\tcs_core /I..\..\components\tcs_link\include /I..\..\components\tcs_link /I..\..\components\tcs_web\include'
     [ -n "$EXTRA_INC" ] && cmd_line="$cmd_line $EXTRA_INC"
     [ -n "$EXTRA_DEF" ] && cmd_line="$cmd_line $EXTRA_DEF"
     for s in "$@"; do
@@ -50,6 +50,8 @@ run() {  # run <name> <test.c> <sources...>
 run m207proto tests/test_m207_proto.c  components/tcs_m207/m207_proto.c
 run m207golden tests/test_m207_golden.c components/tcs_m207/m207_proto.c
 run tmp117pure tests/test_tmp117_pure.c    components/tcs_tmp117/tmp117_pure.c
+# S-G e2（X04-F-05 ② / M13-F-06）：风扇服务的纯逻辑（头文件 inline）——命令-回读判定、弱校验
+run fanpure   tests/test_fan_pure.c
 # S-G e2：TMP117 采样内核（tmp117_core.c）逐拍主机用例——假器件记录每一次寄存器读写
 run tmp117core tests/test_tmp117_core.c components/tcs_tmp117/tmp117_core.c components/tcs_tmp117/tmp117_pure.c components/tcs_core/control.c components/tcs_core/param_registry.c components/tcs_core/post_pure.c components/tcs_link/proto.c
 # 同一套用例按注入构建（CONFIG_TCS_SIM=y）再编一遍：注入实现体在交付档不编入，

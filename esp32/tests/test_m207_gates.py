@@ -2,6 +2,9 @@
 # -*- coding: utf-8 -*-
 """test_m207_gates.py — M207 / TMP117 / 风扇服务的源码门禁（S-G e2）
 
+门禁内容：M12-F-13（上电回环自检）、M12-F-14（unexpected 计数出口）、M12-F-16（UART 安装失败不 abort）、
+M12-F-09 下沉的风扇引脚注释核对（M13-F-09）等。
+
 有些修复落在与硬件绑定的代码里（上电回环自检、UART 驱动安装、控制台 perf 行），主机单测够不着；
 这类改动用"读源码、逐字核对"来把关，和单测一起进 run_m207_tests.sh。只依赖标准库。
 每条门禁对应一个具体条目；未修的源文件跑它是红的（见 docs/results/S_G_e2_结果.md）。
@@ -79,7 +82,10 @@ def function_body(src, signature):
 
 def check(cond, name):
     global FAIL
-    print(("  ok   " if cond else "  FAIL ") + name)
+    # 失败信息里可能引用了源文件中的中文注释：转成 ASCII 再打印（cp1252 的管道下直接 print 会抛异常，
+    # 把真正的失败原因吞掉）
+    safe = name.encode("ascii", "backslashreplace").decode("ascii")
+    print(("  ok   " if cond else "  FAIL ") + safe)
     if not cond:
         FAIL += 1
 
@@ -225,6 +231,24 @@ check("uart_driver_delete(M207_UART);" in start,
 check(start.find("s_started = 1;") > start.find("xTaskCreatePinnedToCore("),
       "s_started is set only after the service task exists")
 check("return -1;" in start, "start failure returns -1 (the caller can see it)")
+
+# ---------------------------------------------------------------------------
+# M13-F-09 fan pin comments
+# ---------------------------------------------------------------------------
+fan_h = read(os.path.join("components", "tcs_fan", "include", "fan_service.h"))
+fan_c = read(os.path.join("components", "tcs_fan", "fan_service.c"))
+print("[gate] M13-F-09 fan pin comments agree with the code: fan = GPIO42, 48/38 are the RGB clear pins only")
+check(re.search(r"#define\s+FAN_GPIO\s+42\b", fan_h) is not None, "FAN_GPIO is 42")
+check("**GPIO42**" in fan_h and "GPIO42 \u2192 \u5149\u8026" in fan_h.replace("**", ""),
+      "fan_service.h header comment names GPIO42 as the fan pin")
+for name, src in (("fan_service.h", fan_h), ("fan_service.c", fan_c)):
+    stale = [l.strip() for l in src.splitlines()
+             if re.search(r"(GPIO48\s*\u2192\s*\u5149\u8026|\u98ce\u6247\u811a\uff0848\uff09|48\s+\u82e5\u63a5\s+RGB|\u98ce\u6247\uff08GPIO48)", l)]
+    check(not stale, "%s has no comment calling GPIO48 the fan pin%s" % (name, "" if not stale else ": " + stale[0]))
+check(re.search(r"fan_ws2812_black_frame\(48\);", fan_c) is not None and
+      re.search(r"fan_ws2812_black_frame\(38\);", fan_c) is not None,
+      "48 / 38 are still cleared at boot (on-board WS2812 on v1.0 / v1.1 boards)")
+check("FAN_GPIO" in fan_c and "gpio_num = FAN_GPIO" in fan_c, "LEDC channel is bound to FAN_GPIO, not a literal pin number")
 
 print("===================")
 if FAIL == 0:

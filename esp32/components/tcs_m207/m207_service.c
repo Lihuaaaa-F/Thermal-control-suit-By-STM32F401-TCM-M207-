@@ -218,33 +218,9 @@ int m207_service_start(void)
 /* ===================================================================== */
 /*                 上电回环自测（独占 UART2，[M207LB]）                    */
 /* ===================================================================== */
-
-static const char *const s_lb_frames[] = {
-    "TC1:TCACTTEMP=25.5",
-    "TC2:TCACTTEMP=-10.05",
-    "TC1:TCACTTEMP=1.0",    /* 只读参写→模块回 =3 拒绝（无害）；原 TCRTOCPHT=1.0 会真改保护参，禁入自检帧 */
-    "CMD:REPLY=0", "CMD:REPLY=1", "CMD:REPLY=2", "CMD:REPLY=3",
-    "CMD:REPLY=4", "CMD:REPLY=5", "CMD:REPLY=6", "CMD:REPLY=7",
-    "CMD:REPLY=8",
-};
-#define M207_LB_N (sizeof(s_lb_frames) / sizeof(s_lb_frames[0]))
-
-/* 对每帧断言：解析语义正确（V-5 全表锚定含 0..8）*/
-static int lb_frame_pass(const char *f)
-{
-    m207_reply_t r;
-    if (!m207_parse_line(f, &r)) return 0;
-    if (strncmp(f, "CMD:REPLY=", 10) == 0)
-        return r.kind == M207_KIND_ERRCODE && r.errcode == (uint8_t)atoi(&f[10]);
-    if (r.kind != M207_KIND_REPLY || r.module == M207_MOD_NONE) return 0;
-    if (strcmp(f, "TC1:TCACTTEMP=25.5") == 0)
-        return r.module == M207_MOD_TC1 && r.value > 25.49f && r.value < 25.51f;
-    if (strcmp(f, "TC2:TCACTTEMP=-10.05") == 0)
-        return r.module == M207_MOD_TC2 && r.value < -10.04f && r.value > -10.06f;
-    if (strcmp(f, "TC1:TCACTTEMP=1.0") == 0)
-        return r.module == M207_MOD_TC1 && r.value > 0.99f && r.value < 1.01f;
-    return r.param[0] != '\0';           /* 其余：参数名非空即过 */
-}
+/* 帧表与判定在 m207_core.c（主机可测）。M12-F-13：过线的只有 ? 查询——模块接着时，
+ * 这些帧经 TX 引脚真实下发，查询不会改它的任何参数；解析样本（REPLY 行、ERRCODE 全表）
+ * 不过线，只在板上逐字节喂进行拼装器再解析。 */
 
 static void lb_run_suite(const char *tag)
 {
@@ -252,29 +228,58 @@ static void lb_run_suite(const char *tag)
     int pass = 0, fail = 0;
     char line[M207_LINE_MAX + 1];
     uint8_t rxb[128];
-    for (size_t i = 0; i < M207_LB_N; i++) {
+    size_t i;
+
+    /* A) 过线：查询帧经真 UART 外设 / 真驱动 / 行拼装 / 解析器，回显逐字节相同 */
+    for (i = 0; i < m207_lb_wire_n(); i++) {
+        const char *f = m207_lb_wire_frame(i);
         char tx[M207_LINE_MAX + 2];
-        snprintf(tx, sizeof(tx), "%s\r", s_lb_frames[i]);
+        int got = 0, n, ok;
+        snprintf(tx, sizeof(tx), "%s\r", f);
         uart_write_bytes(M207_UART, tx, strlen(tx));
         vTaskDelay(pdMS_TO_TICKS(20));
-        int got = 0, n;
+        line[0] = '\0';                  /* M12-F-13：没收到回显时打印空串，不是栈上的残留 */
         m207_lineasm_reset(&s_lb_asm);
         while ((n = uart_read_bytes(M207_UART, rxb, sizeof(rxb), 0)) > 0) {
             for (int k = 0; k < n; k++)
-                if (m207_lineasm_feed(&s_lb_asm, rxb[k], line, sizeof(line)))
+                if (m207_lineasm_feed(&s_lb_asm, rxb[k], line, sizeof(line) - 1))
                     got = 1;
         }
-        line[sizeof(line) - 1] = '\0';
-        if (got && strcmp(line, s_lb_frames[i]) == 0 && lb_frame_pass(s_lb_frames[i])) {
+        line[M207_LINE_MAX] = '\0';
+        ok = got && m207_lb_echo_ok(f, line);
+        if (ok) {
             pass++;
-            ESP_LOGI(TAG, "[M207LB] %s %u/%u byte-identical+parse PASS",
-                     tag, (unsigned)(i + 1), (unsigned)M207_LB_N);
+            ESP_LOGI(TAG, "[M207LB] %s %u/%u query echo byte-identical PASS",
+                     tag, (unsigned)(i + 1), (unsigned)m207_lb_wire_n());
         } else {
             fail++;
             ESP_LOGE(TAG, "[M207LB] %s %u/%u FAIL (got='%s')",
-                     tag, (unsigned)(i + 1), (unsigned)M207_LB_N, line);
+                     tag, (unsigned)(i + 1), (unsigned)m207_lb_wire_n(), line);
         }
     }
+
+    /* B) 不过线：解析样本逐字节喂进行拼装器再解析（REPLY 行、ERRCODE 全表 0..8）*/
+    m207_lineasm_reset(&s_lb_asm);
+    for (i = 0; i < m207_lb_parse_n(); i++) {
+        const char *f = m207_lb_parse_frame(i);
+        int ok = 0;
+        line[0] = '\0';
+        for (const char *p = f; *p; p++)
+            m207_lineasm_feed(&s_lb_asm, (uint8_t)*p, line, sizeof(line) - 1);
+        /* 样本不带行终结符：补一个 \r，行拼装器才出帧 */
+        ok = m207_lineasm_feed(&s_lb_asm, '\r', line, sizeof(line) - 1) &&
+             strcmp(line, f) == 0 && m207_lb_parse_ok(line);
+        if (ok) {
+            pass++;
+            ESP_LOGI(TAG, "[M207LB] %s parse %u/%u PASS (%s)",
+                     tag, (unsigned)(i + 1), (unsigned)m207_lb_parse_n(), f);
+        } else {
+            fail++;
+            ESP_LOGE(TAG, "[M207LB] %s parse %u/%u FAIL (%s -> '%s')",
+                     tag, (unsigned)(i + 1), (unsigned)m207_lb_parse_n(), f, line);
+        }
+    }
+
     ESP_LOGI(TAG, "[M207LB] RESULT %s pass=%d fail=%d %s",
              tag, pass, fail, fail ? "FAIL" : "PASS");
 }
@@ -306,10 +311,12 @@ void m207_lb_boottest(void)
     vTaskDelay(pdMS_TO_TICKS(10));
     lb_run_suite("int");
 
-    /* B) 物理短接探测：GPIO21↔47 杜邦在位则自动跑物理全套 */
+    /* B) 物理短接探测：GPIO21↔47 杜邦在位则自动跑物理全套。
+     * M12-F-13：探测帧也改成查询——短接时回显的是我们自己的 TX，查询帧照样逐字节相同；
+     * 模块接着时，它收到的是一条查询而不是一次写。 */
     uart_set_loop_back(M207_UART, false);
     uart_flush_input(M207_UART);
-    const char *probe = "TC1:TCACTTEMP=25.5\r";
+    const char *probe = "TC1:TCACTTEMP?\r";
     uart_write_bytes(M207_UART, probe, strlen(probe));
     vTaskDelay(pdMS_TO_TICKS(60));
     uint8_t echo[64];

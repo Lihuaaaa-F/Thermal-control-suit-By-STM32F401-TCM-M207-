@@ -63,6 +63,17 @@ typedef struct {
 /* perf 汇报窗（200 拍）满：返回 1 并把窗口峰值填入 out、清零；否则返回 0。*/
 int m207_core_perf_take(m207_core_perf_t *out);
 
+/* ====== 上电回环自检用的帧表与判定（M12-F-13；自 m207_service.c 抽出，主机可测）======
+ * 过线帧（m207_lb_wire_*）只有 ? 查询：自检时模块若接着，不会被改任何参数。
+ * 解析样本（m207_lb_parse_*）不过线，只在板上逐字节喂进行拼装器再解析。 */
+size_t      m207_lb_wire_n(void);
+const char *m207_lb_wire_frame(size_t i);
+size_t      m207_lb_parse_n(void);
+const char *m207_lb_parse_frame(size_t i);
+int  m207_lb_echo_ok(const char *wire, const char *echo);   /* 过线帧是合法查询且回显逐字节相同 */
+int  m207_lb_parse_ok(const char *sample);                  /* 解析样本的语义正确 */
+uint32_t m207_open_debounce_ms(void);   /* M12-F-15：同通道从第一次 =2 到坐实传感器开路的最短时延 */
+
 #if CONFIG_TCS_M207_SELFLOOP
 /* 取证构建的 selfloop 断言用：该通道是否已收到过温度。*/
 uint8_t m207_core_have_temp(uint8_t ch);

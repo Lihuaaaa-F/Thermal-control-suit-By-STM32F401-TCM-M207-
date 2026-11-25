@@ -68,6 +68,9 @@ run m207queue tests/test_m207_queue.c components/tcs_m207/m207_core.c components
 # S-G e2（M12-F-03 后半）：探测期 / 开机首联的等待窗里，任意合法 CMD:REPLY 都是链路活证据——
 # 两路传感器同时开路时链路仍回到 online，ALM_M207 可确认
 run m207link  tests/test_m207_link.c components/tcs_m207/m207_core.c components/tcs_m207/m207_proto.c components/tcs_core/control.c components/tcs_core/param_registry.c components/tcs_core/post_pure.c components/tcs_link/proto.c
+# S-G e2（M12-F-13 / M12-F-15）：上电回环自检的帧表与判定（主机可测）——过线帧只能是查询，
+# 不许带写命令；去抖时延由常量推算并钉住
+run m207lb tests/test_m207_lb.c components/tcs_m207/m207_core.c components/tcs_m207/m207_proto.c components/tcs_core/control.c components/tcs_core/param_registry.c components/tcs_core/post_pure.c components/tcs_link/proto.c
 
 # U 线 W1：网页 WS 契约（st / log 消息，真实 cJSON）
 if [ -f "$CJSON_DIR/cJSON.c" ]; then
@@ -77,6 +80,13 @@ if [ -f "$CJSON_DIR/cJSON.c" ]; then
 else
     echo "[webstatus] FAIL: IDF cJSON 源缺失（$CJSON_DIR，可用 IDF_CJSON 覆盖路径）"; FAIL=1
 fi
+
+# S-G e2：源码门禁——落在与硬件绑定的代码里的修复（上电回环自检、控制台 perf 行、UART 安装），
+# 主机单测够不着，用读源码逐字核对来把关。只依赖标准库，任何 Python 都行。
+PYGATE="${TCS_PYBIN:-python}"
+command -v "$PYGATE" >/dev/null 2>&1 || PYGATE=python3
+if command -v "$PYGATE" >/dev/null 2>&1 && "$PYGATE" -I tests/test_m207_gates.py; then :;
+else echo "[m207gates] FAIL"; FAIL=1; fi
 
 [ $FAIL = 0 ] && echo "esp32-tests: ALL GREEN" || echo "esp32-tests: HAS FAILURES"
 exit $FAIL

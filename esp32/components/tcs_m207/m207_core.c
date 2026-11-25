@@ -1042,6 +1042,66 @@ void m207_perf_reset(void)
     s_stat.fsm_max_us = 0;
 }
 
+/* ====== 上电回环自检用的帧表与判定（M12-F-13；自 m207_service.c 抽出，主机可测）======
+ * 过线帧只有 ? 查询：内部回环把它们原样送回 RX，证明的是"真 UART 外设 + 真驱动 + 行拼装 + 解析器"
+ * 这一条路；回显必须逐字节相同、且解析出正确的模块 / 参数 / 类型。
+ * 原来的前三帧是写命令（TCx:TCACTTEMP=…）：模块接着时这些帧经 TX 引脚真实下发——只读参数被拒（=3）
+ * 还好，万一模块不按"只读即拒绝"实现，就是一次对温度参数的写。现在过线的全是只读查询；
+ * 解析样本（REPLY 行、ERRCODE 全表）不过线，只在板上逐字节喂进行拼装器再解析。 */
+static const char *const s_lb_wire[] = {
+    "TC1:TCACTTEMP?", "TC2:TCACTTEMP?", "TC1:TCADJTEMP?", "TC2:TCSW?",
+};
+#define M207_LB_WIRE_N (sizeof(s_lb_wire) / sizeof(s_lb_wire[0]))
+
+static const char *const s_lb_parse[] = {
+    "TC1:TCACTTEMP=25.5", "TC2:TCACTTEMP=-10.05", "TC1:TCACTTEMP=1.0",
+    "CMD:REPLY=0", "CMD:REPLY=1", "CMD:REPLY=2", "CMD:REPLY=3",
+    "CMD:REPLY=4", "CMD:REPLY=5", "CMD:REPLY=6", "CMD:REPLY=7",
+    "CMD:REPLY=8",
+};
+#define M207_LB_PARSE_N (sizeof(s_lb_parse) / sizeof(s_lb_parse[0]))
+
+size_t m207_lb_wire_n(void) { return M207_LB_WIRE_N; }
+const char *m207_lb_wire_frame(size_t i) { return i < M207_LB_WIRE_N ? s_lb_wire[i] : ""; }
+size_t m207_lb_parse_n(void) { return M207_LB_PARSE_N; }
+const char *m207_lb_parse_frame(size_t i) { return i < M207_LB_PARSE_N ? s_lb_parse[i] : ""; }
+
+/* 回显判定（纯函数）：过线帧只能是合法的 ? 查询（不许带 = 或 !），回显与它逐字节相同 */
+int m207_lb_echo_ok(const char *wire, const char *echo)
+{
+    m207_reply_t r;
+    if (!wire || !echo) return 0;
+    if (strchr(wire, '=') || strchr(wire, '!')) return 0;
+    if (!m207_parse_line(wire, &r) || r.kind != M207_KIND_POLL) return 0;
+    return strcmp(wire, echo) == 0 ? 1 : 0;
+}
+
+/* 解析判定（纯函数）：REPLY 行的模块 / 参数 / 值，ERRCODE 行的全表 0..8 */
+int m207_lb_parse_ok(const char *sample)
+{
+    m207_reply_t r;
+    if (!sample || !*sample) return 0;
+    if (!m207_parse_line(sample, &r)) return 0;
+    if (strncmp(sample, "CMD:REPLY=", 10) == 0)
+        return r.kind == M207_KIND_ERRCODE && r.errcode == (uint8_t)atoi(&sample[10]);
+    if (r.kind != M207_KIND_REPLY || r.module == M207_MOD_NONE) return 0;
+    if (strcmp(sample, "TC1:TCACTTEMP=25.5") == 0)
+        return r.module == M207_MOD_TC1 && r.value > 25.49f && r.value < 25.51f;
+    if (strcmp(sample, "TC2:TCACTTEMP=-10.05") == 0)
+        return r.module == M207_MOD_TC2 && r.value < -10.04f && r.value > -10.06f;
+    if (strcmp(sample, "TC1:TCACTTEMP=1.0") == 0)
+        return r.module == M207_MOD_TC1 && r.value > 0.99f && r.value < 1.01f;
+    return r.param[0] != '\0';           /* 其余：参数名非空即过 */
+}
+
+/* 同通道去抖时延的推算（M12-F-15）：轮询 500ms 一拍、通道交替，同一通道 1s 才被问一次；
+ * 连续 3 次 =2 才坐实——第一次、第二次、第三次分别落在 0s、1s、2s，所以从第一次 =2 到坐实是 2s
+ * （原注释写的"1.5s 内坐实"不对）。 */
+uint32_t m207_open_debounce_ms(void)
+{
+    return (uint32_t)(M207_OPEN_DEBOUNCE - 1u) * 2u * M207_POLL_MS;
+}
+
 /* ====== 钩子适配器（param_registry PF_M207 写入口）====== */
 void m207_hook_set_temp(uint8_t ch, float v) { (void)m207_set_temp(ch, v); }
 void m207_hook_map_set(uint16_t pid, float v) { (void)m207_map_set(pid, v); }

@@ -33,14 +33,16 @@
 
 
 
+
 复现命令（仓库根 `/d/Espressif/ws/tcs`，Git Bash；raw 输出路径分隔符为 `\`，表内归一为 `/`）：
 
 ```bash
 grep -rnE "HAL_GPIO_|HAL_EXTI_" project_tcs/App project_tcs/Core/Src --include=*.c
-# → 49 命中（2026-11-25 重锚），下表 49 行逐一对应
+# → 49 命中（2026-11-26 重锚），下表 49 行逐一对应
 ```
 
 vendor 域说明：`App/rtt/`（SEGGER RTT vendor 五文件）同一 pattern 单独跑=**0 命中**（无需列行）。
+
 
 
 
@@ -59,8 +61,8 @@ vendor 域说明：`App/rtt/`（SEGGER RTT vendor 五文件）同一 pattern 单
 | 3 | project_tcs/App/eeprom/eeprom.c:24 | HAL_GPIO_ReadPin（宏封装） | 软件 I2C 宏 IIC_READ_SDA：读 SDA 回读 |
 | 4 | project_tcs/App/eeprom/eeprom.c:64 | HAL_GPIO_Init(IIC_SCL_PORT, &gi) | EEPROM（AT24C02）软件 I2C SCL 引脚初始化 |
 | 5 | project_tcs/App/eeprom/eeprom.c:68 | HAL_GPIO_Init(IIC_SDA_PORT, &gi) | EEPROM 软件 I2C SDA 引脚初始化 |
-| 6 | project_tcs/App/tcs/console.c:302 | HAL_GPIO_Init | pindrv 调试命令：按参数初始化指定 GPIO（真机取证用，ports 表限界） |
-| 7 | project_tcs/App/tcs/console.c:304 | HAL_GPIO_WritePin | pindrv：按参数驱动引脚电平（链路探针取证命令） |
+| 6 | project_tcs/App/tcs/console.c:382 | HAL_GPIO_Init | pindrv 调试命令：按参数初始化指定 GPIO（真机取证用，ports 表限界） |
+| 7 | project_tcs/App/tcs/console.c:384 | HAL_GPIO_WritePin | pindrv：按参数驱动引脚电平（链路探针取证命令） |
 | 8 | project_tcs/Core/Src/ft5446.c:61 | HAL_GPIO_WritePin（宏封装） | 触摸 bit-bang 宏 CT_IIC_SCL(x)（PD12） |
 | 9 | project_tcs/Core/Src/ft5446.c:62 | HAL_GPIO_WritePin（宏封装） | 触摸 bit-bang 宏 CT_IIC_SDA(x)（PD13） |
 | 10 | project_tcs/Core/Src/ft5446.c:63 | HAL_GPIO_ReadPin（宏封装） | 触摸 bit-bang 宏 CT_READ_SDA（回读 ACK） |
@@ -92,16 +94,16 @@ vendor 域说明：`App/rtt/`（SEGGER RTT vendor 五文件）同一 pattern 单
 | 36 | project_tcs/Core/Src/ltdc.c:420 | HAL_GPIO_Init(GPIOG, &gi) | LTDC PG6/12/13/14=R7/B1/R0/B0（AF14） |
 | 37 | project_tcs/Core/Src/ltdc.c:425 | HAL_GPIO_Init(GPIOH, &gi) | LTDC PH8-15=R2-R6/G3-G5（AF14） |
 | 38 | project_tcs/Core/Src/ltdc.c:430 | HAL_GPIO_Init(GPIOI, &gi) | LTDC PI0/1/2/4/5/6/7=G6/G7/B4-B7（AF14） |
-| 39 | project_tcs/Core/Src/main.c:137 | HAL_GPIO_Init(GPIOA, &gi) | KILL_KEY=PA1 输入+内部下拉初始化（急停键，按下=高） |
-| 40 | project_tcs/Core/Src/main.c:147 | HAL_GPIO_Init | gpio 初始化块：PA3 输入上拉（链路 RX 探针位）等引脚配置 |
-| 41 | project_tcs/Core/Src/main.c:693 | HAL_GPIO_Init(GPIOB, &gi) | LED1/LED2 引脚推挽输出初始化 |
-| 42 | project_tcs/Core/Src/main.c:694 | HAL_GPIO_WritePin(GPIOB, LED1_Pin\ | LED2_Pin, SET) | LED 初始高电平（灭） |
-| 43 | project_tcs/Core/Src/main.c:699 | HAL_GPIO_Init | KEY0(PA1) 输入下拉初始化（急停键，MX_GPIO 块） |
-| 44 | project_tcs/Core/Src/main.c:718 | HAL_GPIO_Init(port, &gi) | uart_gpio_af 通用函数：UART 引脚 AF_PP+VERY_HIGH 复用配置（三路复用同一实现） |
-| 45 | project_tcs/Core/Src/main.c:785 | HAL_GPIO_Init(GPIOB, &gi) | I2C1 MspInit 内 PB8/PB9 AF4_OD+上拉（板上无上拉→飞线 4.7kΩ 外接兜底） |
-| 46 | project_tcs/Core/Src/main.c:810 | HAL_GPIO_TogglePin(LED1_GPIO_Port, LED1_Pin) | Error_Handler 死循环闪 LED1 指示故障 |
-| 47 | project_tcs/Core/Src/main.c:822 | HAL_GPIO_ReadPin(KILL_KEY_GPIO_Port, KILL_KEY_Pin) | 急停键轮询电平读（~10ms 去抖状态机） |
-| 48 | project_tcs/Core/Src/main.c:1069 | HAL_GPIO_WritePin(LED1_GPIO_Port, LED1_Pin, …) | 主循环运行心跳指示翻转 |
+| 39 | project_tcs/Core/Src/main.c:161 | HAL_GPIO_Init(GPIOA, &gi) | KILL_KEY=PA1 输入+内部下拉初始化（急停键，按下=高） |
+| 40 | project_tcs/Core/Src/main.c:171 | HAL_GPIO_Init | gpio 初始化块：PA3 输入上拉（链路 RX 探针位）等引脚配置 |
+| 41 | project_tcs/Core/Src/main.c:717 | HAL_GPIO_Init(GPIOB, &gi) | LED1/LED2 引脚推挽输出初始化 |
+| 42 | project_tcs/Core/Src/main.c:718 | HAL_GPIO_WritePin(GPIOB, LED1_Pin\ | LED2_Pin, SET) | LED 初始高电平（灭） |
+| 43 | project_tcs/Core/Src/main.c:723 | HAL_GPIO_Init | KEY0(PA1) 输入下拉初始化（急停键，MX_GPIO 块） |
+| 44 | project_tcs/Core/Src/main.c:742 | HAL_GPIO_Init(port, &gi) | uart_gpio_af 通用函数：UART 引脚 AF_PP+VERY_HIGH 复用配置（三路复用同一实现） |
+| 45 | project_tcs/Core/Src/main.c:809 | HAL_GPIO_Init(GPIOB, &gi) | I2C1 MspInit 内 PB8/PB9 AF4_OD+上拉（板上无上拉→飞线 4.7kΩ 外接兜底） |
+| 46 | project_tcs/Core/Src/main.c:834 | HAL_GPIO_TogglePin(LED1_GPIO_Port, LED1_Pin) | Error_Handler 死循环闪 LED1 指示故障 |
+| 47 | project_tcs/Core/Src/main.c:846 | HAL_GPIO_ReadPin(KILL_KEY_GPIO_Port, KILL_KEY_Pin) | 急停键轮询电平读（~10ms 去抖状态机） |
+| 48 | project_tcs/Core/Src/main.c:1109 | HAL_GPIO_WritePin(LED1_GPIO_Port, LED1_Pin, …) | 主循环运行心跳指示翻转 |
 | 49 | project_tcs/Core/Src/stm32h7xx_it.c:71 | HAL_GPIO_TogglePin(LED2_GPIO_Port, LED2_Pin) | Fault_Handler 死循环闪 LED2 指示（不喂 IWDG→2s 复位自恢复，WP-C） |
 
 ## ④ 对照结论
@@ -117,4 +119,4 @@ vendor 域说明：`App/rtt/`（SEGGER RTT vendor 五文件）同一 pattern 单
 | HAL_GPIO_Init 单点集中（#44） | **符合官方推荐 ✓**——uart_gpio_af 通用函数收敛三路 UART 引脚配置，避免散抄 |
 | 行号时效 | ltdc.c 行号=G 线未提交工作区快照（git M 态）；**G 线合入后本卡 ltdc.c 域 19 行需复核** |
 
-——研学卡完（49/49，2026-11-25 重锚）。
+——研学卡完（49/49，2026-11-26 重锚）。

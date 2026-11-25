@@ -115,6 +115,8 @@ project_tcs/App/tcs/console.c
 project_tcs/App/tcs/console.h
 project_tcs/App/tcs/control.c
 project_tcs/App/tcs/control.h
+project_tcs/App/tcs/estop_gate.c
+project_tcs/App/tcs/estop_gate.h
 project_tcs/App/tcs/fan.h
 project_tcs/App/tcs/m207.c
 project_tcs/App/tcs/m207.h
@@ -145,6 +147,7 @@ project_tcs/Core/Src/stm32h7xx_hal_msp.c
 project_tcs/Core/Src/stm32h7xx_it.c
 project_tcs/Core/Src/syscalls_stub.c
 project_tcs/tests/fuzz_m207.c
+project_tcs/tests/mutation_estop_gate.py
 project_tcs/tests/mutation_ui_model.py
 project_tcs/tests/test_control.c
 project_tcs/tests/test_link_info.c
@@ -155,6 +158,7 @@ project_tcs/tests/test_param_registry.c
 project_tcs/tests/test_post.c
 project_tcs/tests/test_proto_tcs.c
 project_tcs/tests/test_qr.c
+project_tcs/tests/test_site_logic.c
 project_tcs/tests/test_touch_session.c
 project_tcs/tests/test_ui_model.c
 project_tcs/tests/test_ws_json_escape.c
@@ -179,6 +183,21 @@ project_tcs/tools/qr_verify.py
 project_tcs/tools/reanchor_study_cards.py
 project_tcs/tools/regen_ext_fonts.py
 project_tcs/tools/rehearsal.py
+project_tcs/tools/site/dlg_timing.py
+project_tcs/tools/site/esp_bridge.py
+project_tcs/tools/site/esp_cmd.py
+project_tcs/tools/site/estop_matrix.py
+project_tcs/tools/site/hist_read.py
+project_tcs/tools/site/mask_lattice.py
+project_tcs/tools/site/rtt_live.py
+project_tcs/tools/site/site_common.py
+project_tcs/tools/site/site_web_check.py
+project_tcs/tools/site/tap.py
+project_tcs/tools/site/test_mb_fwcheck.py
+project_tcs/tools/site/test_ws_client.py
+project_tcs/tools/site/tune_refresh_check.py
+project_tcs/tools/site/verify_prod_clean.py
+project_tcs/tools/site/wvar.py
 project_tcs/tools/src_byte_check.py
 project_tcs/tools/tl8_read.py
 project_tcs/tools/touch_analyze.py
@@ -187,7 +206,7 @@ project_tcs/tools/vision_audit.py
 project_tcs/tools/vl2_token_audit.py
 project_tcs/tools/vl4_aa_check.py
 project_tcs/tools/web_gz_check.py
-esp32/tools/chart_test.js
 protocol/proto_layout.h
 protocol/tcs_proto.h
 tools/proto_sync.py
+esp32/tools/chart_test.js

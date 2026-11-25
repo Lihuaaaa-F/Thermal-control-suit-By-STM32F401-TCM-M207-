@@ -141,12 +141,24 @@ static int cmd_webtest(int argc, char **argv)
     return ws_selftest(dump);
 }
 
+/* linkmute：一条命令把两端都静默。
+ * 2026-11-24 两条线各写了一版同名命令（U 线：快照停发；S 线：链路层不收不发），
+ * 合并时合成这一条，两件事一起做：
+ *   - 快照生产者停发（tcs_snap_mute）：静默期内 0x20/0x21/设备信息一帧都不进发送队列；
+ *   - 链路层不收不发（link_mute_ms）：应答帧也不出，屏那边发来的字节直接丢弃并计数。
+ * 不拔线就能诱导"断链 → 恢复"，两端各自验证自己的断链显示与自愈。*/
 static int cmd_linkmute(int argc, char **argv)
 {
-    uint32_t s = (argc >= 2) ? (uint32_t)strtoul(argv[1], NULL, 10) : 0u;
-    if (s > 3600u) s = 3600u;          /* 1 小时封顶：再大 s*1000 会回绕成"立刻到期" */
-    tcs_snap_mute(s);
-    printf("linkmute %lu s (0 = resume)\r\n", (unsigned long)s);
+    if (argc < 2) {
+        printf("linkmute <0-3600 秒>（现在：链路%s，已丢弃接收 %lu 字节；0 = resume）\n",
+               link_muted() ? "静默中" : "正常", (unsigned long)link_mute_rxdrop());
+        return 1;
+    }
+    int sec = atoi(argv[1]);
+    if (sec < 0 || sec > 3600) { printf("linkmute 0-3600\n"); return 1; }
+    link_mute_ms((uint32_t)sec * 1000u);
+    tcs_snap_mute((uint32_t)sec);
+    printf("linkmute %d s (0 = resume)\n", sec);
     return 0;
 }
 #endif
@@ -305,6 +317,19 @@ static int cmd_linkrepin(int argc, char **argv)
     return 0;
 }
 
+#if CONFIG_TCS_SIM || CONFIG_TCS_DIAG
+static int cmd_linkloop(int argc, char **argv)
+{
+    if (argc < 2 || (strcmp(argv[1], "0") != 0 && strcmp(argv[1], "1") != 0)) {
+        printf("linkloop <0|1>（1=芯片内部 TX 接 RX，本端发什么收什么；用来验证回声防护）\n");
+        return 1;
+    }
+    esp_err_t r = link_loopback((uint8_t)atoi(argv[1]));
+    printf("linkloop %s -> %s\n", argv[1], esp_err_to_name(r));
+    return r == ESP_OK ? 0 : 1;
+}
+#endif
+
 static int cmd_ltx(int argc, char **argv)
 {
     (void)argc; (void)argv;
@@ -368,7 +393,7 @@ int tcs_console_start(void)
 #if CONFIG_TCS_DIAG || CONFIG_TCS_SIM
         { .command="webtest", .help="网页端点自检：回环 GET 9 个端点 + WebSocket 回环自检；webtest dump 另把 /api/ 各接口的响应体与收到的帧原文转储到控制台（台架/现场档）", .hint="[dump]",
           .func=cmd_webtest, .argtable=NULL },
-        { .command="linkmute", .help="linkmute <s>：s 秒内不给屏发快照/设备信息（取证屏幕断链显示；0=恢复）", .hint="<s>",
+        { .command="linkmute", .help="linkmute <秒>：链路静默（不收不发，快照也停发），用来诱导断链再恢复；0=恢复", .hint="<0-3600>",
           .func=cmd_linkmute, .argtable=NULL },
 #endif
 #if CONFIG_TCS_DIAG
@@ -393,6 +418,10 @@ int tcs_console_start(void)
       .func=cmd_gedge, .argtable=NULL },
     { .command="ltx", .help="屏链自检：UART1 连发 100B 0x55", .hint=NULL,
           .func=cmd_ltx, .argtable=NULL },
+#if CONFIG_TCS_SIM || CONFIG_TCS_DIAG
+    { .command="linkloop", .help="linkloop <0|1>：芯片内部 TX→RX 回环（回声源，验证回声防护）", .hint="<0|1>",
+          .func=cmd_linkloop, .argtable=NULL },
+#endif
         { .command="reset", .help="软复位", .hint=NULL,
           .func=cmd_reset, .argtable=NULL },
     };

@@ -9,6 +9,7 @@
 #include "lv_port_indev.h"
 #include "ft5446.h"
 #include "control.h"
+#include "estop_gate.h"
 #include <string.h>
 #include "tui.h"           /* TUI_ESTOP_*（急停热区矩形，与主页按钮共用一处定义）*/
 #include "stm32h7xx_hal.h"
@@ -263,16 +264,45 @@ void tcs_lvgl_poll(void)
     }
 }
 
-#define TCS_ESTOP_GRACE_MS       5u      /* 至少跨一个主循环节拍再看心跳（watch 在 poll 之前调用）*/
-#define TCS_ESTOP_FORCE_HOLD_MS   600u    /* 按住这么久还没弹窗 → 判 LVGL 半死，直接急停*/
+/* 急停屏入口兜底（D-L7②）：热区 = 首页底栏"急停"键，主循环节拍判定，不依赖 LVGL。
+ * 判定逻辑在 estop_gate.c（纯函数，单测 tests/test_site_logic.c），这里只负责取触摸坐标。
+ * 2026-11-23/24 现场修正边界：
+ *   - 规范是"急停二次确认（弹窗）"：LVGL 活着时，正常路径由它弹"确认急停？"。
+ *   - LVGL 心跳停了（卡死 / 低水位跳过 handler）→ 任何页面，按下后下一个节拍直接急停。
+ *   - LVGL 活着但按住 ≥600ms 仍无弹窗（indev 半死）→ 只在首页直接急停
+ *     （用户 2026-11-24 确认保留长按直接急停）。其它页面这块区域放的是别的控件
+ *     （调参页的"+"就在这里），不能触发——2026-11-24 复查抓到。
+ * 每次按压只触发一次；合成触摸（probe/console 注入）与真实触摸走同一条判定。*/
+
+/* 探针直读的计时记录（诊断钩子）。[0]=magic 0x45535047（最后写） [1]=按压起始 ms
+ * [2]=触发 ms [3]=按压到触发 ms [4]=原因（1=LVGL 卡死 2=首页长按）
+ * [5]=按压时心跳 [6]=触发时心跳 [7]=触发时页码 */
+#define ESTOP_DBG_MAGIC 0x45535047u
+volatile uint32_t g_estop_dbg[8];
+
+static void estop_zone_step(uint8_t in_zone)
+{
+    static estop_gate_state_t s_gate;
+    uint32_t now = HAL_GetTick();
+    estop_gate_fire_t r = estop_gate_step(&s_gate, in_zone, (uint8_t)(tui_dlg_kind() != TUI_DLG_NONE),
+                                          (uint8_t)(tui_current() == TUI_HOME), now, g_lvgl_beat);
+    if (r == ESTOP_GATE_IDLE) return;
+    uint32_t since = s_gate.since, beat0 = s_gate.beat0;
+    g_estop_dbg[1] = since;
+    g_estop_dbg[2] = now;
+    g_estop_dbg[3] = now - since;
+    g_estop_dbg[4] = (r == ESTOP_GATE_FIRE_DEAD) ? 1u : 2u;
+    g_estop_dbg[5] = beat0;
+    g_estop_dbg[6] = g_lvgl_beat;
+    g_estop_dbg[7] = (uint32_t)tui_current();
+    g_estop_dbg[0] = ESTOP_DBG_MAGIC;
+    tcs_emergency_stop();
+}
 
 void tcs_lvgl_estop_watch(void)
 {
     touch_event_t ev;
-    static uint8_t  s_in_zone, s_fired;
-    static uint32_t s_since, s_beat0;
-    /* 合成触摸（probe/console 注入；正常运行 g_tap_inject[0] 恒 0）与真实触摸走**同一条**
-     * 门控。2026-11-23 之前注入是"seq 一变就急停"的旁路，走查测的不是真手指那条路径。
+    /* 合成触摸（probe/console 注入；正常运行 g_tap_inject[0] 恒 0）：
      * mode 1 = 150ms 按压；mode 2 = 持续按住直到 mode 改 0（与 lv_port_indev 口径一致）。*/
     static uint32_t s_seq, s_synth_until;
     uint32_t now = HAL_GetTick();
@@ -281,51 +311,21 @@ void tcs_lvgl_estop_watch(void)
         s_seq = seq;
         s_synth_until = (g_tap_inject[1] == 1u) ? now + 150u : 0u;
     }
-    uint8_t  pressed;
-    uint32_t x, y;
+    uint8_t pressed = 0;
+    uint32_t x = 0, y = 0;
     if (g_tap_inject[1] == 2u || (s_synth_until && (int32_t)(s_synth_until - now) > 0)) {
         pressed = 1;
         x = g_tap_inject[2];
         y = g_tap_inject[3];
-    } else {
-        if (ft5446_read(&ev) != 0) { s_in_zone = 0; return; }
-        pressed = (ev.valid && ev.touched) ? 1u : 0u;
+    } else if (ft5446_read(&ev) == 0 && ev.valid && ev.touched) {
+        pressed = 1;
         x = ev.x;
         y = ev.y;
     }
-
-    /* D-L7② 屏入口兜底：热区 = 底栏急停键（矩形见 tui.h 的 TUI_ESTOP_*，现在 768,464,216,112），
-     * 主循环节拍判定，不依赖 LVGL。
-     * 2026-11-23 现场修正边界：规范是"急停二次确认（弹窗）"（UI 规范 §、规格书
-     * "屏弹窗"），正常路径由 LVGL 弹"确认急停？"。原实现不分情况先触发 → 一按就急停，
-     * 弹窗反而在急停之后才弹出，还把红色横幅挡住（现场实测）。现在：
-     *   - LVGL 心跳停了（卡死/低水位跳过 handler）→ 按下后下一个节拍直接急停（兜底本职）；
-     *   - LVGL 活着 → 交给弹窗确认；按住 ≥TCS_ESTOP_FORCE_HOLD_MS 仍无弹窗（半死）→ 直接急停。
-     * 两条都只在首页生效（用户 2026-11-24 确认保留长按直接急停）——其它页面这块区域是别的
-     * 控件（调参页的 + 键就在这里），不能触发。
-     * 开着的弹窗如果是"确认急停？"，长按也让位（那本身就是确认入口）；是别的弹窗
-     * （比如"切自动"）则照样直接急停并把它关掉——急停不该被任何弹窗挡住（独立复核 P2-8）。
-     * 每次按压只触发一次：重发由主循环 200ms pending 块负责（R-15），本机动作幂等。*/
-    if (!pressed || x < TUI_ESTOP_X || x >= TUI_ESTOP_X + TUI_ESTOP_W ||
-        y < TUI_ESTOP_Y || y >= TUI_ESTOP_Y + TUI_ESTOP_H) {
-        s_in_zone = 0;
-        return;
-    }
-    if (!s_in_zone) {
-        s_in_zone = 1;
-        s_fired = 0;
-        s_since = now;
-        s_beat0 = g_lvgl_beat;
-    }
-    if (s_fired || (uint32_t)(now - s_since) < TCS_ESTOP_GRACE_MS) return;
-    if (tui_current() != TUI_HOME) return;
-    uint8_t lvgl_alive = (g_lvgl_beat != s_beat0);
-    uint8_t held = ((uint32_t)(now - s_since) >= TCS_ESTOP_FORCE_HOLD_MS);
-    if (!lvgl_alive || (held && tui_dlg_kind() != TUI_DLG_ESTOP)) {
-        s_fired = 1;
-        if (lvgl_alive) tui_dlg_close();
-        tcs_emergency_stop();
-    }
+    uint8_t in_zone = (uint8_t)(pressed &&
+                               x >= TUI_ESTOP_X && x < TUI_ESTOP_X + TUI_ESTOP_W &&
+                               y >= TUI_ESTOP_Y && y < TUI_ESTOP_Y + TUI_ESTOP_H);
+    estop_zone_step(in_zone);
 }
 
 void tcs_lvgl_note_state_change(void)

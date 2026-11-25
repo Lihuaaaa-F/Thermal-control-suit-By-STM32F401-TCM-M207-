@@ -83,3 +83,14 @@ void link_on_cmd(link_cmd_cb_t cb);       /* 注册屏幕命令回调（应用�
 typedef void (*link_setparam_cb_t)(uint16_t id, float v, uint8_t seq);
 void link_on_setparam(link_setparam_cb_t cb);
 void link_send_ack(uint8_t acked_seq, uint8_t acked_mt, uint8_t status, float ret);
+
+#if CONFIG_TCS_SIM || CONFIG_TCS_DIAG
+/* 链路诊断（现场取证用）：静默 N 毫秒 / 芯片内部 TX→RX 回环。见 link_task.c。
+ * esp_err.h 只在这段里需要：bc36788 提交时只在默认档（PROD，不编译这一段）编译验证过，
+ * 到了真正编译这一段的 SIM/DIAG 档才暴露"unknown type name 'esp_err_t'"。*/
+#include "esp_err.h"
+uint8_t    link_muted(void);
+void       link_mute_ms(uint32_t ms);
+uint32_t   link_mute_rxdrop(void);
+esp_err_t  link_loopback(uint8_t on);
+#endif

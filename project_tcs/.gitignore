@@ -3,3 +3,7 @@ build-sim/
 # CDP 审计临时 profile（web_audit.py）
 project_tcs/tools/_chrome_prof/
 project_tcs/tools/_web_audit_page.html
+
+# Python 字节码（2026-11-24：tools/site 跑过就会生成，别入库）
+__pycache__/
+*.pyc

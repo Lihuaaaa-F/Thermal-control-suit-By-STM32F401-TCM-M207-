@@ -41,7 +41,11 @@ def main() -> int:
             bad.append(f"{name}.gz: 缺失（改完源文件必须重压）")
             continue
         try:
-            same = gzip.decompress(gz.read_bytes()) == src.read_bytes()
+            # 比对前把 CRLF 归一成 LF：.gz 里的内容按 LF 提交。仓库根 .gitattributes 已让 web_files
+            # 检出时不做行尾转换，这里再兜一层（2026-11-24：autocrlf 下全新检出实测 4/4 假红）。
+            def norm(b: bytes) -> bytes:
+                return b.replace(b"\r\n", b"\n")
+            same = norm(gzip.decompress(gz.read_bytes())) == norm(src.read_bytes())
         except OSError as e:
             same = False
             bad.append(f"{name}.gz: 解压失败 {e}")

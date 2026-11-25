@@ -1,0 +1,23 @@
+B03 变异验证 — estop_gate.c / estop_gate.h / ui_page_state.c
+基线（未变异）：test_site_logic: PASS=118 FAIL=0
+变异总数：19；被测试抓红：19；未抓到：0
+
+M1	RED	去掉 on_home 条件（非首页长按也会急停）	红 3 项；首条：FAIL: non-home hold 5s no fire (line 96)
+M2	RED	去掉 !dialog_open 条件	红 1 项；首条：FAIL: dialog open hold 5s no fire (line 104)
+M3	RED	去掉 fired 自锁（每次按压反复触发）	红 22 项；首条：FAIL: after fire idle (line 78)
+M4	RED	宽限期 5ms 改成 0	红 19 项；首条：FAIL: press registered idle (line 71)
+M5	RED	宽限期 5ms 改成 50	红 2 项；首条：FAIL: dead: held 5 fires (line 112)
+M6	RED	held >= 600 改成 > 600	红 6 项；首条：FAIL: hold=600 fires on home (line 77)
+M7	RED	lvgl_alive 取反	红 17 项；首条：FAIL: hold<600 idle (line 75)
+M8	RED	离开热区不复位	红 4 项；首条：FAIL: re-press fires again (line 157)
+M9.mode	RED	ui_p0_state_changed 不比较 mode	红 2 项；首条：FAIL: mode (line 211)
+M9.fan	RED	ui_p0_state_changed 不比较 fan	红 2 项；首条：FAIL: fan (line 211)
+M9.tec1	RED	ui_p0_state_changed 不比较 tec1	红 2 项；首条：FAIL: tec1 (line 211)
+M9.tec2	RED	ui_p0_state_changed 不比较 tec2	红 2 项；首条：FAIL: tec2 (line 211)
+M9.estop	RED	ui_p0_state_changed 不比较 estop	红 2 项；首条：FAIL: estop (line 211)
+M9.alm	RED	ui_p0_state_changed 不比较 alm	红 2 项；首条：FAIL: alm (line 211)
+M9.body	RED	ui_p0_state_changed 不比较 body	红 3 项；首条：FAIL: body (line 211)
+M9.m207	RED	ui_p0_state_changed 不比较 m207	红 2 项；首条：FAIL: m207 (line 211)
+M10.sel	RED	ui_p1_state_changed 不比较 sel	红 1 项；首条：FAIL: p1 sel change (line 233)
+M10.step	RED	ui_p1_state_changed 不比较 step	红 1 项；首条：FAIL: p1 step change (line 234)
+M10.val	RED	ui_p1_state_changed 不比较 val[i]	红 10 项；首条：FAIL: p1 val change (line 237)

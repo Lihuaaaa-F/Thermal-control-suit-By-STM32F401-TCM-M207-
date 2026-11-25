@@ -348,6 +348,8 @@ static uint16_t s_hook_id;
 static int hook_map(uint16_t pid, float v) { (void)v; s_hook_calls++; s_hook_id = pid; return s_hook_rc; }
 static int hook_set(uint8_t ch, float v)   { (void)v; s_hook_calls++; s_hook_id = ch; return s_hook_rc; }
 static void bcast_cnt(param_desc_t *p, uint8_t src) { (void)p; (void)src; s_bcast++; }
+static int s_commit_rc, s_commit_calls;
+static int commit_stub(const uint8_t *img) { (void)img; s_commit_calls++; return s_commit_rc; }
 
 static void test_param_set(void)
 {
@@ -384,6 +386,23 @@ static void test_param_set(void)
     s_hook_rc = -1; s_hook_calls = 0; s_hook_id = 0;
     rv = param_set(PARAM_ID_TC1_SET, 26.0f, PARAM_SRC_WEB);
     CHECK(rv == 2 && s_hook_calls == 1 && s_hook_id == 1, "P5 setpoint path reports 'not taken' with the channel");
+
+    /* E1 / E2（X04-F-07）：落盘失败要计数（control_poll 据此置 ALM_EEPROM）；首次上电不报警 */
+    s_commit_rc = -1; s_commit_calls = 0;
+    param_registry_init(&(param_hooks_t){ .eeprom_commit = commit_stub });
+    (void)param_set(PARAM_ID_HYST, 0.4f, PARAM_SRC_CONSOLE);         /* 置脏 */
+    param_persist_flush(1000u);                                      /* 窗口起点 */
+    CHECK(s_commit_calls == 0, "E1 nothing is written before the debounce window");
+    param_persist_flush(1000u + PARAM_PERSIST_DEBOUNCE_MS);          /* 到点：commit 失败 */
+    CHECK(s_commit_calls == 1 && param_persist_fail_count() == 1, "E1 a failed commit is counted");
+    param_persist_flush(1000u + PARAM_PERSIST_DEBOUNCE_MS + 100u);
+    CHECK(s_commit_calls == 1, "E1 no retry on every call after a failure (backs off one window)");
+    s_commit_rc = 0;
+    param_persist_flush(1000u + 2u * PARAM_PERSIST_DEBOUNCE_MS + 100u);
+    CHECK(s_commit_calls == 2 && param_persist_fail_count() == 0, "E1 a later successful commit clears the count");
+    CHECK(param_restore_alarm_needed(1, 0) == 0, "E2 first boot (no image) is not an EEPROM alarm");
+    CHECK(param_restore_alarm_needed(0, 0) == 1, "E2 unreadable / corrupt image is an EEPROM alarm");
+    CHECK(param_restore_alarm_needed(0, 1) == 0, "E2 a good image is not an alarm");
 }
 
 int main(void)

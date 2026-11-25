@@ -123,6 +123,11 @@ MUTATIONS = [
     ("D01 全部回退到修前写法（不上抛 + 同值短路）", "param_registry.c",
      [("    return err ? 2 : 0;", "    return 0;"),
       ("        return clamped ? 1 : side_effects(p, 1);", "        return clamped ? 1 : 0;")]),
+    # ---- param_registry.c：参数存储故障可见（X04-F-07）----
+    ("C45 落盘失败不计数", "param_registry.c",
+     [("        s_persist_fail++;", "        ;")]),
+    ("C46 首次上电也报 EEPROM 报警", "param_registry.c",
+     [("    return (load_not_found || deser_ok) ? 0u : 1u;", "    return 1u;")]),
 ]
 
 

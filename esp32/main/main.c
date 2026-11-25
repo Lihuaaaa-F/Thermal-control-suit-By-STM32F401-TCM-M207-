@@ -227,12 +227,15 @@ void app_main(void)
                             .on_broadcast = esp_on_broadcast,
                             .on_check = control_param_check };   /* 急停/超温锁存期间不得切自动 */
     param_registry_init(&hooks);
+    uint8_t registry_alarm = 0;   /* X04-F-07：镜像读失败 / 校验不过 → control_init 之后置 ALM_EEPROM */
     {
         /* P1-12：把"首次上电"与"读失败 / 镜像校验不过"拆开。原先两者合用一句
          * "(defaults, first boot)"——参数损坏后以默认设定继续运行，日志看起来却像出厂。*/
         uint8_t img[EE_IMG_SIZE];
         esp_err_t lr = nvs_registry_load(img);
-        if (lr == ESP_OK && param_deserialize(img) == 0)
+        int dr = (lr == ESP_OK) ? param_deserialize(img) : -1;
+        registry_alarm = param_restore_alarm_needed(lr == ESP_ERR_NVS_NOT_FOUND, (uint8_t)(dr == 0));
+        if (dr == 0)
             ESP_LOGI(TAG, "R1a registry: %d params restored from NVS", param_count());
         else if (lr == ESP_ERR_NVS_NOT_FOUND)
             ESP_LOGI(TAG, "R1a registry: %d params loaded (defaults, first boot)", param_count());
@@ -295,6 +298,9 @@ void app_main(void)
         (void)m207_tec(2, 0);
         fan_set_on(1);
     }
+    /* X04-F-07：上电时 NVS 读失败 / 镜像校验不过 → ALM_EEPROM（屏端与网页都有现成文案"参数校验失败"）。
+     * 必须放在 control_init 之后：它会把报警位清零。首次上电不算。*/
+    if (registry_alarm) tcs_alarm_raise(ALM_EEPROM);
     /* X04-F-03：随锁存落盘的报警位快照——上一轮出事时屏上 / 网页上亮着什么。只作证据，不回灌。*/
     {
         uint16_t saved_alarm = safety_state_last_alarm();

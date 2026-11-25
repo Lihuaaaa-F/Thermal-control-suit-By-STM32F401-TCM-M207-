@@ -140,6 +140,8 @@ void  param_persist_flush(uint32_t now_ms);
 /* 立即固化（p save / 调参页保存按钮）。返回 0=已提交，1=无脏参，-1=commit 失败。 */
 int   param_persist_now(void);
 uint32_t param_persist_fail_count(void);   /* R1 P1-04：连续落盘失败次数 */
+/* X04-F-07：上电恢复后要不要报 ALM_EEPROM（首次上电不报；NVS 读失败 / 镜像校验不过要报）*/
+uint8_t param_restore_alarm_needed(uint8_t load_not_found, uint8_t deser_ok);
 
 /* 广播（param_set 内部已调；模式等非参数变更可手动调）*/
 void  param_broadcast(param_desc_t *p, uint8_t src);

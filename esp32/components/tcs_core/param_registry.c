@@ -420,3 +420,11 @@ void param_persist_flush(uint32_t now_ms)
 }
 
 uint32_t param_persist_fail_count(void) { return s_persist_fail; }
+
+/* 上电恢复的结果要不要报 ALM_EEPROM（X04-F-07）。
+ * load_not_found = NVS 里没有镜像（首次上电）；deser_ok = param_deserialize 的结果（读失败时传 0）。
+ * 首次上电是正常现象，不报；读失败 / 镜像校验不过意味着用户的设定已经丢了，必须报。*/
+uint8_t param_restore_alarm_needed(uint8_t load_not_found, uint8_t deser_ok)
+{
+    return (load_not_found || deser_ok) ? 0u : 1u;
+}

@@ -63,6 +63,8 @@ static uint8_t load0_cb(void)            { return 0; }
 static uint8_t load_stuck_cb(void)       { return SAFETY_BIT_STUCK; }
 /* X06-F-03 用：复位前锁存着超温 + 急停 */
 static uint8_t load_ot_estop_cb(void)    { return SAFETY_BIT_OVERTEMP | SAFETY_BIT_ESTOP; }
+/* X04-F-07 用：NVS 落盘总是失败 */
+static int commit_fail_stub(const uint8_t *img) { (void)img; return -1; }
 
 static void reset_stubs(void)
 {
@@ -1274,6 +1276,29 @@ int main(void)
         tcs_alarm_ack();
         CHECK(control_safety_latched() != 0 && control_state() == CTRL_SAFE,
               "Z3 ack cannot clear it while the water is still over 48");
+    }
+
+    /* ====== 2026-11-26 S 线 e3a（X04-F-07）：参数存储出故障要看得见 ====== */
+    {
+        control_init(&(control_ops_t){
+            .fan_set = stub_fan, .tec_sw = stub_tec, .tec_temp = stub_temp, .on_state = 0,
+        });
+        param_registry_init(&(param_hooks_t){ .eeprom_commit = commit_fail_stub });
+        set_armed(0);
+        g_tcs.body_sensor_ok = 1; g_tcs.m207_online = 1; g_tcs.m207_sensor_open = 0;
+        g_tcs.body_temp = 37.0f; g_tcs.tc1_act = 25.0f;
+        s_now = 10000u;
+        (void)param_set(PARAM_ID_HYST, 0.4f, 4);
+        param_persist_flush(s_now);
+        s_now += PARAM_PERSIST_DEBOUNCE_MS;
+        param_persist_flush(s_now);                   /* commit 失败 */
+        control_poll(s_now);
+        CHECK(param_persist_fail_count() == 1 && tcs_alarm_active(ALM_EEPROM) == 1,
+              "E3 a failed parameter write raises ALM_EEPROM on the next control tick");
+        tcs_alarm_ack();
+        CHECK(tcs_alarm_active(ALM_EEPROM) == 0, "E3 ALM_EEPROM is informational: ack clears it");
+        control_poll(s_now + 100u);
+        CHECK(tcs_alarm_active(ALM_EEPROM) == 1, "E3 re-raised on the next tick while the failure count stands");
     }
 
     printf("test_control: PASS=%d FAIL=%d\n", g_pass, g_fail);

@@ -29,6 +29,7 @@ import time
 import site_common as sc
 
 ZONE = (940, 520)            # 兜底区内、调参页"+"键也在这个位置（最坏情况：右下角那块是别的控件）
+BACK = (84, 28)              # 二级页左上角"‹ 返回"（24,8,120,40）的中心；调参 / 曲线 / 连接三页相同
 BTN_PROBE = (790, 482)       # "急停"键内、文字之外的像素
 FB = 0xC0000000
 PAGE_NAME = {0: "首页", 1: "调参", 2: "曲线", 3: "连接"}
@@ -77,7 +78,7 @@ def main():
         if page() == p:
             return True
         if page() != 0:
-            tap(84, 28) if page() in (1, 2) else tap(144, 520)
+            tap(*BACK)
             time.sleep(1.0)
         if p != 0 and page() == 0:
             tap((0, 144, 260, 608)[p], (0, 520, 200, 520)[p])
@@ -94,7 +95,7 @@ def main():
         for _ in range(3):
             if page() == 0:
                 break
-            tap(84, 28) if page() in (1, 2) else tap(144, 520)
+            tap(*BACK)
             time.sleep(1.0)
         time.sleep(0.8)
         tap(400, 36)          # 横幅
@@ -145,97 +146,115 @@ def main():
             r = pixel(*BTN_PROBE)
             rows.append((PAGE_NAME[p], "恢复回红", True, "确认后按钮像素=0x%04X" % r))
 
-    # ---------- 兜底：界面没在处理这次按压 ----------
-    def fallback(pg, how, hold_ms, freeze, drop):
-        """在页 pg 上制造"界面没在处理"，按住 hold_ms。返回 (行, 是否触发)。"""
-        assert goto(pg), "导航失败：到不了 %s" % PAGE_NAME[pg]
-        if freeze:
-            setvar("g_lvgl_freeze", 1)
-        if drop:
-            setvar("g_tap_drop", 1)
-        time.sleep(0.5)
-        c0, r0 = calls(), reads()
-        hold(hold_ms)
-        time.sleep(0.4)
-        c1, r1 = calls(), reads()
-        dbg = r32("g_estop_dbg", 8)
-        if freeze:
-            setvar("g_lvgl_freeze", 0)
-        if drop:
-            setvar("g_tap_drop", 0)
-        fired = c1 != c0
-        detail = "急停调用 +%d，LVGL 读到按下 +%d 次" % (c1 - c0, r1 - r0)
+    try:
+        # ---------- 兜底：界面没在处理这次按压 ----------
+        def fallback(pg, how, hold_ms, freeze, drop):
+            """在页 pg 上制造"界面没在处理"：hold_ms>0 按住 hold_ms；hold_ms=0 点一下。返回 (读数, 是否触发, 调试量)。"""
+            assert goto(pg), "导航失败：到不了 %s" % PAGE_NAME[pg]
+            if freeze:
+                setvar("g_lvgl_freeze", 1)
+            if drop:
+                setvar("g_tap_drop", 1)
+            time.sleep(0.5)
+            c0, r0 = calls(), reads()
+            if hold_ms:
+                hold(hold_ms)
+            else:
+                # 点一下：mode 1，固件侧 150ms 自动松开。不能用 hold(300)——主机每做一次探针写要约 0.35 秒，
+                # "按下"与"松开"两次写之间隔着 sleep(0.3)+两次写，固件看到的按压接近 1 秒，早就过了 600ms 阈值
+                # （2026-11-25 真机据此误报过一条 FAIL）。
+                tap(*ZONE)
+                time.sleep(0.5)
+            time.sleep(0.4)
+            c1, r1 = calls(), reads()
+            dbg = r32("g_estop_dbg", 8)
+            if freeze:
+                setvar("g_lvgl_freeze", 0)
+            if drop:
+                setvar("g_tap_drop", 0)
+            fired = c1 != c0
+            detail = "急停调用 +%d，LVGL 读到按下 +%d 次" % (c1 - c0, r1 - r0)
+            if fired:
+                detail += "，原因=%d 按压到触发=%dms（页码=%d）" % (dbg[4], dbg[3], dbg[7])
+            return detail, fired, dbg
+
+        # A 首页 + LVGL 卡死 → 立即触发
+        detail, fired, dbg = fallback(0, "冻结LVGL", 600, freeze=True, drop=False)
+        rows.append(("首页", "冻结LVGL按住", fired and dbg[4] == 1 and dbg[3] <= 40 and dbg[7] == 0, detail))
+        time.sleep(1.0)
         if fired:
-            detail += "，原因=%d 按压到触发=%dms（页码=%d）" % (dbg[4], dbg[3], dbg[7])
-        return detail, fired, dbg
+            ack_and_home()
 
-    # A 首页 + LVGL 卡死 → 立即触发
-    detail, fired, dbg = fallback(0, "冻结LVGL", 600, freeze=True, drop=False)
-    rows.append(("首页", "冻结LVGL按住", fired and dbg[4] == 1 and dbg[3] <= 40 and dbg[7] == 0, detail))
-    time.sleep(1.0)
-    if fired:
-        ack_and_home()
+        # C 调参页 + LVGL 卡死：点一下（300ms）不触发
+        detail, fired, _ = fallback(1, "冻结LVGL", 0, freeze=True, drop=False)
+        rows.append(("调参", "冻结LVGL点一下", not fired, detail + "（150ms 点按，误碰不停机）"))
 
-    # C 调参页 + LVGL 卡死：点一下（300ms）不触发
-    detail, fired, _ = fallback(1, "冻结LVGL", 300, freeze=True, drop=False)
-    rows.append(("调参", "冻结LVGL点一下", not fired, detail + "（一下误碰不停机）"))
+        # C 调参页 + LVGL 卡死：按住 600ms 才触发
+        detail, fired, dbg = fallback(1, "冻结LVGL", 800, freeze=True, drop=False)
+        rows.append(("调参", "冻结LVGL按住", fired and dbg[4] == 3 and 540 <= dbg[3] <= 760 and dbg[7] == 1, detail))
+        time.sleep(1.0)
+        if fired:
+            ack_and_home()
 
-    # C 调参页 + LVGL 卡死：按住 600ms 才触发
-    detail, fired, dbg = fallback(1, "冻结LVGL", 800, freeze=True, drop=False)
-    rows.append(("调参", "冻结LVGL按住", fired and dbg[4] == 3 and 540 <= dbg[3] <= 760 and dbg[7] == 1, detail))
-    time.sleep(1.0)
-    if fired:
-        ack_and_home()
+        # B 首页 + 触摸没送进 LVGL（LVGL 活着）→ 首页长按压住 600ms 触发
+        detail, fired, dbg = fallback(0, "触摸丢帧", 800, freeze=False, drop=True)
+        rows.append(("首页", "触摸丢帧按住", fired and dbg[4] == 2 and 540 <= dbg[3] <= 700 and dbg[7] == 0, detail))
+        time.sleep(1.0)
+        if fired:
+            ack_and_home()
 
-    # B 首页 + 触摸没送进 LVGL（LVGL 活着）→ 首页长按压住 600ms 触发
-    detail, fired, dbg = fallback(0, "触摸丢帧", 800, freeze=False, drop=True)
-    rows.append(("首页", "触摸丢帧按住", fired and dbg[4] == 2 and 540 <= dbg[3] <= 700 and dbg[7] == 0, detail))
-    time.sleep(1.0)
-    if fired:
-        ack_and_home()
+        # C 调参页 + 触摸没送进 LVGL（LVGL 活着）→ 按住 600ms 触发（界面回不了首页，急停不能因此够不着）
+        detail, fired, dbg = fallback(1, "触摸丢帧", 800, freeze=False, drop=True)
+        rows.append(("调参", "触摸丢帧按住", fired and dbg[4] == 3 and 540 <= dbg[3] <= 700 and dbg[7] == 1, detail))
+        time.sleep(1.0)
+        if fired:
+            ack_and_home()
 
-    # C 调参页 + 触摸没送进 LVGL（LVGL 活着）→ 按住 600ms 触发（界面回不了首页，急停不能因此够不着）
-    detail, fired, dbg = fallback(1, "触摸丢帧", 800, freeze=False, drop=True)
-    rows.append(("调参", "触摸丢帧按住", fired and dbg[4] == 3 and 540 <= dbg[3] <= 700 and dbg[7] == 1, detail))
-    time.sleep(1.0)
-    if fired:
-        ack_and_home()
+        # ---------- 弹窗 ----------
+        # B 首页 + "切自动"弹窗开着：按住照样触发，并且弹窗被关掉
+        assert goto(0), "导航失败：回不了首页"
+        ui_cmd(UI_CMD["dlg_mode"])
+        time.sleep(1.0)
+        opened = mask() != 0
+        c0 = calls()
+        hold(800)
+        time.sleep(0.5)
+        c1 = calls()
+        dbg = r32("g_estop_dbg", 8)
+        fired = c1 != c0
+        rows.append(("首页", "别的弹窗挡不住", opened and fired and dbg[4] == 2 and mask() == 0,
+                     "弹窗先开着=%s；急停调用 +%d，原因=%d 按压到触发=%dms，触发后弹窗=%s"
+                     % (opened, c1 - c0, dbg[4], dbg[3], "已关" if mask() == 0 else "还开着")))
+        if mask():
+            ui_cmd(UI_CMD["dlg_close"])
+        if fired:
+            ack_and_home()
 
-    # ---------- 弹窗 ----------
-    # B 首页 + "切自动"弹窗开着：按住照样触发，并且弹窗被关掉
-    assert goto(0), "导航失败：回不了首页"
-    ui_cmd(UI_CMD["dlg_mode"])
-    time.sleep(1.0)
-    opened = mask() != 0
-    c0 = calls()
-    hold(800)
-    time.sleep(0.5)
-    c1 = calls()
-    dbg = r32("g_estop_dbg", 8)
-    fired = c1 != c0
-    rows.append(("首页", "别的弹窗挡不住", opened and fired and dbg[4] == 2 and mask() == 0,
-                 "弹窗先开着=%s；急停调用 +%d，原因=%d 按压到触发=%dms，触发后弹窗=%s"
-                 % (opened, c1 - c0, dbg[4], dbg[3], "已关" if mask() == 0 else "还开着")))
-    if mask():
-        ui_cmd(UI_CMD["dlg_close"])
-    if fired:
-        ack_and_home()
+        # B 首页 + "确认急停"弹窗开着：按住 2s 让位，不触发
+        assert goto(0), "导航失败：回不了首页"
+        ui_cmd(UI_CMD["dlg_estop"])
+        time.sleep(1.0)
+        opened = mask() != 0
+        c0 = calls()
+        hold(2000)
+        time.sleep(0.5)
+        c1 = calls()
+        rows.append(("首页", "确认急停弹窗让位", opened and c1 == c0 and mask() != 0,
+                     "弹窗先开着=%s；急停调用 +%d；按完弹窗=%s" % (opened, c1 - c0, "还开着" if mask() else "没了")))
+        if mask():
+            ui_cmd(UI_CMD["dlg_close"])
+            time.sleep(0.6)
 
-    # B 首页 + "确认急停"弹窗开着：按住 2s 让位，不触发
-    assert goto(0), "导航失败：回不了首页"
-    ui_cmd(UI_CMD["dlg_estop"])
-    time.sleep(1.0)
-    opened = mask() != 0
-    c0 = calls()
-    hold(2000)
-    time.sleep(0.5)
-    c1 = calls()
-    rows.append(("首页", "确认急停弹窗让位", opened and c1 == c0 and mask() != 0,
-                 "弹窗先开着=%s；急停调用 +%d；按完弹窗=%s" % (opened, c1 - c0, "还开着" if mask() else "没了")))
-    if mask():
-        ui_cmd(UI_CMD["dlg_close"])
-        time.sleep(0.6)
-
+    except Exception as e:                                  # noqa: BLE001
+        # 2026-11-25 教训：兜底段中途抛异常时，前两轮已经量到的行一个都没打印出来。
+        # 现在照常出表；冻结 / 丢帧钩子可能还开着，先复位，免得界面一直卡着。
+        for hook in ("g_lvgl_freeze", "g_tap_drop"):
+            try:
+                mb.pr_write(A[hook], struct.pack("<I", 0))
+            except Exception:                                  # noqa: BLE001
+                pass
+        rows.append(("—", "脚本中断", False, "%s: %s" % (type(e).__name__, e)))
+        raise
     ok_all = True
     print("%-6s %-16s %-4s %s" % ("页面", "动作", "结果", "读数"))
     for pg, act, ok, detail in rows:

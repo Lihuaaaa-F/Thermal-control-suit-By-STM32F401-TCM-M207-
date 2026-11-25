@@ -43,6 +43,13 @@ typedef enum {
 #define SAFETY_BIT_BODY_LOST  (1u << 1)
 #define SAFETY_BIT_M207_LOST  (1u << 2)
 #define SAFETY_BIT_ESTOP      (1u << 3)
+/* 读数卡死（M09-F-09 / X04-F-06）：源自报健康，但读数逐位不变 ≥ CTRL_STUCK_WINDOW_MS 且 TEC 已开
+ * 同样久。与上面四位的区别：只在运行时成立，**不落盘**——复位后"哪个通道、冻在哪个值"都无从得知，
+ * 而运行时判据会在 TEC 重新开满一个窗口后再次触发，落盘不增加保护；反而会在上电恢复时因为
+ * 通道归属丢失（见 s_stuck_chn）把没有体温探头的设备永久锁在 SAFE。按通信类自动恢复：读数重新
+ * 开始变化后 2s 自清。不受布防门控。*/
+#define SAFETY_BIT_STUCK      (1u << 4)
+/* 卡死窗口 CTRL_STUCK_WINDOW_MS 定义在 control.c（30s = 300 拍，审查方案 M09-F-09 的 N=300）*/
 
 typedef struct {
     void (*fan_set)(uint8_t on);

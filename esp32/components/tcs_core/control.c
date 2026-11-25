@@ -7,7 +7,10 @@
  *   COOL : body < body_hot−hyst → TCSW=0 + 风扇关 → IDLE
  *   HEAT : body > body_cold+hyst → TCSW=0 + 风扇关 → IDLE
  *   任意 : 传感器丢失 / M207 失联 → SAFE（TCSW=0 + 风扇开 + ALM）
- *   SAFE : 通信类故障（体温/M207/探头）源健康 2s → 自动退出；急停/超温 → 人工确认后退出
+ *   任意 : 过温（tc1_act > 48°C）→ SAFE，不受布防门控（P0-01）
+ *   任意 : 读数卡死（源自报健康，但读数逐位不变 ≥30s 且 TEC 已开 ≥30s）→ SAFE，不受布防门控
+ *          （M09-F-09 / X04-F-06，见下方"卡死值活性判据"）
+ *   SAFE : 通信类故障（体温/M207/探头/卡死）源健康 2s → 自动退出；急停/超温 → 人工确认后退出
  *   退出 : 手动模式复原故障前的风扇；仅"体温传感器一个源、且是 2s 自愈退出"时复原手动 TEC2；
  *          自动模式不复原，输出当拍由状态机按体温重新定（见 leave_safe）
  * 滞回算例（默认参数 37.5/36.5/0.2）：>37.7 进制冷、<37.3 退制冷；
@@ -16,6 +19,7 @@
 #include "control.h"
 #include "param_registry.h"
 #include "post.h"
+#include <string.h>       /* 卡死判据按位比较读数（memcpy）*/
 
 /* 安全锁存并发：ESP32 上是跨任务（control/link/httpd/console）读改写，需临界区；
  * PC 单测是单线程，锁退化为空——保持 control.c 零 HAL/零 FreeRTOS 依赖（既有测试架构）。*/
@@ -67,8 +71,81 @@ static uint8_t s_safety_ok = 0xFF;
  * 源持续健康 2s 就自动清锁存——否则每次线缆抖动都要人工 ack，实测无法连续跑。
  * 急停与超温**不**在此列，仍必须人工确认（安全红线不变）。*/
 #define COMM_AUTO_RECOVER_MS   2000u
-#define SAFETY_COMM_MASK       ((uint8_t)(SAFETY_BIT_BODY_LOST | SAFETY_BIT_M207_LOST))
+#define SAFETY_COMM_MASK       ((uint8_t)(SAFETY_BIT_BODY_LOST | SAFETY_BIT_M207_LOST | SAFETY_BIT_STUCK))
 static uint32_t s_comm_ok_since;
+
+/* 落盘的锁存位：STUCK 只在运行时成立，不跨复位（理由见 control.h 的 SAFETY_BIT_STUCK）*/
+#define SAFETY_PERSIST_MASK     ((uint8_t)~SAFETY_BIT_STUCK)
+#define CTRL_STUCK_WINDOW_MS    30000u  /* 卡死窗口：300 拍 × 100ms（审查方案 M09-F-09 的 N=300）*/
+
+/* ====== 卡死值活性判据（M09-F-09 / X04-F-06，审查方案 AD-2）======
+ * 合理性滤波只查范围与变化率：恒定值永远"合理"。于是——
+ *   体温（TMP117）读数冻结 → 自动模式永远停在 HEAT/COOL，水按 45°C / 15°C 目标一直开；
+ *   水温（M207 TCACTTEMP）冻结 → 48°C 硬切断对它完全失效；冻结的若正是模块自己的探头，
+ *     模块闭环也一起失明，输出不再有界——这才是真正的"无边界加热"。
+ * 判据：源自报健康（体温 ok / 模块在线且探头未开路），但读数**逐位**不变满一个窗口，
+ *   且 TEC 已连续开满同一个窗口（两者取较晚者：刚开 TEC 时给被控对象留出响应时间）。
+ *   - 体温：只在自动模式的 HEAT / COOL 下判——那里是这个读数在驱动决策；手动模式下体温读数不驱动任何输出。
+ *   - 水温：TC1 开着就判（自动、手动都算；手动模式下 48°C 硬切断同样依赖这个读数）。
+ *   源不健康期间不累计（离线 / 探头开路走既有失联路径，不重复报）。
+ * 进 SAFE，不受布防门控。报警位借用 ALM_BODY_SENSOR / ALM_SENSOR_OPEN：屏与网页只对已知位出文案，
+ *   新增位在两端都不可见（界面文件不在本批次）。这两位在两端都归"自动恢复类"，所以 STUCK 也按
+ *   通信类自愈：涉事通道的读数重新开始变化后 2s 清锁存；读数一直不变就一直留在 SAFE。
+ *   （代价：时冻时动的传感器每次"动一下"最多换来一个窗口的输出，见结果文档风险一节。）
+ * 真机旁证（docs/evidence/S_线/B10_风扇复现.txt）：健康的 TCACTTEMP 以 0.01°C 上报，相邻两次
+ *   读数在 ±0.01~0.07°C 内持续抖动，不会 30s 逐位不变。*/
+typedef struct {
+    uint32_t bits;         /* 最近一个**不同**的读数（按位比较；不用 ==，NaN 也算变化）*/
+    uint32_t last_change;  /* 读数最近一次变化的时间；0 = 没有样本（源不健康期间复位）*/
+} stuck_src_t;
+
+static stuck_src_t s_stuck_body, s_stuck_tc1;
+static volatile uint8_t s_stuck_chn;   /* 本轮 STUCK 锁存由谁引起：bit0=体温 bit1=水温（随锁存位一起清）*/
+static uint32_t   s_tec_on_since[2];   /* TCx 有效命令最近一次 0→1 的时间（out_tec_sw 里记）*/
+static uint8_t    s_tec_cmd_on[2];
+static uint32_t   s_poll_now_ms;       /* 最近一拍的时间戳：out_tec_sw 在拍外被调时用它给 TEC 开沿计时*/
+
+static void stuck_feed(stuck_src_t *c, float v, uint32_t now_ms, uint8_t src_ok)
+{
+    uint32_t b;
+    if (!src_ok) {                       /* 源不健康：从头再来，恢复后要有完整的一个窗口 */
+        c->last_change = 0;
+        return;
+    }
+    memcpy(&b, &v, sizeof(b));
+    if (!c->last_change || b != c->bits) {
+        c->bits = b;
+        c->last_change = now_ms ? now_ms : 1u;   /* 0 是"时间基准未建立"，不能当时间戳 */
+    }
+}
+
+/* 读数是"活"的：最近一个窗口内变过 */
+static uint8_t stuck_live(const stuck_src_t *c, uint32_t now_ms)
+{
+    return (uint8_t)(c->last_change && (uint32_t)(now_ms - c->last_change) < CTRL_STUCK_WINDOW_MS);
+}
+
+/* 卡死成立：读数逐位不变满一个窗口，且 TEC 从那之后（或同时）一直开着。
+ * 没有样本（源不健康期间 last_change 被复位）不算卡死——离线走失联路径，不是"读数冻结"。*/
+static uint8_t stuck_is(const stuck_src_t *c, uint32_t now_ms, uint32_t on_since)
+{
+    if (!c->last_change || stuck_live(c, now_ms) || !on_since) return 0;
+    return (uint8_t)((uint32_t)(now_ms - on_since) >= CTRL_STUCK_WINDOW_MS);
+}
+
+/* 涉事通道的读数是否都已重新开始变化（STUCK 自愈与 ack 的依据）*/
+static uint8_t stuck_recovered(uint32_t now_ms, uint8_t chn)
+{
+    if ((chn & 1u) && !stuck_live(&s_stuck_body, now_ms)) return 0;
+    if ((chn & 2u) && !stuck_live(&s_stuck_tc1,  now_ms)) return 0;
+    return 1;
+}
+
+/* 涉事通道：锁存里有 STUCK 才有意义。调用方持有 SAFETY_LOCK（lat 就是锁里读出的那份）*/
+static uint8_t stuck_chn_latched(uint8_t lat)
+{
+    return (uint8_t)((lat & SAFETY_BIT_STUCK) ? s_stuck_chn : 0u);
+}
 
 /* N-04：落盘串行化。trip 与 ack 可能在不同任务并发，直接各自写 NVS 会用旧值覆盖新值。
  * 这里用一把 mutex 串行化"读最新 latch + 写盘"，且**每次写当前值**，所以最后一次写入
@@ -82,7 +159,7 @@ static void safety_persist_now(void)
     if (!s_ops.safety_persist) return;
     if (s_persist_mtx && xSemaphoreTake(s_persist_mtx, portMAX_DELAY) != pdTRUE) return;
     SAFETY_LOCK();
-    v = s_safety_latch;
+    v = s_safety_latch & SAFETY_PERSIST_MASK;   /* STUCK 不落盘 */
     SAFETY_UNLOCK();
     s_ops.safety_persist(v);
     if (s_persist_mtx) xSemaphoreGive(s_persist_mtx);
@@ -93,7 +170,7 @@ static void safety_persist_now(void)
     uint8_t v;
     if (!s_ops.safety_persist) return;
     SAFETY_LOCK();
-    v = s_safety_latch;
+    v = s_safety_latch & SAFETY_PERSIST_MASK;   /* STUCK 不落盘 */
     SAFETY_UNLOCK();
     s_ops.safety_persist(v);
 }
@@ -147,6 +224,7 @@ static void safety_ack_latched(void)
         drop |= (uint8_t)(after & SAFETY_BIT_ESTOP);
     }
     s_safety_latch = (uint8_t)(lat & (uint8_t)~drop);
+    if (!(s_safety_latch & SAFETY_BIT_STUCK)) s_stuck_chn = 0;   /* 涉事通道随锁存位一起清 */
     SAFETY_UNLOCK();
     if (drop) safety_persist_now();      /* N-04：写当前值，不会用旧快照覆盖并发 trip */
 }
@@ -163,6 +241,12 @@ static void out_tec_sw(uint8_t ch, uint8_t on)
     /* 安全门控的唯一收敛点：锁存期间任何"开"都压成 0（P0-04 的在途状态机覆写在此失效）。
      * 单字节读在 32 位 MCU 上原子；最坏情况是晚一拍看到 trip，而 trip 由 poll 同拍处理。 */
     if (on && s_safety_latch) on = 0;
+    {
+        /* 有效命令的 0→1 沿：卡死判据要用"TEC 实际开了多久"（锁存期间被压成 0 的"开"不算开过）*/
+        uint8_t i = (ch == 2) ? 1u : 0u;
+        if (on && !s_tec_cmd_on[i]) s_tec_on_since[i] = s_poll_now_ms ? s_poll_now_ms : 1u;
+        s_tec_cmd_on[i] = on ? 1u : 0u;
+    }
     if (ch == 1) g_tcs.tec1_on = on ? 1u : 0u;
     else         g_tcs.tec2_on = on ? 1u : 0u;
     if (s_ops.tec_sw) s_ops.tec_sw(ch, on);
@@ -194,6 +278,13 @@ void control_init(const control_ops_t *ops)
     s_restore_tec2_ok = 0;
     s_exit_by_recover = 0;
     s_safe_assert_ms = 0;
+    /* 卡死判据从头开始：上电没有"读数多久没变""TEC 开了多久"可言 */
+    memset(&s_stuck_body, 0, sizeof(s_stuck_body));
+    memset(&s_stuck_tc1, 0, sizeof(s_stuck_tc1));
+    s_stuck_chn = 0;
+    memset(s_tec_on_since, 0, sizeof(s_tec_on_since));
+    memset(s_tec_cmd_on, 0, sizeof(s_tec_cmd_on));
+    s_poll_now_ms = 0;
     g_tcs.alarm_bits = 0;
     /* N-04：落盘串行化用 mutex（只在首次 init 时创建；失败则退化为不加锁）*/
 #ifdef ESP_PLATFORM
@@ -207,7 +298,7 @@ void control_init(const control_ops_t *ops)
         if (lat == 0xFF) {
             lat = SAFETY_BIT_ESTOP;    /* 未知即按最坏情况处理 */
         }
-        s_safety_latch = lat;
+        s_safety_latch = (uint8_t)(lat & SAFETY_PERSIST_MASK);   /* 旧固件写进去的 STUCK 位读回即丢 */
     }
     s_safety_ok = 0xFF;
     if (s_safety_latch & SAFETY_BIT_ESTOP)      { s_estop_latch = 1; g_tcs.alarm_bits |= ALM_ESTOP; }
@@ -311,24 +402,35 @@ static uint8_t safe_sources_recovered(void)
 void tcs_alarm_ack(void)
 {
     uint8_t lat;
+    uint8_t stuck_chn;      /* STUCK 涉事通道：bit0=体温 bit1=水温；锁存里没有 STUCK 则为 0 */
     /* 先按"当前"源状态刷新（不依赖上一拍缓存）：操作员降温后立即 ack 也应生效。*/
     safety_set_ok(SAFETY_BIT_OVERTEMP, (uint8_t)(g_tcs.tc1_act <= ALM_OVERTEMP_HARD_C));
     safety_set_ok(SAFETY_BIT_BODY_LOST, g_tcs.body_sensor_ok);
     safety_set_ok(SAFETY_BIT_M207_LOST, (uint8_t)(g_tcs.m207_online && !g_tcs.m207_sensor_open));
+    /* 卡死（STUCK）：按涉事通道"读数是否重新开始变化"刷新。活性是窗口概念，依赖 control_poll 的
+     * 样本跟踪，拍外没有自己的时钟，所以时间戳取最近一拍。*/
+    {
+        SAFETY_LOCK();
+        stuck_chn = stuck_chn_latched(s_safety_latch);
+        SAFETY_UNLOCK();
+        safety_set_ok(SAFETY_BIT_STUCK, stuck_recovered(s_poll_now_ms, stuck_chn));
+    }
     /* P0：再按"源已恢复"清安全锁存；ALM 显示位跟随锁存，不能比锁存更早消失。*/
     safety_ack_latched();
     /* N-05：一次性取锁存快照，后续显示位判断都用它——避免"锁外读-判-清"与并发 trip 交错，
      * 把刚置上的 ALM 位清掉。*/
     SAFETY_LOCK();
     lat = s_safety_latch;
+    stuck_chn = stuck_chn_latched(lat);     /* 与 lat 同一次快照：涉事通道和锁存位对得上 */
     SAFETY_UNLOCK();
     /* X03-F-02：一连串 &= 合成一个临界区，避免并发 raise 的位被中间态抹掉 */
     ALM_LOCK();
-    if (!(lat & SAFETY_BIT_BODY_LOST) && g_tcs.body_sensor_ok)
+    if (!(lat & SAFETY_BIT_BODY_LOST) && !(stuck_chn & 1u) && g_tcs.body_sensor_ok)
         g_tcs.alarm_bits &= (uint16_t)~ALM_BODY_SENSOR;
     if (!(lat & SAFETY_BIT_M207_LOST) && g_tcs.m207_online)
         g_tcs.alarm_bits &= (uint16_t)~ALM_M207;
-    if (!(lat & SAFETY_BIT_M207_LOST) && !g_tcs.m207_sensor_open)
+    /* 卡死借用的报警位：涉事通道读数还没恢复变化时不清——否则设备停在 SAFE 而屏上说不出原因 */
+    if (!(lat & SAFETY_BIT_M207_LOST) && !g_tcs.m207_sensor_open && !(stuck_chn & 2u))
         g_tcs.alarm_bits &= (uint16_t)~ALM_SENSOR_OPEN;
     if (!(lat & SAFETY_BIT_OVERTEMP) && g_tcs.tc1_act <= ALM_OVERTEMP_HARD_C)
         g_tcs.alarm_bits &= (uint16_t)~ALM_OVERTEMP;
@@ -486,6 +588,7 @@ static void auto_evaluate(uint32_t now_ms)
 /* ====== 每拍评估（任务每 100ms 调一次，见 control_service.c）====== */
 void control_poll(uint32_t now_ms)
 {
+    s_poll_now_ms = now_ms;                /* out_tec_sw 在拍外被调时用它给 TEC 开沿计时 */
     if (!s_boot_ms_base_set) {
         s_boot_ms = now_ms;
         s_boot_ms_base_set = 1;
@@ -505,6 +608,31 @@ void control_poll(uint32_t now_ms)
         safety_set_ok(SAFETY_BIT_OVERTEMP, 1);
     }
 
+    /* 卡死值活性判据（M09-F-09 / X04-F-06）：不受布防门控；与上面的过温硬切断同一位置、同一做法——
+     * 先锁存，锁存块当拍进 SAFE。样本喂入放在锁存块之前：已经在 SAFE 里时也要继续跟踪，
+     * "读数重新开始变化"是 STUCK 自愈与 ack 的依据。*/
+    {
+        uint8_t m207_src_ok = (uint8_t)(g_tcs.m207_online && !g_tcs.m207_sensor_open);
+        uint8_t tc1_stuck, body_stuck, stuck_chn;
+        stuck_feed(&s_stuck_body, g_tcs.body_temp, now_ms, g_tcs.body_sensor_ok);
+        stuck_feed(&s_stuck_tc1, g_tcs.tc1_act, now_ms, m207_src_ok);
+        tc1_stuck  = (uint8_t)(g_tcs.tec1_on && stuck_is(&s_stuck_tc1, now_ms, s_tec_on_since[0]));
+        body_stuck = (uint8_t)(g_tcs.mode != 0 && (s_state == CTRL_HEAT || s_state == CTRL_COOL)
+                               && stuck_is(&s_stuck_body, now_ms, s_tec_on_since[0]));
+        if (tc1_stuck || body_stuck) {
+            if (body_stuck) tcs_alarm_raise(ALM_BODY_SENSOR);
+            if (tc1_stuck)  tcs_alarm_raise(ALM_SENSOR_OPEN);
+            SAFETY_LOCK();
+            s_stuck_chn |= (uint8_t)((body_stuck ? 1u : 0u) | (tc1_stuck ? 2u : 0u));
+            SAFETY_UNLOCK();
+            safety_trip(SAFETY_BIT_STUCK);
+        }
+        SAFETY_LOCK();
+        stuck_chn = stuck_chn_latched(s_safety_latch);
+        SAFETY_UNLOCK();
+        safety_set_ok(SAFETY_BIT_STUCK, stuck_recovered(now_ms, stuck_chn));
+    }
+
     /* 锁存期间：任何模式都不再评估，直接停在 SAFE，并按 CTRL_SAFE_REASSERT_MS 重申 TCSW=0。
      * R-18：M207 离线时 m207_tec 直接返回 -2（不入队），本处重发并不产生帧；
      * 离线期的兜底是复联重同步（m207_go_online 里补发 TCSW=0）。P1-09 的彻底修法
@@ -518,7 +646,17 @@ void control_poll(uint32_t now_ms)
         uint8_t comm_ok = (uint8_t)(g_tcs.body_sensor_ok && g_tcs.m207_online
                                     && !g_tcs.m207_sensor_open
                                     && g_tcs.tc1_act <= ALM_OVERTEMP_HARD_C);
-        if (comm_ok && (s_safety_latch & SAFETY_COMM_MASK)) {
+        /* 通信类位各看各的源：失联类看 comm_ok，STUCK 只看涉事通道的读数是否重新开始变化。
+         * 锁存里没有 STUCK 时与原先逐位等价（ready 恒为"全部失联类位"或 0）。*/
+        uint8_t stuck_chn;
+        uint8_t ready;
+        SAFETY_LOCK();
+        stuck_chn = stuck_chn_latched(s_safety_latch);
+        SAFETY_UNLOCK();
+        ready = (uint8_t)((comm_ok ? (uint8_t)(SAFETY_BIT_BODY_LOST | SAFETY_BIT_M207_LOST) : 0u)
+                          | (stuck_recovered(now_ms, stuck_chn) ? SAFETY_BIT_STUCK : 0u));
+        if ((s_safety_latch & SAFETY_COMM_MASK) != 0
+            && (uint8_t)(s_safety_latch & (uint8_t)~ready) == 0) {
             if (now_ms == 0) {
                 /* 复核 B3：0 是"时间基准未建立"，不能当时间戳——否则 0-1 溢出成立即自愈 */
             } else if (!s_comm_ok_since) {
@@ -527,6 +665,7 @@ void control_poll(uint32_t now_ms)
                 uint8_t emptied;          /* 这次自愈把锁存清空了（没有急停/超温留着）*/
                 SAFETY_LOCK();
                 s_safety_latch &= (uint8_t)~SAFETY_COMM_MASK;
+                if (!(s_safety_latch & SAFETY_BIT_STUCK)) s_stuck_chn = 0;   /* 涉事通道随锁存位一起清 */
                 emptied = (uint8_t)(s_safety_latch == 0);
                 SAFETY_UNLOCK();
                 alarm_clear_bits((uint16_t)(ALM_M207 | ALM_BODY_SENSOR | ALM_SENSOR_OPEN));

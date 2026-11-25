@@ -40,6 +40,9 @@ static void stub_temp(uint8_t ch, float v)    { temp_calls++; last_temp_ch = ch;
 static uint8_t s_persisted;
 static void    persist_cb(uint8_t latch) { s_persisted = latch; }
 static uint8_t load_cb(void)             { return SAFETY_BIT_ESTOP; }
+/* S 线 e3a（卡死判据）用：上电无锁存 / 存储里留着 STUCK 位 */
+static uint8_t load0_cb(void)            { return 0; }
+static uint8_t load_stuck_cb(void)       { return SAFETY_BIT_STUCK; }
 
 static void reset_stubs(void)
 {
@@ -49,6 +52,13 @@ static void reset_stubs(void)
 /* 推进 500ms 评估节拍 */
 static uint32_t s_now;
 static void tick(void) { s_now += 500u; control_poll(s_now); }
+
+/* S 线 e3a（卡死判据）用：推进一拍，同时让**不该被判**的那个通道保持活的读数。
+ * 真实传感器的读数一直在抖（真机旁证：TCACTTEMP 相邻两次 ±0.01~0.07°C）；用例里如果让它
+ * 一直是常量，水温通道会和体温通道一起被判卡死，断言就分不清是谁触发的。*/
+static int s_flick;
+#define tick100_tc1_live() do { g_tcs.tc1_act = (s_flick++ & 1) ? 24.99f : 25.01f; tick100(); } while (0)
+#define tick_tc1_live()    do { g_tcs.tc1_act = (s_flick++ & 1) ? 24.99f : 25.01f; tick(); } while (0)
 
 static void enter_auto_healthy(void)
 {
@@ -847,6 +857,204 @@ int main(void)
         tcs_alarm_ack();
         tick();
         CHECK(control_state() == CTRL_IDLE && tcs_alarm_active(ALM_ESTOP) == 0, "N5 armed: probe back + ack -> released");
+    }
+
+    /* ====== 2026-11-25 S 线 e3a（M09-F-09 / X04-F-06）：读数卡死 → SAFE ======
+     * 合理性滤波只查范围与变化率，恒定读数永远"合理"：体温冻结则自动模式永远停在 HEAT/COOL，
+     * 水温冻结则 48°C 硬切断失明。判据：源自报健康 + 读数逐位不变 ≥30s + TEC 已开 ≥30s → 锁存 STUCK、
+     * 进 SAFE，不受布防门控。时间全部用 100ms 拍推进（现场服务就是 100ms 一拍）。
+     * 判别性与变异验证见 tests/mutation_control.py 的 M31 起。*/
+    {
+        /* K1 体温冻在 30.0，自动模式 HEAT：TEC 开满 30 s 才判，差一拍都不判 */
+        enter_auto_healthy();
+        g_tcs.body_temp = 30.0f;                 /* 远低于 cold-hyst，且从此不变 */
+        tick();                                  /* 评估进 HEAT：TC1 在这一拍开 */
+        CHECK(control_state() == CTRL_HEAT && g_tcs.tec1_on == 1, "K1 precondition: HEAT, TC1 on");
+        for (int i = 0; i < 299; i++) tick100_tc1_live();   /* 29.9 s：还不到窗口 */
+        CHECK(control_state() == CTRL_HEAT, "K1 frozen body: no trip before 30 s");
+        tick100_tc1_live();                      /* 整 30.0 s */
+        CHECK(control_state() == CTRL_SAFE, "K1 frozen body + TC1 on for 30 s -> SAFE");
+        CHECK((control_safety_latched() & SAFETY_BIT_STUCK) != 0, "K1 STUCK latched");
+        CHECK(g_tcs.tec1_on == 0 && g_tcs.tec2_on == 0, "K1 both TEC off");
+        CHECK(tcs_alarm_active(ALM_BODY_SENSOR) == 1, "K1 ALM_BODY_SENSOR raised");
+        CHECK(tcs_alarm_active(ALM_SENSOR_OPEN) == 0, "K1 body-only: no ALM_SENSOR_OPEN");
+        CHECK(g_tcs.fan_on == 1, "K1 fan full");
+
+        /* K2 未布防同样进 SAFE（卡死判据不受布防门控；未布防时普通的体温失联是不进 SAFE 的）*/
+        enter_auto_healthy();
+        set_armed(0);
+        g_tcs.body_temp = 30.0f;
+        tick();
+        CHECK(control_state() == CTRL_HEAT, "K2 precondition: unarmed auto HEAT");
+        for (int i = 0; i < 300; i++) tick100_tc1_live();
+        CHECK(control_state() == CTRL_SAFE && (control_safety_latched() & SAFETY_BIT_STUCK) != 0,
+              "K2 unarmed: frozen body still -> SAFE");
+        CHECK(tcs_alarm_active(ALM_BODY_SENSOR) == 1, "K2 unarmed: ALM_BODY_SENSOR raised");
+
+        /* K11 读数一直不变 → 一直留在 SAFE；K12 这时 ack 不清（读数没恢复变化就不算恢复），
+         *     借用的报警位也不清——设备停在 SAFE 时屏上说得出原因 */
+        for (int i = 0; i < 600; i++) tick100_tc1_live();  /* 再过 60 s */
+        CHECK(control_state() == CTRL_SAFE && (control_safety_latched() & SAFETY_BIT_STUCK) != 0,
+              "K11 still frozen -> stays SAFE");
+        tcs_alarm_ack();
+        CHECK((control_safety_latched() & SAFETY_BIT_STUCK) != 0,
+              "K12 ack cannot clear STUCK while the reading is still frozen");
+        CHECK(tcs_alarm_active(ALM_BODY_SENSOR) == 1, "K12 alarm bit stays while STUCK is latched");
+        CHECK(control_state() == CTRL_SAFE, "K12 still SAFE after ack");
+
+        /* K10 读数重新开始变化 → 2 s 后自愈退出 SAFE、清报警，自动模式当拍重新评估 */
+        {
+            uint32_t t_ok = s_now;
+            int n = 0;
+            while (control_state() == CTRL_SAFE && n < 40) {
+                g_tcs.body_temp = (n & 1) ? 29.99f : 30.01f;   /* 活了：每拍都在变 */
+                tick100_tc1_live();
+                n++;
+            }
+            CHECK(control_state() == CTRL_HEAT, "K10 reading moves again -> SAFE left, HEAT resumes");
+            CHECK(control_safety_latched() == 0 && tcs_alarm_active(ALM_BODY_SENSOR) == 0,
+                  "K10 latch and alarm cleared");
+            /* 与 W2-1 同一口径：恢复后第 1 拍起计时，满 2000ms 的那一拍退出 → 距恢复 2100ms */
+            CHECK(s_now - t_ok == 2100u, "K10 exit exactly 2000 ms after the first live poll");
+
+            /* K15 只动了一下又冻住：自愈后 TEC 最多再开一个窗口，然后再次进 SAFE。
+             *     时冻时动的传感器，每次"动一下"换来的输出不超过一个窗口——把这条实际行为钉住。*/
+            for (int i = 0; i < 280; i++) tick100_tc1_live();   /* 距读数最后一次变化 28 s */
+            CHECK(control_state() == CTRL_HEAT, "K15 no re-trip before the window ends");
+            for (int i = 0; i < 25; i++) tick100_tc1_live();
+            CHECK(control_state() == CTRL_SAFE && (control_safety_latched() & SAFETY_BIT_STUCK) != 0,
+                  "K15 frozen again -> SAFE again");
+        }
+
+        /* K3 反证：体温每拍都在变（活着的传感器）→ HEAT 开满 60 s 也不进 SAFE */
+        enter_auto_healthy();
+        g_tcs.body_temp = 30.0f; tick();
+        CHECK(control_state() == CTRL_HEAT, "K3 precondition: HEAT");
+        for (int i = 0; i < 600; i++) {
+            g_tcs.body_temp = (i & 1) ? 29.99f : 30.01f;
+            g_tcs.tc1_act   = (i & 1) ? 24.99f : 25.01f;
+            tick100();
+        }
+        CHECK(control_state() == CTRL_HEAT && (control_safety_latched() & SAFETY_BIT_STUCK) == 0,
+              "K3 live body: no trip after 60 s of HEAT");
+
+        /* K4 反证：读数不变但 TEC 没开（带内 IDLE）→ 不判卡死（判据要求 TEC 在输出）*/
+        enter_auto_healthy();
+        g_tcs.body_temp = 37.0f; tick();
+        for (int i = 0; i < 120; i++) tick();          /* 60 s，体温一直是 37.0 */
+        CHECK(control_state() == CTRL_IDLE && control_safety_latched() == 0,
+              "K4 frozen body with TEC off -> no trip");
+
+        /* K5 手动模式下体温读数不驱动任何输出：冻住也不判
+         *     （否则"环境水箱 TEC2 开着 + 安静的体温探头"会被误停机）*/
+        enter_auto_healthy();
+        (void)param_set(PARAM_ID_MODE, 0.0f, 4);
+        g_tcs.body_temp = 30.0f;
+        tick();
+        control_manual_tec(2, 1);                       /* 手动开 TEC2（环境水箱）*/
+        for (int i = 0; i < 120; i++) tick();
+        CHECK(control_state() == CTRL_IDLE && control_safety_latched() == 0,
+              "K5 manual mode: frozen body does not trip");
+
+        /* K6 水温读数冻结（48°C 硬切断对它失明）：TC1 开着 30 s → SAFE + ALM_SENSOR_OPEN（手动模式同样判）*/
+        enter_auto_healthy();
+        (void)param_set(PARAM_ID_MODE, 0.0f, 4);
+        tick();                                         /* 喂进第一个水温样本 */
+        g_tcs.tc1_act = 30.0f; tick();
+        control_manual_tec(1, 1);                       /* TC1 在拍外开：开沿记在最近一拍的时间戳上 */
+        CHECK(control_state() == CTRL_IDLE && g_tcs.tec1_on == 1,
+              "K6 precondition: manual, TC1 on, water frozen at 30.0");
+        for (int i = 0; i < 299; i++) tick100();
+        CHECK(control_state() == CTRL_IDLE, "K6 frozen water: no trip before 30 s");
+        tick100();
+        CHECK(control_state() == CTRL_SAFE && (control_safety_latched() & SAFETY_BIT_STUCK) != 0,
+              "K6 frozen water + TC1 on for 30 s -> SAFE");
+        CHECK(tcs_alarm_active(ALM_SENSOR_OPEN) == 1 && tcs_alarm_active(ALM_BODY_SENSOR) == 0,
+              "K6 ALM_SENSOR_OPEN raised (water channel)");
+        CHECK(g_tcs.tec1_on == 0, "K6 TC1 off");
+
+        /* K17 X04-F-06 关单条件：体温活着（一直在动）、水温冻在 30°C，TC1 加热 30 s → 进 SAFE */
+        enter_auto_healthy();
+        g_tcs.body_temp = 37.0f; tick();                            /* 带内：先喂一拍 IDLE 样本 */
+        g_tcs.tc1_act = 30.0f; g_tcs.body_temp = 30.0f; tick();     /* 这一拍进 HEAT */
+        CHECK(control_state() == CTRL_HEAT, "K17 precondition: HEAT with water frozen at 30.0");
+        for (int i = 0; i < 300; i++) { g_tcs.body_temp = (i & 1) ? 29.99f : 30.01f; tick100(); }
+        CHECK(control_state() == CTRL_SAFE && (control_safety_latched() & SAFETY_BIT_STUCK) != 0,
+              "K17 frozen water while heating -> SAFE even though the body reading is live");
+        CHECK(tcs_alarm_active(ALM_SENSOR_OPEN) == 1 && tcs_alarm_active(ALM_BODY_SENSOR) == 0,
+              "K17 water channel blamed, not body");
+
+        /* K7 反证：真实模块的 TCACTTEMP 以 0.01°C 持续抖动（真机旁证 B10），TC1 开 60 s 不误报 */
+        enter_auto_healthy();
+        (void)param_set(PARAM_ID_MODE, 0.0f, 4);
+        tick();
+        control_manual_tec(1, 1);
+        for (int i = 0; i < 600; i++) { g_tcs.tc1_act = (i & 1) ? 18.43f : 18.46f; tick100(); }
+        CHECK(control_state() == CTRL_IDLE && control_safety_latched() == 0,
+              "K7 live water reading: no trip after 60 s with TC1 on");
+
+        /* K8 反证：水温不变但 TC1 没开 → 不判 */
+        enter_auto_healthy();
+        (void)param_set(PARAM_ID_MODE, 0.0f, 4);
+        for (int i = 0; i < 120; i++) tick();
+        CHECK(control_state() == CTRL_IDLE && control_safety_latched() == 0,
+              "K8 frozen water with TC1 off -> no trip");
+
+        /* K9 读数早就冻住了、TEC 后开：从 TEC 开起再等满一个窗口才判（给被控对象留响应时间），
+         *     不是一开 TEC 就判 */
+        enter_auto_healthy();
+        (void)param_set(PARAM_ID_MODE, 0.0f, 4);
+        g_tcs.body_temp = 30.0f; tick();
+        for (int i = 0; i < 120; i++) tick_tc1_live();   /* 手动模式下体温冻 60 s */
+        (void)param_set(PARAM_ID_MODE, 1.0f, 4);       /* 切自动：下一拍进 HEAT */
+        tick();
+        CHECK(control_state() == CTRL_HEAT, "K9 precondition: HEAT starts with an already-frozen reading");
+        for (int i = 0; i < 299; i++) tick100_tc1_live();
+        CHECK(control_state() == CTRL_HEAT,
+              "K9 window counts from TEC turn-on, not from when the reading froze");
+        tick100_tc1_live();
+        CHECK(control_state() == CTRL_SAFE && (control_safety_latched() & SAFETY_BIT_STUCK) != 0,
+              "K9 trips one window after TEC turn-on");
+
+        /* K14 源不健康时不累计：未布防 + 模块离线 + TC1 开着 + 水温陈旧不变
+         *     → 走既有失联路径，不报卡死（离线不是"读数冻结"）*/
+        enter_auto_healthy();
+        (void)param_set(PARAM_ID_MODE, 0.0f, 4);
+        set_armed(0);
+        tick();
+        s_now += 5000u;                                 /* 越过 M207 上电宽限 */
+        g_tcs.m207_online = 0;
+        control_manual_tec(1, 1);
+        for (int i = 0; i < 120; i++) tick();
+        CHECK((control_safety_latched() & SAFETY_BIT_STUCK) == 0, "K14 unhealthy source is not a stuck reading");
+        CHECK(control_state() != CTRL_SAFE, "K14 unarmed + module offline: no SAFE (existing semantics untouched)");
+
+        /* K13 STUCK 不落盘：复位后"哪个通道、冻在哪个值"都无从得知，落盘不增加保护 */
+        control_init(&(control_ops_t){
+            .fan_set = stub_fan, .tec_sw = stub_tec, .tec_temp = stub_temp,
+            .on_state = 0, .safety_persist = persist_cb, .safety_load = load0_cb,
+        });
+        param_registry_init(&(param_hooks_t){0});
+        set_armed(1);
+        g_tcs.body_sensor_ok = 1; g_tcs.m207_online = 1; g_tcs.m207_sensor_open = 0;
+        g_tcs.body_temp = 30.0f; g_tcs.tc1_act = 25.0f;
+        s_now = 10000u;
+        (void)param_set(PARAM_ID_MODE, 1.0f, 4);
+        tick();
+        for (int i = 0; i < 300; i++) tick100();
+        CHECK(control_state() == CTRL_SAFE && (control_safety_latched() & SAFETY_BIT_STUCK) != 0,
+              "K13 precondition: STUCK latched");
+        CHECK((s_persisted & SAFETY_BIT_STUCK) == 0, "K13 STUCK is never written to persistent storage");
+
+        /* K16 存储里留着 STUCK 位（别的固件写的）：上电读回即丢——通道归属已丢失，
+         *     留着会让没有体温探头的设备永远等不到"体温读数恢复变化" */
+        control_init(&(control_ops_t){
+            .fan_set = stub_fan, .tec_sw = stub_tec, .tec_temp = stub_temp,
+            .on_state = 0, .safety_persist = persist_cb, .safety_load = load_stuck_cb,
+        });
+        param_registry_init(&(param_hooks_t){0});
+        CHECK(control_safety_latched() == 0 && control_state() == CTRL_IDLE,
+              "K16 a STUCK bit found in storage is dropped at boot");
     }
 
     printf("test_control: PASS=%d FAIL=%d\n", g_pass, g_fail);

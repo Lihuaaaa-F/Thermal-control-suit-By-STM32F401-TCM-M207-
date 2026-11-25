@@ -38,6 +38,7 @@
 
 
 
+
 复现命令（仓库根 `/d/Espressif/ws/tcs`，Git Bash；raw 输出路径分隔符为 `\`，表内归一为 `/`）：
 
 ```bash
@@ -46,6 +47,7 @@ grep -rnE "HAL_UART_" project_tcs/App project_tcs/Core/Src --include=*.c
 ```
 
 vendor 域说明：`App/rtt/`（SEGGER RTT vendor 五文件）同一 pattern 单独跑=**0 命中**（RTT 不触 HAL，无需列行）。
+
 
 
 
@@ -77,15 +79,15 @@ vendor 域说明：`App/rtt/`（SEGGER RTT vendor 五文件）同一 pattern 单
 | 11 | project_tcs/App/tcs/console.c:887 | HAL_UART_Receive_IT(s_uart, &s_rx_byte, 1) | console_init 启动期首挂（W10 #3） |
 | 12 | project_tcs/App/tcs/m207.c:6 | HAL_UART_ErrorCallback（注释提及） | 头注：ORE 溢出=ErrorCallback 先清标志再重置接收（F401 踩坑防御保留）（非调用点） |
 | 13 | project_tcs/App/tcs/m207.c:7 | HAL_UART_Transmit（注释提及） | 头注：TX 主循环阻塞 Transmit，禁止 ISR 内发送（非调用点） |
-| 14 | project_tcs/App/tcs/m207.c:207 | HAL_UART_Receive_IT（注释提及） | s_rx_byte 变量注释=Receive_IT 单字节落点（非调用点） |
-| 15 | project_tcs/App/tcs/m207.c:373 | HAL_UART_Transmit(s_huart, cmd, strlen(cmd), 20u) | AT 命令阻塞发送，超时 20ms（15B@57600≈2.6ms，W10 #5） |
-| 16 | project_tcs/App/tcs/m207.c:404 | HAL_UART_Receive_IT(s_huart, &s_rx_byte, 1) | 服务启动期首挂（W10 #6） |
-| 17 | project_tcs/App/tcs/m207.c:617 | __HAL_UART_GET_FLAG(s_huart, UART_FLAG_ORE) | 错误恢复入口查 ORE（W10 #7 整改后路径） |
-| 18 | project_tcs/App/tcs/m207.c:618 | __HAL_UART_CLEAR_OREFLAG(s_huart) | 清 ORE |
-| 19 | project_tcs/App/tcs/m207.c:623 | HAL_UART_AbortReceive(s_huart) | W10 #7 整改补齐的 Abort（对齐 console 金标准；附录 C 三路配对 1/1/1 之二，2026-10-27 复跑 grep -c=1 实证在树） |
-| 20 | project_tcs/App/tcs/m207.c:624 | HAL_UART_Receive_IT(s_huart, &s_rx_byte, 1) | Abort 后重启接收 |
-| 21 | project_tcs/App/tcs/m207.c:627 | HAL_UART_RxCpltCallback（注释提及） | 注释：RX 完成回调转发入口（main.c 回调按实例分发）（非调用点） |
-| 22 | project_tcs/App/tcs/m207.c:631 | HAL_UART_Receive_IT(s_huart, &s_rx_byte, 1) | RxCplt 回调内重挂续收（W10 #8） |
+| 14 | project_tcs/App/tcs/m207.c:208 | HAL_UART_Receive_IT（注释提及） | s_rx_byte 变量注释=Receive_IT 单字节落点（非调用点） |
+| 15 | project_tcs/App/tcs/m207.c:374 | HAL_UART_Transmit(s_huart, cmd, strlen(cmd), 20u) | AT 命令阻塞发送，超时 20ms（15B@57600≈2.6ms，W10 #5） |
+| 16 | project_tcs/App/tcs/m207.c:405 | HAL_UART_Receive_IT(s_huart, &s_rx_byte, 1) | 服务启动期首挂（W10 #6） |
+| 17 | project_tcs/App/tcs/m207.c:618 | __HAL_UART_GET_FLAG(s_huart, UART_FLAG_ORE) | 错误恢复入口查 ORE（W10 #7 整改后路径） |
+| 18 | project_tcs/App/tcs/m207.c:619 | __HAL_UART_CLEAR_OREFLAG(s_huart) | 清 ORE |
+| 19 | project_tcs/App/tcs/m207.c:624 | HAL_UART_AbortReceive(s_huart) | W10 #7 整改补齐的 Abort（对齐 console 金标准；附录 C 三路配对 1/1/1 之二，2026-10-27 复跑 grep -c=1 实证在树） |
+| 20 | project_tcs/App/tcs/m207.c:625 | HAL_UART_Receive_IT(s_huart, &s_rx_byte, 1) | Abort 后重启接收 |
+| 21 | project_tcs/App/tcs/m207.c:628 | HAL_UART_RxCpltCallback（注释提及） | 注释：RX 完成回调转发入口（main.c 回调按实例分发）（非调用点） |
+| 22 | project_tcs/App/tcs/m207.c:632 | HAL_UART_Receive_IT(s_huart, &s_rx_byte, 1) | RxCplt 回调内重挂续收（W10 #8） |
 | 23 | project_tcs/Core/Src/main.c:124 | HAL_UART_Receive_IT（注释提及） | s_link_it_byte 变量注释=链路 Receive_IT 落点（非调用点） |
 | 24 | project_tcs/Core/Src/main.c:140 | HAL_UART_Receive_IT(&huart_link, &s_link_it_byte, 1) | 链路 RX 单字节挂（W10 #9） |
 | 25 | project_tcs/Core/Src/main.c:203 | （注释提及）（注释提及） | 重锚新增（注释提及）：代码摘录见左列 |

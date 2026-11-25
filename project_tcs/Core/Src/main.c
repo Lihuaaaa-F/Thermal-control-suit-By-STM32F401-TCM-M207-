@@ -19,7 +19,8 @@
 #include "proto.h"
 #include "comm.h"
 #include "link_info.h"
-#include "tcs_proto.h"
+#include "link_send.h"
+#include "tcs_proto.h"   /* R5-01：链路帧带方向位，两端固件必须成对更新（见该文件"方向"一节）*/
 #include "ltdc.h"
 #include "ft5446.h"
 #include "param_registry.h"
@@ -317,17 +318,10 @@ static void hook_broadcast(param_desc_t *p, uint8_t src)
     (void)src;
     /* 屏：LVGL 单栈 UI 是"拉"模型——tui_p0/p1_refresh 每 500ms 用 param_get/find 重读
      * （M4 ≤1s 同步预算内），不经过 dirty 标志（M05-F-10 已删该死字段）；
-     * 链路：0x11 TCS_PARAM 帧（变更即推）*/
-    uint8_t pl[TCS_PARAM_PL_LEN];
-    tcs_param_pl_t pp = {
-        .id = p->id, .type = p->type,
-        .value = (p->type == PARAM_TYPE_F32) ? tcs_f2b(p->value) : (uint32_t)p->value,
-    };
-    size_t n = tcs_pl_param(pl, sizeof(pl), &pp);
-    uint8_t frame[MAX_FRAME];
-    size_t fn = proto_encode_frame_with_mt(MT_TCS_PARAM, comm_next_seq(&g_link),
-                                           pl, n, frame, sizeof(frame));
-    if (fn) comm_txq_push(&g_link, frame, fn);
+     * 链路（R5-10，2026-11-25）：屏→ESP32 的参数写入统一是一帧 0x12、等 ACK。
+     * 原先这里发的是 0x11 "变更即推"、不等 ACK——丢了没人知道，ESP32 侧的发送窗过滤还会
+     * 误杀它（R5 复核 R5-10）。策略在 App/comm/link_send.c（主机可测）。*/
+    (void)link_send_on_broadcast(&g_link, p->id, p->type, p->flags, p->value);
 }
 
 /* ====== R2（v11.3 链路升级+协议换向）：快照接收状态 ======
@@ -403,16 +397,9 @@ static uint8_t m207_redirect_send(uint16_t id, float v)
      * 主循环被长时间占用（整页重绘/调试探针暂停）时会瞬时为 0，导致屏幕设参
      * 被静默丢弃并退回本机（v2 下 H743 无 M207）。
      * 2026-10-30 真机实证：p set 返回 ok 但 M207/ESP32 均为旧值。
-     * 现在无条件入队：comm 层自带 ARQ×3 + 500ms 超时，链路死时由 txq 自然丢弃。*/
-    uint8_t pl[TCS_PARAM_PL_LEN];
-    tcs_param_pl_t pp = { .id = id, .type = PARAM_TYPE_F32, .value = tcs_f2b(v) };
-    size_t n = tcs_pl_param(pl, sizeof(pl), &pp);
-    if (!n) return 0;
-    uint8_t frame[MAX_FRAME];
-    size_t fn = proto_encode_frame_with_mt(MT_TCS_SET_PARAM, comm_next_seq(&g_link),
-                                           pl, n, frame, sizeof(frame));
-    if (!fn) return 0;
-    return (comm_send(&g_link, frame, fn, MT_TCS_SET_PARAM) != 0xFFu) ? 1u : 0u;
+     * 现在无条件入队：comm 层自带 ARQ×3 + 500ms 超时，链路死时由 txq 自然丢弃。
+     * 组帧与登记在 App/comm/link_send.c（R5-10：屏写参数统一走这一条等 ACK 的 0x12）。*/
+    return (link_send_set_param(&g_link, id, PARAM_TYPE_F32, v) == 0) ? 1u : 0u;
 }
 
 /* v2：本地急停/确认 → 链路 0x15（ESP32 执行 TEC/风扇），ARQ 保证送达 */
@@ -452,9 +439,9 @@ void on_frame(const uint8_t *payload, size_t len)
     size_t blen = len - 2;
 
     switch (mt) {
-    case MT_TCS_PARAM: {             /* v2 补口：ESP32 权威 → 屏镜像（反向 0x11）
-                                      * 网页/控制台改的非设定值参数在这里静默落表；
-                                      * param_link_sync 不广播，故不会反向成环。*/
+    case MT_TCS_PARAM: {             /* 0x11 = 主控→屏的权威镜像（R5-01 起只有这一个方向）
+                                      * 网页/控制台/镜像泵改的非设定值参数在这里静默落表；
+                                      * param_mirror_apply 不广播，故不会反向成环。*/
         tcs_param_pl_t pp;
         if (tcs_scan_param(body, blen, &pp) == 0) {
             float v = (pp.type == PARAM_TYPE_F32) ? tcs_b2f(pp.value) : (float)pp.value;
@@ -463,21 +450,8 @@ void on_frame(const uint8_t *payload, size_t len)
         }
         break;
     }
-    case MT_TCS_SET_PARAM: {
-        tcs_param_pl_t pp;
-        if (tcs_scan_param(body, blen, &pp) != 0) {
-            link_send_ack(seq, mt, TCS_ACK_BAD_ID, 0.0f);
-            break;
-        }
-        float v = (pp.type == PARAM_TYPE_F32) ? tcs_b2f(pp.value) : (float)pp.value;
-        int rv = param_set(pp.id, v, PARAM_SRC_WEB);
-        uint8_t st = TCS_ACK_OK;
-        if (rv == 1) st = TCS_ACK_CLAMP;
-        else if (rv < 0) st = (rv == -1) ? TCS_ACK_BAD_ID : TCS_ACK_BUSY;
-        link_send_ack(seq, mt, st, param_get(pp.id));
-        tcs_log("[NET]", "set id=0x%02x v=%.2f rv=%d", pp.id, (double)v, rv);
-        break;
-    }
+    /* 0x12 SET_PARAM（"主控让屏写参数"）是 v1 遗留分支，v2 里主控从不发 0x12：2026-11-25（R5-01）
+     * 起方向表把它挡在 comm 层，这段接收分支已删除——屏写参数只走 App/comm/link_send.c 那一条路。*/
     case MT_TCS_GET_REGISTRY: {
         /* 注册表全量 → 0x14 帧 ×N。v1.2 H10 全表 51 条（0x127 已入表） > txq 16 深 → 改节拍化
          * 下发（registry_dump_tick 每拍 2 帧，50 条≈250ms，前端零感知）。*/
@@ -571,7 +545,7 @@ void on_frame(const uint8_t *payload, size_t len)
         break;
     }
     default:
-        break;   /* 0x10/0x11 不会从 ESP 发来；0x90 已被 comm 层消费 */
+        break;   /* 0x90 已被 comm 层消费；0x10/0x12/0x14 是屏专用，不会从 ESP32 发来（方向闸门已丢）；未知消息号静默丢弃（前向兼容） */
     }
 }
 
@@ -919,7 +893,8 @@ int main(void)
     tmp117_init(&hi2c_tmp117);
     fan_init();
 
-    comm_init(&g_link, link_uart_send, now_ms_fn, on_link_down, crit_enter, crit_exit);
+    comm_init(&g_link, link_uart_send, now_ms_fn, on_link_down, crit_enter, crit_exit,
+              TCS_SIDE_H743);
 
 #ifdef ENABLE_LCD
     tcs_lvgl_init();     /* LVGL 单栈（2026-11-15：旧 tcs_ui 已删除） */

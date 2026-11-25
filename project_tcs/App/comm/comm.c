@@ -9,6 +9,7 @@
  * tx_head/tx_tail/tx_count 的读改写用 enter/exit_critical 短临界区保护。
  */
 #include "comm.h"
+#include "tcs_proto.h"   /* R5-01：方向闸门的判定（tcs_rx_verdict 等纯函数，协议唯一源）*/
 #include <string.h>
 
 /* 诊断：实际发出的帧数（主循环 comm_poll_tx 唯一计数点；真机取证用）*/
@@ -19,7 +20,8 @@ void comm_init(comm_link_t *L,
                uint32_t (*now_ms_fn)(void),
                void (*on_link_down)(void),
                void (*enter_critical)(void),
-               void (*exit_critical)(void))
+               void (*exit_critical)(void),
+               uint8_t self_side)
 {
     memset(L, 0, sizeof(*L));
     L->send_fn = send_fn;
@@ -28,6 +30,8 @@ void comm_init(comm_link_t *L,
     L->enter_critical = enter_critical;
     L->exit_critical = exit_critical;
     L->link_ok = COMM_LINK_OK_TRUE;
+    /* R5-01：本端身份。只认 TCS_SIDE_ESP32 这一个非零值，其余一律按 H743（屏）处理。*/
+    L->self_side = (self_side == TCS_SIDE_ESP32) ? TCS_SIDE_ESP32 : TCS_SIDE_H743;
     /* R1：last_seen_seq 用 uint8_t + last_seen_ok 位图表示"是否见过"（全 0 = 都没见过）*/
     for (int i = 0; i < 256; i++) L->last_seen_seq[i] = 0;
     for (int i = 0; i < 32; i++)  L->last_seen_ok[i] = 0;
@@ -86,6 +90,20 @@ static void txq_push_unlocked(comm_link_t *L, const uint8_t *frame, size_t len)
         L->txq_drop++;              /* M11-F-10：溢出可观测（原实现静默丢）*/
     }
     memcpy(L->tx_queue[t], frame, len);
+    /* R5-01：出队上线的帧带本端方向位（整帧第 4 字节 = 消息号字节，bit6）。所有发送都经本函数，
+     * 发送点不需要、也不能自己打；已带方向位的输入先去掉再按本端身份打。
+     * CRC 覆盖"Len + 载荷"，消息号字节改了就必须按改后的字节重算——否则主控发出的帧
+     * （bit6=1）在屏端全部过不了 CRC（屏发出的帧 bit6=0，字节不变，CRC 不动）。
+     * 顺带自检：方向表不允许本端发的消息号计 tx_wrongdir_cnt（仍照发，由对端按方向表丢弃）。*/
+    if (len >= 5u && len <= MAX_FRAME) {
+        uint8_t mt = tcs_frame_mt(frame[3]);
+        uint8_t mt_wire = tcs_frame_mark(mt, L->self_side);
+        if (!tcs_mt_sent_by(mt, L->self_side)) L->tx_wrongdir_cnt++;
+        if (mt_wire != frame[3]) {
+            L->tx_queue[t][3] = mt_wire;
+            L->tx_queue[t][len - 1] = proto_crc8(&L->tx_queue[t][2], len - 3);
+        }
+    }
     L->tx_len[t] = (uint16_t)len;
     L->tx_tail = (uint8_t)((t + 1) % MAX_TXQ);
     L->tx_count++;
@@ -192,6 +210,26 @@ static uint8_t s_dup_seq;
 static uint8_t s_dup_mt;
 static int s_dup_valid = 0;
 
+/* R5-01 方向闸门。判定是 protocol/tcs_proto.h 的纯函数 tcs_rx_verdict（协议唯一源），
+ * 这里只负责在"任何处理之前"调用它并分桶计数。
+ * ⚠ 两端各有一份 comm.c（ESP32：esp32/components/tcs_link/comm.c）。从下面这行注释起到函数结束，
+ * 两份必须逐字相同：python tools/proto_sync.py --check 每次核对，两端各自的主机用例
+ * （project_tcs/tests/test_link_dir.c、esp32/tests/test_link_dir.c）与变异验证
+ * （tests/mutation_link_dir.py）各自编译自己那一份。*/
+static int comm_rx_gate(comm_link_t *L, const uint8_t *payload, size_t plen)
+{
+    int vd = tcs_rx_verdict(payload[0], L->self_side, payload, plen);
+    if (vd == TCS_RX_ACCEPT) return 0;
+    uint8_t mt = tcs_frame_mt(payload[0]);
+    if (vd == TCS_RX_ECHO) {
+        L->echo_cnt++;
+        if (L->echo_by_mt[mt] != 0xFFFFu) L->echo_by_mt[mt]++;
+    } else {
+        L->wrongdir_cnt++;
+    }
+    return 1;
+}
+
 int comm_rx_feed_byte(comm_link_t *L, uint8_t b,
                       const uint8_t **out_payload, size_t *out_len, int *out_is_dup)
 {
@@ -218,14 +256,18 @@ int comm_rx_feed_byte(comm_link_t *L, uint8_t b,
         return 0;
     }
     if (plen < 2) return 0;  /* 至少 MsgType+SeqNo */
-    uint8_t mt = payload[0];
+    /* R5-01：方向闸门——本端发出的帧被回送 / 对端不可能发来的消息号，在 ACK 处理、去重、
+     * 交付之前丢弃。只看字节里的方向信息，不看长度、不看时刻。*/
+    if (comm_rx_gate(L, payload, plen)) return 0;
+    uint8_t mt = tcs_frame_mt(payload[0]);
     uint8_t seq = payload[1];
 
     /* ACK 帧：交给发送侧清 pending，不交上层 */
-    /* TCS 扩展（任务书 §4.2）：0x90 = TCS_ACK，布局与 GS ACK 兼容（[2]acked_seq [3]acked_mt）*/
-    if (mt == MT_UPLINK_ACK || mt == MT_DOWNLINK_ACK || mt == 0x90 /* MT_TCS_ACK */) {
+    /* TCS 扩展（任务书 §4.2）：0x90 = TCS_ACK，布局与 GS ACK 兼容（[2]acked_seq [3]acked_mt）
+     * R5-01：载荷里的被确认消息号按"去掉方向位"解释（comm 层往上只认去掉方向位的消息号）。*/
+    if (mt == MT_UPLINK_ACK || mt == MT_DOWNLINK_ACK || mt == MT_TCS_ACK) {
         if (plen < 4) return 0;
-        comm_on_ack(L, payload[2], payload[3]);
+        comm_on_ack(L, payload[2], tcs_frame_mt(payload[3]));
         return 0;
     }
 
@@ -250,8 +292,12 @@ int comm_rx_feed_byte(comm_link_t *L, uint8_t b,
         return 0;
     }
 
-    /* 新帧：交上层 */
-    if (out_payload) *out_payload = payload;
+    /* 新帧：交上层。消息号字节去掉方向位再交（上层只认 protocol/tcs_proto.h 里的消息号）。
+     * proto_rx_feed 交付的就是 L->rx.payload 本身：原地改第 0 字节，有效期不变（到下一帧）。*/
+    uint8_t *out = L->rx.payload;
+    if (payload != out) return 0;   /* 帧不在本链路的接收缓冲里：不交付（正常不会发生）*/
+    out[0] = mt;
+    if (out_payload) *out_payload = out;
     if (out_len) *out_len = plen;
     return 1;
 }

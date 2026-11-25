@@ -2,9 +2,15 @@
 # -*- coding: utf-8 -*-
 """proto_ref.py — TCS 链路协议 Python 参考实现（任务书 §4.2 / §5.1 跨端字节级对照）
 
-帧：AA 55 | Len | Payload | CRC8(poly 0x07)；Payload = MT + Seq + body；多字节小端。
+帧：AA 55 | Len | Payload | CRC8(poly 0x07)；Payload = MT | 方向位 | Seq | body；多字节小端。
 消息：0x10 STATUS(19B) / 0x11 PARAM / 0x12 SET_PARAM / 0x13 GET_REGISTRY /
-      0x14 REGISTRY_ENTRY / 0x15 CMD / 0x90 ACK。
+      0x14 REGISTRY_ENTRY / 0x15 CMD / 0x20 SNAPSHOT(40B) / 0x21 DELTA / 0x22 INFO / 0x90 ACK。
+
+方向位（2026-11-25，R5-01；唯一说明在 protocol/tcs_proto.h 的「方向」一节）：
+      Payload[0] 的 bit6 (0x40)：1 = 发送方是 ESP32（主控），0 = 发送方是 H743（屏）。
+      frame(..., side="h743") 默认打屏方向（bit6=0，与旧线格式逐字节相同）；side="esp32" 打主控方向。
+      CRC 覆盖 Len + Payload，按带方向位的字节算。decode 输出里注明发送方。
+      方向表：0x11 只 ESP32→H743；0x12 只 H743→ESP32（屏写参数，等 ACK）；0x15 / 0x90 双向。
 
 用法：
   python tools/proto_ref.py selftest                     # 独立向量自检
@@ -30,11 +36,21 @@ def crc8(data: bytes) -> int:
 
 MT_STATUS, MT_PARAM, MT_SET_PARAM, MT_GET_REG, MT_REG_ENTRY, MT_CMD, MT_ACK = \
     0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x90
+MT_SNAPSHOT, MT_DELTA, MT_INFO = 0x20, 0x21, 0x22
+
+DIR_ESP32 = 0x40          # 消息号字节的 bit6：1 = 发送方是 ESP32（主控）
+DIR_MASK = 0xBF
 
 
-def frame(mt: int, seq: int, body: bytes) -> bytes:
-    payload = bytes([mt, seq]) + body
+def frame(mt: int, seq: int, body: bytes, side: str = "h743") -> bytes:
+    """组整帧。side = "h743"（屏方向，bit6=0）或 "esp32"（主控方向，bit6=1）。"""
+    mt_wire = (mt & DIR_MASK) | (DIR_ESP32 if side == "esp32" else 0)
+    payload = bytes([mt_wire, seq]) + body
     return b"\xAA\x55" + bytes([len(payload)]) + payload + bytes([crc8(bytes([len(payload)]) + payload)])
+
+
+def sender_of(mt_wire: int) -> str:
+    return "ESP32>H743" if mt_wire & DIR_ESP32 else "H743>ESP32"
 
 
 def parse_frame_stream() -> "callable":
@@ -160,7 +176,9 @@ def dec_delta(b: bytes):
     return mask, d
 
 
-def describe(mt, seq, body) -> str:
+def describe(mt_wire, seq, body) -> str:
+    # 方向位只用来注明发送方；消息号按去掉方向位解释（与两端 comm 层交上去的一致）
+    mt = mt_wire & DIR_MASK
     if mt == MT_STATUS:
         s = dec_status(body)
         return (f"STATUS seq={s['seq']} tc1={s['tc1']} tc2={s['tc2']} body={s['body']} "
@@ -190,10 +208,13 @@ def describe(mt, seq, body) -> str:
     if mt == 0x21:
         mask, d = dec_delta(body)
         return f"DELTA mask=0x{mask:04x} {d}"
+    if mt == MT_INFO:
+        return f"INFO {body.decode('utf-8', 'replace')}"
     if mt == MT_ACK:
         acked_seq, acked_mt, status = body[0], body[1], body[2]
         ret = struct.unpack("<f", body[3:7])[0]
-        return f"ACK acked_seq={acked_seq} mt=0x{acked_mt:02x} status={status} ret={ret}"
+        return (f"ACK acked_seq={acked_seq} mt=0x{acked_mt & DIR_MASK:02x} "
+                f"status={status} ret={ret}")
     return f"MT=0x{mt:02x} len={len(body)} {body.hex()}"
 
 
@@ -223,6 +244,25 @@ def cmd_selftest():
     if neg[5:7] != bytes.fromhex("c9ff"):
         fails += 1
         print("FAIL negative i16")
+    # 方向位（R5-01）：屏方向与旧线格式逐字节相同；主控方向 bit6=1，CRC 按带方向位的字节算；
+    # 两端 comm.c 出队时打的正是这一位——对照向量与 esp32/tests/test_link_dir.c 的 [I] 阶段一致。
+    if frame(MT_SET_PARAM, 7, enc_param(1, 0, 30.5))[3] != 0x12:
+        fails += 1
+        print("FAIL h743 frame must carry bit6=0")
+    fe = frame(MT_SNAPSHOT, 0x15, enc_snapshot(), side="esp32")
+    if fe[3] != 0x60 or crc8(fe[2:3 + fe[2]]) != fe[-1]:
+        fails += 1
+        print("FAIL esp32 frame must carry bit6=1 with matching crc")
+    feed = parse_frame_stream()
+    got = [feed(b) for b in fe]
+    got = [g for g in got if g]
+    if not (len(got) == 1 and got[0][0] == 0x60 and got[0][1] == 0x15 and sender_of(got[0][0]) == "ESP32>H743"):
+        fails += 1
+        print("FAIL esp32 frame decode")
+    # 被确认消息号按去掉方向位解释
+    if "mt=0x12" not in describe(0x90, 1, bytes([7, 0x12, 0]) + struct.pack("<f", 30.5)):
+        fails += 1
+        print("FAIL acked mt strip")
     print("proto_ref selftest:", "OK" if fails == 0 else f"{fails} FAILS")
     return fails
 
@@ -243,7 +283,7 @@ def cmd_live(port, baud, set_args):
             for byte in data:
                 r = feed(byte)
                 if r:
-                    print("[ref]", describe(*r))
+                    print("[ref]", sender_of(r[0]), describe(*r))
     except KeyboardInterrupt:
         pass
     finally:
@@ -271,7 +311,7 @@ def main():
         for byte in raw:
             r = feed(byte)
             if r:
-                print(describe(*r))
+                print(sender_of(r[0]), describe(*r))
         return 0
     if cmd == "live":
         set_args = None

@@ -99,7 +99,11 @@ int main(void)
     boot();
     tcs_emergency_stop();
     CHECK(control_state() == CTRL_SAFE, "B: 急停进入 SAFE");
-    CHECK(tec_calls == 2 && last_tec_on == 0 && last_fan == 1, "B: 进 SAFE 的输出（TEC 关、风扇开）");
+    /* 合并 h1a（P1-06）之后：交付档的 control_init 拒收本地执行器钩子，进 SAFE 只改显示态、只发急停命令，
+     * 一次都不调本地钩子（与 test_prod_link_only.c 同一口径）。原先这里断言"调了 2 次 TEC 关、1 次风扇开"，
+     * 在合并后的树上必红——2026-11-26 集成时改。*/
+    CHECK(tec_calls == 0 && fan_calls == 0, "B: 进 SAFE 不调本地执行器（交付档）");
+    CHECK(g_tcs.tec1_on == 0 && g_tcs.tec2_on == 0 && g_tcs.fan_on == 1, "B: 进 SAFE 的显示态（TEC 关、风扇开）");
     CHECK(hook_calls == 1 && hook_last == TCS_CMD_ESTOP, "B: 下发了一次急停命令");
     {
         int f = fan_calls, t = tec_calls, h = hook_calls;

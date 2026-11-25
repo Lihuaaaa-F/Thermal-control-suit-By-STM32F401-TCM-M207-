@@ -150,6 +150,7 @@ static void m207_task(void *arg)
             } else if (ev.type == UART_FIFO_OVF || ev.type == UART_BUFFER_FULL) {
                 ESP_LOGW(TAG, "uart overflow ev=%d → flush", (int)ev.type);
                 uart_flush_input(M207_UART);
+                m207_core_rx_flush();    /* M12-F-10：已经不完整的半行一并丢弃（计 linedrop）*/
             }
         }
         m207_rx_drain(now_ms);           /* 拍内兜底（事件丢失也无损）*/

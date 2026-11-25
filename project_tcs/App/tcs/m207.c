@@ -19,22 +19,31 @@
 void m207_lineasm_reset(m207_lineasm_t *la)
 {
     la->len = 0;
+    la->over = 0;                         /* M12-F-10：超长标志随复位一起清（结构体可能在栈上未初始化）*/
     la->buf[0] = '\0';
 }
 
 int m207_lineasm_feed(m207_lineasm_t *la, uint8_t b, char *line, size_t cap)
 {
     if (b == '\r' || b == '\n') {
-        if (la->len == 0) return 0;            /* 空行忽略（连续 \r\n）*/
+        if (la->len == 0) {                /* 空行忽略（连续 \r\n）*/
+            la->over = 0;
+            return 0;
+        }
         size_t n = la->len;
-        if (n >= cap) n = cap - 1;
-        memcpy(line, la->buf, n);
-        line[n] = '\0';
+        int deliver = !la->over;           /* M12-F-10：超长行丢弃至行尾，不上送截断的前缀 */
         la->len = 0;
+        la->over = 0;
+        if (deliver) {
+            if (n >= cap) n = cap - 1;
+            memcpy(line, la->buf, n);      /* 先拷出去，再清缓冲 */
+            line[n] = '\0';
+        }
         la->buf[0] = '\0';
-        return 1;
+        return deliver;
     }
-    if (la->len >= M207_LINE_MAX) {            /* 超长：丢弃至行尾，防溢出 */
+    if (la->len >= M207_LINE_MAX) {        /* 超长：丢弃至行尾，防溢出 */
+        la->over = 1;
         return 0;
     }
     la->buf[la->len++] = (char)b;

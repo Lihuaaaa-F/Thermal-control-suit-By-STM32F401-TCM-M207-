@@ -53,6 +53,7 @@ typedef struct {
     uint16_t unexpected;   /* 无在途事务、也不在轮询等待窗的 CMD:REPLY（链路活但语义意外）*/
     uint16_t save_ok;      /* 保存帧（`!`）被模块确认（CMD:REPLY=8）*/
     uint16_t save_rej;     /* 保存帧得到其它回码，或应答窗内没有回码 */
+    uint16_t linedrop;     /* 没进解析器就被丢弃的行：超长（>64B）整行、空闲 >500ms 的半行、UART 溢出清缓冲 */
     uint32_t txdrop;       /* 发送环满、没交给 UART 的帧 */
 } m207_qstats_t;
 void     m207_stats_queue(m207_qstats_t *out);       /* 一次取全 */

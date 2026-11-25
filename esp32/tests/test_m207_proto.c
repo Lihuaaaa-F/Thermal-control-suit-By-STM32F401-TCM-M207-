@@ -162,6 +162,46 @@ int main(void)
         CHECK(m207_map_format(&bad, 1.0f, mb, sizeof mb) == -1, "bad ch rejected");
     }
 
+
+    /* M12-F-10（S-G e2）：超长行丢弃至行尾，不上送截断的前缀；之后状态干净。
+     * 原实现超限后只丢字节，遇 \r 仍把 64 字节的前缀当整行上送——与注释"丢弃至行尾"相反。*/
+    {
+        m207_lineasm_t la;
+        char line[M207_LINE_MAX + 1];
+        char big[200];
+        m207_lineasm_reset(&la);
+        /* 一条看起来合法、但超过行长上限 64 的行：截断后的前缀照样"能解析" */
+        snprintf(big, sizeof big, "PCRS232:COMPUSHLIST=%.3f", 1.5);
+        while (strlen(big) < 80) strcat(big, "0");
+        int delivered = 0, got = 0;
+        float v = 0;
+        for (const char *p = big; *p; p++)
+            delivered += m207_lineasm_feed(&la, (uint8_t)*p, line, sizeof(line));
+        delivered += m207_lineasm_feed(&la, '\r', line, sizeof(line));
+        CHECK(delivered == 0, "M12-F-10: over-long line is not delivered");
+        /* 紧跟的正常行照常上送、值正确（不与被丢弃的前缀粘连）*/
+        const char *next = "TC1:TCACTTEMP=27.5\r";
+        for (const char *p = next; *p; p++) {
+            if (m207_lineasm_feed(&la, (uint8_t)*p, line, sizeof(line))) {
+                m207_reply_t rr;
+                got++;
+                if (m207_parse_line(line, &rr)) v = rr.value;
+            }
+        }
+        CHECK(got == 1 && v > 27.49f && v < 27.51f,
+              "M12-F-10: the line after an over-long one is intact");
+        /* 恰好 64 字节的行仍要上送（上限本身没变）*/
+        m207_lineasm_reset(&la);
+        memset(big, 'A', M207_LINE_MAX);
+        big[M207_LINE_MAX] = '\0';
+        delivered = 0;
+        for (int i = 0; i < M207_LINE_MAX; i++)
+            delivered += m207_lineasm_feed(&la, (uint8_t)big[i], line, sizeof(line));
+        delivered += m207_lineasm_feed(&la, '\r', line, sizeof(line));
+        CHECK(delivered == 1 && strlen(line) == M207_LINE_MAX,
+              "M12-F-10: a line of exactly M207_LINE_MAX bytes is delivered");
+    }
+
     printf("test_m207_proto: PASS=%d FAIL=%d\n", g_pass, g_fail);
     return g_fail ? 1 : 0;
 }

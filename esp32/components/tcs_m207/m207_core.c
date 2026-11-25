@@ -66,6 +66,7 @@ static portMUX_TYPE s_qmux = portMUX_INITIALIZER_UNLOCKED;
 #define M207_PEND_MAX    4       /* 在途写确认事务（FIFO）*/
 #define M207_PERF_WIN    200u    /* perf 汇报窗 = 200 拍 = 10s */
 #define M207_SAVE_N      32u     /* "保存到模块"的帧数：TC1/TC2 各 16 个参数（映射表前 32 项）*/
+#define M207_LINE_IDLE_MS 500u   /* M12-F-10：半行空闲超过这么久就丢弃（一行在 57600 下最长 11ms 到齐）*/
 
 /* ====== 队列消息（生产者：任意任务 API/内部；消费者：服务任务）====== */
 typedef struct {
@@ -118,13 +119,15 @@ static m207_lineasm_t s_asm;
 static m207_pend_t s_pend[M207_PEND_MAX];
 
 static float    s_temp[M207_MOD_MAX];      /* [1]=tc1 [2]=tc2 TCACTTEMP */
-static uint32_t s_temp_tick[M207_MOD_MAX];
+static uint32_t s_temp_ms[M207_MOD_MAX];    /* 各通道上个样本的真实毫秒时刻（温度龄、合理性 dt 用）*/
+static uint32_t s_asm_ms;                   /* 行拼装器最近一个字节的时刻（空闲超时用）*/
 static uint8_t  s_have_temp[M207_MOD_MAX];
 
 static struct {
     uint16_t nak, verify_ok, resend, offline, wdrop, qdrop, unexpected;
     uint16_t superseded;                /* X03-F-07：被更新的写取代、没上线路的帧 */
     uint16_t save_ok, save_rej;         /* M12-F-08：保存帧被确认 / 被拒或无应答 */
+    uint16_t linedrop;                  /* M12-F-10：没进解析器的行（超长整行 / 空闲半行 / 溢出清缓冲）*/
     uint32_t tx, rx_lines, parse_err;
     uint32_t tick_max_us, fsm_max_us;    /* perf 窗口内最大值 */
 } s_stat;
@@ -526,8 +529,9 @@ static void m207_handle_line(const char *line)
     }
     if (r.kind == M207_KIND_REPLY && strcmp(r.param, "TCACTTEMP") == 0) {
         if (s_have_temp[r.module]) {
-            float dt = (float)(s_tick - s_temp_tick[r.module]) *
-                       (M207_TICK_MS / 1000.0f);
+            /* dt 用真实毫秒：服务拍被饿后拍号落后于真实时间（M12-F-07 的追赶拍被吞），
+             * 按拍号算会把隔了很久才来的合理样本误判成跳变。*/
+            float dt = (float)(s_now_ms - s_temp_ms[r.module]) / 1000.0f;
             if (!post_m207_sanity_ok(s_temp[r.module], r.value, dt)) {
                 M207_LOGW("implausible ch=%s %.1f→%.1f (dt=%.2fs) → count fail",
                           m207_mod_name(r.module), (double)s_temp[r.module],
@@ -538,7 +542,7 @@ static void m207_handle_line(const char *line)
             }
         }
         s_temp[r.module] = r.value;
-        s_temp_tick[r.module] = s_tick;
+        s_temp_ms[r.module] = s_now_ms;
         s_have_temp[r.module] = 1;
         s_fail_ch[r.module] = 0;                 /* M06-F-05：本通道恢复 */
         if (s_ch_open[r.module]) {                       /* F6 恢复沿（接回传感器）*/
@@ -579,14 +583,26 @@ static void m207_handle_line(const char *line)
 void m207_core_rx(const uint8_t *buf, size_t n, uint32_t now_ms)
 {
     char line[M207_LINE_MAX + 1];
-    (void)now_ms;
-    for (size_t i = 0; i < n; i++)
-        if (m207_lineasm_feed(&s_asm, buf[i], line, sizeof(line)))
+    if (n == 0) return;
+    s_asm_ms = now_ms;                        /* 最近一个字节到达的时刻（空闲超时用）*/
+    for (size_t i = 0; i < n; i++) {
+        uint8_t b = buf[i];
+        /* M12-F-10：超长行在行尾被行拼装器整行丢弃（截断的前缀不进解析器）——留痕计数 */
+        if (s_asm.over && (b == '\r' || b == '\n')) {
+            s_stat.linedrop++;
+            M207_LOGW("over-long line dropped (more than %d bytes)", M207_LINE_MAX);
+        }
+        if (m207_lineasm_feed(&s_asm, b, line, sizeof(line)))
             m207_handle_line(line);
+    }
 }
 
 void m207_core_rx_flush(void)
 {
+    if (s_asm.len) {
+        s_stat.linedrop++;
+        M207_LOGW("uart overflow: partial line discarded (%u bytes)", (unsigned)s_asm.len);
+    }
     m207_lineasm_reset(&s_asm);
 }
 
@@ -660,6 +676,14 @@ void m207_core_tick_begin(uint32_t now_ms)
 {
     s_now_ms = now_ms;
     s_tick++;
+    /* M12-F-10：半行空闲超时。一行在 57600 下最长 11ms 就到齐；超过 500ms 还没有后续字节，
+     * 说明模块复位或线上是噪声。残段留着会与下一行拼成一条"看起来合法"的行。*/
+    if (s_asm.len && (uint32_t)(now_ms - s_asm_ms) > M207_LINE_IDLE_MS) {
+        s_stat.linedrop++;
+        M207_LOGW("partial line discarded: idle %ums with %u bytes",
+                  (unsigned)(now_ms - s_asm_ms), (unsigned)s_asm.len);
+        m207_lineasm_reset(&s_asm);
+    }
 }
 
 /* 本拍的发送名额先给安全关断旁路（X03-F-07）。返回 1=本拍的名额已用于旁路帧 */
@@ -862,7 +886,8 @@ void m207_core_init(const m207_core_io_t *io)
     s_save_last_tick = 0;
     s_save_ack_ok = s_save_ack_other = 0;
     memset(s_temp, 0, sizeof(s_temp));
-    memset(s_temp_tick, 0, sizeof(s_temp_tick));
+    memset(s_temp_ms, 0, sizeof(s_temp_ms));
+    s_asm_ms = 0;
     memset(s_have_temp, 0, sizeof(s_have_temp));
     memset(&s_stat, 0, sizeof(s_stat));
     s_txdrop = 0;
@@ -986,7 +1011,8 @@ uint32_t m207_temp_age_ms(void)
     if (!s_have_temp[1] || !s_have_temp[2]) return 0xFFFFu;
     uint32_t worst = 0;                                /* 取较旧通道=显示新鲜度下界 */
     for (int ch = 1; ch <= 2; ch++) {
-        uint32_t age = (s_tick - s_temp_tick[ch]) * M207_TICK_MS;
+        /* 真实毫秒龄：服务拍被饿时拍号会落后于真实时间，按拍号算会把旧数据报成新鲜 */
+        uint32_t age = s_now_ms - s_temp_ms[ch];
         if (age > worst) worst = age;
     }
     return (worst > 0xFFFFu) ? 0xFFFFu : worst;
@@ -1006,6 +1032,7 @@ void m207_stats_queue(m207_qstats_t *out)
     out->save_ok = s_stat.save_ok;
     out->save_rej = s_stat.save_rej;
     out->txdrop = s_txdrop;
+    out->linedrop = s_stat.linedrop;
 }
 uint8_t m207_alarm_active(void) { return tcs_alarm_active(ALM_M207); }
 

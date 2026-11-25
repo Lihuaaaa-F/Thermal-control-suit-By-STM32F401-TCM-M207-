@@ -317,6 +317,72 @@ static void test_queue_capacity(void)
     TB_CHECK(okc == 16, "after wrap-around the queue still holds 16");
 }
 
+/* ---------- 10. M12-F-10：超长行 / 半行不进解析器，且丢弃计数可见 ---------- */
+static void test_rx_line_hygiene(void)
+{
+    m207_qstats_t st;
+    tb_init();
+    TB_CHECK(tb_wait_online(120), "online");
+    tb_run(30);
+    TB.m.silent = 1;                            /* 不让轮询应答来掺和 */
+    tb_run(2);
+
+    /* 超长行（COMPUSHLIST 之类）：截断的前缀不得被解析；紧随其后的正常行完好 */
+    char big[160];
+    snprintf(big, sizeof big, "PCRS232:COMPUSHLIST=%.3f", 1.5);
+    while (strlen(big) < 100) strcat(big, "0");
+    tb_rx_inject(big);
+    tb_rx_inject("\rTC2:TCACTTEMP=24.3\r");    /* 台阶要小：合理性滤波按距上个样本的 dt 限速 */
+    tb_tick();
+    memset(&st, 0, sizeof st);
+    m207_stats_queue(&st);
+    TB_CHECK(st.linedrop == 1, "M12-F-10: over-long line dropped and counted");
+    TB_CHECK(m207_last_temp(2) > 24.29f && m207_last_temp(2) < 24.31f,
+             "the line right after it is parsed intact");
+
+    /* 半行在空闲窗内接上：仍是一条完整行 */
+    tb_rx_inject("TC1:TCACTTEMP=2");           /* 没有 \r */
+    tb_run(4);                                  /* 200ms：还在等后续字节 */
+    tb_rx_inject("6.0\r");
+    tb_tick();
+    TB_CHECK(m207_last_temp(1) > 25.99f && m207_last_temp(1) < 26.01f,
+             "a line completed within the idle window is accepted (26.0)");
+
+    /* 半行 500ms 没有后续字节（模块复位 / 噪声）：整段丢弃，不与迟到的尾巴拼成一条 */
+    tb_rx_inject("TC1:TCACTTEMP=2");
+    tb_run(12);                                 /* 600ms */
+    memset(&st, 0, sizeof st);
+    m207_stats_queue(&st);
+    TB_CHECK(st.linedrop == 2, "M12-F-10: partial line idle > 500ms is discarded and counted");
+    tb_rx_inject("7.0\r");                      /* 若没丢弃，会拼成 27.0 被采纳 */
+    tb_tick();
+    TB_CHECK(m207_last_temp(1) > 25.99f && m207_last_temp(1) < 26.01f,
+             "M12-F-10: the late tail does not resurrect the discarded line");
+}
+
+/* ---------- 11. 温度龄与合理性 dt 用真实毫秒：被饿掉的拍不能让数据显得"新鲜" ----------
+ * 服务拍被饿后 vTaskDelayUntil 的追赶拍会被吞掉（M12-F-07），拍号于是落后于真实时间；
+ * 按拍号算年龄会低估，按拍号算 dt 会把隔了很久才来的合理样本误判成跳变。 */
+static void test_time_base_is_real_ms(void)
+{
+    tb_init();
+    TB_CHECK(tb_wait_online(120), "online");
+    tb_run(30);
+    TB.m.silent = 1;
+    tb_run(2);
+    TB.now_ms += 1000u;                         /* 服务任务 1s 一拍都没跑 */
+    tb_tick();
+    TB_CHECK(m207_temp_age_ms() >= 1000u && m207_temp_age_ms() != 0xFFFFu,
+             "temp age follows real time (starved ticks do not make data look fresh)");
+    /* 隔了 10s 真实时间才来的下一个样本：25→45 摊在 10s 里是 2°C/s，合理；
+     * 按拍数算 dt 只有 0.2s，会被误判成跳变而拒收 */
+    TB.now_ms += 10000u;
+    tb_rx_inject("TC1:TCACTTEMP=45.0\r");
+    tb_tick();
+    TB_CHECK(m207_last_temp(1) > 44.99f && m207_last_temp(1) < 45.01f,
+             "plausibility dt is real time: a sample after a 10s gap is judged over 10s");
+}
+
 int main(void)
 {
     test_boot_first_online();
@@ -328,5 +394,7 @@ int main(void)
     test_offline_writes();
     test_golden_tx();
     test_queue_capacity();
+    test_rx_line_hygiene();
+    test_time_base_is_real_ms();
     return tb_done("test_m207_core");
 }

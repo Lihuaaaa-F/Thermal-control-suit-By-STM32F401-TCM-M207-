@@ -47,7 +47,7 @@ void m207_core_tick_end(int64_t t0_us);
 /* 喂 RX 字节（服务每拍清空 UART 环形缓冲后调用，可多次）。now_ms=读到这批字节的时刻。*/
 void m207_core_rx(const uint8_t *buf, size_t n, uint32_t now_ms);
 
-/* UART 溢出、驱动清了接收缓冲之后调用：行拼装器里的半行已不完整，整段丢弃。*/
+/* UART 溢出、驱动清了接收缓冲之后调用：行拼装器里的半行已不完整，整段丢弃（计 linedrop）。*/
 void m207_core_rx_flush(void);
 
 typedef struct {

@@ -51,6 +51,13 @@ run tmp117pure tests/test_tmp117_pure.c    components/tcs_tmp117/tmp117_pure.c
 run tcsproto  tests/test_tcs_proto.c
 run control   tests/test_control_esp32.c   components/tcs_core/control.c components/tcs_core/param_registry.c components/tcs_core/post_pure.c components/tcs_link/proto.c
 
+# S-G l1（2026-11-25）：R5-01 / R5-10 的 ESP32 侧用例——components/tcs_link/link_task.c 原样编译
+# （IDF / FreeRTOS 用 tests/host_stubs 里的桩，按诊断档），在虚拟时钟上跑一条时间线：
+# 自己发出的帧被回送的三种情形、屏写参数紧跟本端发送之后到达、ACK 回声、方向表、linkloop 20s。
+EXTRA_INC="/I..\..\tests\host_stubs"
+run linkdir tests/test_link_dir.c components/tcs_link/link_task.c components/tcs_link/comm.c components/tcs_link/proto.c
+EXTRA_INC=""
+
 # U 线 W1：网页 WS 契约（st / log 消息，真实 cJSON）
 if [ -f "$CJSON_DIR/cJSON.c" ]; then
     EXTRA_INC="/I\"$(cygpath -w "$CJSON_DIR")\""

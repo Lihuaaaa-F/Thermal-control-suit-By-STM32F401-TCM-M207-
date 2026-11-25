@@ -14,7 +14,11 @@
  *   - 零 HAL 依赖，仅 <stdint.h>/<string.h>，PC/H743/ESP32 三端同编译（§5.1 tcs_proto 跨端单测）
  *   - 多字节字段一律小端（任务书 §4.2 "字节级，小端"）
  *
- * 消息号段 0x10-0x16 / 0x90-0x91（与 GS 无人机协议 0x01-0x05/0x81-0x85 无冲突）。
+ * 消息号段 0x10-0x15 / 0x20-0x22 / 0x90（与 GS 无人机协议 0x01-0x05/0x81-0x85 无冲突；
+ * 0x16、0x91 未定义）。每个消息号的发送方见下面"方向表"，它是方向信息的唯一说明。
+ *
+ * ⚠️ 两端固件必须成对更新（2026-11-25，R5-01）：线上帧带方向位，屏写参数只用 0x12、
+ *    参数镜像只用 0x11。只换一端时设备的表现在"方向"一节末尾。
  *
  * ⚠️ 长度核对记录（2026-10-18）：STATUS 逐字段相加 = 1+4+2+2+2+1+1+1+1+2+1+1 = 19B。
  *    任务书 §4.2 表尾标注 "17B" 为算术口径（漏加 online+rfu 两字节）；字段清单为准，
@@ -27,17 +31,174 @@
 #include <stddef.h>
 #include <string.h>
 
-/* ====== 协议版本（STATUS.ver；不匹配→网页黄条不拒绝服务）====== */
+/* ====== 协议版本（STATUS.ver / SNAPSHOT.ver；不匹配→网页黄条、屏丢弃快照）======
+ * 2026-11-25（R5-01）没有递增：屏端 POST 的 VER 自检项写死 TCS_PROTO_VER == 1
+ * （project_tcs/App/tcs/post.c），递增会让交付档自检失败；方向位的不兼容是整帧级的
+ * （见下），靠"必须成对更新"约束，不靠版本号。要递增须连同 POST 那一项一起改。*/
 #define TCS_PROTO_VER       1U
 
-/* ====== 消息号 ====== */
-#define MT_TCS_STATUS          0x10  /* H743→ESP 500ms 周期 */
-#define MT_TCS_PARAM           0x11  /* 双向参数帧：H743→ESP32=屏改参/握手全量；ESP32→H743=权威镜像（v2 补口）*/
-#define MT_TCS_SET_PARAM       0x12  /* ESP→H743 ACK 必达 */
-#define MT_TCS_GET_REGISTRY    0x13  /* ESP→H743 无载荷 */
-#define MT_TCS_REGISTRY_ENTRY  0x14  /* H743→ESP ×N 条 */
-#define MT_TCS_CMD             0x15  /* ESP→H743 ACK 必达 */
+/* ====== 方向：这一帧是谁发的（R5-01，2026-11-25）======
+ *
+ * 起因：2026-11-23 现场，ESP32 自己发出的参数镜像（0x11）经接线回声回到自己的 RX，被当成
+ * "屏发来的改参"写进权威注册表，tc1_set 从 40.1 被改到下限 5.0。帧里原先没有任何字段能
+ * 回答"这是谁发的"。
+ *
+ * 线上消息号字节（Payload[0]，整帧第 4 字节）= 消息号 | 方向位：
+ *     bit6 (0x40) = 1 → 发送方是 ESP32（主控）
+ *     bit6 (0x40) = 0 → 发送方是 H743（屏）
+ * 在用的消息号（TCS 0x10-0x15 / 0x20-0x22 / 0x90，GS 遗留 0x01-0x05 / 0x81-0x85）bit6
+ * 都是 0，所以一个机制对所有消息号生效；下方 _Static_assert 把"消息号不得占用 bit6"钉死。
+ *
+ * 方向位由 comm 层统一处理：发送时在出队处打上本端方向（发送点不需要、也不能自己打）；
+ * 接收时在 ACK 处理、去重、交付之前先判方向。判定只看字节——不看长度、不看时刻。
+ *
+ * 极性为什么是"1 = ESP32"：只换一端时要倒向安全的一侧。旧屏固件发出的帧没有这一位
+ * （读作"H743 发的"），新 ESP32 照常认——急停 0x15、写参数 0x12 仍然执行。若定成
+ * "1 = H743"，旧屏的急停帧会被新 ESP32 当成"本端回送"整帧丢掉。
+ *
+ * 只换一端的实际表现（只为排障；两端固件必须成对更新）：
+ *   新 ESP32 + 旧屏：屏不出数（旧屏不认带方向位的 0x20）；旧屏用 0x11 写的非 M207 参数被
+ *                    按方向表丢弃（屏上改了又跳回）；ESP32 日志反复 link down (ARQ)。
+ *   新屏 + 旧 ESP32：屏把旧 ESP32 的帧全当成"本端回送"丢弃——屏不出数；屏的写参数 0x12
+ *                    与急停 0x15 仍会到达旧 ESP32 并执行。
+ *
+ * 方向表（"谁会发"由两端源码的收发分支决定；python tools/proto_sync.py --check 逐条核对
+ * 两端的发送点与接收分支，改了代码没改这张表 → 门禁红）：
+ *
+ *   消息号  名称             谁会发        载荷   可靠性        接收方怎么处理
+ *   ------  ---------------  ------------  ----  ------------  ----------------------------
+ *   0x10    STATUS          H743          19B   免 ARQ        ESP32：链路判活 + 网页状态
+ *   0x11    PARAM           ESP32          7B   免 ARQ        H743：权威镜像，静默落本地表
+ *   0x12    SET_PARAM       H743           7B   等 ACK        ESP32：写权威注册表（屏的参数写入）
+ *   0x13    GET_REGISTRY    ESP32          0B   等 ACK        H743：开始节拍化下发 0x14
+ *   0x14    REGISTRY_ENTRY  H743         变长   免 ARQ        ESP32：注册表条目
+ *   0x15    CMD             双向           1B   等 ACK        对端执行命令。ESP32→H743 方向
+ *                                                      当前没有调用者（link_send_cmd 零调用）
+ *   0x20    SNAPSHOT        ESP32         40B   免 ARQ        H743：全量快照（屏唯一读源）
+ *   0x21    DELTA           ESP32        变长   免 ARQ        H743：位图增量
+ *   0x22    INFO            ESP32        变长   免 ARQ        H743：热点名/密码/网址/固件版本
+ *   0x90    ACK             双向           7B   免 ARQ        comm 层消费（清 pending、判活）
+ *
+ * 其它消息号：没有登记的方向表项 → 两个方向都放行到收帧分发，由分发的 default 丢弃
+ * （前向兼容：0x22 刚加进来时旧屏就是这样处理的）。*/
+#define MT_TCS_STATUS          0x10
+#define MT_TCS_PARAM           0x11  /* 仅 ESP32→H743：权威参数镜像（屏显示跟随）*/
+#define MT_TCS_SET_PARAM       0x12  /* 仅 H743→ESP32：屏写参数，等 ACK（R5-10 起所有参数都走它）*/
+#define MT_TCS_GET_REGISTRY    0x13  /* 仅 ESP32→H743，无载荷 */
+#define MT_TCS_REGISTRY_ENTRY  0x14  /* 仅 H743→ESP32 ×N 条 */
+#define MT_TCS_CMD             0x15  /* 双向（ESP32→H743 当前无调用者）*/
+#define MT_TCS_SNAPSHOT        0x20  /* 仅 ESP32→H743：全量快照（载荷见下方 0x20/0x21 段）*/
+#define MT_TCS_DELTA           0x21  /* 仅 ESP32→H743：位图增量 */
+#define MT_TCS_INFO            0x22  /* 仅 ESP32→H743：设备信息（载荷见下方 0x22 段）*/
 #define MT_TCS_ACK             0x90  /* 双向 */
+
+/* 方向位的三个取值：只有谁会发 */
+#define TCS_DIR_H743_ONLY      1u    /* bit0：H743（屏）会发 */
+#define TCS_DIR_ESP32_ONLY     2u    /* bit1：ESP32（主控）会发 */
+#define TCS_DIR_BOTH           3u
+
+/* 每个消息号的"谁会发"。改方向 = 改协议：同步改上面的表与两端代码分支。*/
+#define MT_TCS_STATUS_DIR          TCS_DIR_H743_ONLY
+#define MT_TCS_PARAM_DIR           TCS_DIR_ESP32_ONLY
+#define MT_TCS_SET_PARAM_DIR       TCS_DIR_H743_ONLY
+#define MT_TCS_GET_REGISTRY_DIR    TCS_DIR_ESP32_ONLY
+#define MT_TCS_REGISTRY_ENTRY_DIR  TCS_DIR_H743_ONLY
+#define MT_TCS_CMD_DIR             TCS_DIR_BOTH
+#define MT_TCS_ACK_DIR             TCS_DIR_BOTH
+#define MT_TCS_SNAPSHOT_DIR        TCS_DIR_ESP32_ONLY
+#define MT_TCS_DELTA_DIR           TCS_DIR_ESP32_ONLY
+#define MT_TCS_INFO_DIR            TCS_DIR_ESP32_ONLY
+
+/* 本端身份（comm_init 的 self_side）*/
+#define TCS_SIDE_H743          0u
+#define TCS_SIDE_ESP32         1u
+
+/* 消息号字节里的方向位与掩码 */
+#define TCS_MT_DIR_ESP32       0x40u  /* bit6 = 1：发送方是 ESP32 */
+#define TCS_MT_NUM_MASK        0xBFu  /* 去掉方向位 */
+#define TCS_MT_DIR_MASK        0x40u
+
+/* 在用的消息号都不得占用方向位（占用后"谁发的"就分不清了）*/
+#define TCS_ASSERT_NO_DIR_(mt) _Static_assert(((mt) & TCS_MT_DIR_MASK) == 0u, \
+    "message number uses the direction bit (0x40): " #mt)
+TCS_ASSERT_NO_DIR_(MT_TCS_STATUS);     TCS_ASSERT_NO_DIR_(MT_TCS_PARAM);
+TCS_ASSERT_NO_DIR_(MT_TCS_SET_PARAM);  TCS_ASSERT_NO_DIR_(MT_TCS_GET_REGISTRY);
+TCS_ASSERT_NO_DIR_(MT_TCS_REGISTRY_ENTRY); TCS_ASSERT_NO_DIR_(MT_TCS_CMD);
+TCS_ASSERT_NO_DIR_(MT_TCS_ACK);        TCS_ASSERT_NO_DIR_(MT_TCS_SNAPSHOT);
+TCS_ASSERT_NO_DIR_(MT_TCS_DELTA);      TCS_ASSERT_NO_DIR_(MT_TCS_INFO);
+
+/* 线上消息号字节 → 发送方（TCS_SIDE_*）*/
+static inline uint8_t tcs_frame_sender(uint8_t mt_wire)
+{
+    return (mt_wire & TCS_MT_DIR_ESP32) ? TCS_SIDE_ESP32 : TCS_SIDE_H743;
+}
+
+/* 线上消息号字节 → 消息号（去掉方向位）*/
+static inline uint8_t tcs_frame_mt(uint8_t mt_wire)
+{
+    return (uint8_t)(mt_wire & TCS_MT_NUM_MASK);
+}
+
+/* 消息号 + 发送方 → 线上消息号字节（comm 层出队时调用；已带方向位的输入先去掉再打）*/
+static inline uint8_t tcs_frame_mark(uint8_t mt, uint8_t side)
+{
+    return (uint8_t)(tcs_frame_mt(mt) | (side == TCS_SIDE_ESP32 ? TCS_MT_DIR_ESP32 : 0u));
+}
+
+/* 消息号的"谁会发"（方向表）。未登记的消息号返回 0（两个方向都放行，见上）。*/
+static inline uint8_t tcs_mt_dir(uint8_t mt)
+{
+    switch (mt) {
+    case MT_TCS_STATUS:         return MT_TCS_STATUS_DIR;
+    case MT_TCS_PARAM:          return MT_TCS_PARAM_DIR;
+    case MT_TCS_SET_PARAM:      return MT_TCS_SET_PARAM_DIR;
+    case MT_TCS_GET_REGISTRY:   return MT_TCS_GET_REGISTRY_DIR;
+    case MT_TCS_REGISTRY_ENTRY: return MT_TCS_REGISTRY_ENTRY_DIR;
+    case MT_TCS_CMD:            return MT_TCS_CMD_DIR;
+    case MT_TCS_ACK:            return MT_TCS_ACK_DIR;
+    case MT_TCS_SNAPSHOT:       return MT_TCS_SNAPSHOT_DIR;
+    case MT_TCS_DELTA:          return MT_TCS_DELTA_DIR;
+    case MT_TCS_INFO:           return MT_TCS_INFO_DIR;
+    default:                    return 0u;
+    }
+}
+
+/* 发送方 side 是否可能发出消息号 mt。未登记的消息号对两个方向都算"可能"。*/
+static inline int tcs_mt_sent_by(uint8_t mt, uint8_t side)
+{
+    uint8_t d = tcs_mt_dir(mt);
+    if (d == 0u) return 1;
+    return (d & (1u << (side ? 1u : 0u))) != 0u;
+}
+
+/* 收帧判定的三种结果 */
+#define TCS_RX_ACCEPT        0   /* 对端发来的、方向表允许的帧：照常处理 */
+#define TCS_RX_ECHO          1   /* 本端发出的帧被回送：丢弃，不计入任何处理 */
+#define TCS_RX_WRONG_DIR     2   /* 方向位说是对端，但对端不会发这个消息号（或 ACK 确认了一个
+                                  * 本端不会发的消息号）：丢弃并单独计数——它不是回声，是坏帧或
+                                  * 版本不匹配的对端 */
+
+/* 收帧方向闸门（纯函数：两端 comm.c 同用，不依赖 HAL/RTOS）。
+ *   mt_wire  = 帧载荷第 0 字节（消息号 | 方向位）
+ *   self     = 本端身份（TCS_SIDE_*）
+ *   payload  = 帧载荷（ACK 帧用它核对"被确认的消息号"），plen = 载荷长度（≥2）
+ * 判定顺序不能换：先看方向位（回声一律不碰，包括 ACK），再看方向表。*/
+static inline int tcs_rx_verdict(uint8_t mt_wire, uint8_t self,
+                                 const uint8_t *payload, size_t plen)
+{
+    uint8_t sender = tcs_frame_sender(mt_wire);
+    if (sender == self) return TCS_RX_ECHO;
+    uint8_t mt = tcs_frame_mt(mt_wire);
+    if (!tcs_mt_sent_by(mt, sender)) return TCS_RX_WRONG_DIR;
+    /* ACK（0x90，及 GS 遗留的 0x04/0x84，布局相同：载荷 [2]=被确认 seq、[3]=被确认消息号）
+     * 确认的必须是本端会发给对端的帧。本端发出的 ACK 回声即使方向位被改坏，它确认的也
+     * 是对端发来的消息号——按方向表过不了这一关。*/
+    if (mt == MT_TCS_ACK || mt == 0x04u || mt == 0x84u) {
+        if (plen >= 4u && !tcs_mt_sent_by(tcs_frame_mt(payload[3]), self))
+            return TCS_RX_WRONG_DIR;
+    }
+    return TCS_RX_ACCEPT;
+}
 
 /* TCS_CMD 命令码（§4.2）*/
 #define TCS_CMD_TEC1_ON        1
@@ -286,12 +447,11 @@ static inline int tcs_scan_ack(const uint8_t *pl, size_t len, tcs_ack_pl_t *a)
     return 0;
 }
 
-/* ====== 0x20 TCS_SNAPSHOT / 0x21 TCS_DELTA（R2 架构 v2：ESP→H743 200ms 全量，
- * fire-and-forget；本段与 esp32/components/tcs_link/tcs_proto.h 逐字同源——
- * 字节格式=唯一真相，改动必须双端同步并经 proto_ref.py 字节对照）====== */
-#define MT_TCS_SNAPSHOT       0x20
-#define MT_TCS_DELTA          0x21
-
+/* ====== 0x20 TCS_SNAPSHOT / 0x21 TCS_DELTA（R2 架构 v2：ESP32→H743 200ms 全量，
+ * fire-and-forget）。本段与本文件其余部分一样只有一份（R1 AD-6：两端包装文件只是
+ * include 本文件，不存在"两份逐字同源"的文本）；字节格式以本文件为准，
+ * 两端各自的单测（project_tcs/tests、esp32/tests）与 project_tcs/tools/proto_ref.py
+ * 对同一组字节向量。====== */
 typedef struct {
     uint8_t  ver;        /* TCS_PROTO_VER */
     uint32_t seq;        /* 帧序号（发送侧自增；收端做单调性检查 F15）*/
@@ -415,7 +575,6 @@ static inline int tcs_scan_delta(const uint8_t *pl, size_t len, tcs_delta_src_t 
  * 现有键：ssid（热点名）/ pass（热点密码）/ url（控制台网址）/ fw（主控固件版本）。
  * 值里的 '\n' 与 '=' 被换成空格（保证一行一键）；键为空或含这两个字符的整对跳过。
  * 旧屏固件对未知消息号静默丢弃（on_frame 的 default 分支）→ 前向兼容。*/
-#define MT_TCS_INFO          0x22
 #define TCS_INFO_MAX_LEN     120
 
 /* 编 n 对 key=value。返回载荷字节数（不含结尾 NUL）；一对都放不下或参数非法返回 0。*/

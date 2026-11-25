@@ -383,6 +383,24 @@ fi
 # S-G h1a（M01-F-08 / M02-F-05）：驱动层纯逻辑——_sbrk 堆上界、SDRAM 自检图样（故障注入）
 run drvpure     tests/test_drv_pure.c     Core/Src/ltdc.c
 
+# S-G l1（2026-11-25）：链路方向闸门（R5-01）与屏写参数走 ARQ（R5-10）——屏端 comm 层的方向用例、
+# 屏写参数策略用例（App/comm/link_send.c）。ESP32 侧的对应用例在上面的 esp32_tests 里（linkdir 一行）。
+run linkdir    tests/test_link_dir.c     App/proto/proto.c App/comm/comm.c
+run link_send  tests/test_link_send.c    App/comm/link_send.c App/comm/comm.c App/proto/proto.c
+# 它们的变异验证：协议唯一源、两端 comm.c、link_task.c、link_send.c 逐个改坏，对应那一侧的用例必须变红。
+# 有变异体活下来 = 用例有盲区。约 1.5 分钟（每个变异体一次 vcvars + cl）。
+if [ -n "$PYBIN" ] && PYTHONUTF8=1 "$PYBIN" tests/mutation_link_dir.py > build/mut_link.log 2>&1; then
+    echo "[mut-link] PASS（$(tail -1 build/mut_link.log)）"
+else
+    echo "[mut-link] FAIL"; grep -a "活下来\|编译失败\|锚点\|FAIL" build/mut_link.log | head -12; FAIL=1
+fi
+# S-G l1：协议唯一源门禁——两端包装是薄包装、方向表与两端源码的收发分支逐条一致（M11-F-17 / X01-F-07）。
+if [ -n "$PYBIN" ]; then
+    if "$PYBIN" ../tools/proto_sync.py --check; then :; else echo "[proto_sync] FAIL"; FAIL=1; fi
+else
+    echo "[proto_sync] SKIP: python not found"; FAIL=1
+fi
+
 echo "==================="
 if [ "$FAIL" = 0 ]; then echo "run_all: ALL GREEN"; else echo "run_all: HAS FAILURES"; fi
 exit $FAIL

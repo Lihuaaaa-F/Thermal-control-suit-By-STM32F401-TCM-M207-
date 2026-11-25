@@ -249,26 +249,20 @@ void link_demo_note_param(uint16_t id, float v)
 /* —— UART 发送钩子（comm 注入；comm_poll_tx 任务内串行调用）—— */
 static uint32_t s_uart_txdrop;   /* 驱动 TX 环满丢弃（linkstat 可见）*/
 
-/* 回声防护（2026-11-23 现场）：屏→ESP32 那根发送线接触不良时，本端会在自己发送期间
- * 从 RX 脚串扰收到自己刚发出去的帧（参数镜像 0x11 为主）。完好的回声只是日志噪音；
- * 但劣化链路上回声内容会被改写，约 1/256 的坏帧仍能碰巧通过 CRC8——现场实测一条被
- * 改写成 tc1_set=0 的回声被当成"屏的写入"落进权威注册表（40.1 → 钳到下限 5.0）。
- * 规则：本端刚发完一帧（线路上仍处在这一帧的发送窗内）就"收"到等长的帧 → 判为回声，
- * 不上抛，计入 echo 统计并周期性告警（提示查接线）。
- * 误杀面：屏的真帧与本端刚发的那帧等长且落在同一窗——等长的只有 0x11/0x12/0x90
- * （载荷 9）对镜像 0x11：镜像 1.7 帧/s、窗≈4.5ms → 屏的 0x11 约 0.8% 被丢；0x12/0x90
- * 走 ARQ 会重传。周期帧之间长度都不同（STATUS 21 / 快照 42），不存在相位锁定风险。*/
-#define TCS_ECHO_MARGIN_MS   4u
-static uint32_t link_now_ms(void);
-static volatile uint32_t s_echo_plen;      /* 本端刚发那帧的载荷长度（0=无窗）*/
-static volatile uint32_t s_echo_until_ms;  /* 该帧在线路上发完的时刻 + 余量 */
-static uint32_t s_echo_drop;
+/* 回声防护（2026-11-25 重做，R5-01 / R5 复核）：屏→ESP32 那根发送线接触不良时，本端会在自己发送
+ * 期间从 RX 脚串扰收到自己刚发出去的帧。2026-11-23 现场一条被改写的回声被当成"屏的写入"落进
+ * 权威注册表（40.1 → 钳到下限 5.0）。当时的防护是"发送窗内收到等长的帧就丢"，它放在
+ * comm_rx_feed_byte 之后（ACK 回声在 comm 层内已经被消费）、只比长度不比方向，并且会误杀
+ * 紧跟在本端发送之后到达的屏帧（R5-10）。
+ * 现在帧里有方向位（protocol/tcs_proto.h「方向」）：本端发出的帧 bit6=1。回送帧在 comm 层的
+ * 方向闸门里、任何处理（ACK、去重、交付、判活）之前丢弃，只看字节，不看长度、不看时刻。
+ * 这里只剩两件事：把计数报出来；周期性告警提示查接线。*/
 
 /* 链路诊断（只在 CONFIG_TCS_SIM / CONFIG_TCS_DIAG 构建里；PROD 没有下面任何符号）：
  *   link_mute_ms(N)   —— N 毫秒内既不发也不收（收到的字节直接丢弃）。不拔线就能诱导
  *                        "屏链路断开再恢复"，用来验证两端的恢复逻辑；物理层仍要人工拔线。
  *   link_loopback(1)  —— 芯片内部把 TX 接到 RX：本端发什么就收什么，是确定性的回声源，
- *                        用来在真机上验证上面的回声防护（echo 计数应增长，不得出现参数写入）。*/
+ *                        用来在真机上验证方向闸门（echo 计数应增长，不得出现参数写入）。*/
 #if CONFIG_TCS_SIM || CONFIG_TCS_DIAG
 static volatile uint32_t s_mute_until_ms;
 static volatile uint8_t  s_loopback;
@@ -294,13 +288,7 @@ static void link_uart_send(const uint8_t *d, size_t n)
 #endif
     size_t free_sz = 0;
     if (uart_get_tx_buffer_free_size(LINK_UART, &free_sz) == ESP_OK && free_sz >= n) {
-        uart_write_bytes(LINK_UART, d, n);
-        size_t pend = 0;
-        uint32_t on_wire = (uint32_t)n;
-        if (uart_get_tx_buffer_free_size(LINK_UART, &pend) == ESP_OK) on_wire = LINK_TXBUF - pend;
-        s_echo_plen = 0u;      /* 先关旧窗再开新窗（两个 32 位写各自原子）*/
-        s_echo_until_ms = link_now_ms() + on_wire * 10000u / (uint32_t)LINK_BAUD + TCS_ECHO_MARGIN_MS;
-        s_echo_plen = (uint32_t)n - 4u;   /* AA 55 + Len + 载荷 + CRC8 → 载荷 = n-4 */
+        uart_write_bytes(LINK_UART, d, n);     /* 帧已由 comm 层带上方向位 */
     } else {
         s_uart_txdrop++;
         if ((s_uart_txdrop % 50u) == 1u) ESP_LOGW(TAG, "link tx ring full, dropped %lu frames", (unsigned long)s_uart_txdrop);
@@ -403,30 +391,6 @@ static void on_frame(const uint8_t *payload, size_t len)
         notify();
         break;
     }
-    case MT_TCS_PARAM: {
-        tcs_param_pl_t p;
-        if (tcs_scan_param(body, blen, &p) != 0) break;
-        float v = (p.type == PARAM_TYPE_F32) ? tcs_b2f(p.value) : (float)p.value;
-        ESP_LOGI(TAG, "PARAM id=0x%02x v=%.2f", p.id, v);
-        taskENTER_CRITICAL(&s_mux);
-        s_last_param.id = p.id;
-        s_last_param.v = v;
-        s_last_param.us = esp_timer_get_time();
-        for (int i = 0; i < LINK_REGISTRY_MAX; i++) {
-            if (s_reg[i].used && s_reg[i].e.id == p.id) {
-                s_param_val[i] = v;
-                s_param_valid[i] = 1;
-                break;
-            }
-        }
-        taskEXIT_CRITICAL(&s_mux);
-        /* v2 上行写路径：屏幕 0x11 广播（模式/阈值等非 PF_M207 参数）必须落入
-         * 本端权威注册表，否则屏幕改动丢失并被快照回灌成旧值。
-         * param_set 对等值短路 → 0x12 已写过的参数不会重复下发 M207。*/
-        if (s_setparam_cb) s_setparam_cb(p.id, v, payload[1]);
-        notify();
-        break;
-    }
     case MT_TCS_REGISTRY_ENTRY: {
         tcs_reg_entry_t e;
         if (tcs_scan_registry_entry(body, blen, &e) != 0) break;
@@ -452,7 +416,7 @@ static void on_frame(const uint8_t *payload, size_t len)
         }
         break;
     }
-    case MT_TCS_SET_PARAM: {         /* R2 协议换向：屏（H743）写参数 → 本端权威注册表 → M207 verify */
+    case MT_TCS_SET_PARAM: {         /* 屏写参数（R5-10 起所有参数都走这一条，等 ACK）→ 本端权威注册表 → M207 verify */
         tcs_param_pl_t p;
         uint8_t seq = payload[1];
         if (tcs_scan_param(body, blen, &p) != 0) {
@@ -460,12 +424,20 @@ static void on_frame(const uint8_t *payload, size_t len)
             break;
         }
         float v = (p.type == PARAM_TYPE_F32) ? tcs_b2f(p.value) : (float)p.value;
+        /* 这里也是 web 的 pv 推送源之一：记"最近一次屏的参数写入"（R5-01 之前 0x11 的
+         * 广播也走这段，本端镜像回声因此能冒充屏的写入；现在 0x11 是主控专用，进不了这里）。*/
+        taskENTER_CRITICAL(&s_mux);
+        s_last_param.id = p.id;
+        s_last_param.v = v;
+        s_last_param.us = esp_timer_get_time();
+        taskEXIT_CRITICAL(&s_mux);
         /* 破组件环（tcs_core→tcs_link）：应用层注册处理器落权威注册表并回 ACK */
         if (s_setparam_cb) {
             s_setparam_cb(p.id, v, seq);
         } else {
             link_send_ack(seq, mt, TCS_ACK_BUSY, 0.0f);
         }
+        notify();
         break;
     }
     case MT_TCS_CMD: {               /* v2 反向：屏幕急停/确认 → 本端执行 */
@@ -477,7 +449,7 @@ static void on_frame(const uint8_t *payload, size_t len)
         break;
     }
     default:
-        break;   /* 0x90 已被 comm 层消费；0x13 仅本端发起 */
+        break;   /* 0x90 已被 comm 层消费；0x11/0x20/0x21/0x22 是本端专用（方向闸门在 comm 层就丢了）；0x13 仅本端发起 */
     }
 }
 
@@ -502,12 +474,12 @@ int link_send_frame_mt(uint8_t mt, const uint8_t *pl, size_t n)
     return 0;
 }
 
-/* v2 补口（2026-11-16）：ESP32→H743 参数镜像。
- * 0x11 原本只有 H743→ESP32 一个方向；v2 把权威放到 ESP32 后，网页/控制台改的
- * 非设定值参数（body_hot/body_cold/hyst/tc_set_confirm/0x1xx…）没有通道回屏，
- * 屏上显示旧值，用户在屏上再按 +/- 就会用旧值覆盖网页的新值（静默数据丢失）。
- * 0x11 的载荷 tcs_param_pl_t 本来就是"参数变更"，反向复用不改格式；
- * H743 侧 param_link_sync 静默落表、不回推，故不会成环。*/
+/* v2 补口（2026-11-16）：ESP32→H743 参数镜像。R5-01（2026-11-25）起 0x11 只在这个方向使用：
+ * 屏写参数一律走 0x12（等 ACK），ESP32 收到 0x11 一律按方向表丢弃，不存在"把 0x11 当成屏的
+ * 写入"的代码路径——2026-11-23 现场那条 tc1_set 40.1→5.0 的路（本端镜像回声冒充屏的写入）由此关掉。
+ * 背景：网页/控制台改的非设定值参数（body_hot/body_cold/hyst/tc_set_confirm/0x1xx…）需要
+ * 有通道回屏，否则屏上显示旧值，用户在屏上再按 +/- 就会用旧值覆盖网页的新值（静默数据丢失）。
+ * H743 侧 param_mirror_apply 静默落表、不回推，故不会成环。*/
 int link_send_param(uint16_t id, float v)
 {
 #if CONFIG_TCS_DEMO
@@ -605,7 +577,17 @@ void link_stats_get(link_stats_t *out)
     out->retry = s_link.retry_cnt;
     out->txq_drop = s_link.txq_drop;
     out->uart_txdrop = s_uart_txdrop;
-    out->echo_drop = s_echo_drop;
+    /* R5-01：回声 = 本端发出的帧被回送、按方向位丢弃的帧数（comm 层方向闸门）；
+     * wdir = 方向位说是对端、但方向表不允许的消息号（不是回声：坏帧或版本不匹配的对端）。*/
+    out->echo_drop = s_link.echo_cnt;
+    out->wrongdir = s_link.wrongdir_cnt;
+    out->tx_wrongdir = s_link.tx_wrongdir_cnt;
+    out->arq_ok = (uint8_t)(s_link.link_ok ? 1u : 0u);
+    out->echo_param = s_link.echo_by_mt[MT_TCS_PARAM];
+    out->echo_snap  = (uint32_t)s_link.echo_by_mt[MT_TCS_SNAPSHOT] + s_link.echo_by_mt[MT_TCS_DELTA];
+    out->echo_info  = s_link.echo_by_mt[MT_TCS_INFO];
+    out->echo_ack   = s_link.echo_by_mt[MT_TCS_ACK];
+    out->echo_getreg = s_link.echo_by_mt[MT_TCS_GET_REGISTRY];
     out->pending_evict = s_link.pending_evict;
     out->proto_mismatch = s_proto_mismatch;
 }
@@ -651,6 +633,7 @@ static void link_task(void *arg)
     uint8_t buf[256];
     uint32_t last_tick = 0;
     uint32_t last_reg_req = 0;
+    uint32_t last_echo = 0;    /* R5-01：上一圈的本端回送帧数（只用来触发告警）*/
 
     ESP_LOGI(TAG, "link task up");
     /* 握手：要注册表全量（无 STATUS 前每 2s 重试一次）*/
@@ -670,16 +653,11 @@ static void link_task(void *arg)
                 if (n > 0) s_rx_bytes += (uint32_t)n;
                 for (int i = 0; i < n; i++) {
                     const uint8_t *pl; size_t plen; int dup;
+                    /* R5-01：本端发出的帧被回送时 comm_rx_feed_byte 返回 0（方向闸门在 comm 层，
+                     * ACK / 去重 / 交付之前），这里不需要、也不再有任何按长度或时刻的过滤。*/
                     if (comm_rx_feed_byte(&s_link, buf[i], &pl, &plen, &dup)) {
-                        if (plen == s_echo_plen && (int32_t)(s_echo_until_ms - link_now_ms()) >= 0) {
-                            s_echo_drop++;
-                            if ((s_echo_drop % 20u) == 1u)
-                                ESP_LOGW(TAG, "self-echo on RX dropped=%lu (check H743 TX wire / crosstalk)",
-                                         (unsigned long)s_echo_drop);
-                        } else {
-                            s_rx_frames++;
-                            on_frame(pl, plen);
-                        }
+                        s_rx_frames++;
+                        on_frame(pl, plen);
                     } else if (dup) {
                         /* R1 修复 M11-F-04：重复帧也回 ACK（幂等）。
                          * 原来丢弃且不回 ACK，发送端 ARQ 3 次后误判链路失败。*/
@@ -698,6 +676,13 @@ static void link_task(void *arg)
             last_tick = now;
             comm_tick(&s_link);
             comm_poll_tx(&s_link);   /* 队列串行消费 */
+        }
+        /* R5-01：本端回送帧只在接线/串扰异常时出现。每 20 帧告警一次，提示查接线。*/
+        if (s_link.echo_cnt != last_echo) {
+            last_echo = s_link.echo_cnt;
+            if ((last_echo % 20u) == 1u)
+                ESP_LOGW(TAG, "self-echo on RX dropped=%lu (check H743 TX wire / crosstalk)",
+                         (unsigned long)last_echo);
         }
         if (!link_alive()) s_reg_done = 0;      /* 对端重启/断链 → 重新要全量 */
         if (now - last_reg_req >= 5000 && !s_reg_done) {
@@ -730,7 +715,7 @@ void link_start(void)
     /* 2026-11-19：原来 on_link_down 传 NULL——ARQ 判死后没人记账，重连不重问注册表。
      * 现在断链即作废注册表收齐状态，重连后由 5s 请求/心跳自动补齐。*/
     comm_init(&s_link, link_uart_send, link_now_ms, link_on_down,
-              link_crit_enter, link_crit_exit);
+              link_crit_enter, link_crit_exit, TCS_SIDE_ESP32);
 
     uart_config_t cfg = {
         .baud_rate = LINK_BAUD,
@@ -750,26 +735,36 @@ void link_start(void)
 }
 
 /* ===================================================================== */
-/* WP-F.1 真机自环：UART1 GPIO17(TX)→GPIO18(RX) 内部回环                  */
-/* 真驱动/真帧/真协议栈：编解码回环、重复帧去重、坏 CRC 丢弃、ARQ 重传观测。 */
-/* 在 link_start 之前调用（独占 UART1）；证据=[LPBK] 日志行。              */
+/* WP-F.1 真机自环自测：UART1 芯片内 TX→RX 回环，真驱动 / 真帧 / 真协议栈。
+ * 在 link_start 之前调用（独占 UART1，~2.5s）；证据 = [LPBK] 日志行。
+ *
+ * 2026-11-25（R5-01）改为两个链路实例共用这一条回环线：A 扮演屏（H743），B 扮演主控
+ * （ESP32，与真链路同身份）。线上的字节同时喂给两端，每一端只认对端发来的帧，自己发出的
+ * 那一份被各自的方向闸门丢弃——这正是方向闸门在真链路要做的事。
+ * 此前这里只有一个实例自问自答：第 4 项只数"交付"的份数，重传副本全被去重，恒为 1，
+ * 每次开机都报 "[LPBK] ARQ retransmit FAIL"、"RESULT pass=3 fail=1 FAIL"。*/
 /* ===================================================================== */
-static void lp_send_fn(const uint8_t *d, size_t n)
+static comm_link_t s_lbk_a, s_lbk_b;
+
+static void lbk_send_fn(const uint8_t *d, size_t n)
 {
     uart_write_bytes(LINK_UART, d, n);
 }
 
-static int lp_drain_rx(comm_link_t *lp, int *dups)
+typedef struct { int deliv, dups; } lbk_rx_t;
+
+/* 读回环线上的字节，逐字节同时喂给两端 */
+static void lbk_drain(lbk_rx_t *a, lbk_rx_t *b)
 {
     uint8_t buf[256];
-    int frames = 0;
     int n = uart_read_bytes(LINK_UART, buf, sizeof(buf), 0);
     for (int i = 0; i < n; i++) {
         const uint8_t *pl; size_t plen; int dup;
-        if (comm_rx_feed_byte(lp, buf[i], &pl, &plen, &dup)) frames++;
-        else if (dup) (*dups)++;
+        if (comm_rx_feed_byte(&s_lbk_a, buf[i], &pl, &plen, &dup)) a->deliv++;
+        else if (dup) a->dups++;
+        if (comm_rx_feed_byte(&s_lbk_b, buf[i], &pl, &plen, &dup)) b->deliv++;
+        else if (dup) b->dups++;
     }
-    return frames;
 }
 
 void link_loopback_run(void)
@@ -786,55 +781,68 @@ void link_loopback_run(void)
     uart_set_loop_back(LINK_UART, true);      /* ESP-IDF 内部回环：真机无杜邦线 */
     vTaskDelay(pdMS_TO_TICKS(20));
 
-    static comm_link_t lp;   /* ~6KB，app_main 栈放不下（3.5K），必须 static */
-    comm_init(&lp, lp_send_fn, link_now_ms, NULL, NULL, NULL);
+    comm_init(&s_lbk_a, lbk_send_fn, link_now_ms, NULL, NULL, NULL, TCS_SIDE_H743);
+    comm_init(&s_lbk_b, lbk_send_fn, link_now_ms, NULL, NULL, NULL, TCS_SIDE_ESP32);
     uint8_t frame[MAX_FRAME];
     uint8_t payload[MAX_PAYLOAD];
-    int dups = 0, pass = 0, fail = 0;
+    lbk_rx_t ra = { 0, 0 }, rb = { 0, 0 };
+    int pass = 0, fail = 0;
 
-    /* 1) 帧回环：STATUS 帧 TX→RX 原样解出 */
+    /* 1) 帧回环：屏发 STATUS，TX→RX 原样解出 1 帧（主控端）；屏自己那一份被方向闸门丢弃 */
     tcs_status_pl_t st = { .ver = 1, .seq = 0x11223344, .tc1_act = 25.5f,
                            .tc2_act = 24.5f, .body = 36.8f, .tec1 = 0, .tec2 = 0,
                            .fan = 0, .mode = 0, .alarm = 0, .online = 3, .rfu = 0 };
     size_t pn = tcs_pl_status(payload + 2, sizeof(payload) - 2, &st);
-    payload[0] = MT_TCS_STATUS; payload[1] = 0x5A;
+    payload[0] = MT_TCS_STATUS; payload[1] = 0x5A;   /* 自环夹具：屏方向的帧，不带方向位 */
     size_t fn = proto_encode_frame(payload, pn + 2, frame, sizeof(frame));
     uart_write_bytes(LINK_UART, frame, fn);
     vTaskDelay(pdMS_TO_TICKS(50));
-    int got = lp_drain_rx(&lp, &dups);
-    if (got == 1) { pass++; ESP_LOGI(TAG, "[LPBK] frame loopback PASS (1 frame decoded)"); }
-    else { fail++; ESP_LOGE(TAG, "[LPBK] frame loopback FAIL (got %d)", got); }
+    lbk_drain(&ra, &rb);
+    if (rb.deliv == 1 && ra.deliv == 0 && s_lbk_a.echo_cnt == 1) {
+        pass++; ESP_LOGI(TAG, "[LPBK] frame loopback PASS (controller decoded 1 frame, screen dropped own echo)");
+    } else {
+        fail++; ESP_LOGE(TAG, "[LPBK] frame loopback FAIL (controller=%d screen=%d echo=%lu)",
+                         rb.deliv, ra.deliv, (unsigned long)s_lbk_a.echo_cnt);
+    }
 
-    /* 2) 重复帧去重：同帧再发 → is_dup 命中 */
+    /* 2) 重复帧去重：同帧再发 → 主控端判重复，不交付 */
     uart_write_bytes(LINK_UART, frame, fn);
     vTaskDelay(pdMS_TO_TICKS(50));
-    got = lp_drain_rx(&lp, &dups);
-    if (got == 0 && dups >= 1) { pass++; ESP_LOGI(TAG, "[LPBK] dup dedup PASS (dup=%d)", dups); }
-    else { fail++; ESP_LOGE(TAG, "[LPBK] dup dedup FAIL (frames=%d dups=%d)", got, dups); }
+    lbk_drain(&ra, &rb);
+    if (rb.deliv == 1 && rb.dups >= 1) { pass++; ESP_LOGI(TAG, "[LPBK] dup dedup PASS (dup=%d)", rb.dups); }
+    else { fail++; ESP_LOGE(TAG, "[LPBK] dup dedup FAIL (frames=%d dups=%d)", rb.deliv, rb.dups); }
 
-    /* 3) 坏 CRC 丢弃：翻转 1 字节 → 接收侧静默丢弃 */
+    /* 3) 坏 CRC 丢弃：翻转 1 字节 → 两端都静默丢弃 */
     frame[fn - 1] ^= 0xFF;
     uart_write_bytes(LINK_UART, frame, fn);
     vTaskDelay(pdMS_TO_TICKS(50));
-    got = lp_drain_rx(&lp, &dups);
-    if (got == 0) { pass++; ESP_LOGI(TAG, "[LPBK] bad-crc drop PASS"); }
-    else { fail++; ESP_LOGE(TAG, "[LPBK] bad-crc drop FAIL (got %d)", got); }
+    lbk_drain(&ra, &rb);
+    if (rb.deliv == 1 && ra.deliv == 0) { pass++; ESP_LOGI(TAG, "[LPBK] bad-crc drop PASS"); }
+    else { fail++; ESP_LOGE(TAG, "[LPBK] bad-crc drop FAIL (controller=%d screen=%d)", rb.deliv, ra.deliv); }
 
-    /* 4) ARQ 重传观测：SET_PARAM 无 ACK，500ms 超时 ×3 重传 → 回环收到多份 */
-    tcs_param_pl_t pm = { .id = 0x01, .type = PARAM_TYPE_F32, .value = tcs_f2b(30.5f) };
-    size_t mn = tcs_pl_param(payload + 2, sizeof(payload) - 2, &pm);
-    payload[0] = MT_TCS_SET_PARAM; payload[1] = 0xA7;
-    size_t mfn = proto_encode_frame(payload, mn + 2, frame, sizeof(frame));
-    comm_send(&lp, frame, mfn, MT_TCS_SET_PARAM);
-    int copies = 0;
+    /* 4) ARQ 重传观测：主控发 0x13（屏不应答）→ 500ms 超时 ×3 重传 → 屏端收到 4 份
+     *    （1 份交付 + 3 份被去重）；主控端自己发出的这 4 份一份也不得被当成屏帧。*/
+    payload[0] = MT_TCS_GET_REGISTRY; payload[1] = 0xA7;
+    fn = proto_encode_frame(payload, 2, frame, sizeof(frame));
+    comm_send(&s_lbk_b, frame, fn, MT_TCS_GET_REGISTRY);
+    lbk_rx_t ra0 = ra, rb0 = rb;
     for (int i = 0; i < 22; i++) {            /* 2.2s > 500ms×3+裕量 */
         vTaskDelay(pdMS_TO_TICKS(100));
-        comm_tick(&lp);
-        comm_poll_tx(&lp);
-        copies += lp_drain_rx(&lp, &dups);
+        comm_tick(&s_lbk_b);
+        comm_poll_tx(&s_lbk_b);
+        lbk_drain(&ra, &rb);
     }
-    if (copies >= 3) { pass++; ESP_LOGI(TAG, "[LPBK] ARQ retransmit PASS (%d copies rx)", copies); }
-    else { fail++; ESP_LOGE(TAG, "[LPBK] ARQ retransmit FAIL (%d copies)", copies); }
+    int copies = (ra.deliv - ra0.deliv) + (ra.dups - ra0.dups);
+    int self_got = rb.deliv - rb0.deliv;
+    if (copies >= 3 && self_got == 0) {
+        pass++;
+        ESP_LOGI(TAG, "[LPBK] ARQ retransmit PASS (%d copies rx by screen: %d delivered + %d dedup'd)",
+                 copies, ra.deliv - ra0.deliv, ra.dups - ra0.dups);
+    } else {
+        fail++;
+        ESP_LOGE(TAG, "[LPBK] ARQ retransmit FAIL (copies=%d, controller took own frame %d times)",
+                 copies, self_got);
+    }
 
     uart_set_loop_back(LINK_UART, false);
     uart_driver_delete(LINK_UART);

@@ -268,16 +268,25 @@ static int cmd_linkstat(int argc, char **argv)
     (void)argc; (void)argv;
     link_stats_t st;
     link_stats_get(&st);
-    /* M11-F-10：一次打出全部故障桶（注入已知故障后应只有对应桶增长）*/
+    /* M11-F-10：一次打出全部故障桶（注入已知故障后应只有对应桶增长）
+     * echo（2026-11-25 口径，R5-01）：本端发出的帧被回送、按方向位丢弃的帧数——只在接线/串扰
+     * 异常或 linkloop 1 时增长；arq：comm 层 link_ok（0 = 有一帧等 ACK 重传耗尽）；
+     * wdir：方向位说是屏、但屏不会发的消息号（坏帧或两端版本不匹配，不是回声）。*/
     printf("link rx_b=%lu rx_f=%lu crc=%lu len=%lu gap=%lu dup=%lu retry=%lu "
-           "txqdrop=%lu uartdrop=%lu echo=%lu evict=%lu verg=%lu",
+           "txqdrop=%lu uartdrop=%lu echo=%lu evict=%lu verg=%lu arq=%u wdir=%lu txwdir=%lu",
            (unsigned long)st.rx_bytes, (unsigned long)st.rx_frames,
            (unsigned long)st.crc_err, (unsigned long)st.len_err,
            (unsigned long)st.gap_resets, (unsigned long)st.dup,
            (unsigned long)st.retry, (unsigned long)st.txq_drop,
            (unsigned long)st.uart_txdrop, (unsigned long)st.echo_drop,
-           (unsigned long)st.pending_evict, (unsigned long)st.proto_mismatch);
+           (unsigned long)st.pending_evict, (unsigned long)st.proto_mismatch,
+           (unsigned)st.arq_ok, (unsigned long)st.wrongdir, (unsigned long)st.tx_wrongdir);
     printf("\n");
+    /* echo 按消息号分计（R5-01）：11=参数镜像 13=请求注册表 20/21=快照/增量 22=设备信息 90=应答 */
+    printf("link echo_by: 11=%lu 13=%lu 20+21=%lu 22=%lu 90=%lu\n",
+           (unsigned long)st.echo_param, (unsigned long)st.echo_getreg,
+           (unsigned long)st.echo_snap, (unsigned long)st.echo_info,
+           (unsigned long)st.echo_ack);
     return 0;
 }
 
@@ -333,7 +342,7 @@ static int cmd_linkrepin(int argc, char **argv)
 static int cmd_linkloop(int argc, char **argv)
 {
     if (argc < 2 || (strcmp(argv[1], "0") != 0 && strcmp(argv[1], "1") != 0)) {
-        printf("linkloop <0|1>（1=芯片内部 TX 接 RX，本端发什么收什么；用来验证回声防护）\n");
+        printf("linkloop <0|1>（1=芯片内部 TX 接 RX，本端发什么收什么；用来验证方向闸门：echo 应增长、rx_f/dup 不动、不得出现参数写入）\n");
         return 1;
     }
     esp_err_t r = link_loopback((uint8_t)atoi(argv[1]));

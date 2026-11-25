@@ -25,6 +25,12 @@ static size_t mt_frame(uint8_t mt, uint8_t seq, const uint8_t *body, size_t blen
     return proto_encode_frame(payload, blen + 2, out, cap);
 }
 
+/* R5-01（2026-11-25）：帧带方向位。下面这些用例扮演屏（H743）这一端：OPEN() 建屏端链路，
+ * 喂进来的"对端帧"是主控（ESP32）发来的，消息号字节要带主控方向位 ESP(mt)；
+ * 屏自己发出去的帧由 comm 层在出队时打方向位（屏方向 bit6=0，与旧线格式逐字节相同）。*/
+#define OPEN(L)   comm_init((L), stub_send, stub_now, NULL, NULL, NULL, TCS_SIDE_H743)
+#define ESP(mt)   tcs_frame_mark((mt), TCS_SIDE_ESP32)
+
 /* proto_self_test：GS proto_test.c 职责并入（CRC 向量 + 定点换算 + 帧结构 + RX 状态机）*/
 int proto_self_test(void)
 {
@@ -190,7 +196,7 @@ int main(void)
     /* ====== comm ARQ 回环：send → pending；ACK 清 pending；重复帧去重 ====== */
     {
         comm_link_t L;
-        comm_init(&L, stub_send, stub_now, NULL, NULL, NULL);
+        OPEN(&L);
         /* H743 发一帧 0x12（登记 pending）*/
         uint8_t pl[7]; tcs_param_pl_t pp = { .id=1, .type=0, .value=tcs_f2b(30.5f) };
         tcs_pl_param(pl, sizeof(pl), &pp);
@@ -212,7 +218,7 @@ int main(void)
                                .status = 0, .ret = 30.5f };
             tcs_pl_ack(ackp, sizeof(ackp), &a);
             uint8_t ackf[MAX_FRAME];
-            size_t an = mt_frame(MT_TCS_ACK, 99, ackp, 7,
+            size_t an = mt_frame(ESP(MT_TCS_ACK), 99, ackp, 7,
                                                    ackf, sizeof(ackf));
             stub_send(ackf, an);   /* 直接进 wire */
             const uint8_t *rpl; size_t rplen; int dup;
@@ -229,7 +235,7 @@ int main(void)
         /* 超时重传：3 次后断链 */
         comm_link_t L2;
         wire_len = 0;
-        comm_init(&L2, stub_send, stub_now, NULL, NULL, NULL);
+        OPEN(&L2);
         fn = mt_frame(MT_TCS_CMD, 1, (const uint8_t *)"\x08", 1,
                                         frame, sizeof(frame));
         comm_send(&L2, frame, fn, MT_TCS_CMD);
@@ -252,9 +258,9 @@ int main(void)
     {
         comm_link_t L;
         wire_len = 0;
-        comm_init(&L, stub_send, stub_now, NULL, NULL, NULL);
+        OPEN(&L);
         uint8_t frame[MAX_FRAME];
-        size_t fn = mt_frame(MT_TCS_CMD, 5, (const uint8_t *)"\x05", 1,
+        size_t fn = mt_frame(ESP(MT_TCS_CMD), 5, (const uint8_t *)"\x05", 1,
                                                frame, sizeof(frame));
         /* 不经 comm_send（不登记 pending），直接当对端来帧喂两次 */
         const uint8_t *rpl; size_t rplen; int dup;
@@ -272,9 +278,9 @@ int main(void)
     /* R1 M04-F-02: dedup must still work for seq>=128 (old int8_t impl missed it) */
     {
         comm_link_t L3;
-        comm_init(&L3, stub_send, stub_now, NULL, NULL, NULL);
+        OPEN(&L3);
         uint8_t f2[MAX_FRAME];
-        size_t n2 = mt_frame(MT_TCS_CMD, 200, (const uint8_t *)"", 1,
+        size_t n2 = mt_frame(ESP(MT_TCS_CMD), 200, (const uint8_t *)"", 1,
                              f2, sizeof(f2));
         const uint8_t *r2; size_t l2; int d2;
         int a1 = 0, a2 = 0;
@@ -289,13 +295,13 @@ int main(void)
     /* R1 M04-F-03: 半帧 + 线路静默 → 丢弃半帧，后续有效帧不再被吞 */
     {
         uint8_t f4[MAX_FRAME];
-        size_t n4 = mt_frame(MT_TCS_CMD, 0x21, (const uint8_t *)"\x09", 1,
+        size_t n4 = mt_frame(ESP(MT_TCS_CMD), 0x21, (const uint8_t *)"\x09", 1,
                              f4, sizeof(f4));
         const uint8_t *r4; size_t l4; int d4, got4;
 
         /* 反证（修复前行为）：无静默时，噪声帧头 Len=250 把后续帧当 payload 吞掉 */
         comm_link_t L4;
-        comm_init(&L4, stub_send, stub_now, NULL, NULL, NULL);
+        OPEN(&L4);
         fake_now = 500000;
         got4 = 0;
         comm_rx_feed_byte(&L4, 0xAA, &r4, &l4, &d4);
@@ -307,7 +313,7 @@ int main(void)
 
         /* 判别：同一串字节，中间隔 > COMM_RX_GAP_MS 的静默 → 立刻恢复并交付 */
         comm_link_t L5;
-        comm_init(&L5, stub_send, stub_now, NULL, NULL, NULL);
+        OPEN(&L5);
         fake_now = 600000;
         got4 = 0;
         comm_rx_feed_byte(&L5, 0xAA, &r4, &l4, &d4);
@@ -325,7 +331,7 @@ int main(void)
         comm_link_t L6;
         wire_len = 0;
         fake_now = 900000;
-        comm_init(&L6, stub_send, stub_now, NULL, NULL, NULL);
+        OPEN(&L6);
         uint8_t f6[MAX_FRAME];
         uint8_t seqs[COMM_MAX_PENDING + 1];
         for (int i = 0; i <= COMM_MAX_PENDING; i++) {
@@ -345,7 +351,7 @@ int main(void)
     {
         comm_link_t L7;
         wire_len = 0;
-        comm_init(&L7, stub_send, stub_now, NULL, NULL, NULL);
+        OPEN(&L7);
         fake_now = 0xFFFFFF00u;
         uint8_t f7[MAX_FRAME];
         size_t n7 = mt_frame(MT_TCS_CMD, 0x33, (const uint8_t *)"1", 1, f7, sizeof(f7));

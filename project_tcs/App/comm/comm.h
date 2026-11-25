@@ -34,6 +34,8 @@
 #define MAX_TXQ               16     /* 待发队列深度（WP-A.5：注册表 8 条目+ACK 全量入队不丢；RAM +2KB 可承受） */
 #define COMM_LINK_OK_TRUE     1
 #define COMM_LINK_OK_FALSE    0
+/* R5-01：回声按消息号分计的桶数 = 消息号去掉方向位（bit6）后的取值范围 0x00..0xBF */
+#define COMM_MT_BUCKETS       192
 
 /* pending 表项：登记一帧等 ACK。key = (seq, msg_type) 复合。 */
 typedef struct {
@@ -78,6 +80,13 @@ typedef struct {
     volatile uint8_t tx_head;   /* 消费索引（主循环 comm_poll_tx / push_front）*/
     volatile uint8_t tx_tail;   /* 生产索引（中断 comm_tick / 主循环 comm_send）*/
     volatile uint8_t tx_count;  /* 队列内帧数 */
+    /* —— R5-01 方向闸门（2026-11-25）——判定是 protocol/tcs_proto.h 的纯函数 tcs_rx_verdict，
+     * 两端 comm.c 同用一份逻辑；这里只是它的输入与计数。见 comm.c 的 comm_rx_gate。*/
+    uint8_t  self_side;         /* 本端身份：TCS_SIDE_H743 / TCS_SIDE_ESP32（comm_init 设定）*/
+    uint32_t echo_cnt;          /* 本端发出的帧被回送、按方向位丢弃的总数（stat echo=）*/
+    uint32_t wrongdir_cnt;      /* 方向位说是对端、但方向表不允许的消息号（含 ACK 确认了本端不会发的消息号）*/
+    uint32_t tx_wrongdir_cnt;   /* 自检：本端发出了方向表不允许自己发的消息号（编程错误，应为 0）*/
+    uint16_t echo_by_mt[COMM_MT_BUCKETS];   /* 回声按消息号分计（下标 = 消息号去掉方向位）*/
 } comm_link_t;
 
 
@@ -88,13 +97,17 @@ typedef struct {
  * on_link_down 可空（NULL=断链不通知）。
  * enter_critical/exit_critical 可空（NULL=不保护，PC 单线程用；MCU 必须给
  * __disable_irq/__enable_irq 以保护 tx 队列索引的读改写竞态）。
+ * self_side = 本端身份（TCS_SIDE_H743 / TCS_SIDE_ESP32，R5-01）：发出的帧在出队时打上
+ * 这一侧的方向位；收到的帧里方向位等于本端的，是本端回送，任何处理之前丢弃。
+ * 其它取值一律按 TCS_SIDE_H743 处理。
  */
 void comm_init(comm_link_t *L,
                void (*send_fn)(const uint8_t *data, size_t len),
                uint32_t (*now_ms_fn)(void),
                void (*on_link_down)(void),
                void (*enter_critical)(void),
-               void (*exit_critical)(void));
+               void (*exit_critical)(void),
+               uint8_t self_side);
 
 /**
  * 取下一个本端序号（0-255 循环）。给 proto_encode_* 的 seq 参数用。

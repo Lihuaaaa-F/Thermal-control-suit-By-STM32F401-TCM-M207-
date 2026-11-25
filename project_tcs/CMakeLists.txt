@@ -67,6 +67,7 @@ set(APP_SRC
     # 全工程零调用，此前"只编译不初始化"——公开的 keypad_init() 一旦有人调用就会把屏链发送脚改成输入。
     ${CMAKE_CURRENT_SOURCE_DIR}/App/proto/proto.c
     ${CMAKE_CURRENT_SOURCE_DIR}/App/comm/comm.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/App/comm/link_send.c     # 屏→主控 参数写入的发送策略（等 ACK 的 0x12，R5-10；主机可测）
     ${CMAKE_CURRENT_SOURCE_DIR}/App/comm/link_info.c   # 主控设备信息（0x22 INFO）保存与查询
     ${CMAKE_CURRENT_SOURCE_DIR}/App/rtt/segger_rtt.c
     ${CMAKE_CURRENT_SOURCE_DIR}/App/iwdg/iwdg.c

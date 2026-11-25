@@ -9,6 +9,7 @@
 #include "build_info.h"      /* 构建时间与提交号：CMake 生成在构建目录的 generated/ 下 */
 #include "ft5446.h"
 #include "param_registry.h"
+#include "comm.h"       /* comm_link_t：stat 里报屏链回声 / 方向不符计数（R5-01）*/
 #include "proto.h"
 #include "control.h"
 #include "m207.h"
@@ -232,16 +233,20 @@ static void cmd_exec(char *line)
                (unsigned)param_get(PARAM_ID_COMMISSIONED),
                (unsigned long)g_stat_loop_passes,
                (unsigned long)s_tx_drop_cnt);
-        /* 屏链诊断（2026-10-30）：RX 字节总量+快照帧计数（ltx 自检核对；全 0=方向不通）*/
+        /* 屏链诊断（2026-10-30）：RX 字节总量+快照帧计数（ltx 自检核对；全 0=方向不通）
+         * echo / wdir（2026-11-25，R5-01）：屏发出的帧被回送、按方向位丢弃的帧数（只在接线/串扰
+         * 异常时增长）；方向位说是主控、但主控不会发的消息号（坏帧或两端版本不匹配）。*/
         extern volatile uint32_t g_dbg_lrx_total;
         extern volatile uint32_t g_dbg_snap;
         extern volatile uint32_t g_dbg_snap_gap_max;
         extern volatile uint32_t g_dbg_snap_gap_last;
-        printf("lrx=%lu snap=%lu gapmax=%lu gaplast=%lu\n",
+        extern comm_link_t g_link;
+        printf("lrx=%lu snap=%lu gapmax=%lu gaplast=%lu echo=%lu wdir=%lu\n",
                (unsigned long)g_dbg_lrx_total,
                (unsigned long)g_dbg_snap,
                (unsigned long)g_dbg_snap_gap_max,
-               (unsigned long)g_dbg_snap_gap_last);
+               (unsigned long)g_dbg_snap_gap_last,
+               (unsigned long)g_link.echo_cnt, (unsigned long)g_link.wrongdir_cnt);
         return;
     }
 #if TCS_PROFILE >= 1

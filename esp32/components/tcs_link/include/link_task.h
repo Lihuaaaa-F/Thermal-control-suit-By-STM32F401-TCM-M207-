@@ -34,7 +34,8 @@ typedef struct {
 typedef void (*link_event_cb_t)(void);   /* 参数/注册表/状态变更通知（ws 推送）*/
 
 void link_start(void);                    /* 建 UART + 任务 */
-void link_loopback_run(void);             /* WP-F.1 真机自环自测（link_start 前独占 UART1，证据=[LPBK] 日志）*/
+void link_loopback_run(void);             /* WP-F.1 开机自环自测（link_start 前独占 UART1，证据=[LPBK] 日志）：
+                                            * 屏 / 主控两个身份的链路实例共用一条芯片内回环线 */
 bool link_alive(void);                    /* 0x10 3s 内有新鲜帧 */
 /* M11-F-12：整块快照拷贝（临界区内一次结构体赋值）。取代原 link_status() 指针——
  * 指针让调用方在锁外逐字段读，与链路任务写 0x10 交错会拼出"新温度+旧报警"混合态。*/
@@ -50,22 +51,32 @@ typedef struct {
     uint32_t retry;                  /* 本端累计重传 */
     uint32_t txq_drop, pending_evict;/* 发送/待确认溢出 */
     uint32_t uart_txdrop;         /* 驱动 TX 环满丢弃（2026-11-23：恒增=链路实际没发出去）*/
-    uint32_t echo_drop;          /* 回声防护丢弃数（本端发送窗内收到等长帧；2026-11-23）*/
+    uint32_t echo_drop;          /* 回声：本端发出的帧被回送、按方向位丢弃的帧数（comm 层方向闸门，R5-01；
+                                    只在接线/串扰异常或 linkloop 1 时增长）。2026-11-25 之前是"发送窗内
+                                    收到等长帧"的计数，口径不同。*/
+    uint32_t wrongdir;           /* 方向位说是对端、但方向表不允许的消息号（坏帧或版本不匹配的对端；不是回声）*/
+    uint32_t tx_wrongdir;        /* 自检：本端发出了方向表不允许自己发的消息号（应为 0）*/
+    uint8_t  arq_ok;             /* comm 层 link_ok：1=最近一次有 ACK / 尚未判死，0=有一帧等 ACK 重传耗尽 */
+    uint32_t echo_param;         /* 回声里的 0x11（参数镜像）*/
+    uint32_t echo_snap;          /* 回声里的 0x20/0x21（快照/增量）*/
+    uint32_t echo_info;          /* 回声里的 0x22（设备信息）*/
+    uint32_t echo_ack;           /* 回声里的 0x90（本端应答）*/
+    uint32_t echo_getreg;        /* 回声里的 0x13（请求注册表）*/
     uint32_t proto_mismatch;         /* STATUS 版本不符帧数（M11-F-09）*/
 } link_stats_t;
 void link_stats_get(link_stats_t *out);
 
 int  link_send_cmd(uint8_t cmd);                    /* → 0x15，异步等 ACK */
-int  link_send_param(uint16_t id, float v);         /* → 0x11（反向镜像：ESP32 权威 → 屏显示）*/
+int  link_send_param(uint16_t id, float v);         /* → 0x11（仅 ESP32→H743：权威镜像 → 屏显示跟随；方向表见 protocol/tcs_proto.h）*/
 /* → 0x22 设备信息（热点名/密码/网址/固件版本；载荷由调用方按 tcs_pl_info 组好）*/
 int  link_send_info(const uint8_t *pl, size_t n);
 int  link_send_frame_mt(uint8_t mt, const uint8_t *pl, size_t n);  /* R2：0x20/0x21 载荷发送（fire-and-forget，免 ARQ：0x20/0x21 走 comm_send_noarq）；返回 0=入队 1=演示抑制 -1=组帧失败 */
 int  link_get_registry(link_reg_t *out, int max);   /* 拷贝注册表缓存 */
 void link_request_registry(void);                   /* 发 0x13（握手全量）*/
 
-/* 最近一次 0x11 参数变更（pv 推送源：src=h743 触摸/CLI；含初值缓存）*/
+/* 最近一次屏的参数写入（0x12）：pv 推送源；含初值缓存 */
 typedef struct { uint16_t id; float v; int64_t us; } link_param_change_t;
-/* 最近一次 0x11 快照拷贝。指针版会在锁外逐字段读，与链路任务写交错时出现
+/* 最近一次屏写参数的快照拷贝。指针版会在锁外逐字段读，与链路任务写交错时出现
  * "新 id + 旧值"（与 M11-F-12 同类），故只提供整块拷贝。*/
 void link_last_param_copy(link_param_change_t *out);
 float link_param_value(uint16_t id);       /* 注册表初值（无缓存则 NaN→前端用 min）*/

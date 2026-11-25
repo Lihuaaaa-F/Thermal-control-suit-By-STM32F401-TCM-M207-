@@ -35,6 +35,7 @@
 
 
 
+
 复现命令（仓库根 `/d/Espressif/ws/tcs`，Git Bash；raw 输出路径分隔符为 `\`，表内归一为 `/`）：
 
 ```bash
@@ -43,6 +44,7 @@ grep -rnE "HAL_GPIO_|HAL_EXTI_" project_tcs/App project_tcs/Core/Src --include=*
 ```
 
 vendor 域说明：`App/rtt/`（SEGGER RTT vendor 五文件）同一 pattern 单独跑=**0 命中**（无需列行）。
+
 
 
 
@@ -70,8 +72,8 @@ vendor 域说明：`App/rtt/`（SEGGER RTT vendor 五文件）同一 pattern 单
 | 10 | project_tcs/Core/Src/ft5446.c:249 | HAL_GPIO_ReadPin | 重锚新增：代码摘录见左列 |
 | 11 | project_tcs/Core/Src/ft5446.c:257 | HAL_GPIO_WritePin | 重锚新增：代码摘录见左列 |
 | 12 | project_tcs/Core/Src/ft5446.c:293 | HAL_GPIO_Init(GPIOD, &gi) | W1a：PD12/13 AF4_OD+I2C4 引脚（模块自有底层=eeprom 惯例） |
-| 13 | project_tcs/Core/Src/ft5446.c:304 | HAL_GPIO_ReadPin（宏封装） | 触摸 bit-bang 宏 CT_READ_SDA（回读 ACK） |
-| 14 | project_tcs/Core/Src/ft5446.c:305 | HAL_GPIO_ReadPin | 重锚新增：代码摘录见左列 |
+| 13 | project_tcs/Core/Src/ft5446.c:304 | HAL_GPIO_ReadPin | 重锚新增：代码摘录见左列 |
+| 14 | project_tcs/Core/Src/ft5446.c:305 | HAL_GPIO_ReadPin（宏封装） | 触摸 bit-bang 宏 CT_READ_SDA（回读 ACK） |
 | 15 | project_tcs/Core/Src/ft5446.c:516 | HAL_GPIO_WritePin | 重锚新增：代码摘录见左列 |
 | 16 | project_tcs/Core/Src/ft5446.c:521 | HAL_GPIO_Init | 重锚新增：代码摘录见左列 |
 | 17 | project_tcs/Core/Src/ft5446.c:526 | HAL_GPIO_WritePin | 重锚新增：代码摘录见左列 |

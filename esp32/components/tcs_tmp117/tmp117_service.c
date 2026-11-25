@@ -103,22 +103,13 @@ int tmp117_service_start(void)
         return -1;
     }
 
-    /* 上电探活：读 DEVID（0x0F 期望 0x0117）。硬件未接=失败留痕，不阻塞服务。*/
-    uint8_t idreg = TMP117_REG_DEVID;
-    uint8_t idbuf[2] = {0};
-    if (i2c_master_transmit_receive(s_dev, &idreg, 1, idbuf, 2,
-                                    TMP117_I2C_TIMEOUT_MS) == ESP_OK) {
-        uint16_t id = (uint16_t)(((uint16_t)idbuf[0] << 8) | idbuf[1]);
-        ESP_LOGI(TAG, "DEVID=0x%04X (%s)", id,
-                 id == TMP117_DEVID_EXPECT ? "OK" : "UNEXPECTED");
-    } else {
-        ESP_LOGW(TAG, "DEVID probe NACK — 硬件未接（T1-T3 待接，Q12 标注）");
-    }
-
+    /* 身份核对、写配置、回读校验都在内核的第一拍里做（M13-F-08 / M13-F-02）：
+     * DEVID 不是 0x0117 就不读它的温度；配置不符就不采样。硬件未接 = 身份读失败 → 计错 →
+     * 1s 后掉线沿 ALM_BODY_SENSOR（F4 预期行为），不阻塞服务。*/
     tmp117_core_init(&s_core, &(tmp117_io_t){
         .read_reg = io_read_reg,
         .write_reg = io_write_reg,
-    });
+    }, NULL);
 
     if (xTaskCreatePinnedToCore(tmp117_task, "tmp117_svc", 4096, NULL,
                                 5, &s_task, 1) != pdPASS) return -1;

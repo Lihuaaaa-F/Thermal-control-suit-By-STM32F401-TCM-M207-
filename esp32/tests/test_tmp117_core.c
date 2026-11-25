@@ -48,7 +48,12 @@ static int f_read(void *ctx, uint8_t reg, uint8_t out[2])
 {
     uint16_t v;
     (void)ctx;
-    if (!F.present) return -1;
+    if (!F.present) {                        /* 不在总线上：记下这次尝试，然后 NACK */
+        if (F.nlog < (int)(sizeof F.log / sizeof F.log[0])) {
+            F.log[F.nlog].is_wr = 0; F.log[F.nlog].reg = reg; F.log[F.nlog].val = 0xEEEE; F.nlog++;
+        }
+        return -1;
+    }
     v = fake_get(reg);
     if (F.nlog < (int)(sizeof F.log / sizeof F.log[0])) {
         F.log[F.nlog].is_wr = 0; F.log[F.nlog].reg = reg; F.log[F.nlog].val = v; F.nlog++;
@@ -94,7 +99,7 @@ static void t_reset(int present, float temp_c)
     g_tcs.body_temp = 0.0f;                   /* 上电初值：没有样本时体温为 0、不就绪 */
     g_tcs.body_sensor_ok = 0;
     post_arm_commit(POST_ARM_UNARMED_ABSENT); /* 默认不布防 */
-    tmp117_core_init(&C, &(tmp117_io_t){ .read_reg = f_read, .write_reg = f_write });
+    tmp117_core_init(&C, &(tmp117_io_t){ .read_reg = f_read, .write_reg = f_write }, NULL);
 }
 static void t_tick(void)
 {
@@ -134,7 +139,15 @@ static void test_absent_armed(void)
 static void test_normal_sampling(void)
 {
     t_reset(1, 36.5f);
-    t_tick();
+    /* 均值窗用例把周期校验关掉（60s 一次）： otherwise 每秒有一拍读配置不读温度，样本序列不确定 */
+    tmp117_core_init(&C, &(tmp117_io_t){ .read_reg = f_read, .write_reg = f_write },
+                     &(tmp117_cfg_t){ 100u, 1000u, 5000u, 60000u, 1000u });
+    t_tick();                                /* 第 1 拍：核对身份 */
+    CHECK(g_tcs.body_sensor_ok == 0 && C.stat_samples == 0, "boot tick 1: identity check, no sample yet");
+    t_tick();                                /* 第 2 拍：写配置 */
+    t_tick();                                /* 第 3 拍：回读核对 */
+    CHECK(g_tcs.body_sensor_ok == 0 && C.stat_samples == 0, "boot tick 3: config verified, no sample yet");
+    t_tick();                                /* 第 4 拍：第一个样本 */
     CHECK(g_tcs.body_sensor_ok == 1, "present: body_sensor_ok after first sample");
     CHECK(g_tcs.body_temp > 36.49f && g_tcs.body_temp < 36.51f, "present: body_temp = 36.5");
     CHECK(C.stat_samples == 1, "present: one sample in window");
@@ -150,11 +163,12 @@ static void test_plausibility(void)
     t_run(10);
     CHECK(g_tcs.body_sensor_ok == 0 && g_tcs.body_temp == 0.0f, "first sample out of range: never used");
     t_reset(1, 36.5f);
-    t_tick();
+    t_run(4);                                /* 身份 → 写配置 → 回读 → 第一个样本 */
     F.temp_raw = c_to_raw(40.0f);             /* 一拍跳 3.5°C：>2°C/s */
     t_tick();
     CHECK(g_tcs.body_temp > 36.49f && g_tcs.body_temp < 36.51f, "jump sample dropped");
     CHECK(C.stat_err == 1, "jump sample counted as error");
+    CHECK(C.id_fail_cnt == 0 && C.cfg_bad_cnt == 0, "normal boot: no identity or config complaints");
     F.temp_raw = c_to_raw(36.6f);
     t_tick();
     CHECK(g_tcs.body_temp > 36.54f && g_tcs.body_temp < 36.56f, "small step accepted");
@@ -208,7 +222,147 @@ static void test_sim_injection(void)
 }
 #endif
 
+/* ===== 修复用例开始 ===== */
+/* R1 [红] M13-F-04：失联降频到 1s 后，dt 必须按真实时间算。
+ * 拍号是循环计数：失联降频到 1s 后一拍是 1s，按拍数算却只当 0.1s。
+ * 失联 14 拍（真实约 5s；按拍数只有 1.4s）后回来时体温变了 5°C（1°C/s，合理）：
+ * 按真实时间允许 10°C，按拍数只允许 2.8°C——后者会把合理样本当跳变拒收。 */
+static void test_r_dt_is_real_time(void)
+{
+    t_reset(1, 36.0f);
+    t_run(7);                                /* 开机三拍 + 至少 3 个有效样本 */
+    CHECK(g_tcs.body_temp > 35.99f && g_tcs.body_temp < 36.01f, "dt: valid before unplug");
+    F.present = 0;
+    t_run(14);                                /* 失联 14 拍 = 10×100ms + 4×1s ≈ 5s 真实时间 */
+    CHECK(tmp117_core_ok(&C) == 0, "dt: lost");
+    CHECK(now_ms >= 4000u && now_ms <= 6000u, "dt: about 5s of real time have passed");
+    F.present = 1;
+    F.temp_raw = c_to_raw(41.0f);
+    uint32_t e0 = C.stat_err, n0 = C.stat_samples;
+    int guard = 4;                           /* 回来后的第一拍可能是周期校验（读配置、不读温度）*/
+    while (C.stat_samples == n0 && guard-- > 0) t_tick();
+    CHECK(C.stat_samples == n0 + 1 && C.stat_err == e0,
+          "M13-F-04: the sample after a 5s loss (14 ticks) is judged over real time, not over ticks");
+    t_run(10);
+    CHECK(g_tcs.body_temp > 40.97f && g_tcs.body_temp < 41.03f,
+          "M13-F-04: body temp follows the real temperature after recovery");
+}
 
+/* R2 [红] M13-F-08：0x48 上不是 TMP117（DEVID 不符）→ 不得当体温源，也不往里写一个字节 */
+static void test_r_wrong_device_rejected(void)
+{
+    t_reset(1, 36.8f);
+    F.devid = 0x0116;                         /* 不是 TMP117 的 0x0117 */
+    post_arm_commit(POST_ARM_ARMED_ONLINE);
+    t_run(12);
+    CHECK(g_tcs.body_temp == 0.0f, "M13-F-08: a device with a wrong DEVID is never used as body temp");
+    CHECK(g_tcs.body_sensor_ok == 0, "M13-F-08: body_sensor_ok stays 0");
+    CHECK(fake_count(0, FAKE_REG_TEMP) == 0, "M13-F-08: its temperature register is never even read");
+    CHECK(tcs_alarm_active(ALM_BODY_SENSOR) == 1, "M13-F-08: armed -> ALM_BODY_SENSOR");
+    int bad = 0;
+    for (int i = 0; i < F.nlog; i++)
+        if (F.log[i].is_wr || F.log[i].reg != FAKE_REG_DEVID) bad++;
+    CHECK(bad == 0, "M13-F-08: the only traffic is reading DEVID — nothing is written to an unknown device");
+    CHECK(fake_count(0, FAKE_REG_DEVID) >= 1 && fake_count(0, FAKE_REG_DEVID) <= 3,
+          "M13-F-08: a present-but-wrong device is re-checked at a slow rate (5s), not every tick");
+}
+
+/* R3 M13-F-08：换成正确的器件后恢复采样 */
+static void test_r_wrong_device_then_right_one(void)
+{
+    t_reset(1, 36.8f);
+    F.devid = 0x1234;
+    t_run(12);
+    CHECK(g_tcs.body_sensor_ok == 0, "swap: not ok while wrong device");
+    F.devid = 0x0117;
+    int guard = 80;                           /* 身份复核最多 5s；之后写配置 + 3 个好样本 */
+    while (g_tcs.body_sensor_ok == 0 && guard-- > 0) t_tick();
+    CHECK(g_tcs.body_sensor_ok == 1, "swap: right device -> sampling resumes");
+    CHECK(g_tcs.body_temp > 36.79f && g_tcs.body_temp < 36.81f, "swap: body temp is the real one");
+}
+
+/* R4 [红] M13-F-02：身份通过后写一次配置（连续转换、CONV=125ms、AVG=8），且只写一次 */
+static void test_r_config_written_once(void)
+{
+    t_reset(1, 36.5f);
+    t_run(20);
+    CHECK(fake_count(1, FAKE_REG_CONFIG) == 1, "M13-F-02: config register written exactly once");
+    CHECK(F.nlog >= 2 && F.log[0].is_wr == 0 && F.log[0].reg == FAKE_REG_DEVID
+          && F.log[1].is_wr == 1 && F.log[1].reg == FAKE_REG_CONFIG && F.log[1].val == 0x00A0u,
+          "M13-F-02: DEVID read first, then CONFIG := 0x00A0");
+    CHECK(F.log[2].is_wr == 0 && F.log[2].reg == FAKE_REG_CONFIG,
+          "M13-F-02: the write is read back and checked before any temperature is used");
+    CHECK(F.config == 0x00A0u, "M13-F-02: device now converts every 125ms with x8 averaging");
+}
+
+/* R5 M13-F-02：只碰配置寄存器——EEPROM / 门限寄存器一个字节都不写 */
+static void test_r_only_config_register_written(void)
+{
+    t_reset(1, 36.5f);
+    t_run(200);
+    int bad = 0;
+    for (int i = 0; i < F.nlog; i++)
+        if (F.log[i].is_wr && F.log[i].reg != FAKE_REG_CONFIG) bad++;
+    CHECK(bad == 0, "M13-F-02: no register other than CONFIG is ever written");
+}
+
+/* R6 [红] M13-F-02：运行中配置被改成关断模式（温度寄存器冻结、I2C 照常应答）
+ * (a) 器件肯认重写：1s 内的周期校验发现 → 重写并核对 → 自愈，不惊动健康机
+ * (b) 器件不认重写：温度一直不来 → 10 拍后掉线（不假装恢复）；重写每秒至多一次 */
+static void test_r_config_corruption_detected(void)
+{
+    /* (a) */
+    t_reset(1, 36.5f);
+    t_run(5);
+    F.config = 0x04A0;                        /* MOD=01 关断（总线噪声把它改了）*/
+    int guard = 15;
+    while (F.config != TMP117_CFG_WORD && guard-- > 0) t_tick();
+    CHECK(F.config == TMP117_CFG_WORD, "M13-F-02: corrupted config detected within 1s and rewritten");
+    CHECK(fake_count(1, FAKE_REG_CONFIG) == 2, "M13-F-02: (a) exactly one rewrite");
+    t_run(10);
+    CHECK(g_tcs.body_sensor_ok == 1, "M13-F-02: (a) a self-healing glitch never trips the health machine");
+
+    /* (b) */
+    t_reset(1, 36.5f);
+    t_run(5);                                /* 开机正常：第一次写被接受并核对通过 */
+    CHECK(F.config == TMP117_CFG_WORD, "(b) normal boot first");
+    F.cfg_stuck = 1;                         /* 从现在起器件不认写 */
+    F.config = 0x04A0;
+    int w0 = fake_count(1, FAKE_REG_CONFIG);
+    t_run(12);                                /* 发现 + 立即重写一次；1s 内不许再写 */
+    CHECK(fake_count(1, FAKE_REG_CONFIG) - w0 == 1,
+          "M13-F-02: (b) rewrite attempted once immediately, not hammered");
+    guard = 12;
+    while (tmp117_core_ok(&C) && guard-- > 0) t_tick();
+    CHECK(g_tcs.body_sensor_ok == 0, "M13-F-02: (b) stuck shutdown config -> not-ok, no fake recovery");
+    CHECK(C.lost_edges == 1, "M13-F-02: (b) one lost edge");
+}
+
+/* R7 M13-F-02：上电时器件不在、之后接上——身份每拍都查（恢复要快），接上后几拍内恢复 */
+static void test_r_absent_then_appears(void)
+{
+    t_reset(0, 36.5f);
+    t_run(12);
+    CHECK(tmp117_core_ok(&C) == 0, "late: lost while absent");
+    CHECK(fake_count(0, FAKE_REG_DEVID) == 12, "late: DEVID probed every tick while the device is absent");
+    F.present = 1;
+    int guard = 8;
+    while (!g_tcs.body_sensor_ok && guard-- > 0) t_tick();
+    CHECK(g_tcs.body_sensor_ok == 1, "late: device appears -> sampling within a few ticks");
+    CHECK(F.config == TMP117_CFG_WORD, "late: device configured before its temperature is used");
+}
+
+/* R8 M13-F-02：每拍仍只有一次 I2C 事务；配置约每秒回读一次（代替当拍的温度读） */
+static void test_r_one_transaction_per_tick(void)
+{
+    t_reset(1, 36.5f);
+    int n0 = F.nlog;
+    t_run(100);                               /* 10s */
+    CHECK(F.nlog - n0 <= 100, "cadence: exactly one I2C transaction per tick (budget 500us)");
+    CHECK(fake_count(0, FAKE_REG_CONFIG) >= 10, "cadence: CONFIG read back about once per second");
+    CHECK(C.stat_samples >= 88, "cadence: temperature still sampled on almost every tick");
+}
+/* ===== 修复用例结束 ===== */
 
 int main(void)
 {
@@ -221,6 +375,14 @@ int main(void)
 #if TCS_SIM_ENABLED
     test_sim_injection();
 #endif
+    test_r_dt_is_real_time();
+    test_r_wrong_device_rejected();
+    test_r_wrong_device_then_right_one();
+    test_r_config_written_once();
+    test_r_only_config_register_written();
+    test_r_config_corruption_detected();
+    test_r_absent_then_appears();
+    test_r_one_transaction_per_tick();
     printf("test_tmp117_core: PASS=%d FAIL=%d\n", g_pass, g_fail);
     return g_fail ? 1 : 0;
 }

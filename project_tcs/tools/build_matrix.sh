@@ -15,7 +15,9 @@
 # 门禁②：交付档干净核对（tools/site/verify_prod_clean.py）——PROD 产物里不得有调试/台架钩子与命令，
 #        台架/仿真/诊断档里它们必须还在（证明核对工具查得出来）。任一不符 → 退出码 1。
 #        --twice      PROD 档再从零构建一次，比对两次 tcs_main.bin 的 md5（可复现构建；
-#                     __DATE__/__TIME__ 与绝对路径会让 md5 不同，所以同时给出"剔除后的可比 md5"见下）
+#                     __DATE__/__TIME__ 与绝对路径会让 md5 不同，所以同时给出"剔除后的可比 md5"见下）；
+#                     加了 --esp32 时 ESP32 默认档也再从零构建一次，比对 app / bootloader / 分区表的 sha256
+#        --esp32-only 跳过 H743 四档，只做 ESP32（H743 四档每次从零约 5 分钟；等价于 --esp32 再加跳过）
 #        --keep       结束时不删 build-matrix/ 目录（默认保留，方便接着烧录；加 --clean 才删）
 # 判定：任一档 build 失败、或告警数超过 tools/build_matrix_baseline.txt 里的基线 → 退出码 1。
 #       基线文件第一次由本脚本生成（--init-baseline），之后新增告警必须显式更新基线并在提交里说明。
@@ -24,7 +26,7 @@
 #       2026-11-24（审查 X05-F-06）起本脚本不再强设 SOURCE_DATE_EPOCH：CMake 在没有这个环境变量时
 #       取 HEAD 提交时间生成构建标识（App/tcs/build_info.h.in），所以这里核对的就是默认路径——
 #       同一提交两次从零构建，产物必须相同。工作树有未提交改动时版本串带 -dirty，内容相同仍然可比。
-# 用法：bash tools/build_matrix.sh [--esp32] [--diag] [--site] [--twice] [--init-baseline] [--clean]
+# 用法：bash tools/build_matrix.sh [--esp32-only | --esp32] [--diag] [--site] [--twice] [--init-baseline] [--clean]
 #       产物目录 project_tcs/build-matrix/<档>/（已被 .gitignore 的 build-*/ 覆盖），日志在同目录 build.log
 set -u
 cd "$(dirname "$0")/.." || exit 1
@@ -33,10 +35,11 @@ CHIP=STM32H743II
 TOOLCHAIN=arm-none-eabi-gcc.cmake
 OUT=build-matrix
 BASE=tools/build_matrix_baseline.txt
-DO_ESP32=0; DO_DIAG=0; DO_SITE=0; DO_TWICE=0; INIT_BASE=0; CLEAN=0
+DO_ESP32=0; DO_DIAG=0; DO_SITE=0; DO_TWICE=0; INIT_BASE=0; CLEAN=0; DO_H743=1
 for a in "$@"; do
     case "$a" in
         --esp32) DO_ESP32=1 ;;
+        --esp32-only) DO_ESP32=1; DO_H743=0 ;;   # 只做 ESP32（H743 四档每次都是从零，约 5 分钟）
         --diag) DO_DIAG=1 ;;
         --site) DO_SITE=1 ;;
         --twice) DO_TWICE=1 ;;
@@ -100,6 +103,9 @@ repro_md5() {  # repro_md5 <档目录>
 }
 
 # ---------- H743 四档 ----------
+CLEAN_NOTE="未做（--esp32-only）"
+REPRO_NOTE="未做（--esp32-only）"
+if [ "$DO_H743" = 1 ]; then
 h743 PROD  -DTCS_PROFILE=PROD;  check_base PROD
 h743 BENCH -DTCS_PROFILE=BENCH; check_base BENCH
 h743 SIM   -DTCS_PROFILE=SIM;   check_base SIM
@@ -131,6 +137,7 @@ if [ "$DO_TWICE" = 1 ]; then
     REPRO_NOTE="剔除 .comment 与调试信息后 md5 $M1 / $M2 → $([ "$M1" = "$M2" ] && echo 相同 || echo 不同)；原始 bin md5 $([ "$RAW1" = "$RAW2" ] && echo 相同 || echo 不同)"
     [ "$M1" = "$M2" ] || { echo "[repro] FAIL：同一源码两次从零构建产物不同"; FAIL=1; }
 fi
+fi   # DO_H743
 
 # ---------- ESP32 ----------
 ESP_NOTE="未做（加 --esp32 / --diag / --site）"
@@ -173,6 +180,24 @@ if [ "$DO_ESP32" = 1 ] || [ "$DO_DIAG" = 1 ] || [ "$DO_SITE" = 1 ]; then
             if [ "$DO_SITE" = 1 ]; then
                 [ -f sdkconfig.site ] || { echo "[esp32-site] FAIL：esp32/sdkconfig.site 不存在"; exit 1; }
                 esp32 site sdkconfig.site || exit 1
+            fi
+            # 可复现（审查 X05-F-06 的关单条件："H743 与 ESP32 各一次两次干净构建 sha256 相同"）：
+            # 默认档再从零构建一次，逐个比对 app / bootloader / 分区表的 sha256。
+            if [ "$DO_TWICE" = 1 ] && [ -f "build-matrix-default/$APP" ]; then
+                rm -rf build-matrix-repro sdkconfig.matrix.repro sdkconfig.matrix.repro.old
+                cp sdkconfig.matrix.default sdkconfig.matrix.repro
+                echo "=== [esp32-repro] 默认档再从零构建一次（可复现构建）"
+                idf.py -B build-matrix-repro -D SDKCONFIG=sdkconfig.matrix.repro build > build-matrix-repro.build.log 2>&1 \
+                    || { echo "[esp32-repro] exit!=0（见 build-matrix-repro.build.log）"; exit 1; }
+                same=1
+                for f in "$APP" bootloader/bootloader.bin partition_table/partition-table.bin; do
+                    a=$(sha256sum "build-matrix-default/$f" | cut -c1-16); b=$(sha256sum "build-matrix-repro/$f" | cut -c1-16)
+                    if [ "$a" = "$b" ]; then echo "[esp32-repro] $f  sha256 $a  相同"
+                    else same=0; echo "[esp32-repro] $f  两次构建不同：$a / $b"; fi
+                done
+                echo "[esp32-repro] 默认档两次从零构建 sha256 $([ $same = 1 ] && echo 相同 || echo 不同)"
+                [ "$same" = 1 ] || exit 1
+                rm -rf build-matrix-repro sdkconfig.matrix.repro sdkconfig.matrix.repro.old build-matrix-repro.build.log
             fi
             # 干净核对：默认档不得含台架命令；诊断档必须全含（证明查得出来）；
             # 现场档（SIM）只含 linkmute / linkloop / webtest 这三条 SIM 也有的。

@@ -134,7 +134,7 @@ endif()
 # ====== 构建标识：可复现构建（2026-11-24 S 线，审查条目 X05-F-06）======
 # 版本串里的构建时间此前用编译器宏 __DATE__/__TIME__，同一份源码两次构建的固件必然不同。
 # 现在：时间优先取环境变量 SOURCE_DATE_EPOCH；没给就取 HEAD 提交的时间——同一提交两次从零构建产物相同
-# （tools/build_matrix.sh --twice 核对）。提交号取 git 短号，工作树有未提交改动时加 -dirty。
+# （tools/build_matrix.sh --twice 核对）。提交号取 git 短号，已跟踪文件有未提交改动时加 -dirty。
 # 都是 configure 时定下的：提交之后要重新 configure 才会更新（发布构建一律从零）。
 set(TCS_BUILD_GIT "n/a")
 # 直接试 git，不看"目录里有没有 .git"：本工程在仓库的子目录里，.git 在上一级；
@@ -144,7 +144,10 @@ execute_process(COMMAND git rev-parse --short=9 HEAD
                 OUTPUT_VARIABLE _tcs_git_rev OUTPUT_STRIP_TRAILING_WHITESPACE
                 RESULT_VARIABLE _tcs_git_rc ERROR_QUIET)
 if(_tcs_git_rc EQUAL 0 AND _tcs_git_rev)
-    execute_process(COMMAND git status --porcelain
+    # 只看已跟踪文件：未跟踪的证据截图、日志不影响固件内容，不该让版本串带上 -dirty
+    # （与 git describe --dirty 的口径一致。2026-11-25 第一次从干净提交上构建时就因为旁边多了几张
+    #   未跟踪的 PNG 被标成了 dirty。）
+    execute_process(COMMAND git status --porcelain --untracked-files=no
                     WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
                     OUTPUT_VARIABLE _tcs_git_dirty ERROR_QUIET)
     if(NOT "${_tcs_git_dirty}" STREQUAL "")
@@ -161,7 +164,8 @@ if(_tcs_git_rc EQUAL 0 AND _tcs_git_rev)
         endif()
     endif()
 endif()
-string(TIMESTAMP TCS_BUILD_STAMP "%Y-%m-%d %H:%M" UTC)
+# 时间是提交时间（UTC），标明时区，免得被当成按下编译键的本地时间。
+string(TIMESTAMP TCS_BUILD_STAMP "%Y-%m-%d %H:%M UTC" UTC)
 message(STATUS "build id: git=${TCS_BUILD_GIT} stamp=${TCS_BUILD_STAMP}")
 configure_file(App/tcs/build_info.h.in "${CMAKE_BINARY_DIR}/generated/build_info.h" @ONLY)
 target_include_directories(tcs_main.elf PRIVATE "${CMAKE_BINARY_DIR}/generated")
@@ -224,7 +228,9 @@ add_custom_target(lvgl_font_gate ALL
     COMMENT "LVGL 字体门禁（font_audit_lvgl.py）")
 add_dependencies(tcs_main.elf lvgl_font_gate)
 add_custom_command(TARGET tcs_main.elf POST_BUILD
+    # objcopy / size 用工具链文件找到的同一套工具链（与编译器同目录），不再各找各的
     COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/post_build_objcopy.py $<TARGET_FILE_NAME:tcs_main.elf>
+            "${GCC_BIN}/${TOOLCHAIN_PREFIX}objcopy.exe" "${GCC_BIN}/${TOOLCHAIN_PREFIX}size.exe"
     WORKING_DIRECTORY ${CMAKE_BINARY_DIR}
     COMMENT "Generating HEX/BIN + size report"
     BYPRODUCTS tcs_main.hex tcs_main.bin

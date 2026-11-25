@@ -31,6 +31,11 @@ except Exception as e:                      # noqa: BLE001
 
 def main():
     bad, total = [], 0
+    # 最小张数断言：登记表被清空时下面循环一次都不跑，会直接输出"PASS（0 张卡）"——
+    # 正是这道门禁要堵的那类漏洞（2026-11-25 对账复核指出）。
+    if len(rac.CARDS) < 3:
+        bad.append("tools/reanchor_study_cards.py 的 CARDS 里只有 %d 张卡（应 ≥ 3：UART / GPIO / PWR-RCC）"
+                   % len(rac.CARDS))
     for name, card in rac.CARDS.items():
         if not os.path.isfile(card):
             bad.append("%s：卡片文件不存在 %s" % (name, card))

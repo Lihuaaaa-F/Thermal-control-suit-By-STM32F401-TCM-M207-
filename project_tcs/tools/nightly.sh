@@ -35,7 +35,7 @@ fi
 bash tools/build_matrix.sh $ARGS > build/nightly_matrix.txt 2>&1
 RC=$?
 cat build/nightly_matrix.txt >> "$LOG"
-grep -aE "^\[[A-Za-z0-9_-]+\] (exit=|告警数|没有告警基线)|可复现构建|交付档干净核对|干净核对 (PASS|FAIL)|ESP32：|build_matrix: (PASS|FAIL)" build/nightly_matrix.txt | tee -a "$LOG"
+grep -aE "^\[[A-Za-z0-9_-]+\] (exit=|告警数|没有告警基线)|可复现构建|交付档干净核对|干净核对 (PASS|FAIL)|esp32-repro|ESP32：|build_matrix: (PASS|FAIL)" build/nightly_matrix.txt | tee -a "$LOG"
 [ "$RC" -ne 0 ] && FAIL=1
 
 echo "--- ② PC 单测 ---" | tee -a "$LOG"

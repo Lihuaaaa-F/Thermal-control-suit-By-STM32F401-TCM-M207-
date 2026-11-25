@@ -3,7 +3,22 @@ set(CMAKE_SYSTEM_NAME Generic)
 set(CMAKE_SYSTEM_PROCESSOR arm)
 
 set(TOOLCHAIN_PREFIX arm-none-eabi-)
-set(GCC_BIN "C:/Program Files (x86)/Arm GNU Toolchain arm-none-eabi/13.2 Rel1/bin")
+# 工具链位置（2026-11-25 S 线，审查条目 X05-F-06：构建配置里不得写死本机绝对路径）。
+# 查找顺序：① 环境变量 ARM_NONE_EABI_GCC_BIN（bin 目录）；② PATH 上的 arm-none-eabi-gcc；
+#          ③ 默认安装位置（只为没把工具链加进 PATH 的机器兜底）。
+# 三处都找不到就报错停下——不要再悄悄回落到某台机器的路径。
+if(DEFINED ENV{ARM_NONE_EABI_GCC_BIN} AND NOT "$ENV{ARM_NONE_EABI_GCC_BIN}" STREQUAL "")
+    set(GCC_BIN "$ENV{ARM_NONE_EABI_GCC_BIN}")
+else()
+    find_program(_tcs_arm_gcc NAMES ${TOOLCHAIN_PREFIX}gcc
+                 PATHS "C:/Program Files (x86)/Arm GNU Toolchain arm-none-eabi/13.2 Rel1/bin")
+    if(NOT _tcs_arm_gcc)
+        message(FATAL_ERROR "找不到 ${TOOLCHAIN_PREFIX}gcc：把 Arm GNU Toolchain 的 bin 目录加进 PATH，"
+                            "或设置环境变量 ARM_NONE_EABI_GCC_BIN")
+    endif()
+    get_filename_component(GCC_BIN "${_tcs_arm_gcc}" DIRECTORY)
+endif()
+message(STATUS "toolchain: ${GCC_BIN}")
 
 set(CMAKE_C_COMPILER   ${GCC_BIN}/${TOOLCHAIN_PREFIX}gcc.exe)
 set(CMAKE_ASM_COMPILER ${GCC_BIN}/${TOOLCHAIN_PREFIX}gcc.exe)

@@ -74,6 +74,7 @@ set(APP_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/App/eeprom/eeprom.c
     ${CMAKE_CURRENT_SOURCE_DIR}/App/tcs/param_registry.c
     ${CMAKE_CURRENT_SOURCE_DIR}/App/tcs/m207.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/App/tcs/m207_txq.c    # M207 下发指令队列（纯逻辑，主机可测；过长指令不截断，M07-F-10）
     ${CMAKE_CURRENT_SOURCE_DIR}/App/tcs/tmp117.c
     ${CMAKE_CURRENT_SOURCE_DIR}/App/tcs/control.c
     ${CMAKE_CURRENT_SOURCE_DIR}/App/tcs/estop_gate.c      # 急停屏入口兜底判定（纯函数）

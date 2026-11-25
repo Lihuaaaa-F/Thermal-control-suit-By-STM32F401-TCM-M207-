@@ -13,6 +13,7 @@
 #include "proto.h"
 #include "control.h"
 #include "m207.h"
+#include "m207_txq.h"   /* M207_CMD_MAX：m207 send 的长度上限（M07-F-10）*/
 #include "post.h"
 #include "segger_rtt.h"
 #include "ltdc.h"
@@ -550,11 +551,24 @@ static void cmd_exec(char *line)
         return;
     }
 #if TCS_PROFILE >= 1
-    /* --- m207 send <raw>（BENCH：可直写 TCSW 等执行器参数，PROD 必须不存在）--- */
+    /* --- m207 send <raw>（BENCH：可直写 TCSW 等执行器参数，PROD 必须不存在）---
+     * M07-F-10（2026-11-25，S-G l1）：原来把 "%s\r" 截进 64 字节缓冲后交给 24 字节的下发队列，
+     * 超过 22 字符的指令被队列静默截成另一条指令，回复却是 "m207 rv=0"（只表示入队成功，
+     * 读起来像"已发送"）。现在：过长显式拒绝；回复按 m207_send_raw 的返回值说清楚
+     * "只是入了队，还没发出"。*/
     if (strcmp(argv[0], "m207") == 0 && argc >= 3 && strcmp(argv[1], "send") == 0) {
-        char cmd[64];
+        size_t rawlen = strlen(argv[2]);
+        if (rawlen + 1u > M207_CMD_MAX) {        /* +1 = 结尾的 \r */
+            printf("m207 send: too long (%u chars; max %u incl. CR) -> NOT sent\n",
+                   (unsigned)rawlen, (unsigned)(M207_CMD_MAX - 1u));
+            return;
+        }
+        char cmd[M207_CMD_MAX + 1u];
         snprintf(cmd, sizeof(cmd), "%s\r", argv[2]);
-        printf("m207 rv=%d\n", m207_send_raw(cmd));
+        int rv = m207_send_raw(cmd);
+        if (rv == 0)       printf("m207 send -> queued (not sent yet; one frame per 50ms; reply in log)\n");
+        else if (rv == -1) printf("m207 send -> NOT queued (queue full or empty command)\n");
+        else               printf("m207 send -> NOT queued (rv=%d)\n", rv);
         return;
     }
 #endif /* TCS_PROFILE >= 1: m207 send */

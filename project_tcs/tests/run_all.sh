@@ -70,15 +70,15 @@ run() {  # run <name> <test.c> <sources...>
     if "./$bin"; then echo "[$name] PASS"; else echo "[$name] FAIL"; FAIL=1; fi
 }
 
-run m207        tests/test_m207_parse.c       App/tcs/m207.c
-run m207golden  tests/test_m207_golden.c      App/tcs/m207.c
+run m207        tests/test_m207_parse.c       App/tcs/m207.c App/tcs/m207_txq.c   # S-G l1：m207.c 纯逻辑段的 m207_send_raw 引用队列
+run m207golden  tests/test_m207_golden.c      App/tcs/m207.c App/tcs/m207_txq.c
 run registry    tests/test_param_registry.c   App/tcs/param_registry.c App/proto/proto.c
 run control     tests/test_control.c          App/tcs/control.c App/tcs/param_registry.c App/tcs/post.c App/proto/proto.c
 run post        tests/test_post.c             App/tcs/post.c App/tcs/param_registry.c App/proto/proto.c
 # S 线（2026-11-24）：现场抽出的纯逻辑——急停屏入口兜底判定、页面重建判据在 U 线的 uimodel 里测
 run site_logic  tests/test_site_logic.c       App/tcs/estop_gate.c
 run proto_comm  tests/test_proto_tcs.c        App/proto/proto.c App/comm/comm.c
-run fuzz        tests/fuzz_m207.c             App/tcs/m207.c
+run fuzz        tests/fuzz_m207.c             App/tcs/m207.c App/tcs/m207_txq.c   # S-G l1：同上
 
 run touchsession tests/test_touch_session.c   App/tcs/touch_session.c Core/Src/ft5446.c
 run qr          tests/test_qr.c               App/tcs/qr/qrcodegen.c
@@ -369,6 +369,16 @@ if [ -n "$PYBIN" ] && PYTHONUTF8=1 "$PYBIN" tests/mutation_link_follow.py > buil
     echo "[mut-follow] PASS（$(tail -1 build/mut_follow.log)）"
 else
     echo "[mut-follow] FAIL"; grep -a "活下来\|编译失败\|锚点\|FAIL" build/mut_follow.log | head -12; FAIL=1
+fi
+
+# S-G l1（2026-11-25）：M07-F-10——M207 下发指令队列不截断过长指令。队列是纯逻辑（App/tcs/m207_txq.c），
+# 用例里照抄了修复前的入队函数做对照：同一条 30 字符的指令，修复前"接受并截成半截"，现在"拒绝、队列不变"。
+run m207txq     tests/test_m207_txq.c  App/tcs/m207_txq.c App/tcs/m207.c
+# 它的变异验证：把队列逐个改坏（截断代替拒绝 / 上限差一 / 条数回绕算错 / 满了还写…），上面的用例必须每次都变红。
+if [ -n "$PYBIN" ] && PYTHONUTF8=1 "$PYBIN" tests/mutation_m207_txq.py > build/mut_txq.log 2>&1; then
+    echo "[mut-txq] PASS（$(tail -1 build/mut_txq.log)）"
+else
+    echo "[mut-txq] FAIL"; grep -a "活下来\|编译失败\|锚点\|FAIL" build/mut_txq.log | head -12; FAIL=1
 fi
 
 echo "==================="

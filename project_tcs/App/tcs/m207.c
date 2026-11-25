@@ -160,6 +160,22 @@ int m207_map_format(const m207_map_entry_t *e, float v, char *out, size_t cap)
     return 0;
 }
 
+/* ====== 下发队列 + 原始指令透传（纯逻辑段：主机单测也编译）======
+ * M07-F-10（2026-11-25，S-G l1）：这几样原来在下面 "#ifndef TCS_UNIT_TEST" 的驱动段里，
+ * 主机单测编译不到——入队用 strncpy 截到 23 字符这件事一直没有判别性用例。队列本身在
+ * m207_txq.c；这里只留模块级的一份队列和 console 用的入口。*/
+#include "m207_txq.h"
+
+static m207_txq_t s_txq;
+
+int m207_send_raw(const char *cmd)
+{
+    /* 指令原样入队（需要结尾的 \r 由调用方带上）。
+     * 0 = 已入队（还没发出：m207_poll 每 50ms 送一条，应答见日志）；
+     * -1 = 空指令 / NULL / 队列满；-2 = 指令超过 M207_CMD_MAX 字符——不入队、不截断。*/
+    return m207_txq_push(&s_txq, cmd);
+}
+
 /* ===================================================================== */
 /*                          目标机驱动                                    */
 /* ===================================================================== */
@@ -172,8 +188,6 @@ int m207_map_format(const m207_map_entry_t *e, float v, char *out, size_t cap)
 
 #define M207_RING_SIZE   512u
 #define M207_RING_MASK   (M207_RING_SIZE - 1u)
-#define M207_TXQ_DEPTH   8u
-#define M207_TXQ_LEN     24u
 #define M207_POLL_MS     500u       /* 轮询时刻（通道交替）*/
 #define M207_REPLY_TMO   100u       /* WAIT_REPLY 超时 */
 #define M207_FAIL_LIMIT  5         /* ≈2.5s（2 通道交替 500ms）*/
@@ -250,10 +264,6 @@ static const m207_map_entry_t s_map[] = {
     { 0x126, 0, "COMADDR",      0, M207_MOD_PCRS232 },
 };
 #define M207_MAP_N  (sizeof(s_map) / sizeof(s_map[0]))
-
-/* TX 命令队列（SPSC：生产者全在主循环上下文，消费者 m207_poll）*/
-static char    s_txq[M207_TXQ_DEPTH][M207_TXQ_LEN];
-static uint8_t s_txq_head, s_txq_tail;
 
 void m207_isr_push(uint8_t b)
 {
@@ -354,14 +364,12 @@ static void m207_tx_raw(const char *cmd)
     HAL_UART_Transmit(s_huart, (uint8_t *)cmd, (uint16_t)strlen(cmd), 20u);
 }
 
-static int m207_txq_push(const char *cmd)
+/* TX 队列（SPSC：生产者全在主循环上下文，消费者 m207_poll）在 m207_txq.c（纯逻辑，主机可测）。
+ * 各下发函数的本地包装：任何入队失败（满 / 过长）都报 -1。内部指令最长 20 字符
+ * （"TC2:TCADJTEMP=80.0\r"），够不着 M207_CMD_MAX，所以这里不会把一条合法的内部指令拒掉。*/
+static int m207_enqueue(const char *cmd)
 {
-    uint8_t next = (uint8_t)((s_txq_head + 1u) % M207_TXQ_DEPTH);
-    if (next == s_txq_tail) return -1;         /* 满 */
-    strncpy(s_txq[s_txq_head], cmd, M207_TXQ_LEN - 1);
-    s_txq[s_txq_head][M207_TXQ_LEN - 1] = '\0';
-    s_txq_head = next;
-    return 0;
+    return (m207_txq_push(&s_txq, cmd) != 0) ? -1 : 0;
 }
 
 void m207_init(UART_HandleTypeDef *huart)
@@ -376,12 +384,12 @@ void m207_init(UART_HandleTypeDef *huart)
     s_last_temp_ms[1] = s_last_temp_ms[2] = 0;
     s_have_temp[1] = s_have_temp[2] = 0;
     memset(s_pend, 0, sizeof(s_pend));
-    s_txq_head = s_txq_tail = 0;
+    m207_txq_reset(&s_txq);
     g_tcs.m207_online = 0;
 
     /* F9 上电安全：双通道 TCSW=0（TEC 保持停止）。离线时发不出去也无害。 */
-    m207_txq_push("TC1:TCSW=0\r");
-    m207_txq_push("TC2:TCSW=0\r");
+    (void)m207_enqueue("TC1:TCSW=0\r");
+    (void)m207_enqueue("TC2:TCSW=0\r");
 
     /* 启动 RX 单字节中断（错误恢复同款重启入口）*/
     HAL_UART_Receive_IT(s_huart, &s_rx_byte, 1);
@@ -394,7 +402,7 @@ int m207_set_temp(uint8_t ch, float v)
     char cmd[24];
     snprintf(cmd, sizeof(cmd), "TC%u:TCADJTEMP=%.1f\r",
              (unsigned)ch, (double)v);
-    if (m207_txq_push(cmd) != 0) return -1;
+    if (m207_enqueue(cmd) != 0) return -1;
     /* 登记/覆盖同通道待确认 */
     m207_setpend_t *p = &s_pend[ch - 1];
     p->value = v;
@@ -412,14 +420,10 @@ int m207_tec(uint8_t ch, uint8_t on)
     if (ch != 1 && ch != 2) return -1;
     char cmd[24];
     snprintf(cmd, sizeof(cmd), "TC%u:TCSW=%u\r", (unsigned)ch, (unsigned)(on ? 1u : 0u));
-    return m207_txq_push(cmd);
+    return m207_enqueue(cmd);
 }
 
-int m207_send_raw(const char *cmd)
-{
-    if (!cmd || !*cmd) return -1;
-    return m207_txq_push(cmd);
-}
+/* m207_send_raw 在上面的纯逻辑段（主机单测也编译，M07-F-10）*/
 
 /* H10：按映射表下发（下发→回读确认→不一致自动重发 1 次→NAK 告警）*/
 int m207_map_set(uint16_t pid, float v)
@@ -429,7 +433,7 @@ int m207_map_set(uint16_t pid, float v)
         if (e->pid != pid) continue;
         char cmd[24];
         if (m207_map_format(e, v, cmd, sizeof(cmd)) != 0) return -1;
-        if (m207_txq_push(cmd) != 0) return -1;
+        if (m207_enqueue(cmd) != 0) return -1;
         /* M12-F-05：mod!=0（PCB/SYSTEM/PCRS232）没有通道写确认语义，跳过 setpend */
         if (e->mod == 0 && e->ch >= 1 && e->ch <= 2) {
             m207_setpend_t *p = &s_pend[e->ch - 1];
@@ -524,7 +528,7 @@ static void m207_handle_line(const char *line, uint32_t now_ms)
             char cmd[24];
             snprintf(cmd, sizeof(cmd), "TC%u:TCADJTEMP=%.1f\r",
                      (unsigned)r.module, (double)p->value);
-            m207_txq_push(cmd);
+            (void)m207_enqueue(cmd);             /* 入队失败（队列满）与原行为一致：下次回显走 NAK 分支 */
         } else {
             p->active = 0;
             char b[160];         /* F14：同上，%f 预格式化（160 见上注）*/
@@ -541,10 +545,11 @@ void m207_poll(uint32_t now_ms)
      * R1 修复 M06-F-07：加 50ms 节流——正典 §4 铁律要求两次下行 ≥50ms，
      * 原实现主循环 10ms 一拍，上电两条 TCSW=0 只隔 10ms。*/
     static uint32_t s_last_tx_ms;
-    if (s_txq_tail != s_txq_head && (uint32_t)(now_ms - s_last_tx_ms) >= 50u) {
+    const char *nx = m207_txq_peek(&s_txq);
+    if (nx && (uint32_t)(now_ms - s_last_tx_ms) >= 50u) {
         s_last_tx_ms = now_ms;
-        m207_tx_raw(s_txq[s_txq_tail]);
-        s_txq_tail = (uint8_t)((s_txq_tail + 1u) % M207_TXQ_DEPTH);
+        m207_tx_raw(nx);
+        m207_txq_pop(&s_txq);
     }
 
     /* 2) RX：环形缓冲取字节拼行（0.3ms 预算内，环形至多清空 512B）*/

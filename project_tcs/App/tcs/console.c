@@ -13,6 +13,9 @@
 #include "proto.h"
 #include "control.h"
 #include "m207.h"
+#include "m207_txq.h"   /* M207_CMD_MAX：m207 send 的长度上限（M07-F-10）*/
+#include "audit_ring.h" /* M07-F-08：关键命令的审计留痕环 */
+#include "perf_hist.h"  /* M01-F-09：perf 读最近一个 1 秒窗口 */
 #include "post.h"
 #include "segger_rtt.h"
 #include "ltdc.h"
@@ -75,8 +78,32 @@ static void tx_drain(void)
             break;                      /* 发送失败：保留 tail 下次重试 */
         s_tx_tail = (uint16_t)((s_tx_tail + chunk) & CON_TX_MASK);
         n = (uint16_t)(n - chunk);
+        /* M03-F-04：环里连着有 2KB 时这一次要连发 32 块（约 180ms）——每发完一块看一眼屏上的急停入口。*/
+        console_estop_yield();
     }
 }
+
+/* ====== 阻塞型命令让位给急停兜底入口（M03-F-04，2026-11-25，S-G l1）======
+ * 主循环每 10ms 看一次屏上的急停入口（tcs_lvgl_estop_watch）。一条命令把主循环占住的时候
+ * （pinscan 最长 1s、wdttest 5s、wave 250ms、p list 的串口排空…），这个入口在这段时间里没人看：
+ * 审查条目 M03-F-04 测到急停被延迟 3–5s，而屏入口的门槛是 ≤500ms。
+ * 这里让这些循环体每 CONSOLE_ESTOP_YIELD_MS 回到同一个入口。
+ * 交付档里没有阻塞型台架命令（C01），但 p list 三档都在，对它同样适用。
+ * 注意：阻塞期间 LVGL 没被轮询、心跳不前进——这时按在首页急停键上，estop_gate 会按"LVGL 卡死"
+ * 立即触发、不弹确认。方向是安全的（宁停勿漏），而且这些命令只在台架及以上档。*/
+#if TCS_USE_LVGL
+#define CONSOLE_ESTOP_YIELD_MS  10u
+void console_estop_yield(void)
+{
+    static uint32_t s_last;
+    uint32_t now = HAL_GetTick();
+    if ((uint32_t)(now - s_last) < CONSOLE_ESTOP_YIELD_MS) return;
+    s_last = now;
+    tcs_lvgl_estop_watch();
+}
+#else
+void console_estop_yield(void) { }        /* 不带屏的构建：没有屏入口 */
+#endif
 
 /* ====== 日志 / printf 重定向 ====== */
 void tcs_log(const char *prefix, const char *fmt, ...)
@@ -194,6 +221,27 @@ static void touch_log_dump_poll(void)
     }
 }
 
+/* ====== 审计留痕（M07-F-08，2026-11-25，S-G l1）======
+ * 改参数 / 改模式 / 驱动引脚 / 急停与确认 / 仿真注入 / 复位这类命令，执行后记进一块**独立的**
+ * 512 字节环形缓冲（不走控制台 TX 环，也不占 RTT 缓冲），同时往 RTT 打一行 [AUDIT]。
+ * 判定与环在 audit_ring.c（纯逻辑，主机可测）；这里只做接入。三档都保留，`audit` 命令只读回放。*/
+static audit_ring_t s_audit;
+static char s_audit_text[AUDIT_CMD_MAX + 1u];   /* 本条命令的留痕文本；空串 = 这条不留 */
+static int  s_cmd_rv;                            /* 本条命令的返回值：未知命令 -1，p set / m207 send 取其实际返回值 */
+
+/* 命令执行完之后调：把这条（如果要留）写进环并打到 RTT */
+static void audit_commit(void)
+{
+    uint32_t now = HAL_GetTick();
+    char ln[96];
+    if (!s_audit_text[0]) return;
+    (void)audit_ring_add(&s_audit, now, s_audit_text, s_cmd_rv);
+    snprintf(ln, sizeof(ln), "[AUDIT] %lu %s rv=%d\n",
+             (unsigned long)now, s_audit_text, s_cmd_rv);
+    SEGGER_RTT_WriteString(ln);
+    s_audit_text[0] = '\0';
+}
+
 /* ====== 命令执行 ====== */
 static void cmd_exec(char *line)
 {
@@ -202,12 +250,26 @@ static void cmd_exec(char *line)
     while (n && (line[n-1] == ' ' || line[n-1] == '\t')) line[--n] = '\0';
     if (n == 0) return;
 
+    /* M07-F-08：strtok_r 会把 line 就地切碎，留痕用的原文要在它之前抄一份 */
+    char raw[CON_LINE_MAX];
+    strncpy(raw, line, sizeof(raw) - 1);
+    raw[sizeof(raw) - 1] = '\0';
+
     char *argv[6];
     int argc = 0;
     char *save = NULL;
     for (char *tok = strtok_r(line, " \t", &save);
          tok && argc < 6; tok = strtok_r(NULL, " \t", &save))
         argv[argc++] = tok;
+
+    /* M07-F-08：关键命令留痕。这里只判断并抄原文；写环在执行之后（audit_commit），带返回值。
+     * 交付档上被档位挡掉、但仍在审计表里的关键命令（p defaults / p save）会留一条 rv=-1——
+     * 有人在交付固件上试过什么，事后看得到。台架专用的命令（pindrv / mode …）在交付档不进审计表
+     * （命令名不能出现在交付档产物里），试敲它们不留痕。*/
+    s_cmd_rv = 0;
+    s_audit_text[0] = '\0';
+    if (audit_is_critical(argv[0], argc >= 2 ? argv[1] : NULL))
+        audit_cmd_text(s_audit_text, sizeof(s_audit_text), raw);
 
     /* --- ver --- */
     if (strcmp(argv[0], "ver") == 0) {
@@ -218,6 +280,17 @@ static void cmd_exec(char *line)
                (unsigned long)(g_tcs.fw_ver >> 8) & 0xFFu,
                (unsigned long)(g_tcs.fw_ver) & 0xFFu,
                TCS_BUILD_STAMP, TCS_BUILD_GIT, 1);
+        return;
+    }
+    /* --- audit：审计留痕回放（只读；三档都在，M07-F-08）---
+     * 环里是从旧到新的关键命令（时间戳 ms + 命令原文 + 返回值），最多 16 条；total 是开机以来的总条数。*/
+    if (strcmp(argv[0], "audit") == 0) {
+        static char buf[AUDIT_SLOT_BYTES * AUDIT_SLOT_COUNT + 1u];   /* 不占主栈：513 字节 */
+        int shown = audit_ring_format(&s_audit, buf, sizeof(buf));
+        printf("audit: total=%lu kept=%u shown=%d\n",
+               (unsigned long)s_audit.total, (unsigned)s_audit.count, shown);
+        printf("%s", buf);
+        tx_drain();                          /* 16 行约 0.6KB：一次排掉，免得和后面的输出挤 TX 环 */
         return;
     }
     /* --- stat --- */
@@ -241,12 +314,14 @@ static void cmd_exec(char *line)
         extern volatile uint32_t g_dbg_snap_gap_max;
         extern volatile uint32_t g_dbg_snap_gap_last;
         extern comm_link_t g_link;
-        printf("lrx=%lu snap=%lu gapmax=%lu gaplast=%lu echo=%lu wdir=%lu\n",
+        /* arq / txfail（M04-F-06 / X03-F-09）：comm 层 link_ok；没能上线的发送次数（应与 uartdrop 同源、恒 0）*/
+        printf("lrx=%lu snap=%lu gapmax=%lu gaplast=%lu echo=%lu wdir=%lu arq=%u txfail=%lu\n",
                (unsigned long)g_dbg_lrx_total,
                (unsigned long)g_dbg_snap,
                (unsigned long)g_dbg_snap_gap_max,
                (unsigned long)g_dbg_snap_gap_last,
-               (unsigned long)g_link.echo_cnt, (unsigned long)g_link.wrongdir_cnt);
+               (unsigned long)g_link.echo_cnt, (unsigned long)g_link.wrongdir_cnt,
+               (unsigned)g_link.link_ok, (unsigned long)g_link.tx_fail_cnt);
         return;
     }
 #if TCS_PROFILE >= 1
@@ -366,7 +441,11 @@ static void cmd_exec(char *line)
     }
     /* --- pinscan：全端口 GPIO 边沿普查（BENCH 档；屏蔽 MHz 级显示总线）---
      * R1：原实现 3s 忙等且循环内 iwdg_refresh()——既阻塞急停键轮询，又让看门狗假活。
-     * 现改为：上限 1s（< IWDG 2s，不再需要喂狗）、去掉 iwdg_refresh、时钟走 HAL 宏。*/
+     * 现改为：上限 1s（< IWDG 2s，不再需要喂狗）、去掉 iwdg_refresh、时钟走 HAL 宏。
+     * M03-F-04（2026-11-25）：循环体内每 10ms 经 console_estop_yield() 回到屏上的急停入口——
+     * 原来这 1s 里屏上的急停键没人看。让位期间要读触摸控制器（I2C4：PD12=SCL / PD13=SDA），
+     * 这两脚上会出现 I2C 边沿：从普查里屏蔽掉，否则每次都报出假边沿。读 I2C 的那约 1ms 里
+     * 别的边沿数不到（每 10ms 一段，约占一成），这是 pinscan 的已知盲区。*/
     if (strcmp(argv[0], "pinscan") == 0) {
         int secs = (argc >= 2) ? atoi(argv[1]) : 1;
         if (secs < 1) secs = 1;
@@ -381,15 +460,19 @@ static void cmd_exec(char *line)
                                     GPIOG, GPIOH, GPIOI, GPIOJ, GPIOK };
         static uint16_t last[11];
         static uint32_t edge[11][16];
+        const uint16_t touch_i2c = (uint16_t)(GPIO_PIN_12 | GPIO_PIN_13);   /* PD12 / PD13 */
         for (int i = 0; i < 11; i++) {
             last[i] = (uint16_t)ports[i]->IDR;
+            if (i == 3) last[i] &= (uint16_t)~touch_i2c;
             for (int b = 0; b < 16; b++) edge[i][b] = 0u;
         }
         uint32_t t0 = DWT->CYCCNT;
         uint32_t dur = (uint32_t)secs * (SystemCoreClock / 1u);
         while ((DWT->CYCCNT - t0) < dur) {
+            console_estop_yield();
             for (int i = 0; i < 11; i++) {
                 uint16_t cur = (uint16_t)ports[i]->IDR;
+                if (i == 3) cur &= (uint16_t)~touch_i2c;
                 uint16_t ch = (uint16_t)(cur ^ last[i]);
                 if (ch) {
                     last[i] = cur;
@@ -398,7 +481,7 @@ static void cmd_exec(char *line)
                 }
             }
         }
-        printf("pinscan %ds edges(2..400 shown):\n", secs);
+        printf("pinscan %ds edges(2..400 shown; PD12/PD13 masked, estop watch runs every 10ms):\n", secs);
         for (int i = 0; i < 11; i++)
             for (int b = 0; b < 16; b++)
                 if (edge[i][b] >= 2u && edge[i][b] <= 400u)
@@ -406,7 +489,10 @@ static void cmd_exec(char *line)
         return;
     }
 #endif /* TCS_PROFILE >= 1: wave / rxraw / pinscan */
-    /* --- ee：EEPROM 镜像现场重读+校验（诊断）--- */
+#if TCS_PROFILE >= 1
+    /* --- ee：EEPROM 镜像现场重读+校验（诊断）。只在台架及以上（S-G l1，2026-11-25）：
+     * 交付档的屏不初始化本地 EEPROM（参数真值在主控），这条命令在交付档上恒回 "ee offline"，
+     * 是误导——现在交付档回 "?"，实现体不编译。--- */
     if (strcmp(argv[0], "ee") == 0) {
         extern int eeprom_ready(void);
         extern int eeprom_read_image(uint8_t img[EE_IMG_SIZE]);
@@ -420,6 +506,7 @@ static void cmd_exec(char *line)
                    ? "VALID" : "INVALID");
         return;
     }
+#endif /* TCS_PROFILE >= 1: ee */
     /* --- post：六项自检结果 + 布防三态（H6）--- */
     if (strcmp(argv[0], "post") == 0) {
         if (argc >= 2 && strcmp(argv[1], "badge") == 0) {
@@ -459,19 +546,31 @@ static void cmd_exec(char *line)
                (unsigned long)g_stat_touch_us_max,
                (unsigned long)g_stat_loop_passes, (unsigned long)rate,
                (unsigned long)up_s);
+        /* M01-F-09：最近一个**已经结束**的 1 秒窗口的分布。上面的 max 是开机以来的终身值——
+         * 一个几小时前的尖峰会一直占着它；这里看的是"现在"：P50 / P99（按桶下界报，桶宽 2 倍）、
+         * 窗口最大值、超预算（8ms）的拍数。开机的第一秒还没有结束的窗口，n=0。*/
+        {
+            const perf_hist_t *w = tcs_perf_last_window();
+            printf("win1s: n=%lu p50=%luus p99=%luus max=%luus over=%lu(budget %luus)\n",
+                   (unsigned long)w->n, (unsigned long)perf_hist_pctl(w, 50u),
+                   (unsigned long)perf_hist_pctl(w, 99u), (unsigned long)w->max,
+                   (unsigned long)w->over, (unsigned long)w->over_thresh);
+        }
         return;
     }
     /* --- p ... --- */
     if (strcmp(argv[0], "p") == 0 && argc >= 2) {
         if (strcmp(argv[1], "list") == 0) {
-            /* 50 条 ≈2KB 输出 > TX 环 2KB → 边打印边排空（防尾部被丢弃）*/
+            /* 50 条 ≈2KB 输出 > TX 环 2KB → 边打印边排空（防尾部被丢弃）
+             * M03-F-04：排空是阻塞的串口发送（整张表约 180ms），每排一次就回到屏上的急停入口看一眼。*/
             for (int i = 0; i < param_count(); i++) {
                 const param_desc_t *p = param_at(i);
                 printf("0x%02x %s %.2f [%.1f,%.1f] 0x%02x\n",
                        p->id, p->key, (double)p->value,
                        (double)p->min, (double)p->max, p->flags);
-                if ((i & 7) == 7) tx_drain();
+                if ((i & 7) == 7) { console_estop_yield(); tx_drain(); }
             }
+            console_estop_yield();
             tx_drain();
             return;
         }
@@ -479,12 +578,22 @@ static void cmd_exec(char *line)
             uint16_t id = (uint16_t)strtoul(argv[2], NULL, 0);
             float v = strtof(argv[3], NULL);
             int rv = param_set(id, v, PARAM_SRC_CONSOLE);
+            s_cmd_rv = rv;                  /* M07-F-08：留痕用 */
             if (rv == 0)      printf("ok %.2f\n", (double)param_get(id));
             else if (rv == 1) printf("clamped %.2f\n", (double)param_get(id));
             else if (rv == -2) printf("rejected (body_cold<body_hot)\n");
             else              printf("bad id\n");
             return;
         }
+#if TCS_PROFILE >= 1
+        /* p save / p defaults：只在台架及以上（S-G l1，2026-11-25，交付固件上机时发现）。
+         * 交付档的屏是纯显示终端：参数真值在主控（NVS），本机既不读也不写参数区。
+         * 原来这两条在交付档也在——`p defaults Y` 回 "defaults restored+saved rv=1"，
+         * 实际只把屏本地的参数镜像重置了一下（下一帧快照 / 镜像就盖回去），保存必然失败；
+         * `p save` 回 "save rv=1"，其实什么都没保存。回复是误导性的，交付档现在回 "?"。
+         * 实现体与声明之外的调用点（param_persist_now / param_persist_all）仍被注册表自己引用，
+         * 这里只是不让交付档够得着它们。要"经链路让主控恢复默认"是另一件事：需要新的协议消息、
+         * 主控侧处理与二次确认，不在本批次。*/
         if (strcmp(argv[1], "save") == 0) {
             int rv = param_persist_now();
             printf("save rv=%d\n", rv);
@@ -500,6 +609,7 @@ static void cmd_exec(char *line)
             }
             return;
         }
+#endif /* TCS_PROFILE >= 1: p save / p defaults */
     }
 #if TCS_PROFILE >= 1
     /* --- 控制命令（与 UI 同路径；BENCH 档：手动直控会绕过网页/屏的权威链）--- */
@@ -534,11 +644,25 @@ static void cmd_exec(char *line)
         return;
     }
 #if TCS_PROFILE >= 1
-    /* --- m207 send <raw>（BENCH：可直写 TCSW 等执行器参数，PROD 必须不存在）--- */
+    /* --- m207 send <raw>（BENCH：可直写 TCSW 等执行器参数，PROD 必须不存在）---
+     * M07-F-10（2026-11-25，S-G l1）：原来把 "%s\r" 截进 64 字节缓冲后交给 24 字节的下发队列，
+     * 超过 22 字符的指令被队列静默截成另一条指令，回复却是 "m207 rv=0"（只表示入队成功，
+     * 读起来像"已发送"）。现在：过长显式拒绝；回复按 m207_send_raw 的返回值说清楚
+     * "只是入了队，还没发出"。*/
     if (strcmp(argv[0], "m207") == 0 && argc >= 3 && strcmp(argv[1], "send") == 0) {
-        char cmd[64];
+        size_t rawlen = strlen(argv[2]);
+        if (rawlen + 1u > M207_CMD_MAX) {        /* +1 = 结尾的 \r */
+            printf("m207 send: too long (%u chars; max %u incl. CR) -> NOT sent\n",
+                   (unsigned)rawlen, (unsigned)(M207_CMD_MAX - 1u));
+            return;
+        }
+        char cmd[M207_CMD_MAX + 1u];
         snprintf(cmd, sizeof(cmd), "%s\r", argv[2]);
-        printf("m207 rv=%d\n", m207_send_raw(cmd));
+        int rv = m207_send_raw(cmd);
+        s_cmd_rv = rv;                      /* M07-F-08：留痕用 */
+        if (rv == 0)       printf("m207 send -> queued (not sent yet; one frame per 50ms; reply in log)\n");
+        else if (rv == -1) printf("m207 send -> NOT queued (queue full or empty command)\n");
+        else               printf("m207 send -> NOT queued (rv=%d)\n", rv);
         return;
     }
 #endif /* TCS_PROFILE >= 1: m207 send */
@@ -608,7 +732,9 @@ static void cmd_exec(char *line)
     if (strcmp(argv[0], "wdttest") == 0) {
         tcs_log("[SYSTEM]", "IWDG test: busy-loop 5s (timeout=2s)");
         uint32_t t0 = HAL_GetTick();
-        while (HAL_GetTick() - t0 < 5000u) { }
+        /* M03-F-04：这 5 秒里屏上的急停入口照旧每 10ms 看一次（不喂狗——那才是这条命令要测的）。
+         * 急停命令在下一次复位之前就能发给主控。*/
+        while (HAL_GetTick() - t0 < 5000u) { console_estop_yield(); }
         return;
     }
 #endif /* TCS_PROFILE >= 1: wdttest */
@@ -682,6 +808,7 @@ static void cmd_exec(char *line)
         return;
     }
 #endif
+    s_cmd_rv = -1;                          /* M07-F-08：没被任何分支接住 = 这条命令没执行 */
     printf("?\n");
 }
 
@@ -707,6 +834,7 @@ void console_poll(void)
             if (len >= MB_CMD_MAX) s_mb.cmd[MB_CMD_MAX - 1] = '\0';
             else                   s_mb.cmd[len] = '\0';
             cmd_exec(s_mb.cmd);
+            audit_commit();                  /* M07-F-08 */
             s_mb_seq++;
             tcs_log("[MB]", "done seq=%lu", (unsigned long)(s_mb_seq + 1));
         }
@@ -732,6 +860,7 @@ void console_poll(void)
             } else if (s_line_len) {
                 s_line[s_line_len] = '\0';
                 cmd_exec(s_line);
+                audit_commit();              /* M07-F-08 */
                 s_line_len = 0;
             }
         } else if (s_line_discard) {
@@ -753,6 +882,8 @@ void console_init(UART_HandleTypeDef *huart)
     s_tx_drop_cnt = 0;
     s_line_len = 0;
     s_line_discard = 0;
+    audit_ring_init(&s_audit);              /* M07-F-08：审计环上电清空 */
+    s_audit_text[0] = '\0';
     HAL_UART_Receive_IT(s_uart, &s_rx_byte, 1);
 }
 

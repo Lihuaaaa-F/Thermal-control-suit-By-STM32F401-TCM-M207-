@@ -3,18 +3,19 @@
  *
  * 与 Python comm_protocol.ReliableLink 行为对齐。零 HAL 依赖。
  *
- * §0E 中断重入修复（M1.5）：所有 TX 经环形待发队列，主循环 comm_poll_tx
- * 唯一消费点串行 HAL_UART_Transmit。中断里 comm_tick 只判超时+重传入队。
- * 急停=常规尾插（队头插队函数已按 W3-A/终审 MF-8 删除：双端 0 调用死码）。
- * tx_head/tx_tail/tx_count 的读改写用 enter/exit_critical 短临界区保护。
- * 官方查证：FreeRTOS 官方队列族检索 2026-10-26：esp_ringbuf/StreamBuffer 为字节流语义，与本 txq 项缓冲（定界+满丢老+ISR 单生产者）语义不符（差异分析=v13.4 §4 六操作映射表）；清单 F7 定性=官方等价候选（MessageBuffer 双通道）待评估，W3-A 评估中；未定论前自研环形为缺省实现（Q5 PC 双编译）；实现参考：不适用（环形队列=C 语义自持，官方无直接项缓冲原语；官方候选评估即上句 W3-A）
+ * 所有 TX 经环形待发队列，由 comm_poll_tx 唯一消费。待发队列的生产模型（M04-F-07 定论，
+ * 2026-11-25）见 comm.h 文件头：这一份是"任务上下文生产，没有 ISR"——链路任务与其它任务
+ * （网页 / 控制台 / 快照）都会写队列索引与 pending[]，读改写全部在同一把锁里（M11-F-07）。
+ * 屏那一端的 comm.c（project_tcs/App/comm）是"仅主循环生产"。
+ * 急停 = 常规尾插（队头插队函数已按 W3-A / 终审 MF-8 删除：双端 0 调用死码）。
+ * 官方查证：FreeRTOS 官方队列族检索 2026-10-26：esp_ringbuf/StreamBuffer 为字节流语义，与本 txq 项缓冲（定界+满丢老）语义不符（差异分析=v13.4 §4 六操作映射表）；清单 F7 定性=官方等价候选（MessageBuffer 双通道）待评估，W3-A 评估中；未定论前自研环形为缺省实现（Q5 PC 双编译）。
  */
 #include "comm.h"
 #include "tcs_proto.h"   /* R5-01：方向闸门的判定（tcs_rx_verdict 等纯函数，协议唯一源）*/
 #include <string.h>
 
 void comm_init(comm_link_t *L,
-               void (*send_fn)(const uint8_t *data, size_t len),
+               int (*send_fn)(const uint8_t *data, size_t len),
                uint32_t (*now_ms_fn)(void),
                void (*on_link_down)(void),
                void (*enter_critical)(void),
@@ -35,6 +36,9 @@ void comm_init(comm_link_t *L,
     for (int i = 0; i < 32; i++)  L->last_seen_ok[i] = 0;
     proto_rx_init(&L->rx);
 }
+
+/* M04-F-06：注册"链路恢复"回调（link_ok 由假转真时在临界区之外调用一次）。*/
+void comm_set_on_link_up(comm_link_t *L, void (*cb)(void)) { L->on_link_up = cb; }
 
 /* —— 统一临界区（M11-F-07）：pending[] 与 next_seq 被多个任务写（网页/控制台/链路），
  * 读改写必须串行。enter_critical 由移植层注入（ESP32 = spinlock，双核安全）。*/
@@ -123,13 +127,11 @@ void comm_txq_push(comm_link_t *L, const uint8_t *frame, size_t len)
 
 void comm_poll_tx(comm_link_t *L)
 {
-    /* 无锁读 tx_count：容忍一拍误差（急停场景可接受）。
-     * 即使 ISR 在此刻 push，下次主循环会处理。主循环只读不改 tail。*/
+    /* 无锁读 tx_count：容忍一拍误差（急停场景可接受）。*/
     if (L->tx_count == 0) return;
     if (!L->send_fn) return;
 
-    /* 取队头：head 是主循环独占消费索引，ISR 只 push 改 tail 不碰 head
-     * （push_front 已按 W3-A/终审 MF-8 删除）；故此处 head 无竞态。*/
+    /* 取队头：head 只有本函数（链路任务）改；其它任务的 push 只改 tail（在锁内）。*/
     /* R3-A-2：先在锁内把队头帧拷到局部再发送。原实现在锁外 send_fn(tx_queue[h])，
      * 队列满时 push 会「丢最老」并把 head 前移——tail==head 时正好覆盖正在发送的槽，
      * 发出去的帧后半段变成别的帧。拷贝 + 解锁后发送，槽位内容不再被读。*/
@@ -144,12 +146,15 @@ void comm_poll_tx(comm_link_t *L)
     L->tx_count--;
     comm_unlock(L);
 
-    L->send_fn(tmp, tlen);
+    /* X03-F-09：发送失败不再不可见。ESP32 这一份保持非阻塞语义——帧照样出队，等 ACK 的帧由
+     * comm_tick 超时重传、免 ARQ 的帧丢弃（理由见 comm.h 的 comm_poll_tx 说明）。*/
+    if (L->send_fn(tmp, tlen) != 0) L->tx_fail_cnt++;
 }
 
-uint8_t comm_send(comm_link_t *L, const uint8_t *frame_bytes, size_t len, uint8_t msg_type)
+int comm_send(comm_link_t *L, const uint8_t *frame_bytes, size_t len, uint8_t msg_type,
+              uint8_t *out_seq)
 {
-    if (len < 5 || len > MAX_FRAME) return 0xFF;
+    if (len < 5 || len > MAX_FRAME) return -1;
     uint8_t seq = frame_bytes[4];  /* 起始符2+Length1+MsgType1+SeqNo1 */
 
     /* M11-F-07 / M08-F-08：找槽+登记+"首传入队"必须整体原子。
@@ -177,17 +182,18 @@ uint8_t comm_send(comm_link_t *L, const uint8_t *frame_bytes, size_t len, uint8_
     e->deadline_ms = e->enq_ms + COMM_ACK_TIMEOUT_MS;
     e->in_use = 1;                    /* 最后写：别的任务只认 in_use=1 的完整条目 */
 
-    /* §0E：首传入队（不直接 send_fn），主循环 comm_poll_tx 串行消费 */
+    /* §0E：首传入队（不直接 send_fn），由 comm_poll_tx 串行消费 */
     txq_push_unlocked(L, frame_bytes, len);
     comm_unlock(L);
-    return seq;
+    if (out_seq) *out_seq = seq;
+    return 0;                           /* M04-F-04：成败看返回值；序号 255 不再与"失败"同名 */
 }
 
-uint8_t comm_send_noarq(comm_link_t *L, const uint8_t *frame_bytes, size_t len)
+int comm_send_noarq(comm_link_t *L, const uint8_t *frame_bytes, size_t len)
 {
-    if (len < 5 || len > MAX_FRAME) return 0xFF;
+    if (len < 5 || len > MAX_FRAME) return -1;
     comm_txq_push(L, frame_bytes, len);
-    return frame_bytes[4];
+    return 0;
 }
 
 void comm_tick(comm_link_t *L)
@@ -238,6 +244,24 @@ static uint8_t s_dup_seq;
 static uint8_t s_dup_mt;
 static int s_dup_valid = 0;
 
+/* M04-F-06（2026-11-25）：判活单一口径。对端发来的任何一帧合法帧（ACK、重复帧、新帧都算）
+ * 都说明链路是通的 → link_ok 置真；由假转真时在锁外调一次 on_link_up。
+ * 原来 link_ok 置假之后只有 ACK 能把它复位：一帧等 ACK 的命令重传耗尽判死之后，对端的 STATUS
+ * 照常到达、屏点也转绿，link_ok 却一直是 0，日志只有"断"没有"恢复"。
+ * 回声与方向不符的帧到不了这里（R5-01 的闸门在前）。ESP32 这一份：收帧在链路任务、
+ * comm_tick 也在链路任务，但 comm_on_ack 可能被别的任务直接调，所以置真放进锁里。*/
+static void comm_note_peer(comm_link_t *L)
+{
+    void (*up)(void) = NULL;
+    comm_lock(L);
+    if (L->link_ok == COMM_LINK_OK_FALSE) {
+        L->link_ok = COMM_LINK_OK_TRUE;
+        up = L->on_link_up;
+    }
+    comm_unlock(L);
+    if (up) up();
+}
+
 /* R5-01 方向闸门。判定是 protocol/tcs_proto.h 的纯函数 tcs_rx_verdict（协议唯一源），
  * 这里只负责在"任何处理之前"调用它并分桶计数。
  * ⚠ 两端各有一份 comm.c（H743：project_tcs/App/comm/comm.c）。从下面这行注释起到函数结束，
@@ -287,6 +311,8 @@ int comm_rx_feed_byte(comm_link_t *L, uint8_t b,
     /* R5-01：方向闸门——本端发出的帧被回送 / 对端不可能发来的消息号，在 ACK 处理、去重、
      * 交付之前丢弃。只看字节里的方向信息，不看长度、不看时刻。*/
     if (comm_rx_gate(L, payload, plen)) return 0;
+    /* M04-F-06：能走到这里的都是对端发来的合法帧——先把 link_ok 置真（如果是假）*/
+    comm_note_peer(L);
     uint8_t mt = tcs_frame_mt(payload[0]);
     uint8_t seq = payload[1];
 

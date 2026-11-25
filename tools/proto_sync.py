@@ -12,7 +12,9 @@
        发送点 `<组帧函数>(MT_TCS_X` 只能出现在"本端会发 X"的那一端；
   6) 两端 comm.c 的方向闸门函数 comm_rx_gate 逐字相同，且调用点在 ACK 处理 / 去重 / 交付之前；
      出队处打方向位并重算 CRC；
-  7) 旧的"等长 + 发送窗"回声过滤没有任何残留符号。
+  7) 旧的"等长 + 发送窗"回声过滤没有任何残留符号；
+  8) 屏端 ISR 不碰 comm 层（M04-F-07 的生产模型：仅主循环生产）；USART2 的错误回调只置标志、
+     恢复在主循环做（X03-F-09）。
 
 用法：python tools/proto_sync.py --check        退出码 0 = 一致；1 = 漂移（构建/CI 应阻断）。
       python tools/proto_sync.py --table        打印"消息号 → 谁会发 → 发送点 / 接收分支（文件:行）"核对表。
@@ -164,6 +166,36 @@ def check_gate(fails):
                 fails.append(f"{p.relative_to(REPO).as_posix()} 仍有旧回声过滤的符号 {sym}")
 
 
+ISR_FN = ("link_rx_isr_byte", "link_rx_cplt")
+
+
+def check_isr(fails):
+    """8) M04-F-07 / X03-F-09：屏端 ISR 不碰 comm 层（comm.h 文件头的生产模型是"仅主循环生产"）；
+    USART2 的错误回调只置标志，恢复在主循环做。"""
+    it = REPO / "project_tcs" / "Core" / "Src" / "stm32h7xx_it.c"
+    main = REPO / "project_tcs" / "Core" / "Src" / "main.c"
+    if not it.exists() or not main.exists():
+        fails.append("缺少 project_tcs/Core/Src/stm32h7xx_it.c 或 main.c")
+        return
+    t = read(it)
+    if re.search(r"\bcomm_\w+\s*\(", t):
+        fails.append("stm32h7xx_it.c 里出现了对 comm_* 的调用：ISR 不得碰 comm 层（comm.h 文件头：仅主循环生产）")
+    if "link_uart_error_recover" in t:
+        fails.append("stm32h7xx_it.c 仍在 ISR 里调 link_uart_error_recover()：X03-F-09 要求只置标志")
+    if "link_uart_error_isr" not in t:
+        fails.append("stm32h7xx_it.c 的 USART2 错误回调应当调 link_uart_error_isr()")
+    m = read(main)
+    f = re.search(r"void link_uart_error_isr\(void\)\s*\{(.*?)\}", m, re.S)
+    if not f:
+        fails.append("main.c 缺少 link_uart_error_isr()")
+    elif not re.fullmatch(r"\s*g_link_err_flag\s*=\s*1\s*;\s*(/\*.*?\*/)?\s*", f.group(1), re.S):
+        fails.append("link_uart_error_isr() 只能置标志（X03-F-09）：函数体里有别的语句")
+    for fn in ISR_FN:
+        b = re.search(r"void %s\([^)]*\)\s*\{(.*?)\n\}" % fn, m, re.S)
+        if b and re.search(r"\bcomm_\w+\s*\(", b.group(1)):
+            fails.append(f"main.c 的 {fn}() 在 ISR 上下文里调用 comm_*：ISR 不得碰 comm 层")
+
+
 def main() -> int:
     fails = []
 
@@ -205,13 +237,14 @@ def main() -> int:
 
     check_direction(fails, table=("--table" in sys.argv))
     check_gate(fails)
+    check_isr(fails)
 
     if fails:
         print("proto_sync: FAIL")
         for f in fails:
             print("  -", f)
         return 1
-    print("proto_sync: OK (单一源 + 2 包装一致，无重复定义；方向表与两端收发分支一致；两端闸门相同)")
+    print("proto_sync: OK (单一源 + 2 包装一致，无重复定义；方向表与两端收发分支一致；两端闸门相同；屏端 ISR 不碰 comm 层)")
     return 0
 
 

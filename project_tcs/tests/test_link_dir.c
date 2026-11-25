@@ -27,10 +27,14 @@ static int g_pass, g_fail;
 static uint8_t  g_wire[8192];
 static size_t   g_wire_n;
 static uint32_t g_now;
+static int      g_send_fail_left;     /* X03-F-09：接下来几次 send_fn 报"没有上线"*/
 
-static void stub_send(const uint8_t *d, size_t n)
+/* send_fn：返回 0 = 这一帧已上线；非 0 = 没有上线（由 g_send_fail_left 控制）*/
+static int stub_send(const uint8_t *d, size_t n)
 {
+    if (g_send_fail_left > 0) { g_send_fail_left--; return -1; }
     if (g_wire_n + n <= sizeof(g_wire)) { memcpy(&g_wire[g_wire_n], d, n); g_wire_n += n; }
+    return 0;
 }
 static uint32_t stub_now(void) { return g_now; }
 
@@ -77,6 +81,15 @@ static int feed(comm_link_t *L, const uint8_t *frame, size_t n, int *dup, uint8_
 }
 
 static void tx_drain(comm_link_t *L) { g_wire_n = 0; comm_poll_tx(L); }
+
+/* comm_send + 断言成功，返回序号。M04-F-04：comm_send 本身返回 0 / -1，序号经出参；
+ * 这里把"报告成功"也作为断言，再让各用例照旧核对序号。*/
+static uint8_t xsend(comm_link_t *L, const uint8_t *f, size_t n, uint8_t mt)
+{
+    uint8_t s = 0xFF;
+    CHECK(comm_send(L, f, n, mt, &s) == 0, "comm_send 报告成功（M04-F-04）");
+    return s;
+}
 
 /* ======================= P：方向表与判定函数（纯函数）======================= */
 static void test_pure(void)
@@ -156,7 +169,7 @@ static void test_tx(void)
 
     /* 等 ACK 的帧（0x12）与免 ARQ 的帧（0x90 ACK）出线时消息号字节 = 消息号本身（屏方向 bit6=0）*/
     n = wire_frame(MT_TCS_SET_PARAM, 7, body, sizeof(body), f);
-    CHECK(comm_send(&L, f, n, MT_TCS_SET_PARAM) == 7, "T: 0x12 已登记");
+    CHECK(xsend(&L, f, n, MT_TCS_SET_PARAM) == 7, "T: 0x12 已登记");
     tx_drain(&L);
     CHECK(g_wire_n == n && g_wire[0] == 0xAA && g_wire[3] == MT_TCS_SET_PARAM, "T: 0x12 出线带屏方向位（bit6=0）");
     n = ack_frame(MT_TCS_ACK, 8, 7, MT_TCS_GET_REGISTRY, f);
@@ -196,6 +209,56 @@ static void test_tx(void)
     CHECK(L.tx_wrongdir_cnt == 1, "T: 自检——屏发出主控专用的 0x13 被计了 tx_wrongdir（重打那一帧）");
 }
 
+/* ======================= X03-F-09：发送失败不出队 =======================
+ * send_fn（屏端 = 阻塞的 HAL_UART_Transmit）返回失败 = 这一帧没有上线。
+ * 原来 send_fn 是 void、发完就前移队头：HAL_BUSY 的那一帧被消费掉了却从没上过线。*/
+extern volatile uint32_t g_comm_tx_frames;
+static void test_tx_fail(void)
+{
+    comm_link_t L;
+    uint8_t body[TCS_PARAM_PL_LEN], f[MAX_FRAME], f2[MAX_FRAME]; size_t n, n2;
+    uint32_t sent0;
+    int pend;
+    param_body(body, 0x01, 30.0f);
+    g_wire_n = 0;
+    link_open(&L, TCS_SIDE_H743);
+
+    /* 队头那帧第一次没上线（HAL_BUSY）：留在队头，下一拍重试，成功后只上线一次 */
+    n = wire_frame(MT_TCS_SET_PARAM, 0x41, body, sizeof(body), f);
+    (void)xsend(&L, f, n, MT_TCS_SET_PARAM);
+    sent0 = g_comm_tx_frames;
+    g_send_fail_left = 1;
+    comm_poll_tx(&L);                          /* 失败：不出队 */
+    CHECK(comm_txq_count(&L) == 1 && g_wire_n == 0, "X: 发送失败的那一帧留在队里");
+    CHECK(L.tx_fail_cnt == 1 && L.txq_drop == 0, "X: 记一次发送失败，没有丢帧");
+    CHECK(comm_pending_count(&L) == 1, "X: 等待确认的登记还在");
+    CHECK(g_comm_tx_frames == sent0, "X: 失败的发送不计入\"实际发出\"的帧数");
+    comm_poll_tx(&L);                          /* 重试成功 */
+    CHECK(comm_txq_count(&L) == 0 && g_wire_n == n && g_wire[4] == 0x41, "X: 下一拍重试上线，且只上线一次");
+    CHECK(g_comm_tx_frames == sent0 + 1, "X: 成功那一次计入\"实际发出\"");
+    CHECK(L.tx_fail_streak == 0, "X: 成功后失败连计清零");
+    g_wire_n = 0;
+
+    /* 队头那一帧一直发不出去（句柄卡死）：连续 COMM_TX_MAX_FAIL 次失败后丢弃它，
+     * 不能把后面排着的帧堵死——后面排着的是急停命令 */
+    n = wire_frame(MT_TCS_SET_PARAM, 0x42, body, sizeof(body), f);
+    n2 = wire_frame(MT_TCS_CMD, 0x43, (const uint8_t *)"\x08", 1, f2);
+    (void)xsend(&L, f, n, MT_TCS_SET_PARAM);
+    comm_txq_push(&L, f2, n2);
+    pend = comm_pending_count(&L);            /* 0x41 与 0x42 两帧都还在等确认 */
+    g_send_fail_left = COMM_TX_MAX_FAIL;
+    for (int i = 0; i < COMM_TX_MAX_FAIL - 1; i++) {
+        comm_poll_tx(&L);
+        CHECK(comm_txq_count(&L) == 2 && g_wire_n == 0, "X: 失败次数没到上限之前不出队");
+    }
+    comm_poll_tx(&L);                          /* 第 COMM_TX_MAX_FAIL 次失败：丢弃队头 */
+    CHECK(comm_txq_count(&L) == 1 && L.txq_drop == 1, "X: 连续失败的队头帧被丢弃并计数");
+    CHECK(comm_pending_count(&L) == pend, "X: 丢弃出队帧不动等待确认的登记（之后由 comm_tick 超时重传）");
+    comm_poll_tx(&L);                          /* 下一帧：急停命令 */
+    CHECK(comm_txq_count(&L) == 0 && g_wire_n == n2 && g_wire[3] == MT_TCS_CMD,
+          "X: 队头丢弃之后，后面排着的急停命令发了出去");
+}
+
 /* ======================= (d) 本端发出的每一种帧被回送 ======================= */
 static void test_echo(void)
 {
@@ -208,9 +271,9 @@ static void test_echo(void)
     /* 先挂一笔等待确认的出站帧：seq=0x21 的 0x12、seq=0x22 的 0x15 */
     param_body(body, 0x01, 30.0f);
     n = wire_frame(MT_TCS_SET_PARAM, 0x21, body, TCS_PARAM_PL_LEN, f);
-    CHECK(comm_send(&L, f, n, MT_TCS_SET_PARAM) == 0x21, "D: 0x12 已登记");
+    CHECK(xsend(&L, f, n, MT_TCS_SET_PARAM) == 0x21, "D: 0x12 已登记");
     n = wire_frame(MT_TCS_CMD, 0x22, (const uint8_t *)"\x08", 1, f);
-    (void)comm_send(&L, f, n, MT_TCS_CMD);
+    (void)xsend(&L, f, n, MT_TCS_CMD);
     tx_drain(&L);
     CHECK(comm_pending_count(&L) == 2, "D: 两帧在等确认");
     g_wire_n = 0;
@@ -271,7 +334,7 @@ static void test_peer(void)
     link_open(&L, TCS_SIDE_H743);
     param_body(body, 0x01, 30.0f);
     n = wire_frame(MT_TCS_SET_PARAM, 0x51, body, TCS_PARAM_PL_LEN, f);
-    CHECK(comm_send(&L, f, n, MT_TCS_SET_PARAM) == 0x51, "E: 0x12 已登记");
+    CHECK(xsend(&L, f, n, MT_TCS_SET_PARAM) == 0x51, "E: 0x12 已登记");
     L.link_ok = COMM_LINK_OK_FALSE;
 
     /* 镜像 0x11：交付，且交给上层的是去掉方向位的消息号 */
@@ -321,7 +384,7 @@ static void test_wrongdir(void)
     param_body(body, 0x01, 5.0f);
     /* 屏自己挂一笔 (0x71, 0x12) 等确认 */
     n = wire_frame(MT_TCS_SET_PARAM, 0x71, body, TCS_PARAM_PL_LEN, f);
-    CHECK(comm_send(&L, f, n, MT_TCS_SET_PARAM) == 0x71, "W: 0x12 已登记");
+    CHECK(xsend(&L, f, n, MT_TCS_SET_PARAM) == 0x71, "W: 0x12 已登记");
     tx_drain(&L);
     g_wire_n = 0;
 
@@ -353,13 +416,131 @@ static void test_wrongdir(void)
     CHECK(L.echo_cnt == 0, "W: 它们不是回声，不进 echo");
 }
 
+/* ======================= M04-F-06：判活单一口径 =======================
+ * link_ok 置假之后，对端发来的任何一帧合法帧（不只 ACK）都把它置回真，并报一次恢复。 */
+static int g_up_cnt;
+static void on_up(void) { g_up_cnt++; }
+static void test_link_ok(void)
+{
+    comm_link_t L;
+    uint8_t f[MAX_FRAME], spl[TCS_SNAP_PL_LEN]; size_t n; int dup = 0;
+    g_wire_n = 0;
+    link_open(&L, TCS_SIDE_H743);
+    comm_set_on_link_up(&L, on_up);
+    g_up_cnt = 0;
+    tcs_snap_pl_t s; memset(&s, 0, sizeof(s)); s.ver = TCS_PROTO_VER;
+    (void)tcs_pl_snapshot(spl, sizeof(spl), &s);
+    L.link_ok = COMM_LINK_OK_FALSE;                 /* 一帧等 ACK 的命令重传耗尽之后 */
+
+    /* 对端的快照（免 ARQ，永远不会有对应的 ACK）到达：链路明明是通的 */
+    n = wire_frame((uint8_t)(MT_TCS_SNAPSHOT | 0x40), 0x90, spl, sizeof(spl), f);
+    CHECK(feed(&L, f, n, &dup, NULL) == 1, "K: 快照交付");
+    CHECK(L.link_ok == COMM_LINK_OK_TRUE, "K: 对端的非 ACK 帧把 link_ok 置回真（旧实现只能被 ACK 复位）");
+    CHECK(g_up_cnt == 1, "K: 由假转真报了一次恢复");
+    s.seq = 7;
+    (void)tcs_pl_snapshot(spl, sizeof(spl), &s);
+    n = wire_frame((uint8_t)(MT_TCS_SNAPSHOT | 0x40), 0x91, spl, sizeof(spl), f);
+    feed(&L, f, n, &dup, NULL);
+    CHECK(g_up_cnt == 1, "K: 链路本来就通时不重复报恢复");
+    /* 重复帧也算对端活着 */
+    L.link_ok = COMM_LINK_OK_FALSE;
+    feed(&L, f, n, &dup, NULL);
+    CHECK(L.link_ok == COMM_LINK_OK_TRUE && g_up_cnt == 2, "K: 重复帧同样把 link_ok 置回真");
+    /* ACK 照旧 */
+    L.link_ok = COMM_LINK_OK_FALSE;
+    n = wire_frame(MT_TCS_SET_PARAM, 0x92, (const uint8_t *)"\x01\x00\x00\x00\x00\x00\x00", 7, f);
+    CHECK(xsend(&L, f, n, MT_TCS_SET_PARAM) == 0x92, "K: 前置——登记一帧");
+    n = ack_frame((uint8_t)(MT_TCS_ACK | 0x40), 0x93, 0x92, MT_TCS_SET_PARAM, f);
+    feed(&L, f, n, &dup, NULL);
+    CHECK(L.link_ok == COMM_LINK_OK_TRUE && g_up_cnt == 3 && comm_pending_count(&L) == 0, "K: ACK 把 link_ok 置回真");
+}
+
+/* ---- M01-F-09 子项②（链路 TX 阻塞）的守卫 ----------------------------------------------
+ * 审查记录的"253 B 帧 10.98ms"是 MAX_FRAME 的理论上限，不是哪一种真实帧。屏这一端会发的帧型
+ * （0x90 ACK、0x14 急停/确认、0x12 写参数、0x15 STATUS、0x22 注册表条目）里最长的是把
+ * key / name / unit 顶满的注册表条目（只有台架/仿真档才发；交付档屏端只发前三种）。
+ * comm_poll_tx 一拍只发一帧，所以一拍被 TX 阻塞的上限 = 最长的一帧上线的时间。这里把它钉住：
+ * 帧型加长到 8ms 预算装不下（230400 8N1，每字 10 bit ≈ 43us）就变红。
+ * 守卫只管已知的这几种帧型；新增帧型时要来这里加一行。*/
+#define LINK_BAUD          230400u
+#define TICK_BUDGET_US     8000u
+static uint32_t wire_us(size_t frame_bytes)
+{
+    /* 每字 10 bit（起始 + 8 数据 + 停止），四舍五入到微秒 */
+    return (uint32_t)(((uint64_t)frame_bytes * 10u * 1000000u + LINK_BAUD / 2u) / LINK_BAUD);
+}
+
+static void test_tx_budget(void)
+{
+    comm_link_t L;
+    uint8_t f[MAX_FRAME];
+    uint8_t body[MAX_PAYLOAD];
+    size_t n, biggest;
+    const char *big_name = "";
+
+    /* 每种帧型按真实发送点用的同一个组包函数、取最长的样子 */
+    biggest = ack_frame(MT_TCS_ACK, 0, 0, MT_TCS_SET_PARAM, f);   /* main.c 的 ACK 应答 */
+    big_name = "ACK";
+    body[0] = 0;
+    n = wire_frame(MT_TCS_CMD, 0, body, TCS_CMD_PL_LEN, f);       /* link_send_cmd_upstream：定长 */
+    if (n > biggest) { biggest = n; big_name = "CMD"; }
+    {
+        tcs_param_pl_t p = { .id = 0xFFFF, .type = 0, .value = tcs_f2b(1.0f) };
+        uint8_t b[TCS_PARAM_PL_LEN];
+        (void)tcs_pl_param(b, sizeof(b), &p);                     /* link_send_set_param */
+        n = wire_frame(MT_TCS_SET_PARAM, 0, b, sizeof(b), f);
+        if (n > biggest) { biggest = n; big_name = "SET_PARAM"; }
+    }
+    {
+        tcs_status_pl_t s;
+        size_t sn;
+        memset(&s, 0, sizeof(s));
+        sn = tcs_pl_status(body, sizeof(body), &s);                /* STATUS 帧 */
+        CHECK(sn == TCS_STATUS_PL_LEN, "Q: STATUS 组包长度是定长");
+        n = wire_frame(MT_TCS_STATUS, 0, body, sn, f);
+        if (n > biggest) { biggest = n; big_name = "STATUS"; }
+    }
+    {
+        /* registry_dump_tick：strncpy(dst, src, sizeof(dst) - 1)，所以三个串最长是容量减一 */
+        tcs_reg_entry_t e;
+        size_t en;
+        memset(&e, 0, sizeof(e));
+        memset(e.key, 'k', sizeof(e.key) - 1);
+        memset(e.name, 'N', sizeof(e.name) - 1);
+        memset(e.unit, 'u', sizeof(e.unit) - 1);
+        e.count = 0xFF; e.idx = 0xFF; e.id = 0xFFFF; e.type = 0xFF; e.flags = 0xFF;
+        en = tcs_pl_registry_entry(body, sizeof(body), &e);
+        CHECK(en > 0, "Q: 注册表条目三个串都顶满也组得出来（不超过 MAX_PAYLOAD）");
+        n = wire_frame(MT_TCS_REGISTRY_ENTRY, 0, body, en, f);
+        if (n > biggest) { biggest = n; big_name = "REGISTRY_ENTRY"; }
+    }
+    CHECK(biggest == 104u, "Q: 屏端最长的一帧是顶满的注册表条目：104 字节");
+    CHECK(wire_us(biggest) <= TICK_BUDGET_US, "Q: 最长的一帧上线时间不超过 8ms 预算");
+
+    /* 一拍只发一帧：队列里压三帧，poll 一次只上线一帧 */
+    link_open(&L, TCS_SIDE_H743);
+    g_wire_n = 0;
+    n = wire_frame(MT_TCS_SET_PARAM, 0x30, body, TCS_PARAM_PL_LEN, f);
+    for (int i = 0; i < 3; i++) comm_txq_push(&L, f, n);
+    CHECK(L.tx_count == 3, "Q: 三帧都在队列里");
+    comm_poll_tx(&L);
+    CHECK(g_wire_n == n && L.tx_count == 2, "Q: comm_poll_tx 一拍只发一帧（队列里还剩 2 帧）");
+
+    printf("  [tx budget] H743 longest frame = %s %u B = %lu us @%lu 8N1 (budget %lu us/beat)\n",
+           big_name, (unsigned)biggest, (unsigned long)wire_us(biggest), (unsigned long)LINK_BAUD,
+           (unsigned long)TICK_BUDGET_US);
+}
+
 int main(void)
 {
     test_pure();
     test_tx();
+    test_tx_fail();
     test_echo();
     test_peer();
     test_wrongdir();
+    test_link_ok();
+    test_tx_budget();
     printf("test_link_dir(H743): PASS=%d FAIL=%d\n", g_pass, g_fail);
     return g_fail ? 1 : 0;
 }

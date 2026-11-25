@@ -118,10 +118,19 @@ MUTANTS = [
      [("                        s_rx_frames++;\n                        on_frame(pl, plen);",
        "                        if (plen == 9) continue;   /* 变异 */\n                        s_rx_frames++;\n                        on_frame(pl, plen);")]),
     ("S1", "屏写参数退回变更即推（不等 ACK）", "lsend",
-     [("    return (comm_send(L, frame, n, MT_TCS_SET_PARAM) != 0xFFu) ? 0 : -1;",
+     [("    return (comm_send(L, frame, n, MT_TCS_SET_PARAM, NULL) == 0) ? 0 : -1;",
        "    comm_txq_push(L, frame, n); return 0;")]),
     ("S2", "广播钩子对 M207 参数重复发", "lsend",
      [("    if (flags & PF_M207) return 0;", "    if (0) return 0;")]),
+    # —— M04-F-04 / M04-F-06 / X03-F-09（同属链路层，放在同一个脚本里）——
+    ("S3", "序号 255 仍被当成失败（旧 comm_send 的语义）", "lsend",
+     [("    return (comm_send(L, frame, n, MT_TCS_SET_PARAM, NULL) == 0) ? 0 : -1;",
+       "    { uint8_t s_ = 0xFF; int r_ = comm_send(L, frame, n, MT_TCS_SET_PARAM, &s_); "
+       "return (r_ != 0 || s_ == 0xFF) ? -1 : 0; }")]),
+    _comm("hcomm", "X1", "发送失败照样出队（不留在队头重试）",
+          [("        if (++L->tx_fail_streak < COMM_TX_MAX_FAIL) return;\n", "        if (0) return;\n")]),
+    _comm("hcomm", "K1", "对端的非 ACK 帧不恢复 link_ok", [("    comm_note_peer(L);\n", "")]),
+    _comm("ecomm", "K1", "对端的非 ACK 帧不恢复 link_ok", [("    comm_note_peer(L);\n", "")]),
 ]
 
 

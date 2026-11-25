@@ -10,8 +10,8 @@
  * 台架档 BENCH / 仿真档 SIM 才跑本地闭环——下表里标〔台架〕的那几步。
  *
  * 主循环 10ms 节拍（SysTick 1ms 分频），时序预算 ≤8ms/节拍（§3.2 铁律）：
- *   喂狗 → comm_poll_tx → console_poll →〔台架〕m207_poll → 链路 RX 喂 comm → comm_tick
- *   → ft5446_service → tcs_lvgl_estop_watch → tcs_lvgl_poll
+ *   屏急停入口兜底（最先看，M03-F-04）→ 喂狗 → comm_poll_tx → console_poll →〔台架〕m207_poll → 链路 RX 喂 comm → comm_tick
+ *   → ft5446_service → tcs_lvgl_poll
  *   →〔台架〕control_poll(500ms) → tmp117_poll(100ms) → post_poll(100ms,H6)
  *   →〔台架〕param_persist_flush(2s) → KEY0 急停 → STATUS 帧(500ms) → LED 心跳 → 等下一节拍
  * ISR 只做：UART RX 单字节入环形缓冲（USART1 console / USART2 link /〔台架〕USART3 m207）。
@@ -45,6 +45,7 @@
 #include "eeprom.h"
 #include "iwdg.h"
 #include "post.h"
+#include "perf_hist.h"  /* M01-F-09：单拍耗用的 1 秒窗口直方图（perf 命令读）*/
 #include "tcs_profile.h"   /* TCS_PROFILE：屏链波形采集与 RX 环只在台架/仿真档（S 线 C01，2026-11-24）*/
 #include <string.h>
 
@@ -67,12 +68,34 @@ volatile uint32_t g_stat_ui_ms_x10 = 0;
 volatile uint32_t g_stat_touch_us_max = 0;
 volatile uint32_t g_stat_tick_ovf = 0;
 
+/* M01-F-09（2026-11-26，S-G l1）：按窗口（1 秒）统计单拍耗用——P50 / P99 / 窗口最大值 / 超预算的拍数。
+ * 原来只有"终身最大值"和一条指数平均：看得出历史上有没有超预算，看不出最近超得勤不勤。
+ * 采样口径不变（仍然含中断时间，见 perf_sample_work）。*/
+#define TCS_TICK_BUDGET_US  8000u          /* §3.2 铁律：≤8ms / 节拍 */
+static perf_hist_t s_perf_win;             /* 正在统计的窗口 */
+static perf_hist_t s_perf_last;            /* 最近一个结束的窗口（perf 命令读）*/
+const perf_hist_t *tcs_perf_last_window(void) { return &s_perf_last; }
+
 static void perf_sample_work(uint32_t cy)
 {
     uint32_t us = cy / (SystemCoreClock / 1000000u);
     if (us > g_stat_work_us_max) g_stat_work_us_max = us;
     g_stat_work_us_avg = (g_stat_work_us_avg * 7u + us) / 8u;
     if (us > 10000u) g_stat_tick_ovf++;
+    perf_hist_add(&s_perf_win, us);
+}
+
+static void perf_window_tick(uint32_t now_ms)
+{
+    static uint32_t s_win_start;
+    if (s_win_start == 0u) {                 /* 第一个窗口的起点 */
+        s_win_start = now_ms ? now_ms : 1u;
+        return;
+    }
+    if (now_ms - s_win_start < 1000u) return;
+    s_win_start = now_ms;
+    s_perf_last = s_perf_win;
+    perf_hist_reset_window(&s_perf_win);
 }
 
 /* SysTick 1ms 双递增覆盖（GS 工程移植时曾丢失本函数 → 主循环卡死在节拍等待，
@@ -164,6 +187,7 @@ void link_wave_capture(void)
     uint32_t t0 = DWT->CYCCNT;
     uint32_t limit = SystemCoreClock / 4u;         /* 250 ms */
     while (g_wave_n < 512u) {
+        console_estop_yield();                     /* M03-F-04：最长 250ms 的忙等里每 10ms 看一眼屏上的急停入口 */
         uint32_t lv = (GPIOA->IDR >> 3) & 1u;
         if (lv != last) { g_wave_ts[g_wave_n++] = DWT->CYCCNT - t0; last = lv; }
         if ((DWT->CYCCNT - t0) > limit) break;
@@ -175,7 +199,19 @@ void link_wave_capture(void)
 }
 #endif /* TCS_PROFILE >= 1：link_wave_capture */
 
-void link_uart_error_recover(void)
+/* X03-F-09（2026-11-25）：USART2 的错误恢复只在主循环里做，ISR 只置标志。
+ * 原来 HAL_UART_ErrorCallback（ISR 上下文，stm32h7xx_it.c）直接调 link_uart_error_recover()，
+ * 与主循环 link_rx_drain() 里 100ms 限速的自愈并发操作同一个句柄：两边各自 AbortReceive 之后
+ * 再各自重挂 Receive_IT，后一次因 RxState 已是 BUSY_RX 返回 HAL_BUSY——等于丢一次重挂，
+ * 最长失聪 100ms。现在回调只调 link_uart_error_isr()，恢复统一由 link_rx_drain() 做。*/
+static volatile uint8_t g_link_err_flag;
+
+void link_uart_error_isr(void)
+{
+    g_link_err_flag = 1;                 /* ISR 上下文：只置标志，不碰句柄 */
+}
+
+void link_uart_error_recover(void)       /* 只在主循环里调（link_rx_drain）*/
 {
     if (__HAL_UART_GET_FLAG(&huart_link, UART_FLAG_ORE))
         __HAL_UART_CLEAR_OREFLAG(&huart_link);
@@ -228,14 +264,17 @@ static void link_rx_drain(void)
     /* R2 真机自愈（2026-10-30）：USART2 首次 ORE 后 HAL 会关闭 RXNEIE
      * （CR1.RXNEIE=0），而错误回调未启用 → 链路 RX 永久失聪。
      * 与 console_poll 同款轮询自愈，但**限速 100ms**——持续 ORE 风暴
-     * （如 RX 接线悬空/悬低）时逐拍 AbortReceive 会拖死主循环（真机实证）。*/
+     * （如 RX 接线悬空/悬低）时逐拍 AbortReceive 会拖死主循环（真机实证）。
+     * X03-F-09：ISR 的错误回调不再自己恢复，只置 g_link_err_flag，在这里一起做。*/
     {
         static uint32_t s_last_heal;
         uint32_t nowms = g_tick_ms;
-        if ((__HAL_UART_GET_FLAG(&huart_link, UART_FLAG_ORE) ||
+        if ((g_link_err_flag ||
+             __HAL_UART_GET_FLAG(&huart_link, UART_FLAG_ORE) ||
              (huart_link.Instance->CR1 & USART_CR1_RXNEIE_RXFNEIE) == 0u) &&
             (uint32_t)(nowms - s_last_heal) >= 100u) {
             s_last_heal = nowms;
+            g_link_err_flag = 0;
             link_uart_error_recover();
         }
     }
@@ -250,7 +289,10 @@ static void link_rx_drain(void)
         g_dbg_rx_ring[g_dbg_rx_pos & 63u] = b;
         g_dbg_rx_pos++;
 #endif
-        /* TEMP-DIAG2（2026-10-30）：原始首 8 字节 + 首 0xAA 帧 32 字节取证 */
+#if TCS_PROFILE >= 1
+        /* TEMP-DIAG2（2026-10-30）：原始首 8 字节 + 首 0xAA 帧 32 字节取证。
+         * M01-F-05 残余（2026-11-25，S-G l1）：这是取证用的实现体，此前三档都编译——交付档每次上电
+         * 都往控制台 / RTT 打一行 [R8] 和四行 [A1..A4]。与 wave / txwave / rxraw 同一个条件。*/
         {
             static uint8_t raw8[8]; static int rn; static int rdone;
             static uint8_t win[32]; static int wl; static int wdone;
@@ -271,6 +313,7 @@ static void link_rx_drain(void)
                 }
             }
         }
+#endif /* TCS_PROFILE >= 1：TEMP-DIAG2 首帧取证日志 */
 
         const uint8_t *pl; size_t plen; int dup;
         if (comm_rx_feed_byte(&g_link, b, &pl, &plen, &dup)) {
@@ -305,15 +348,22 @@ static void crit_exit(void)
     if (s_crit_depth == 0u) __set_PRIMASK(s_crit_primask);
 }
 
-static void link_uart_send(const uint8_t *data, size_t len)
+/* X03-F-09（2026-11-25）：返回 0 = 这一帧已上线；非 0 = 没有上线。
+ * comm_poll_tx 据此决定要不要前移队头——原来 send_fn 是 void，HAL_UART_Transmit 返回
+ * HAL_BUSY（句柄正被诊断用的中断发送占着）或超时的那一帧被消费掉了却从没上过线。*/
+static int link_uart_send(const uint8_t *data, size_t len)
 {
-    HAL_UART_Transmit(&huart_link, (uint8_t *)data, (uint16_t)len, 20u);
+    return (HAL_UART_Transmit(&huart_link, (uint8_t *)data, (uint16_t)len, 20u) == HAL_OK) ? 0 : -1;
 }
 
 static uint32_t now_ms_fn(void) { return g_tick_ms; }
 
 static volatile uint8_t g_link_down_flag = 0;
 static void on_link_down(void) { g_link_down_flag = 1; }
+/* M04-F-06：与上面成对的"恢复"——ARQ 判死之后，对端发来的任何一帧合法帧到达（见 comm.c 的
+ * comm_note_peer）。原来只有 ACK 能把 link_ok 复位，日志里只有"断"没有"恢复"。*/
+static volatile uint8_t g_link_up_flag = 0;
+static void on_link_up(void) { g_link_up_flag = 1; }
 
 /* ====== 0x90 TCS_ACK 发送（txq 入队，主循环串行消费）====== */
 void link_send_ack(uint8_t acked_seq, uint8_t acked_mt, uint8_t status, float ret)
@@ -438,7 +488,7 @@ static void link_send_cmd_upstream(uint8_t cmd)
     uint8_t frame[MAX_FRAME];
     size_t fn = proto_encode_frame_with_mt(MT_TCS_CMD, comm_next_seq(&g_link),
                                            pl, TCS_CMD_PL_LEN, frame, sizeof(frame));
-    if (fn) (void)comm_send(&g_link, frame, fn, MT_TCS_CMD);
+    if (fn) (void)comm_send(&g_link, frame, fn, MT_TCS_CMD, NULL);
 }
 
 static void hook_m207_set(uint8_t ch, float v)
@@ -968,6 +1018,7 @@ int main(void)
 
     comm_init(&g_link, link_uart_send, now_ms_fn, on_link_down, crit_enter, crit_exit,
               TCS_SIDE_H743);
+    comm_set_on_link_up(&g_link, on_link_up);   /* M04-F-06：与 on_link_down 成对的"恢复"日志 */
 
 #ifdef ENABLE_LCD
     tcs_lvgl_init();     /* LVGL 单栈（2026-11-15：旧 tcs_ui 已删除） */
@@ -985,6 +1036,7 @@ int main(void)
     CoreDebug->DEMCR |= CoreDebug_DEMCR_TRCENA_Msk;
     DWT->CYCCNT = 0;
     DWT->CTRL |= DWT_CTRL_CYCCNTENA_Msk;
+    perf_hist_init(&s_perf_win, TCS_TICK_BUDGET_US);   /* M01-F-09：1 秒窗口，预算 8ms */
 
     while (1) {
         uint32_t now = g_tick_ms;
@@ -992,6 +1044,15 @@ int main(void)
         g_stat_loop_passes++;
 
         iwdg_refresh();
+#ifdef ENABLE_LCD
+        /* D-L7② 屏入口兜底：先于 LVGL 的原始坐标判定。
+         * M03-F-04（2026-11-25，S-G l1）：挪到主循环最前面。原来在 console_poll() 之后——一条阻塞型
+         * 控制台命令（台架档的 pinscan 最长 1s / wdttest 5s；三档都有的 p list 约 180ms）占住主循环
+         * 期间，屏上的急停键没人看，入口被拖到命令结束。现在每拍最先看一眼；阻塞型命令的循环体内
+         * 再每 10ms 经 console_estop_yield() 回到同一个入口。放在 comm_poll_tx 之前：这一拍触发的
+         * 急停命令当拍就能上线。*/
+        tcs_lvgl_estop_watch();
+#endif
         comm_poll_tx(&g_link);           /* 链路 TX 串行消费（唯一 HAL_UART_Transmit 处之一）*/
         console_poll();
 #if !TCS_H743_LINK_ONLY
@@ -1006,8 +1067,7 @@ int main(void)
 
 #ifdef ENABLE_LCD
     ft5446_service();        /* S-G h1a（M02-F-01）：触摸链路掉线后每拍恢复一小步，不阻塞；在线时立即返回 */
-    tcs_lvgl_estop_watch();   /* D-L7② 屏入口兜底：先于 LVGL 的原始坐标判定 */
-    tcs_lvgl_poll();
+    tcs_lvgl_poll();          /* 屏入口兜底已挪到主循环开头（M03-F-04）*/
 #endif
 #if TCS_H743_LINK_ONLY
         /* v2/AD-1（2026-11-19）：PROD=纯显示终端。本地 M207/TMP117/POST 在 v2 无机载外设，
@@ -1104,9 +1164,14 @@ int main(void)
         }
 
         perf_sample_work(DWT->CYCCNT - cy0);
+        perf_window_tick(now);
         if (g_link_down_flag) {
             g_link_down_flag = 0;
             tcs_log("[NET]", "esp link down (3 retries)");
+        }
+        if (g_link_up_flag) {
+            g_link_up_flag = 0;
+            tcs_log("[NET]", "esp link restored");
         }
         /* R2（v2.4 §13.4.6）：判活口径=快照新鲜度 500ms 窗（0x20@200ms 连续到达）；
          * comm 层 link_ok(ARQ 活性)保留内部使用，不再直接映射屏点 */

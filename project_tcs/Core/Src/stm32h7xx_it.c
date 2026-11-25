@@ -16,7 +16,7 @@ extern UART_HandleTypeDef huart_m207;
 
 /* 链路 RX 单字节落点；主循环经 link_rx_pop 取字节喂 comm（铁律：协议处理在主循环）*/
 void link_rx_cplt(void);                 /* main.c：推 Receive_IT 落点 + 重启接收 */
-void link_uart_error_recover(void);      /* main.c：ORE 清标志+重置 */
+void link_uart_error_isr(void);          /* main.c：X03-F-09——ISR 只置标志，恢复在主循环做 */
 
 /* ====== §0B.2 全局 fault 信息（probe-rs 可读）====== */
 volatile uint32_t g_fault_cfsr, g_fault_hfsr, g_fault_bfar, g_fault_pc, g_fault_lr, g_fault_sp;
@@ -102,10 +102,12 @@ void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart)
     }
 }
 
-/* ====== 错误回调：ORE 先清标志再重置接收（F401 踩坑防御保留）====== */
+/* ====== 错误回调：ORE 先清标志再重置接收（F401 踩坑防御保留）======
+ * X03-F-09（2026-11-25）：USART2 这一路不再在 ISR 里动句柄——只置标志，
+ * AbortReceive + 重挂由主循环 link_rx_drain() 做（否则与主循环的 100ms 自愈并发操作同一句柄）。*/
 void HAL_UART_ErrorCallback(UART_HandleTypeDef *huart)
 {
     if (huart->Instance == USART1)      console_uart_error_recover();
-    else if (huart->Instance == USART2) link_uart_error_recover();
+    else if (huart->Instance == USART2) link_uart_error_isr();
     else if (huart->Instance == USART3) m207_uart_error_recover();
 }

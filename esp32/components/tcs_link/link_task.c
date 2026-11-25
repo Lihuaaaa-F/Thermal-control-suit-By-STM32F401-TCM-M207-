@@ -279,20 +279,22 @@ esp_err_t link_loopback(uint8_t on)
 }
 #endif
 
-static void link_uart_send(const uint8_t *d, size_t n)
+/* 返回 0 = 这一帧已交给驱动；非 0 = 没有上线（X03-F-09：让 comm 层知道，计入 tx_fail_cnt）*/
+static int link_uart_send(const uint8_t *d, size_t n)
 {
     /* R1 P1-07：非阻塞写——TX 环满时丢弃该帧（comm 层 ARQ 会重传），
      * 不让 uart_write_bytes 阻塞把 link 任务拖死触发 TWDT。*/
 #if CONFIG_TCS_SIM || CONFIG_TCS_DIAG
-    if (link_muted()) return;             /* 诊断静默期：不上线。no-ARQ 帧丢弃，ARQ 帧由 comm 层超时重传 */
+    if (link_muted()) return 1;             /* 诊断静默期：不上线。no-ARQ 帧丢弃，ARQ 帧由 comm 层超时重传 */
 #endif
     size_t free_sz = 0;
     if (uart_get_tx_buffer_free_size(LINK_UART, &free_sz) == ESP_OK && free_sz >= n) {
         uart_write_bytes(LINK_UART, d, n);     /* 帧已由 comm 层带上方向位 */
-    } else {
-        s_uart_txdrop++;
-        if ((s_uart_txdrop % 50u) == 1u) ESP_LOGW(TAG, "link tx ring full, dropped %lu frames", (unsigned long)s_uart_txdrop);
+        return 0;
     }
+    s_uart_txdrop++;
+    if ((s_uart_txdrop % 50u) == 1u) ESP_LOGW(TAG, "link tx ring full, dropped %lu frames", (unsigned long)s_uart_txdrop);
+    return 1;
 }
 
 static uint32_t link_now_ms(void)
@@ -311,6 +313,13 @@ static void link_on_down(void)
     s_reg_done = 0;
     s_reg_got = 0;
     ESP_LOGW(TAG, "link down (ARQ) -> registry resync armed");
+}
+
+/* M04-F-06：ARQ 判死之后对端的任何一帧合法帧到达 → 只报一条恢复日志（与上面那条"断"成对；
+ * 屏上那个点走的是快照新鲜度，与这里无关）。*/
+static void link_on_up(void)
+{
+    ESP_LOGW(TAG, "link up (peer frame received after ARQ failure)");
 }
 
 /* —— 组帧（MT+Seq+body → 整帧）—— */
@@ -469,7 +478,7 @@ int link_send_frame_mt(uint8_t mt, const uint8_t *pl, size_t n)
     if (mt == MT_TCS_SNAPSHOT || mt == MT_TCS_DELTA) {
         comm_send_noarq(&s_link, frame, fn);
     } else {
-        comm_send(&s_link, frame, fn, mt);
+        comm_send(&s_link, frame, fn, mt, NULL);
     }
     return 0;
 }
@@ -522,7 +531,7 @@ int link_send_cmd(uint8_t cmd)
     size_t fn = mt_frame(MT_TCS_CMD, comm_next_seq(&s_link), &cmd, 1,
                          frame, sizeof(frame));
     if (!fn) return -1;
-    comm_send(&s_link, frame, fn, MT_TCS_CMD);
+    comm_send(&s_link, frame, fn, MT_TCS_CMD, NULL);
     return 0;
 }
 
@@ -541,7 +550,7 @@ void link_request_registry(void)
     uint8_t frame[MAX_FRAME];
     size_t fn = mt_frame(MT_TCS_GET_REGISTRY, comm_next_seq(&s_link), NULL, 0,
                          frame, sizeof(frame));
-    if (fn) comm_send(&s_link, frame, fn, MT_TCS_GET_REGISTRY);
+    if (fn) comm_send(&s_link, frame, fn, MT_TCS_GET_REGISTRY, NULL);
 }
 
 bool link_alive(void)
@@ -582,6 +591,7 @@ void link_stats_get(link_stats_t *out)
     out->echo_drop = s_link.echo_cnt;
     out->wrongdir = s_link.wrongdir_cnt;
     out->tx_wrongdir = s_link.tx_wrongdir_cnt;
+    out->tx_fail = s_link.tx_fail_cnt;          /* X03-F-09：交给了驱动却没能上线的帧数 */
     out->arq_ok = (uint8_t)(s_link.link_ok ? 1u : 0u);
     out->echo_param = s_link.echo_by_mt[MT_TCS_PARAM];
     out->echo_snap  = (uint32_t)s_link.echo_by_mt[MT_TCS_SNAPSHOT] + s_link.echo_by_mt[MT_TCS_DELTA];
@@ -716,6 +726,7 @@ void link_start(void)
      * 现在断链即作废注册表收齐状态，重连后由 5s 请求/心跳自动补齐。*/
     comm_init(&s_link, link_uart_send, link_now_ms, link_on_down,
               link_crit_enter, link_crit_exit, TCS_SIDE_ESP32);
+    comm_set_on_link_up(&s_link, link_on_up);   /* M04-F-06：与 link_on_down 成对的"恢复"日志 */
 
     uart_config_t cfg = {
         .baud_rate = LINK_BAUD,
@@ -746,9 +757,10 @@ void link_start(void)
 /* ===================================================================== */
 static comm_link_t s_lbk_a, s_lbk_b;
 
-static void lbk_send_fn(const uint8_t *d, size_t n)
+static int lbk_send_fn(const uint8_t *d, size_t n)
 {
     uart_write_bytes(LINK_UART, d, n);
+    return 0;
 }
 
 typedef struct { int deliv, dups; } lbk_rx_t;
@@ -824,7 +836,7 @@ void link_loopback_run(void)
      *    （1 份交付 + 3 份被去重）；主控端自己发出的这 4 份一份也不得被当成屏帧。*/
     payload[0] = MT_TCS_GET_REGISTRY; payload[1] = 0xA7;
     fn = proto_encode_frame(payload, 2, frame, sizeof(frame));
-    comm_send(&s_lbk_b, frame, fn, MT_TCS_GET_REGISTRY);
+    comm_send(&s_lbk_b, frame, fn, MT_TCS_GET_REGISTRY, NULL);
     lbk_rx_t ra0 = ra, rb0 = rb;
     for (int i = 0; i < 22; i++) {            /* 2.2s > 500ms×3+裕量 */
         vTaskDelay(pdMS_TO_TICKS(100));

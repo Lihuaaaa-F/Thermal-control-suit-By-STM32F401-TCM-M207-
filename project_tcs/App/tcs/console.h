@@ -27,6 +27,9 @@ void console_isr_push(uint8_t b);       /* ISR：RX 单字节入环形缓冲 */
 void console_rx_complete(void);          /* RX 完成重启（main 回调转发）*/
 void console_uart_error_recover(void);   /* ORE 清标志 + 重置接收 */
 void console_poll(void);                 /* 主循环：TX 排空 + RX 行解析（命令执行）*/
+/* M03-F-04：阻塞型命令的循环体内调用——每 10ms 回到屏上的急停兜底入口（tcs_lvgl_estop_watch）。
+ * 不带屏的构建里是空操作。console.c 里是 pinscan / wdttest / p list，main.c 里是 wave 的采集循环。*/
+void console_estop_yield(void);
 
 /* 日志：同时写 RTT 与控制台 TX 环（缓冲满丢弃+计数）。prefix 如 "[APP]"。 */
 void tcs_log(const char *prefix, const char *fmt, ...);

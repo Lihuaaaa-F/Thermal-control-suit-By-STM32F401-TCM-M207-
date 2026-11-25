@@ -82,6 +82,13 @@ typedef struct {
 /* 模板格式化（纯函数）：`TC{ch}:{cmd}=%.{}f\r`。返回 0=ok，-1=cap 不足/表项非法 */
 int m207_map_format(const m207_map_entry_t *e, float v, char *out, size_t cap);
 
+/* 原始指令透传（console 调试期专用，BENCH 及以上）。指令原样入队，需要结尾的 \r 由调用方带上。
+ * 返回 0 = 已入队（还没发出：目标机上 m207_poll 每 50ms 送一条，应答见日志）；
+ * -1 = 空指令 / NULL / 队列满；-2 = 指令超过 M207_CMD_MAX 字符——不入队、不截断（M07-F-10）。
+ * 长度上限与队列在 m207_txq.h（每格 24 字节）。这一段是纯逻辑：主机单测也编译
+ * （tests/test_m207_txq.c），所以放在下面的目标机驱动段之外。*/
+int m207_send_raw(const char *cmd);
+
 /* ====== 目标机驱动（TCS_UNIT_TEST 下不编译）====== */
 #ifndef TCS_UNIT_TEST
 
@@ -102,7 +109,6 @@ void  m207_init(UART_HandleTypeDef *huart);   /* 挂 USART3 @57600 */
 void  m207_poll(uint32_t now_ms);             /* 主循环节拍调用，内部状态机 */
 int   m207_set_temp(uint8_t ch, float v);     /* 入下发队列，异步；0=ok -1=队列满/参数错 */
 int   m207_tec(uint8_t ch, uint8_t on);       /* TCx:TCSW=0/1，异步 */
-int   m207_send_raw(const char *cmd);         /* 原始指令透传（console 调试期专用）*/
 int   m207_map_set(uint16_t pid, float v);    /* H10：按映射表下发（回读确认+NAK 重发）*/
 float m207_last_temp(uint8_t ch);
 uint8_t m207_online(void);                    /* 0/1（g_tcs.m207_online 同步）*/

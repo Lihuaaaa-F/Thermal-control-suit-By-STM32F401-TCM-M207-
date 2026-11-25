@@ -74,12 +74,15 @@ set(APP_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/App/eeprom/eeprom.c
     ${CMAKE_CURRENT_SOURCE_DIR}/App/tcs/param_registry.c
     ${CMAKE_CURRENT_SOURCE_DIR}/App/tcs/m207.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/App/tcs/m207_txq.c    # M207 下发指令队列（纯逻辑，主机可测；过长指令不截断，M07-F-10）
     ${CMAKE_CURRENT_SOURCE_DIR}/App/tcs/tmp117.c
     ${CMAKE_CURRENT_SOURCE_DIR}/App/tcs/control.c
     ${CMAKE_CURRENT_SOURCE_DIR}/App/tcs/estop_gate.c      # 急停屏入口兜底判定（纯函数）
     ${CMAKE_CURRENT_SOURCE_DIR}/App/tcs/post.c
     ${CMAKE_CURRENT_SOURCE_DIR}/App/tcs/qr/qrcodegen.c
     ${CMAKE_CURRENT_SOURCE_DIR}/App/tcs/console.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/App/tcs/audit_ring.c    # 关键控制台命令的审计留痕环（纯逻辑，主机可测；M07-F-08）
+    ${CMAKE_CURRENT_SOURCE_DIR}/App/tcs/perf_hist.c     # 主循环单拍耗用的 1 秒窗口直方图（纯逻辑，主机可测；M01-F-09）
     ${CMAKE_CURRENT_SOURCE_DIR}/App/tcs/touch_session.c
 )
 

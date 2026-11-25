@@ -1,9 +1,13 @@
 # Name,     Type, SubType,  Offset,   Size,     Flags
-# 调温服 v2 分区表（任务书 §4.4：nvs 24K + otadata 8K + 双 OTA 3M + www 512K + 剩余 user）
-# otadata 8K 使 ota_0 起点让到 0x20000（app 需 0x10000 对齐）；首期只做 esp_ota 写入接口自测
+# 调温服 v2 分区表：nvs 24K + otadata 8K + 双 OTA 各 3M。
+# otadata 8K 使 ota_0 起点让到 0x20000（app 需 0x10000 对齐）；首期只做 esp_ota 写入接口自测。
+#
+# 2026-11-24（S 线，审查条目 X05-F-07）：删掉了原来的 www（spiffs 512K）与 user（fat 0x960000）两个数据分区。
+#   代码里没有任何地方挂载或读写它们——网页资源是内嵌进 app 的；现行规格说明书 v1.2 也只要求
+#   "OTA 通路已留（ESP32 双分区+网络 OTA）"，这两个分区只出现在早期任务书 v2.3/v2.4 的布局表里。
+#   它们排在最后，删掉不影响前面各分区的偏移与大小。设备下次烧录分区表后，这约 9.9 MB 成为未分配空间；
+#   原先写在那里的数据（如果有）不再可达。以后要放文件存储（日志、历史数据）再在末尾加回来。
 nvs,        data, nvs,      0x9000,   0x6000,
 otadata,    data, ota,      0xf000,   0x2000,
 ota_0,      app,  ota_0,    0x20000,  3M,
 ota_1,      app,  ota_1,    ,         3M,
-www,        data, spiffs,   ,         512K,
-user,        data, fat,      ,         0x960000,

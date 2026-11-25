@@ -16,7 +16,7 @@ EXTRA_INC=""        # run 可按用例追加 include（见下方 webstatus）
 
 cl_run() {  # cl_run <out.exe> <src...> — bat 内 cd 到 OUT，产物/对象全落 OUT
     local exe="$1"; shift
-    local cmd_line='cl /nologo /W4 /std:c11 /utf-8 /D_CRT_SECURE_NO_WARNINGS /DTCS_UNIT_TEST /I..\..\components\tcs_m207\include /I..\..\components\tcs_tmp117\include /I..\..\components\tcs_core /I..\..\components\tcs_link\include /I..\..\components\tcs_link /I..\..\components\tcs_web\include'
+    local cmd_line='cl /nologo /W4 /std:c11 /utf-8 /D_CRT_SECURE_NO_WARNINGS /DTCS_UNIT_TEST /I..\..\components\tcs_m207\include /I..\..\components\tcs_tmp117\include /I..\..\components\tcs_core /I..\..\components\tcs_core\include /I..\..\components\tcs_link\include /I..\..\components\tcs_link /I..\..\components\tcs_web\include'
     [ -n "$EXTRA_INC" ] && cmd_line="$cmd_line $EXTRA_INC"
     for s in "$@"; do
         case "$s" in
@@ -50,6 +50,8 @@ run m207golden tests/test_m207_golden.c components/tcs_m207/m207_proto.c
 run tmp117pure tests/test_tmp117_pure.c    components/tcs_tmp117/tmp117_pure.c
 run tcsproto  tests/test_tcs_proto.c
 run control   tests/test_control_esp32.c   components/tcs_core/control.c components/tcs_core/param_registry.c components/tcs_core/post_pure.c components/tcs_link/proto.c
+# S-G e3a：tcs_core 里 control.c 之外的纯逻辑（上次运行记录、安全记录 v2，以及后面本批次补的参数用例）
+run tcscore   tests/test_tcs_core.c       components/tcs_core/boot_record.c components/tcs_core/nvs_store.c
 
 # U 线 W1：网页 WS 契约（st / log 消息，真实 cJSON）
 if [ -f "$CJSON_DIR/cJSON.c" ]; then
@@ -59,6 +61,9 @@ if [ -f "$CJSON_DIR/cJSON.c" ]; then
 else
     echo "[webstatus] FAIL: IDF cJSON 源缺失（$CJSON_DIR，可用 IDF_CJSON 覆盖路径）"; FAIL=1
 fi
+
+# S-G e3a：分区表布局与现场故障证据配置的源码门禁（X04-F-03：coredump 分区 / 配置 / 现有偏移不变）
+python tests/check_layout.py || FAIL=1
 
 [ $FAIL = 0 ] && echo "esp32-tests: ALL GREEN" || echo "esp32-tests: HAS FAILURES"
 exit $FAIL

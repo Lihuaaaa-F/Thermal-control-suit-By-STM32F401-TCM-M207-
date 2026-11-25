@@ -36,6 +36,7 @@
 #include "tcs_console.h"
 #include "tcs_snap.h"
 #include "r1e_probe.h"
+#include "tcs_bootrec.h"
 
 static const char *TAG = "TCS";
 
@@ -161,14 +162,21 @@ static void esp_on_setparam(uint16_t id, float v, uint8_t seq)
     link_send_ack(seq, MT_TCS_SET_PARAM, st, param_get(id));
 }
 
-/* R1 修复 P0-08：安全锁存落 NVS（失败只记日志，不阻断控制；下次 latch 变化会重试）*/
+/* R1 修复 P0-08：安全锁存落 NVS（失败只记日志，不阻断控制；下次 latch 变化会重试）。
+ * X04-F-03：报警位随锁存一起落盘——存的是锁存变化那一刻 g_tcs.alarm_bits 的快照，
+ * 上电由 safety_state_last_alarm() 读出作证据（不回灌成实时报警）。*/
 static void safety_persist_cb(uint8_t latch)
 {
-    if (safety_state_save(latch) != 0) ESP_LOGE(TAG, "safety latch persist failed");
+    if (safety_state_save(latch, g_tcs.alarm_bits) != 0) ESP_LOGE(TAG, "safety latch persist failed");
 }
 
 void app_main(void)
 {
+    /* X04-F-03 / R5-13：第一件事。读复位原因、抄出上一轮的运行记录（RTC 慢速存储，魔数 + CRC
+     * 校验，冷上电的随机内容会被识破）、打印 [SYSTEM] 启动行，并报告 flash 里是否留着上一次
+     * 异常的 core dump。必须排在任何可能动 RTC NOINIT 段的初始化之前。*/
+    tcs_bootrec_boot();
+
     esp_err_t err = nvs_flash_init();
     if (err == ESP_ERR_NVS_NO_FREE_PAGES || err == ESP_ERR_NVS_NEW_VERSION_FOUND) {
         ESP_ERROR_CHECK(nvs_flash_erase());
@@ -239,6 +247,18 @@ void app_main(void)
         (void)m207_tec(1, 0);
         (void)m207_tec(2, 0);
         fan_set_on(1);
+    }
+    /* X04-F-03：随锁存落盘的报警位快照——上一轮出事时屏上 / 网页上亮着什么。只作证据，不回灌。*/
+    {
+        uint16_t saved_alarm = safety_state_last_alarm();
+        if (saved_alarm)
+            ESP_LOGW(TAG, "safety record: alarm snapshot at last save = 0x%04X (evidence only, not re-raised)",
+                     (unsigned)saved_alarm);
+    }
+    /* X04-F-03 / R5-13：1Hz 把运行时长 / 报警位 / 锁存 / 控制状态刷回 RTC 记录（纯 RAM 写）*/
+    {
+        esp_err_t brc = tcs_bootrec_start_refresh();
+        if (brc != ESP_OK) ESP_LOGE(TAG, "boot record refresh timer failed: %s", esp_err_to_name(brc));
     }
     tcs_console_start();
     /* R2：0x20 快照（200ms 全量，核 0）+0x21 位图增量。旧屏固件对未知消息号

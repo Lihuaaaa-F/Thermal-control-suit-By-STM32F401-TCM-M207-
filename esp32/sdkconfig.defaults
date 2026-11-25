@@ -48,3 +48,15 @@ CONFIG_ESP_TASK_WDT_TIMEOUT_S=3
 # 打开后日期、时间、路径都不再进镜像；调试需要的路径映射由构建自动写进 build/.gdbinit。
 # 现场档的 sdkconfig.site 是本地文件，要重新生成一次才带上这一项。
 CONFIG_APP_REPRODUCIBLE_BUILD=y
+
+# --- 现场故障证据（2026-11-25 S 线，审查条目 X04-F-03）---
+# 此前是 IDF 默认的 ENABLE_TO_NONE：panic / 看门狗 / 欠压复位后设备重启继续工作，事后从设备里
+# 读不到任何现场。打开后 panic 处理路径先把核心转储写进 flash 的 coredump 分区再重启。
+# 需要 partitions-16mb.csv 里有 coredump 分区。分区表是随整片烧录写入的：只经网页 OTA 升级的设备
+# 仍是旧分区表，没有这个分区——IDF 只在启动日志里报一条 "No core dump partition found"，照常运行。
+CONFIG_ESP_COREDUMP_ENABLE_TO_FLASH=y
+# 其余取 IDF 默认：ELF 格式、CRC32 校验、启动时校验、最多 64 个任务。
+# 导出用的专用栈：本工程开着 FREERTOS_TASK_CREATE_ALLOW_EXT_MEM（SPIRAM 的 Kconfig 默认带出来的），
+# IDF 据此默认启用专用栈并要求 STACK_SIZE > 0（为 0 时编译报错）。写死 1792 是把"用哪块栈跑导出"
+# 钉住，不随 Kconfig 默认值漂；代价是 1.8 KB 内部 RAM。
+CONFIG_ESP_COREDUMP_STACK_SIZE=1792

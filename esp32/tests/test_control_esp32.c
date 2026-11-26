@@ -1178,18 +1178,49 @@ int main(void)
         CHECK(control_state() == CTRL_SAFE && (control_safety_latched() & SAFETY_BIT_STUCK) != 0,
               "K9c water frozen long before TC1 turn-on trips at once");
 
-        /* K24（r7f R7-04）体温、水温同时冻住：体温先判出来（30 秒）时，水温这一路也要记进涉事通道；
-         *     体温读数恢复变化之后**不得**重开 TEC（水温仍冻着 → 48°C 硬切断对它失明），
-         *     要等水温也动了才 2 秒自愈。*/
+        /* K24（R8-02，独立复核 r8f）体温先判出来时，水温如果只是**稳态不动**（30 秒级；健康读数的常态，
+         *     F2 实测 30–53 秒）不得记进涉事通道。否则体温一恢复，2 秒自愈还要求“水温也活”，设备被按在
+         *     SAFE 里（ack 也不行），屏上报警还写错通道。r7f R7-04 原来这条用的就是 30 秒短窗口（tc1_pre）。*/
         enter_auto_healthy();
         g_tcs.body_temp = 30.0f; g_tcs.tc1_act = 25.0f;
         tick();                                           /* HEAT，TEC1 开；两路读数从此都不动 */
         CHECK(control_state() == CTRL_HEAT, "K24 precondition: HEAT with both readings frozen");
         for (int i = 0; i < 301; i++) tick100();
         CHECK(control_state() == CTRL_SAFE && (control_safety_latched() & SAFETY_BIT_STUCK) != 0,
-              "K24 both readings frozen -> STUCK");
+              "K24 frozen body reading -> STUCK");
+        CHECK(tcs_alarm_active(ALM_BODY_SENSOR) == 1, "K24 the body channel is blamed");
+        CHECK(tcs_alarm_active(ALM_SENSOR_OPEN) == 0,
+              "K24 [R8-02] a merely steady water reading is not blamed (30 s is not stuck for water)");
+        {
+            int n = 0;
+            while (control_state() == CTRL_SAFE && n < 40) {   /* 体温恢复变化、水温仍稳态 → 2 秒自愈 */
+                g_tcs.body_temp = (n & 1) ? 29.99f : 30.01f;
+                tick100();
+                n++;
+            }
+            CHECK(control_state() == CTRL_HEAT,
+                  "K24 [R8-02] the body recovering releases SAFE although the water reading stayed steady");
+        }
+
+        /* K24b（R8-02 对照）水温**真的**冻满自己的长窗口（10 分钟）：这一路仍要记进涉事通道——
+         *     体温单独恢复不得重开 TEC（对仍然冻着的水温读数，48°C 硬切断是失明的）。
+         *     时序：TEC 关着先冻 580 秒（不足长窗口，所以开沿不预判），开 TEC 后再过 30 秒水温
+         *     正好越过 600 秒 → 与体温同一拍判出。*/
+        enter_auto_healthy();
+        (void)param_set(PARAM_ID_MODE, 0.0f, 4);          /* 手动 */
+        g_tcs.tc1_act = 25.0f; tick();                    /* 水温从这里开始不动 */
+        for (int i = 0; i < 5800; i++) { g_tcs.body_temp = (i & 1) ? 36.99f : 37.01f; tick100(); }
+        CHECK(control_safety_latched() == 0, "K24b precondition: 580 s of frozen water with TEC off, no trip");
+        (void)param_set(PARAM_ID_MODE, 1.0f, 4);          /* 自动 → HEAT，TEC1 开；体温从此冻在 30 */
+        g_tcs.body_temp = 30.0f;
+        tick();
+        CHECK(control_state() == CTRL_HEAT,
+              "K24b precondition: HEAT starts (water 580 s frozen, not yet past its 10-minute window)");
+        for (int i = 0; i < 310 && control_state() == CTRL_HEAT; i++) tick100();
+        CHECK(control_state() == CTRL_SAFE && (control_safety_latched() & SAFETY_BIT_STUCK) != 0,
+              "K24b both readings frozen -> STUCK");
         CHECK(tcs_alarm_active(ALM_SENSOR_OPEN) == 1 && tcs_alarm_active(ALM_BODY_SENSOR) == 1,
-              "K24 the water channel is recorded too (ALM_SENSOR_OPEN), not only the body");
+              "K24b the water reading crossed its own 10-minute window: blamed too");
         {
             int on = 0;
             for (int i = 0; i < 60; i++) {                 /* 6 秒：体温恢复变化、水温仍冻着 */
@@ -1198,7 +1229,7 @@ int main(void)
                 if (control_tec_cmd(1) || control_tec_cmd(2)) on++;
             }
             CHECK(on == 0 && control_state() == CTRL_SAFE,
-                  "K24 the body recovering alone does not restart the TEC while the water reading is still frozen");
+                  "K24b the body recovering alone does not restart the TEC while the water is still frozen");
         }
         {
             int n = 0;
@@ -1209,7 +1240,7 @@ int main(void)
                 n++;
             }
             CHECK(control_state() == CTRL_HEAT,
-                  "K24 once the water reading moves too -> self-heals back to HEAT");
+                  "K24b once the water reading moves too -> self-heals back to HEAT");
         }
 
         /* K14 源不健康时不累计：未布防 + 模块离线 + TC1 开着 + 水温陈旧不变

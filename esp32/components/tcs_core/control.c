@@ -793,11 +793,9 @@ void control_poll(uint32_t now_ms)
         uint8_t m207_src_ok = (uint8_t)(g_tcs.m207_online && !g_tcs.m207_sensor_open);
         uint8_t tc1_stuck, body_stuck, stuck_chn;
         uint8_t tc2_stuck;                     /* r7f R7-08：TC2 那一路的水温 */
-        uint8_t tc1_pre;                       /* r7f R7-04：水温"已经冻过一个短窗口"（长窗口判据的前半）*/
         stuck_feed(&s_stuck_body, g_tcs.body_temp, now_ms, g_tcs.body_sensor_ok, 0u);
         stuck_feed(&s_stuck_tc1, g_tcs.tc1_act, now_ms, m207_src_ok, 1u);
         stuck_feed(&s_stuck_tc2, g_tcs.tc2_act, now_ms, m207_src_ok, 1u);   /* r7f R7-08；idx=1 = 水温类，与 TC1 共用最长连续时长统计 */
-        tc1_pre    = (uint8_t)(s_tec_cmd_on[0] && stuck_is(&s_stuck_tc1, now_ms, s_tec_on_since[0]));   /* r7f R7-04 */
         tc1_stuck  = (uint8_t)(s_tec_cmd_on[0] && stuck_is(&s_stuck_tc1, now_ms, s_tec_on_since[0]));   /* X03-F-08：读命令意图，不读回显 */
         tc1_stuck  = (uint8_t)(tc1_stuck && stuck_water_is(&s_stuck_tc1, now_ms));   /* 水温窗口 10 分钟（2026-11-26）*/
         tc2_stuck  = (uint8_t)(s_tec_cmd_on[1] && stuck_is(&s_stuck_tc2, now_ms, s_tec_on_since[1]));   /* r7f R7-08：TC2 命令开着 */
@@ -822,12 +820,13 @@ void control_poll(uint32_t now_ms)
         if (tc1_stuck || body_stuck || tc2_stuck) {
             if (body_stuck) tcs_alarm_raise(ALM_BODY_SENSOR);
             if (tc1_stuck || tc2_stuck)  tcs_alarm_raise(ALM_SENSOR_OPEN);   /* 两路水温共用借来的这一位 */
-            if (body_stuck && tc1_pre)   tcs_alarm_raise(ALM_SENSOR_OPEN);   /* r7f R7-04：见下面那一行 */
             SAFETY_LOCK();
+            /* R8-02（独立复核 r8f，2026-11-26）：r7f R7-04 曾在这里用 30 秒短窗口（tc1_pre）把“体温先判出来时
+             * 同拍也没动”的水温一并记进涉事通道。健康读数的稳态本来就会 30–53 秒逐位不变（真机 F2 实测），
+             * 于是体温探头一次卡死之后，设备要等**正常不动**的水温动一下才肯退出 SAFE（ack 也不行），
+             * 屏上报警还写错通道。现在只由水温自己的判据决定是否记入（长窗口 10 分钟，见 tc1_stuck /
+             * tc2_stuck）：真冻住的那一路照样记；注入档的豁免也走 tc1_stuck（stuck_src_injected(2)）。*/
             s_stuck_chn |= (uint8_t)((body_stuck ? 1u : 0u) | (tc1_stuck ? 2u : 0u) | (tc2_stuck ? 4u : 0u));
-            /* r7f（R7-04）：体温先判出来时，水温如果同拍也已经冻过一个短窗口，一并记进涉事通道——
-             * 否则体温读数一恢复，2 秒自愈就把 TEC 重开，对着一个仍冻着的水温读数。 */
-            if (body_stuck && tc1_pre) s_stuck_chn |= 2u;
             SAFETY_UNLOCK();
             safety_trip(SAFETY_BIT_STUCK);
         }

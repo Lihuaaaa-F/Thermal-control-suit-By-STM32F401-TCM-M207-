@@ -292,7 +292,7 @@ def main():
 
     # 13) S 线 i3（条目 12）：真机脚本的护栏进了仓库（site_lib.sh 的 guard / FLASH）+ 现场工具 README 有规则
     sl = read(H7, "tools", "site", "site_lib.sh")
-    for needle in ("guard() {", "FLASH() {", "REBUILT", "idf.py flash` **会先构建**"):
+    for needle in ("guard() {", "FLASH() {", "REBUILT", "**会先构建再烧**"):
         if needle not in sl:
             fails.append("project_tcs/tools/site/site_lib.sh 缺（i3）：%s" % needle)
     srd = read(H7, "tools", "site", "README.md")

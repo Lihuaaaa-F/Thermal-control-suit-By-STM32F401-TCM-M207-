@@ -41,6 +41,14 @@ PAGE_NAME = {0: "首页", 1: "调参", 2: "曲线", 3: "连接", 4: "模式"}
 PAGE_X = (0, 144, 260, 608, 376)
 PAGE_Y = (0, 520, 200, 520, 520)
 UI_CMD = {"dlg_estop": 1, "dlg_mode": 2, "dlg_close": 15}
+# 模式页（页 4）上会让执行器动作的控件（2026-11-26 量自真机截图 shots7/02_mode_manual.png）：
+# 两行"制冷 / 制热"（暂停键是关断方向，不列）、"风扇"、"切换到自动模式"。
+# 矩阵里的任何点击都不得落在这些矩形里。起因：2026-11-26 D7 第一次运行，模式页"点按"那一行用 tap(632,388) 去点确认框的"取消"，
+# 确认框已经不在了，这一下落在 TEC2"制冷"上——主控向 M207 发了一条真实的 TEC2 制冷命令（约 1 秒后被同一行的"按住 2 秒"急停关掉）。
+# 用户明确要求不做任何驱动 TEC 的操作：这类工具必须从结构上做不到，而不是靠坐标碰巧对。
+ACTUATOR_RECTS = [(504, 272, 648, 360), (848, 272, 992, 360),      # TEC1 行：制冷、制热
+                  (504, 376, 648, 464), (848, 376, 992, 464),      # TEC2 行：制冷、制热
+                  (32, 472, 264, 568), (280, 472, 744, 568)]      # 风扇、切换到自动模式
 
 
 def main():
@@ -54,10 +62,19 @@ def main():
     r32 = lambda n, k=1: mb.pr_read("b32", A[n], k)
     rows = []
 
-    def tap(x, y, mode=1):
+    def raw_tap(x, y, mode=1):
         mb.pr_write(A["g_tap_inject"] + 4, struct.pack("<III", mode, x, y))
         seq = (r32("g_tap_inject")[0] + 1) & 0xFFFFFFFF
         mb.pr_write(A["g_tap_inject"], struct.pack("<I", seq))
+
+    def tap(x, y, mode=1):
+        """在模式页（页 4）上只允许点执行器控件之外的位置；落在控件矩形里直接中止（宁可不跑，也不发执行器命令）。
+        其它页不查：同样的坐标在首页是导航键（例如 (376,520) 在首页是模式键、(608,520) 是连接键）。"""
+        if page() == 4:
+            for (x0, y0, x1, y1) in ACTUATOR_RECTS:
+                assert not (x0 <= x < x1 and y0 <= y < y1), \
+                    "要点的 (%d,%d) 落在模式页的执行器控件里，拒绝" % (x, y)
+        raw_tap(x, y, mode)
 
     def ui_cmd(n):
         mb.pr_write(A["g_ui_cmd"], struct.pack("<I", n))
@@ -122,7 +139,8 @@ def main():
         c1 = calls()
         dlg = mask() != 0
         if dlg:
-            tap(632, 388)     # 取消
+            # 关确认框用固件命令，不用坐标：坐标点击在确认框已经关掉的时候会落到下面的控件上（模式页上就是 TEC2"制冷"）
+            ui_cmd(UI_CMD["dlg_close"])
             time.sleep(0.8)
         if p == 1:            # 调参页：刚才点到的是选中行的"+"，用"−"抵消
             tap(80, 520)

@@ -6,7 +6,7 @@
   1) GET /             → 200 + gzip
   2) GET /api/registry → 含 0x100/0x101 假 M207 参数（F3）
   3) WS  /ws           → reg 推送 + demo st 推送 + set 回显(web_ack) + cmd 8/9（F2）
-  4) POST /api/ota     → 自拷贝+切换重启；rollback 参数=指回对槽（F4）
+  4) POST /api/ota?m=0 → 自拷贝+切换重启；?m=1 = 指回对槽（F4）。m 必填、只认 "0"/"1"（其余 400）
 用法：python tools/web_e2e.py [rollback]
 """
 import base64

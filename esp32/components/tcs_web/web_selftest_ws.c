@@ -310,6 +310,23 @@ int ws_selftest_ws(const char *ip, int port, int *pass, int *total, int dump)
     ws_send_masked(fd, OP_TEXT, "{\"t\":\"ping\",\"ref\":7}");
     chk(ws_expect(fd, "pong", b, sizeof b) == 0 && strstr(b, "\"ref\":7") != NULL, "ping -> pong carries ref");
 
+    /* ---- B2（S-G e3b，M14-F-11）：RFC 6455 的 PING 控制帧 → 服务端回 PONG，载荷原样带回。
+     *         控制帧由 httpd 自己应答（/ws 的 handle_ws_control_frames = false），不进 ws_on_recv。
+     *         应答之前可能还排着在途的推送帧：跳过文本帧，等第一个非文本帧。---- */
+    {
+        uint8_t pl[16];
+        size_t n = 0;
+        int op = -1;
+        ws_send_masked(fd, OP_PING, "hb");
+        for (int i = 0; i < 20; i++) {
+            n = 0;
+            op = ws_frame(fd, pl, sizeof pl, &n);
+            if (op != OP_TEXT) break;                /* PONG（0xA），或连接已断（-1）*/
+        }
+        chk(op == OP_PONG && n == 2 && memcmp(pl, "hb", 2) == 0,
+            "WS PING frame -> PONG frame with the same payload");
+    }
+
     /* ---- C：set 必回执。两个 set 都不改任何参数：
      *         第一个写回 hyst 的当前值（"值没变"也要回执）；第二个把 body_hot 写成 body_cold 的当前值
      *         （必然被"过冷阈值必须小于过热阈值"拒绝）。---- */
@@ -365,7 +382,8 @@ int ws_selftest_ws(const char *ip, int port, int *pass, int *total, int dump)
     /* ---- G：多客户端 + 不打招呼就断开（半死连接）----
      * 回环里每个客户端要占两个 socket（自己这头 + 服务端那头），lwip 的 socket 总数有限
      * （CONFIG_LWIP_MAX_SOCKETS=10，还有热点 DHCP 等在用），所以这里只开 3 个；
-     * "第 5 个被拒"在回环里造不出来（要 11 个 socket），由代码审读覆盖。---- */
+     * "第 5 个被拒"在回环里造不出来（要 11 个 socket），由代码审读覆盖，主机侧有源码门禁
+     * （esp32/tests/test_web_gates.py，S-G e3b M14-F-12）。---- */
     {
         enum { NCLI = 3 };
         int fds[NCLI], n = 0;

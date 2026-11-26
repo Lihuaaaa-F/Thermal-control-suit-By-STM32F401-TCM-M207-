@@ -35,12 +35,22 @@
 #include "m207_service.h"
 #include "softap.h"          /* 热点名/密码（设备页"如何连接"）*/
 #include "esp_netif.h"
+#include "sdkconfig.h"       /* CONFIG_LWIP_MAX_SOCKETS（下面的容量断言）*/
 
 static const char *TAG = "tcs_ws";
 
 #define WS_TICK_MS       100u     /* 采集 + 差分节拍 */
 #define WS_PUSH_MS       500u     /* 无变化时的周期推送 */
 #define WS_TX_MAX        WS_REG_BUF   /* 单帧上限（reg 全量是最大的一帧，现约 7KB）*/
+
+/* M14-F-12：三处上限必须一致，改了哪一处都要在编译期被发现（主机侧 tests/test_web_gates.py 用同样的式子再核一遍）。
+ * ① 客户端表占满时，httpd 还得给普通 HTTP 请求（取页面、/api 下的接口）留出名额；
+ * ② 与 httpd 自己的运行期检查是同一条（esp_http_server/src/httpd_main.c）：httpd 另用 3 个 socket
+ *    （监听 + 两个 UDP 控制口），加起来不能超过 lwip 的 socket 总数。*/
+_Static_assert(WS_MAX_CLIENTS + 2 <= WS_HTTPD_MAX_SOCKETS,
+               "WS client table leaves no room for plain HTTP connections");
+_Static_assert(WS_HTTPD_MAX_SOCKETS + 3 <= CONFIG_LWIP_MAX_SOCKETS,
+               "httpd sockets exceed the lwip socket table (httpd_start would fail at runtime)");
 
 static httpd_handle_t s_hd;
 static int s_fds[WS_MAX_CLIENTS];
@@ -707,12 +717,14 @@ esp_err_t ws_on_recv(httpd_req_t *req)
     }
 #if CONFIG_TCS_DIAG
     else if (strcmp(ts, "ota") == 0) {
-        /* WP-F.4：m=0 自拷贝+切换；m=1 回滚（boot 指回对槽）*/
-        extern void app_ota_trigger(int rollback);
+        /* WP-F.4：m=0 自拷贝+切换；m=1 回滚（boot 指回对槽）。实现在 main.c（组件不能依赖 main）。
+         * X03-F-12：已有一次 OTA 在进行时如实回绝；这里原先不看返回值（也没有返回值）。 */
+        extern esp_err_t app_ota_trigger(int rollback);
         const cJSON *m = cJSON_GetObjectItem(root, "m");
         int rb = (cJSON_IsNumber(m) && m->valueint == 1) ? 1 : 0;
         ESP_LOGI(TAG, "ws ota trigger rollback=%d", rb);
-        app_ota_trigger(rb);
+        if (app_ota_trigger(rb) == ESP_ERR_INVALID_STATE)
+            ws_send_str("{\"t\":\"err\",\"code\":\"server_busy\",\"msg\":\"OTA 进行中，请稍后再试\"}", fd);
     }
 #endif /* CONFIG_TCS_DIAG: ws ota */
     else {

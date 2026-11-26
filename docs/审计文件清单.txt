@@ -51,6 +51,8 @@ esp32/components/tcs_web/websocket.c
 esp32/components/tcs_wifi/include/softap.h
 esp32/components/tcs_wifi/softap.c
 esp32/main/main.c
+esp32/main/ota_pure.c
+esp32/main/ota_pure.h
 esp32/main/r1e_probe.c
 esp32/main/r1e_probe.h
 esp32/main/tcs_bootrec.c
@@ -91,10 +93,13 @@ esp32/tests/test_m207_link.c
 esp32/tests/test_m207_proto.c
 esp32/tests/test_m207_queue.c
 esp32/tests/test_m207_status.c
+esp32/tests/test_ota_pure.c
 esp32/tests/test_tcs_core.c
 esp32/tests/test_tcs_proto.c
 esp32/tests/test_tmp117_core.c
 esp32/tests/test_tmp117_pure.c
+esp32/tests/test_web_gates.py
+esp32/tests/test_web_hardening.c
 esp32/tests/test_web_status.c
 esp32/tools/fix_cr_literals.py
 esp32/tools/led_sweep.py

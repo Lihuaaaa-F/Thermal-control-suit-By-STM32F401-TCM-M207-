@@ -101,10 +101,18 @@ run linkpeer tests/test_link_peer.c components/tcs_link/comm.c components/tcs_li
 run tcscore   tests/test_tcs_core.c       components/tcs_core/boot_record.c components/tcs_core/nvs_store.c components/tcs_core/svc_status.c components/tcs_core/param_registry.c components/tcs_link/proto.c
 
 
+# S-G e3b（X03-F-12 / M08-F-12）：OTA 自拷贝的纯逻辑（main/ota_pure.c）——单实例闸门、镜像长度。
+# C11 原子操作在 MSVC 上要 /experimental:c11atomics（14.42 实测；cl_run 把 EXTRA_DEF 追加在编译命令末尾）
+EXTRA_INC="/I..\..\main"; EXTRA_DEF="/experimental:c11atomics"
+run otapure  tests/test_ota_pure.c main/ota_pure.c
+EXTRA_INC=""; EXTRA_DEF=""
+
 # U 线 W1：网页 WS 契约（st / log 消息，真实 cJSON）
 if [ -f "$CJSON_DIR/cJSON.c" ]; then
     EXTRA_INC="/I\"$(cygpath -w "$CJSON_DIR")\""
     run webstatus tests/test_web_status.c components/tcs_web/web_status.c "$CJSON_DIR/cJSON.c"
+    # S-G e3b（M14-F-13）：/api/ota 的 m 取值判定（web_status.c 的纯逻辑）
+    run webhard   tests/test_web_hardening.c components/tcs_web/web_status.c "$CJSON_DIR/cJSON.c"
     EXTRA_INC=""
 else
     echo "[webstatus] FAIL: IDF cJSON 源缺失（$CJSON_DIR，可用 IDF_CJSON 覆盖路径）"; FAIL=1
@@ -119,6 +127,11 @@ else echo "[m207gates] FAIL"; FAIL=1; fi
 # m1（模式页）：屏链路断开 3 秒 = 急停在 control_service.c 里的接线（RTOS 文件，主机编译不了）
 if command -v "$PYGATE" >/dev/null 2>&1 && "$PYGATE" -I tests/test_m1_gates.py; then :;
 else echo "[m1gates] FAIL"; FAIL=1; fi
+
+# S-G e3b：网页控制台 / OTA 加固的源码门禁（X03-F-12、M08-F-12、M14-F-13、M14-F-11、M14-F-12、M10-F-06）。
+# 这些修复落在与 IDF 绑定的代码里，主机单测够不着；同样只依赖标准库。
+if command -v "$PYGATE" >/dev/null 2>&1 && "$PYGATE" -I tests/test_web_gates.py; then :;
+else echo "[webgates] FAIL"; FAIL=1; fi
 
 # S-G e2（X06-F-05）：对端模型直驱固件内核。主机桥 = 交付固件用的同一份 m207_core.c；
 # 对端 = project_tcs/tools/m207_sim.py 的 M207Core。五行注入矩阵 + 黄金语料三方一致 + 50ms 铁律。

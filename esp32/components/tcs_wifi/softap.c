@@ -64,8 +64,10 @@ void softap_start(void)
     esp_netif_ip_info_t ip;
     esp_netif_t *netif = esp_netif_get_handle_from_ifkey("WIFI_AP_DEF");
     if (netif && esp_netif_get_ip_info(netif, &ip) == ESP_OK) {
-        ESP_LOGI(TAG, "AP \"%s\" up, IP " IPSTR " pass=%s",
-                 ssid, IP2STR(&ip.ip), pass);
+        /* M10-F-06：口令不进日志（以前是 pass=%s）。串口日志常被收进证据文档长期留存。
+         * 口令本身不是机密、NVS 也不加密——这两条写在正典《现行规格说明书》§6，量产加密列为后续项。*/
+        ESP_LOGI(TAG, "AP \"%s\" up, IP " IPSTR " pass=***",
+                 ssid, IP2STR(&ip.ip));
     }
 }
 

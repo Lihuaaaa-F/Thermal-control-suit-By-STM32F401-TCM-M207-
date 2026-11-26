@@ -95,18 +95,37 @@ static esp_err_t h_api_linkstats(httpd_req_t *req)
              : httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "json too large");
 }
 
-/* WP-F.4 OTA 触发：POST /api/ota?m=0（自拷贝+切换）/ m=1（回滚）。仅台架/出厂构建注册。*/
+/* WP-F.4 OTA 触发：POST /api/ota?m=0（自拷贝+切换）/ ?m=1（回滚）。m 必填。仅台架/出厂构建注册。*/
 #if CONFIG_TCS_DIAG
-extern void app_ota_trigger(int rollback);
+/* 实现在 main.c（组件不能依赖 main，这里只声明）。返回 ESP_OK = 已受理；
+ * ESP_ERR_INVALID_STATE = 已有一次 OTA 在进行（X03-F-12）；其余 = 这次没做成。 */
+extern esp_err_t app_ota_trigger(int rollback);
 static esp_err_t h_api_ota(httpd_req_t *req)
 {
-    char q[32] = {0};
-    int m = 0;
-    if (httpd_req_get_url_query_str(req, q, sizeof(q)) == ESP_OK && strstr(q, "m=1"))
-        m = 1;
-    app_ota_trigger(m);
+    /* M14-F-13：m 用 httpd_query_key_value 取、再精确比对（web_status.c 的 web_ota_mode_value）。
+     * 以前是 strstr(q, "m=1")：?m=10、?m=1x 也当回滚；没带 query 或 query 超过 31 字节时读取失败，
+     * 静默按 m=0 走"拷贝 + 重启"。现在取不到、或不是精确的 "0" / "1"，一律 400、什么都不做——
+     * 两种模式都会重启设备，输入不合法时不该执行任何一种。*/
+    char q[32] = {0}, val[8] = {0};
+    int m = -1;
+    if (httpd_req_get_url_query_str(req, q, sizeof(q)) == ESP_OK &&
+        httpd_query_key_value(q, "m", val, sizeof(val)) == ESP_OK)
+        m = web_ota_mode_value(val);
+    if (m < 0) {
+        httpd_resp_set_status(req, HTTPD_400);
+        httpd_resp_set_type(req, "application/json");
+        return httpd_resp_sendstr(req, "{\"t\":\"ota\",\"started\":false,\"reason\":\"bad_m\"}");
+    }
+    esp_err_t rv = app_ota_trigger(m);
     httpd_resp_set_type(req, "application/json");
-    return httpd_resp_sendstr(req, "{\"t\":\"ota\",\"started\":true}");
+    if (rv == ESP_OK)
+        return httpd_resp_sendstr(req, "{\"t\":\"ota\",\"started\":true}");
+    /* X03-F-12：并发 OTA 只跑一个。409 = 上一次还没做完（拷贝进行中，或回滚后的 1s 重启窗口里）；
+     * 500 = 这次没做成（没有对槽 / 任务或内存没申请到 / otadata 写失败）。以前不论成败都回 started:true。 */
+    httpd_resp_set_status(req, rv == ESP_ERR_INVALID_STATE ? "409 Conflict" : HTTPD_500);
+    return httpd_resp_sendstr(req, rv == ESP_ERR_INVALID_STATE
+                                    ? "{\"t\":\"ota\",\"started\":false,\"reason\":\"busy\"}"
+                                    : "{\"t\":\"ota\",\"started\":false,\"reason\":\"failed\"}");
 }
 #endif /* CONFIG_TCS_DIAG: /api/ota */
 
@@ -155,6 +174,8 @@ void web_start(void)
     httpd_config_t cfg = HTTPD_DEFAULT_CONFIG();
     cfg.max_uri_handlers = sizeof(s_uris) / sizeof(s_uris[0]) + 2;
     cfg.stack_size = 8192;
+    /* 客户端连接名额显式写出（等于 IDF 的默认值 7，行为不变）：websocket.c 里的容量断言以它为准（M14-F-12）*/
+    cfg.max_open_sockets = WS_HTTPD_MAX_SOCKETS;
     /* 连接数吃紧时挤掉最久没活动的连接。WS 会话每收到一帧推送都会刷新自己的计数
      * （websocket.c），所以先被挤的是半死的普通 HTTP 连接，不是正在看页面的手机。*/
     cfg.lru_purge_enable = true;

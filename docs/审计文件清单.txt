@@ -215,8 +215,12 @@ project_tcs/Core/Src/main.c
 project_tcs/Core/Src/stm32h7xx_hal_msp.c
 project_tcs/Core/Src/stm32h7xx_it.c
 project_tcs/Core/Src/syscalls_stub.c
+project_tcs/tests/assert_count.py
+project_tcs/tests/check_build_scripts.py
 project_tcs/tests/check_estop_yield.py
+project_tcs/tests/check_site_tap_guard.py
 project_tcs/tests/check_snap_fresh.py
+project_tcs/tests/check_tautology.py
 project_tcs/tests/fuzz_m207.c
 project_tcs/tests/mutation_audit_ring.py
 project_tcs/tests/mutation_estop_gate.py
@@ -250,6 +254,7 @@ project_tcs/tests/test_proto_tcs.c
 project_tcs/tests/test_qr.c
 project_tcs/tests/test_site_logic.c
 project_tcs/tests/test_snap_fresh.c
+project_tcs/tests/test_tap_guard.py
 project_tcs/tests/test_touch_session.c
 project_tcs/tests/test_ui_known.c
 project_tcs/tests/test_ui_mismatch.c

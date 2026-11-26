@@ -270,7 +270,10 @@ static void safety_trip(uint8_t bit)
      * 本轮 SAFE 不得复原 TEC2。在这里统一作废，调用方（poll、cmd 8/11、M207 任务里的
      * 超温置位）不必各自记，也不必等到下一拍。*/
     if (bit & (uint8_t)~SAFETY_BIT_BODY_LOST) s_restore_tec2_ok = 0;
-    if (changed) safety_persist_now();   /* 锁外取最新值落盘（N-04） */
+    /* R9-04（独立复核 R9，2026-11-26）：只在"落盘视图真的变了"时写。STUCK 不在 SAFETY_PERSIST_MASK
+     * 里，一个只含 STUCK 的 trip 原先也会把同一个值（不变量）再写一遍 NVS——操作员连点"解除"时
+     * ack+重锁的写放大就是这么来的（每对 2 次写；10 Hz 一小时 72k 次，8 字节 blob 也在磨损均衡下）。*/
+    if (changed && (bit & SAFETY_PERSIST_MASK)) safety_persist_now();   /* 锁外取最新值落盘（N-04） */
 }
 
 static void safety_set_ok(uint8_t bit, uint8_t ok)
@@ -293,7 +296,7 @@ static uint8_t commissioned(void);   /* 定义在下方"控制节拍"附近；�
  * 判别性用例：tests/test_control_esp32.c 的 N1–N4（N1/N3/N4 的解除断言在旧实现上必红）。*/
 static void safety_ack_latched(void)
 {
-    uint8_t lat, ok, drop, after, need;
+    uint8_t lat, ok, drop, after, need, view_changed;
     /* 布防态在锁外读：post 三态机有自己的状态，不在安全锁里调别的模块。*/
     need = (uint8_t)(commissioned() ? SAFETY_SENSOR_MASK
                                     : (SAFETY_SENSOR_MASK & (uint8_t)~SAFETY_BIT_BODY_LOST));
@@ -307,8 +310,10 @@ static void safety_ack_latched(void)
     }
     s_safety_latch = (uint8_t)(lat & (uint8_t)~drop);
     if (!(s_safety_latch & SAFETY_BIT_STUCK)) s_stuck_chn = 0;   /* 涉事通道随锁存位一起清 */
+    view_changed = (uint8_t)(((lat ^ s_safety_latch) & SAFETY_PERSIST_MASK) != 0u);
     SAFETY_UNLOCK();
-    if (drop) safety_persist_now();      /* N-04：写当前值，不会用旧快照覆盖并发 trip */
+    /* R9-04：清掉的只有 STUCK（不落盘）时不产生 NVS 写——写进去的值和原来逐位一样。*/
+    if (drop && view_changed) safety_persist_now();      /* N-04：写当前值，不会用旧快照覆盖并发 trip */
 }
 
 /* ====== 内部输出封装（同步 g_tcs 快照 + 钩子）====== */

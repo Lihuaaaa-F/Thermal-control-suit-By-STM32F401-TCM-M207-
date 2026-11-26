@@ -59,7 +59,8 @@ static uint8_t stub_exempt(uint8_t ch)
 
 /* P0-08 持久化钩子桩（文件作用域：MSVC 不支持嵌套函数定义）*/
 static uint8_t s_persisted;
-static void    persist_cb(uint8_t latch) { s_persisted = latch; }
+static int     s_persist_calls;          /* R9-04：落盘次数（只含 STUCK 的锁存不该产生写）*/
+static void    persist_cb(uint8_t latch) { s_persisted = latch; s_persist_calls++; }
 static uint8_t load_cb(void)             { return SAFETY_BIT_ESTOP; }
 /* S 线 e3a（卡死判据）用：上电无锁存 / 存储里留着 STUCK 位 */
 static uint8_t load0_cb(void)            { return 0; }
@@ -1283,6 +1284,31 @@ int main(void)
             }
             CHECK(control_state() == CTRL_HEAT, "K26 once the water reading moves too -> self-heals back to HEAT");
         }
+
+        /* K28（R9-04，独立复核 R9）只含 STUCK 的锁存不落盘（STUCK 不在 SAFETY_PERSIST_MASK 里）：
+         *     trip 与 ack 都不该产生 NVS 写——写进去的值和原来逐位一样。操作员连点"解除"时的
+         *     写放大（ack + 重锁 = 2 次写/对）就是靠这一条与 R9-01 的 link_down 回绝一起消掉的。*/
+        control_init(&(control_ops_t){
+            .fan_set = stub_fan, .tec_sw = stub_tec, .tec_temp = stub_temp,
+            .on_state = 0, .safety_persist = persist_cb, .safety_load = load0_cb,
+        });
+        param_registry_init(&(param_hooks_t){0});
+        set_armed(1);
+        g_tcs.body_sensor_ok = 1; g_tcs.m207_online = 1; g_tcs.m207_sensor_open = 0;
+        g_tcs.body_temp = 30.0f; g_tcs.tc1_act = 25.0f;
+        s_now = 10000u;
+        (void)param_set(PARAM_ID_MODE, 1.0f, 4);
+        tick();
+        s_persist_calls = 0;
+        for (int i = 0; i < 301; i++) tick100();
+        CHECK((control_safety_latched() & SAFETY_BIT_STUCK) != 0, "K28 precondition: STUCK latched");
+        CHECK(s_persist_calls == 0, "K28 [R9-04] tripping a STUCK-only latch writes nothing");
+        g_tcs.body_temp = 30.5f;                          /* 读数动一下 → stuck_recovered 成立 */
+        tick100();
+        s_persist_calls = 0;
+        tcs_alarm_ack();
+        CHECK(control_safety_latched() == 0, "K28 precondition: the ack cleared the STUCK latch");
+        CHECK(s_persist_calls == 0, "K28 [R9-04] clearing a STUCK-only latch writes nothing either");
 
         /* K14 源不健康时不累计：未布防 + 模块离线 + TC1 开着 + 水温陈旧不变
          *     → 走既有失联路径，不报卡死（离线不是"读数冻结"）*/

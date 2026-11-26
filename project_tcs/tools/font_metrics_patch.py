@@ -77,9 +77,14 @@ def parse_font(text):
     lh = re.search(r"\.line_height\s*=\s*(\d+)", text)
     if not lh:
         raise SystemExit("找不到 .line_height（字号以它为准，不能拿第 1 个字形的位图宽凑）")
+    bp = re.search(r"\.bpp\s*=\s*(\d+)", text)
+    bpp = int(bp.group(1)) if bp else 1
+    if bpp not in (1, 4, 8):
+        raise SystemExit("不支持的 bpp=%d（只有 1/4/8 的 PLAIN 解码）" % bpp)
     return {
         "range_start": base,
         "line_height": int(lh.group(1)),      # 字号（em）：字表自己声明的行高
+        "bpp": bpp,
         # SPARSE_TINY：第 k 个码点 = range_start + unicode_list_0[k]，对应字形下标 k+1
         "cps": [base + v for v in parse_int_list(text, "unicode_list_0")],
         "bitmap": parse_int_list(text, "glyph_bitmap"),
@@ -92,13 +97,21 @@ def ink_of(font, row):
     bidx, _adv, bw, bh, _ox, _oy = row
     if bw <= 0 or bh <= 0:
         return None
-    rb = (bw + 7) // 8
+    bpp = font.get("bpp", 1)
+    rb = (bw * bpp + 7) // 8
     left, right = None, None
     for y in range(bh):
         base = bidx + y * rb
         rowbits = font["bitmap"][base:base + rb]
         for x in range(bw):
-            if (rowbits[x >> 3] >> (7 - (x & 7))) & 1:
+            if bpp == 1:
+                on = (rowbits[x >> 3] >> (7 - (x & 7))) & 1
+            elif bpp == 4:
+                b = rowbits[x >> 1]
+                on = (b >> 4) if (x & 1) == 0 else (b & 0xF)
+            else:
+                on = rowbits[x]
+            if on:
                 if left is None or x < left:
                     left = x
                 if right is None or x + 1 > right:

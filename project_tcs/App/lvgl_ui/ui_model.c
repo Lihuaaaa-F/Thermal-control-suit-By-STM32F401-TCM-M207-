@@ -393,14 +393,14 @@ uint32_t ui_mode_diff(const ui_mode_state_t *was, const ui_mode_state_t *now)
     return m;
 }
 
-int ui_mode_btn_style(const ui_mode_state_t *s, ui_tec_dir_t btn)
+int ui_mode_btn_style(const ui_mode_state_t *s, int ch, ui_tec_dir_t btn)
 {
-    uint8_t i;
     if (s->link != UI_LINK_UP) return UI_MD_BTN_OFF;
-    /* 高亮的是主控回读里"当前生效"的那个方向；通道开着但不是模式页设的 → 三个都不高亮 */
-    for (i = 0; i < 2u; i++)
-        if (s->dir[i] == btn) return UI_MD_BTN_ON;
-    return UI_MD_BTN_NORMAL;
+    if (ch < 0 || ch > 1) return UI_MD_BTN_NORMAL;
+    /* 高亮的是这一路主控回读里"当前生效"的方向；通道开着但不是模式页设的 → 三个都不高亮。
+     * 2026-11-27 用户现场（U1）：原实现是两路共用循环，TEC1 暂停而 TEC2 制冷时
+     * TEC1 的"制冷"键也被点亮——改为只看本路。*/
+    return (s->dir[ch] == btn) ? UI_MD_BTN_ON : UI_MD_BTN_NORMAL;
 }
 
 const char *ui_mode_dir_text(ui_tec_dir_t d)

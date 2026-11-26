@@ -36,7 +36,7 @@ void tui_input_refresh(void) { input_refresh(); }
 /* ---- 横幅 ---- */
 #define BN_X      208
 #define BN_W      440      /* 右边给顶栏状态条留出 660..1000 */
-#define BN_H      56
+#define BN_H      60      /* U4：24px 字库行高 28 → 两行 56 + 上下 4 */
 static ui_banner_t s_bn;
 static uint8_t     s_bn_have;
 static lv_obj_t *  s_bn_layer;
@@ -192,28 +192,29 @@ static void banner_tap(lv_event_t *e)
 
 static void banner_build(const ui_banner_t *b)
 {
-    /* 首页占顶栏槽位（y=8）；二级页顶栏被"返回/标题/状态条"占着，横幅落在其下方（y=64）*/
-    int dy = (s_page == TUI_HOME) ? 0 : 56;
+    /* 首页占顶栏槽位（y=6，高 60）；二级页顶栏被"返回/标题/状态条"占着，横幅落在其下方（y=64）。
+     * U4（2026-11-27）：24px 字库行高 24→28 后两行正好 56，上下各留 2px。*/
+    int y0 = (s_page == TUI_HOME) ? 6 : 64;
     lv_color_t bg = b->red ? TKS_ALMBG : TKS_WARNBG;
     lv_color_t tx = b->red ? TKS_ALMTX : TKS_WARNTX;
     s_bn_layer = ui_box(s_scr, 0, 0, 1024, 600, TKS_BG, 0);
     lv_obj_set_style_bg_opa(s_bn_layer, LV_OPA_TRANSP, 0);
     lv_obj_set_clickable(s_bn_layer, false);
-    lv_obj_t *box = ui_box(s_bn_layer, BN_X, 8 + dy, BN_W, BN_H, bg, 12);
+    lv_obj_t *box = ui_box(s_bn_layer, BN_X, y0, BN_W, BN_H, bg, 12);
     lv_obj_set_clickable(box, true);
     lv_obj_add_event_cb(box, banner_tap, LV_EVENT_CLICKED, NULL);
-    if (b->red) ui_icon_sq20(s_bn_layer, BN_X + 18, 26 + dy, tx);
-    else        ui_icon_tri20(s_bn_layer, BN_X + 18, 26 + dy, tx, bg);
-    ui_text24(s_bn_layer, BN_X + 50, 12 + dy, b->title, tx);
-    s_bn_detail = ui_text24(s_bn_layer, BN_X + 50, 38 + dy, b->detail, tx);
+    if (b->red) ui_icon_sq20(s_bn_layer, BN_X + 18, y0 + 20, tx);
+    else        ui_icon_tri20(s_bn_layer, BN_X + 18, y0 + 20, tx, bg);
+    ui_text24(s_bn_layer, BN_X + 50, y0 + 4, b->title, tx);
+    s_bn_detail = ui_text24(s_bn_layer, BN_X + 50, y0 + 32, b->detail, tx);
     if (b->extra) {
         /* "还有 N 条"：放第一行右端（标题都短，第二行留给说明）*/
         char cnt[24];
         snprintf(cnt, sizeof(cnt), "还有%d条", b->extra);
         int cw = ui_text24_w(cnt) + 16;
         int cx0 = BN_X + BN_W - cw - 12;
-        ui_outline(s_bn_layer, cx0, 12 + dy, cx0 + cw - 1, 32 + dy, tx);
-        ui_text24(s_bn_layer, cx0 + 8, 10 + dy, cnt, tx);
+        ui_outline(s_bn_layer, cx0, y0 + 4, cx0 + cw - 1, y0 + 36, tx);
+        ui_text24(s_bn_layer, cx0 + 8, y0 + 4, cnt, tx);
     }
 }
 

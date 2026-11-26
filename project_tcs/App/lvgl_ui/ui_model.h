@@ -198,11 +198,12 @@ ui_tec_dir_t ui_mode_dir_of(uint8_t d);
 void         ui_mode_state(const ui_in_t *in, const ui_link_view_t *lv, ui_mode_state_t *out);
 uint32_t     ui_mode_diff(const ui_mode_state_t *was, const ui_mode_state_t *now);   /* 位或：UI_M_* */
 
-/* 方向键的样式 */
+/* 方向键的样式。ch = 0/1 指定哪一路——每路只看自己的方向（2026-11-27 用户现场：
+ * TEC1 暂停而 TEC2 制冷时，TEC1 的"制冷"键曾被另一路点亮；原实现两路共用一个循环）*/
 #define UI_MD_BTN_NORMAL  0     /* 普通样式 */
 #define UI_MD_BTN_ON      1     /* 当前生效的方向：高亮 */
 #define UI_MD_BTN_OFF     2     /* 主控断开：置灰不可点 */
-int ui_mode_btn_style(const ui_mode_state_t *s, ui_tec_dir_t btn);
+int ui_mode_btn_style(const ui_mode_state_t *s, int ch, ui_tec_dir_t btn);
 
 /* 一行的状态文字："暂停" / "制冷中" / "制热中" / "输出中" / "未知" */
 const char *ui_mode_dir_text(ui_tec_dir_t d);

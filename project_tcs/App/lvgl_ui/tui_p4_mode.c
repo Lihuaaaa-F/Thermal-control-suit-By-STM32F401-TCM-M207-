@@ -10,8 +10,9 @@
  * 按钮高亮以主控回读的实际输出为准（快照里的 tec_dir），不抢先高亮。
  *
  * 版面（1024×600，8px 网格）：顶栏 0–64；横幅位 64–120（版面给它留着，内容从 128 起，不用挪）；
- * 温度卡 y 128–256；TEC 两行 y 272–360 / 376–464（信息卡 x 32–488，三个键 x 504 / 676 / 848、宽 144）；
- * 底栏 y 472–568：风扇 32–264，切换模式 280–744，急停与首页同位同尺寸（TUI_ESTOP_*）。 */
+ * 温度卡 y 128–256；TEC 两行 y 268–348 / 364–444（信息卡 x 32–488，三个键 x 504 / 676 / 848、宽 144、高 80）；
+ * 底栏 y 472–568：风扇 32–264，切换模式 280–744，急停与首页同位同尺寸（TUI_ESTOP_*，顶 464）。
+ * 2026-11-27（U2 用户现场）：TEC 行高度 88→80、整体上移 4/12px，TEC2 键底 444 与急停顶 464 之间留 20px。 */
 #include "tui.h"
 #include "ui_common.h"
 #include "control.h"
@@ -26,8 +27,8 @@
 #define CARD_H       128
 #define TCARD_W      304
 #define TCARD_X(i)   (32 + (i) * 328)          /* 32 / 360 / 688 */
-#define TEC_Y(i)     (272 + (i) * 104)         /* 272 / 376 */
-#define TEC_H        88
+#define TEC_Y(i)     (268 + (i) * 96)          /* 268 / 364（U2：与底部三键留出 20px）*/
+#define TEC_H        80
 #define INFO_X       32
 #define INFO_W       456                       /* 手动：32..488 */
 #define INFO_W_AUTO  960                       /* 自动：整行 32..992 */
@@ -56,7 +57,7 @@ typedef struct {
 } tecrow_t;
 
 static struct {
-    ui_button_t top_switch, fan, bottom_switch, estop;
+    ui_button_t fan, bottom_switch, estop;
     tcard_t  tc[3];
     tecrow_t tec[2];
     ui_mode_state_t st;              /* 上次画上去的状态（diff 的基准）*/
@@ -170,10 +171,10 @@ static void clk_switch(lv_event_t *e)
 
 /* ================= 就地绘制 ================= */
 
-static int key_style(const ui_mode_state_t *s, int k)
+static int key_style(const ui_mode_state_t *s, int ch, int k)
 {
     ui_tec_dir_t d = (k == 0) ? UI_TD_COOL : (k == 1) ? UI_TD_PAUSE : UI_TD_HEAT;
-    switch (ui_mode_btn_style(s, d)) {
+    switch (ui_mode_btn_style(s, ch, d)) {
         case UI_MD_BTN_ON:  return (k == 0) ? UI_BTN_ON_COOL : (k == 1) ? UI_BTN_ON_PAUSE : UI_BTN_ON_HEAT;
         case UI_MD_BTN_OFF: return UI_BTN_DISABLED;
         default:            return UI_BTN_PRIMARY;
@@ -198,7 +199,7 @@ static void paint_tec(int i, const ui_mode_state_t *s)
     ui_lab_set(r->status, ui_mode_dir_text(d));
     set_color(r->status, dir_color(d));
     if (H.manual)
-        for (int k = 0; k < 3; k++) ui_button_set_style(&r->key[k], key_style(s, k));
+        for (int k = 0; k < 3; k++) ui_button_set_style(&r->key[k], key_style(s, i, k));
 }
 
 static void paint_fan(const ui_mode_state_t *s)
@@ -212,10 +213,9 @@ static void paint_switch(const ui_mode_state_t *s)
 {
     uint8_t on = (uint8_t)(s->link == UI_LINK_UP);
     int style = on ? UI_BTN_PRIMARY : UI_BTN_DISABLED;
-    ui_button_set_style(&H.top_switch, style);
+    /* U5（2026-11-27 用户现场）：顶栏那个重复的"切换到自动 ›"已删，只保留底栏大键 */
     ui_button_set_style(&H.bottom_switch, style);
     if (!on) return;                          /* 断链：文字保持上一次的 */
-    ui_button_set_text(&H.top_switch, s->manual ? "切换到自动 ›" : "切换到手动 ›");
     ui_button_set_text(&H.bottom_switch, s->manual ? "切换到自动模式" : "切换到手动模式");
 }
 
@@ -314,7 +314,6 @@ void tui_p4_build(lv_obj_t *scr)
 
     ui_button(scr, 24, 8, 120, 40, "‹ 返回", UI_BTN_GHOST, &tcs_font_lv24, clk_back, NULL);
     ui_text32(scr, 176, 16, H.manual ? "手动模式" : "自动模式", TKS_TX);
-    H.top_switch = ui_button(scr, 456, 8, 216, 40, "", UI_BTN_PRIMARY, &tcs_font_lv24, clk_switch, NULL);
 
     /* 三张温度卡：整卡可点 → 曲线页 */
     for (int i = 0; i < 3; i++) {
@@ -333,9 +332,9 @@ void tui_p4_build(lv_obj_t *scr)
         r->right = INFO_X + w - PAD;
         ui_card(scr, INFO_X, TEC_Y(i), w, TEC_H, TKS_CARD, TKS_BORDER);
         ui_text24(scr, INFO_X + PAD, TEC_Y(i) + 14, i ? "TEC2" : "TEC1", TKS_TX);
-        r->status = value_label(scr, INFO_X + PAD, TEC_Y(i) + 50, TKS_GRAY, &tcs_font_lv24, "");
+        r->status = value_label(scr, INFO_X + PAD, TEC_Y(i) + 48, TKS_GRAY, &tcs_font_lv24, "");
         r->power  = value_label(scr, r->right - 200, TEC_Y(i) + 12, TKS_GRAY, &tcs_font_lv32, "");
-        r->vi     = value_label(scr, r->right - 200, TEC_Y(i) + 54, TKS_GRAY, &tcs_font_lv24, "");
+        r->vi     = value_label(scr, r->right - 200, TEC_Y(i) + 50, TKS_GRAY, &tcs_font_lv24, "");
     }
     for (int i = 0; i < 2 && H.manual; i++)
         for (k = 0; k < 3; k++)

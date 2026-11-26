@@ -22,7 +22,7 @@
 #define PLOT_Y   116
 #define PLOT_W   888
 #define PLOT_H   376
-#define Y_MAX    60                  /* 纵轴 0..60°C：水温全量程，阈值线在图内 */
+#define Y_MAX    50                  /* 纵轴 0..50°C（U3 用户 2026-11-27：50 就够），阈值线在图内 */
 #define THRESH_C ((int)ALM_OVERTEMP_HARD_C)   /* 图上那条线就是固件的硬切断阈值，不另立口径 */
 
 static lv_obj_t *s_chart, *s_over, *s_v1, *s_v2, *s_now, *s_v3;
@@ -63,7 +63,7 @@ static void redraw_series(uint32_t n, uint32_t total)
         }
         lv_chart_set_value_by_id(s_chart, s_ser1, (uint16_t)i, v1);
         lv_chart_set_value_by_id(s_chart, s_ser2, (uint16_t)i, v2);
-        /* m1（模式页）：体温线。探头没接 / 失联的格子是 NaN，同样断开；体温 35–40 落在 0–60 纵轴的上部 */
+        /* m1（模式页）：体温线。探头没接 / 失联的格子是 NaN，同样断开；体温 35–40 落在 0–50 纵轴的上部 */
         if (k >= 0 && s_hb[k] >= 0.0f)
             lv_chart_set_value_by_id(s_chart, s_ser3, (uint16_t)i, (int)(s_hb[k] + 0.5f));
         else
@@ -99,8 +99,8 @@ void tui_p2_build(lv_obj_t *scr)
     legend(body, PLOT_X + 300, TKS_TX2, "环境水箱", &s_v2);
     legend(body, PLOT_X + 600, TKS_YELLOW, "体温", &s_v3);   /* m1（模式页）：体温卡点进来也有曲线 */
 
-    /* 纵轴刻度：0 / 15 / 30 / 45 / 60 */
-    for (int v = 0; v <= Y_MAX; v += 15) {
+    /* 纵轴刻度：0 / 10 / 20 / 30 / 40 / 50（U3）*/
+    for (int v = 0; v <= Y_MAX; v += 10) {
         char t[8];
         snprintf(t, sizeof t, "%d", v);
         ui_aux20(body, PLOT_X - 12 - ui_aux20_w(t), y_of(v) - 14, t, TKS_TX2);
@@ -128,7 +128,7 @@ void tui_p2_build(lv_obj_t *scr)
     lv_chart_set_type(s_chart, LV_CHART_TYPE_LINE);
     lv_chart_set_point_count(s_chart, HIST_N);
     lv_chart_set_range(s_chart, LV_CHART_AXIS_PRIMARY_Y, 0, Y_MAX);
-    lv_chart_set_div_line_count(s_chart, Y_MAX / 15 - 1, 0);
+    lv_chart_set_div_line_count(s_chart, Y_MAX / 10 - 1, 0);
     lv_obj_set_style_bg_opa(s_chart, LV_OPA_TRANSP, 0);
     lv_obj_set_style_border_width(s_chart, 0, 0);
     lv_obj_set_style_pad_all(s_chart, 0, 0);

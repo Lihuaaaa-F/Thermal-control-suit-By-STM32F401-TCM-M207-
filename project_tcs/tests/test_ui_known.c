@@ -87,7 +87,7 @@ int main(void)
           "mode: an unknown channel shows UNKNOWN; a known one keeps its direction");
     STREQ(ui_mode_dir_text(m.dir[0]), "未知", "mode: text for an unknown channel is '未知', not '暂停'");
     STREQ(ui_mode_dir_text(m.dir[1]), "制冷中", "mode: the known channel still reads its direction");
-    CHECK(ui_mode_btn_style(&m, UI_TD_HEAT) == UI_MD_BTN_NORMAL,
+    CHECK(ui_mode_btn_style(&m, 0, UI_TD_HEAT) == UI_MD_BTN_NORMAL,
           "mode: nothing is highlighted for an unknown channel (the last direction is not 'current')");
     in.tec_known = 0x01u;
     ui_mode_state(&in, &lv, &m);

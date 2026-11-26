@@ -590,20 +590,29 @@ int main(void)
         in.mode = 0; in.dir1 = TCS_TEC_DIR_COOL; in.dir2 = TCS_TEC_DIR_EXT; in.tec_valid = 0;
         v = ui_link_view(&in);
         ui_mode_state(&in, &v, &m1);
-        CHECK(ui_mode_btn_style(&m1, UI_TD_COOL) == UI_MD_BTN_ON
-              && ui_mode_btn_style(&m1, UI_TD_PAUSE) == UI_MD_BTN_NORMAL
-              && ui_mode_btn_style(&m1, UI_TD_HEAT) == UI_MD_BTN_NORMAL, "F7 制冷中：只有'制冷'高亮");
+        CHECK(ui_mode_btn_style(&m1, 0, UI_TD_COOL) == UI_MD_BTN_ON
+              && ui_mode_btn_style(&m1, 0, UI_TD_PAUSE) == UI_MD_BTN_NORMAL
+              && ui_mode_btn_style(&m1, 0, UI_TD_HEAT) == UI_MD_BTN_NORMAL, "F7 制冷中：只有'制冷'高亮");
+        /* U1（2026-11-27 用户现场）：两路必须分开判——TEC1 暂停、TEC2 制冷时，
+         * TEC1 的"制冷"键不得因另一路而高亮 */
+        in.dir1 = TCS_TEC_DIR_PAUSE; in.dir2 = TCS_TEC_DIR_COOL;
+        ui_mode_state(&in, &v, &m1);
+        CHECK(ui_mode_btn_style(&m1, 0, UI_TD_PAUSE) == UI_MD_BTN_ON
+              && ui_mode_btn_style(&m1, 0, UI_TD_COOL)  == UI_MD_BTN_NORMAL
+              && ui_mode_btn_style(&m1, 1, UI_TD_COOL)  == UI_MD_BTN_ON
+              && ui_mode_btn_style(&m1, 1, UI_TD_PAUSE) == UI_MD_BTN_NORMAL,
+              "F7b 高亮按通道分开：TEC1 暂停不被 TEC2 制冷点亮");
         in.dir1 = TCS_TEC_DIR_EXT;                 /* 通道开着，但不是模式页设的：三个键都不高亮 */
         ui_mode_state(&in, &v, &m1);
-        CHECK(ui_mode_btn_style(&m1, UI_TD_PAUSE) == UI_MD_BTN_NORMAL
-              && ui_mode_btn_style(&m1, UI_TD_COOL) == UI_MD_BTN_NORMAL
-              && ui_mode_btn_style(&m1, UI_TD_HEAT) == UI_MD_BTN_NORMAL, "F7 网页直控开着：三个键都不高亮");
+        CHECK(ui_mode_btn_style(&m1, 0, UI_TD_PAUSE) == UI_MD_BTN_NORMAL
+              && ui_mode_btn_style(&m1, 0, UI_TD_COOL) == UI_MD_BTN_NORMAL
+              && ui_mode_btn_style(&m1, 0, UI_TD_HEAT) == UI_MD_BTN_NORMAL, "F7 网页直控开着：三个键都不高亮");
         in.snap_age_ms = 9000u;
         v = ui_link_view(&in);
         ui_mode_state(&in, &v, &m1);
-        CHECK(ui_mode_btn_style(&m1, UI_TD_COOL) == UI_MD_BTN_OFF
-              && ui_mode_btn_style(&m1, UI_TD_PAUSE) == UI_MD_BTN_OFF
-              && ui_mode_btn_style(&m1, UI_TD_HEAT) == UI_MD_BTN_OFF, "F7 主控断开：三个键都置灰");
+        CHECK(ui_mode_btn_style(&m1, 0, UI_TD_COOL) == UI_MD_BTN_OFF
+              && ui_mode_btn_style(&m1, 0, UI_TD_PAUSE) == UI_MD_BTN_OFF
+              && ui_mode_btn_style(&m1, 0, UI_TD_HEAT) == UI_MD_BTN_OFF, "F7 主控断开：三个键都置灰");
 
         /* F8 状态文字 */
         STREQ(ui_mode_dir_text(UI_TD_PAUSE), "暂停", "F8 暂停");

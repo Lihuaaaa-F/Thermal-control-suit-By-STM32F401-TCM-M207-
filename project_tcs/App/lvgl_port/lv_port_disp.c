@@ -1,17 +1,25 @@
-/* lv_port_disp.c — G4-Z21b：PARTIAL 渲染 + 隐藏帧 memcpy + VBR 上屏
+/* lv_port_disp.c — PARTIAL 渲染 + 脏区双写两块帧缓冲（G4-Z21b 起）
  *
- * 实证（G4-Z21 前身）：LVGL v9.6 DIRECT 双缓冲不交替渲染目标（g_shown_fb 钉死
- * buf1）→ 每帧渲染落进正被 LTDC 扫描的缓冲=滑动/动画闪频真根因（用户目检+probe
- * 双证据）。本模式为 MCU 标准无撕裂画法：
- *   LVGL 渲染 → AXI 小块（不碰 fb）→ flush 逐行 memcpy 进「隐藏帧」→
- *   末次 flush 触发 VBR 上屏（消隐期重载，无撕裂）→ 隐藏/显示角色互换。
+ * 机制（2026-11-27 按 M03-F-06 校正，与代码一致）：
+ *   LVGL PARTIAL 只把脏区渲染进 SDRAM 里的 chunk（CHUNK_BUF，不碰帧缓冲）→
+ *   flush_cb 按脏区逐行 memcpy 进 FRONT/BACK **两块**帧缓冲 → flush_ready。
+ *   LTDC 始终扫描 FRONT（ltdc.c 初始化时设死），BACK 保持逐字节一致
+ *   （fb_dump/工具与任何翻转路径读哪块都对）。本文件**没有** VBR / 隐藏帧
+ *   翻转路径：早期设计（渲染进隐藏帧、末次 flush 在消隐期切 CFBAR）已随
+ *   LVGL 迁移废弃，相关 static 指针 s_hidden 于 2026-11-24 删除（S 线 C01）。
+ * 为什么这样：LVGL v9.6 DIRECT 双缓冲不交替渲染目标（渲染目标钉死 buf1）→
+ * 每帧渲染落进正被 LTDC 扫描的缓冲=滑动/动画闪频真根因（用户目检+probe 双
+ * 证据）。PARTIAL 把渲染目标与帧缓冲解耦（渲染进 chunk），脏区再双写回两块
+ * 帧缓冲；这是 2026-11-23 起现场验收通过的显示路径（整页/局部刷新均正常）。
  * 帧缓冲零 CPU 读（写入直透 SDRAM），无 cache 维护需求（init 处防御性清一次）。 */
 #include "lv_port_disp.h"
 #include "ltdc.h"
 #include "stm32h7xx_hal.h"
 #include <string.h>
 
-extern volatile uint32_t g_shown_fb;          /* ltdc.c：当前显示帧地址（fb_dump 同源） */
+/* M03-F-06 清理（2026-11-27）：这里原有一行未使用的 extern g_shown_fb 声明
+ * （旧 VBR 方案遗留，本文件无读者）。显示帧地址以 ltdc.c 的 g_shown_fb 为准，
+ * fb_dump 等工具经 nm 直读，不需要本文件的声明。 */
 
 /* G5-Z27（终极正解）：chunk 放 SDRAM 空闲区并扩为整屏高——任何刷新 area 永不
  * 被 chunk 行数截断（此前 60 行 chunk 遇大 area 时，超出行把 chunk 后的 AXIRAM
@@ -20,7 +28,7 @@ extern volatile uint32_t g_shown_fb;          /* ltdc.c：当前显示帧地址�
 #define CHUNK_BUF ((uint16_t *)0xC0258000)       /* 两块 fb(2×1.2MB) 之后的 1.2MB 空闲 */
 #define CHUNK_LINES 600
 /* 2026-11-24（S 线 C01）：这里原有一个从未被使用的 static 指针 s_hidden（早期双帧方案的遗留），
- * 是每档构建 1 条"未使用变量"告警的来源，删掉。显示帧地址一律以 g_shown_fb 为准。 */
+ * 是每档构建 1 条"未使用变量"告警的来源，删掉。显示帧地址以 ltdc.c 的 g_shown_fb 为准。 */
 
 static void flush_cb(lv_display_t * disp, const lv_area_t * area, uint8_t * px_map)
 {

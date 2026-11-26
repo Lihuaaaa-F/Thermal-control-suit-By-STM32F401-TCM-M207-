@@ -2,7 +2,7 @@
  * link_loss_guard.c — 屏链路断开 3 秒 = 急停 的判定（m1，用户 2026-11-26 裁决）。口径见头文件。
  */
 #include "link_loss_guard.h"
-#include "control.h"      /* SAFETY_BIT_ESTOP / SAFETY_BIT_OVERTEMP：只给 link_loss_already_safe 用 */
+#include "control.h"      /* SAFETY_BIT_ESTOP：只给 link_loss_already_safe 用 */
 
 /* r7f（独立复核 R7-01，2026-11-26）：already_safe 只认“人工确认才能解除”的安全态。
  * R8-04（独立复核 r8f，2026-11-26）：再把范围收窄到**急停锁存**。超温同样“只有确认能解除”，

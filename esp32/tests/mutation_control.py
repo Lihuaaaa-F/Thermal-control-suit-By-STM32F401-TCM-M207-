@@ -138,8 +138,10 @@ MUTATIONS = [
      [("        tc1_stuck  = (uint8_t)(s_tec_cmd_on[0] && stuck_is(&s_stuck_tc1, now_ms, s_tec_on_since[0]));",
        "        tc1_stuck  = (uint8_t)(m207_src_ok && stuck_is(&s_stuck_tc1, now_ms, now_ms - CTRL_STUCK_WINDOW_MS));")], ""),
     ("M51 卡死判据读模块回显（晚到的“关”回显会掩盖卡死；X03-F-08）",
+     # S 线 i3：回显改成独立字段后，"读回显"就是把命令意图换成 control_tec_act()（K18 同时喂两处，
+     # 所以读旧混用字段也照样会被抓）
      [("        tc1_stuck  = (uint8_t)(s_tec_cmd_on[0] && stuck_is(&s_stuck_tc1, now_ms, s_tec_on_since[0]));",
-       "        tc1_stuck  = (uint8_t)(g_tcs.tec1_on && stuck_is(&s_stuck_tc1, now_ms, s_tec_on_since[0]));")], ""),
+       "        tc1_stuck  = (uint8_t)(control_tec_act(1) && stuck_is(&s_stuck_tc1, now_ms, s_tec_on_since[0]));")], ""),
     ("M35 卡死窗口不把 TEC 开沿算在内（读数冻够了立刻判）",
      [("    if (!c->last_change || stuck_live(c, now_ms) || !on_since) return 0;",
        "    if (!c->last_change || stuck_live(c, now_ms)) return 0;"),

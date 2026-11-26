@@ -131,3 +131,100 @@
 
 （原样汇总行，命令均在 `project_tcs/` 或 `esp32/` 下执行。）
 
+**1) 主机全量 —— `esp32/`：`bash tests/run_m207_tests.sh`**
+
+```
+esp32-tests: ALL GREEN
+```
+关键行：`test_tcs_proto: PASS=74 FAIL=0`、`test_control: PASS=291 FAIL=0`（SIM 档 `ctlstat` 296/0）、
+`test_control_manual: PASS=169`、`test_m207_force: PASS=74`、`test_m207_sim: PASS=14`、
+`test_link_dir: PASS=79`、`test_web_hardening: PASS=31`、`test_web_status: PASS=230`；
+门禁 `[m207gates]` `[m1gates]` `[webgates]` 全 PASS。
+
+**2) 主机全量 —— `project_tcs/`：`bash tests/run_all.sh`**
+
+```
+[audit] PASS (报告与代码一致: 290 files, 0 uncovered, 0 unclassified)
+...
+esp32-tests: ALL GREEN
+...
+run_all: ALL GREEN
+```
+关键行：`test_control: PASS=86`（含 T1–T13）、`test_proto_m1: PASS=45`、`test_ui_model: PASS=182`、
+`test_ui_known: PASS=19`、`test_ui_svc: PASS=15`、`test_ui_mismatch: PASS=18`、
+`test_link_dir(H743): PASS=154`、`test_post: PASS=81`；`[card_lines] PASS（3 张卡 / 162 行）`、
+`[audit] PASS`、`[m1gates]/[webgates]/[m207gates] PASS`；内嵌的 esp32 套件 ALL GREEN。
+
+**3) 变异（每个都必须让单测变红；等价的注明理由并提供"两道一起删"的变异）**
+
+```
+$ cd esp32 && python tests/mutation_control.py
+[current] PASS=291 FAIL=0
+[old impl] rc=1 PASS=229 FAIL=62 (W2 fails: 16)
+... （56 个变异：55 CAUGHT，1 个按预期等价存活）
+mutation_control: ALL AS EXPECTED
+
+$ python tests/mutation_control_manual.py     → mutation_control_manual: ALL AS EXPECTED
+$ python tests/mutation_m207_force.py         → mutation_m207_force: ALL AS EXPECTED（9 抓 + F05 等价，F07 把两道一起删被抓）
+$ python tests/mutation_web.py                → mutation_web: ALL AS EXPECTED
+$ python tests/mutation_core.py               → mutation_core: ALL AS EXPECTED
+$ cd ../project_tcs && python tests/mutation_ui_model.py → mutation_ui_model: ALL AS EXPECTED（34 抓，含 M30–M34）
+```
+H743 侧的 `mutation_link_dir / mutation_link_follow / mutation_m207_txq / mutation_audit_ring /
+mutation_perf_hist / mutation_estop_gate` 随 `run_all.sh` 跑，全 PASS。
+
+**4) 协议单一源**：`python tools/proto_sync.py --check`
+
+```
+proto_sync: OK (单一源 + 2 包装一致，无重复定义；方向表与两端收发分支一致；两端闸门相同；屏端 ISR 不碰 comm 层)
+```
+
+**5) 版本**：`python tools/version_bump.py --check`
+
+```
+version: protocol/tcs_version.h = 1.3.0-rc1 (fw_ver BCD 0x010300)
+version_check: PASS
+```
+
+**6) 构建矩阵**：`bash tools/build_matrix.sh --esp32 --diag --site --twice`
+
+```
+=== [PROD] 从零构建：rm -rf build-matrix/PROD && cmake && build
+[PROD] exit=0 error=0 warning=4 FLASH: 460516 2; DTCMRAM: 95504 128; AXIRAM: 205952 320
+=== [BENCH] 从零构建
+[BENCH] exit=0 error=0 warning=4 FLASH: 479316 2; DTCMRAM: 99208 128; AXIRAM: 205952 320
+=== [SIM] 从零构建
+[SIM] exit=0 error=0 warning=4 FLASH: 479316 2; DTCMRAM: 99208 128; AXIRAM: 205952 320
+=== [SIMWG] 从零构建
+[SIMWG] exit=0 error=0 warning=4 FLASH: 518460 2; DTCMRAM: 99256 128; AXIRAM: 205952 320
+[prod-clean] PASS（交付（PROD）档产物不得含调试/台架钩子）
+[prod-clean] PASS（台架档产物必须含钩子）×3
+=== [esp32-default] 从零构建（配置取自 sdkconfig.matrix.seed，原文件不动）
+[esp32-default] exit=0 error=0 warning=0
+=== [esp32-diag] 从零构建（配置取自 sdkconfig.matrix.diagbase，原文件不动）
+[esp32-diag] exit=0 error=0 warning=0
+=== [esp32-site] 从零构建（配置取自 sdkconfig.site，原文件不动）
+[esp32-site] exit=0 error=0 warning=0
+=== [esp32-repro] 默认档再从零构建一次（可复现构建）
+[esp32-repro] tcs_wireless.bin  sha256 4387fcb57e8eca12  相同
+[esp32-repro] bootloader/bootloader.bin  sha256 ad532789dd342643  相同
+[esp32-repro] partition_table/partition-table.bin  sha256 137dde9623233f24  相同
+[esp32-repro] 默认档两次从零构建 sha256 相同
+[prod-clean] PASS（…ESP32 命令集=无台架命令）
+[prod-clean] PASS（…ESP32 命令集=全部台架命令）
+[prod-clean] PASS（…ESP32 命令集含 linkloop,linkmute,mstat,water,webtest）
+[esp32] 干净核对 PASS（默认档无台架命令；诊断档 / 现场档命令集相符）
+================ build_matrix 汇总 ================
+可复现构建：剔除 .comment 与调试信息后 md5 b48276d311847140cee06417fd751619 / b48276d311847140cee06417fd751619 → 相同；原始 bin md5 相同
+交付档干净核对：PASS
+ESP32：见上（日志在 esp32/build-matrix-*.log）
+build_matrix: PASS
+```
+
+> 第一次跑矩阵（17:06 启动）遇到两件都不是代码问题的事，如实记录：
+> ① `[esp32-diag]` 撞上 IDF 自带 `esp_lcd_panel_rgb.c:722` 的 GCC 内部编译器错误（brief 预告过）——
+> 从断点续编一次即过（续编日志 0 个 ICE，diag 档 `verify_prod_clean --esp32-expect-all` PASS）；
+> ② 跑的过程中我重锚了研学卡（改动已跟踪文件），H743 的 `[repro]` 因此把两次从零构建的产物判成不同
+> （版本串一次干净、一次 `-dirty`）。把审计产物重新生成、其余改动提交后重跑整个矩阵，就是上面这次
+> （`build_matrix: PASS`）。
+

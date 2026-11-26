@@ -1,0 +1,17 @@
+=== D10 start 00:17:11 HEAD=5d8a23abb
+>>> 主控交付档
+flash default rc=0 sha256=25f40b77f57df320
+>>> 屏交付档
+tcs v1.2.0 build=2026-11-26 16:04 UTC git=5d8a23abb params=v1(8+0x100resv) proto=v3
+tc1=18.2 tc2=18.9 body=0.0 tec1=0 tec2=0 fan=0 mode=0 alarm=0x0000 m207=1 sensor=0 esp=1 ctrl=0 arm=0(0x08=0) loop=1206 drops=0
+lrx=4774 snap=61 gapmax=509 gaplast=286 echo=0 wdir=0 arq=1 txfail=0 vr=0 vrlast=3 ackbad=0 wbad=0 wclamp=0 wbusy=0 fresh=700 bdg=0 stl=0
+[flash] PASS
+[00:19:00] status
+tc1=18.19 tc2=18.85 body=0.00(ok=0) fan=0% mode=0 m207=1 alarm=0x0000 armed=0 state=0 sim=0 latch=0x00 heap=8496188 up=84s rst=11 prst=1 pup=740s palm=0x0000 plat=0x00 pseq=1 nvalm=0x0004 cd=0
+ack: alarm=0x0000 armed=0 state=0
+[00:19:03] ack 之后
+tc1=18.19 tc2=18.85 body=0.00(ok=0) fan=0% mode=0 m207=1 alarm=0x0000 armed=0 state=0 sim=0 latch=0x00 heap=8496188 up=87s rst=11 prst=1 pup=740s palm=0x0000 plat=0x00 pseq=1 nvalm=0x0004 cd=0
+[NET] mirror id=0x07 v=40.00
+tc1=18.2 tc2=18.8 body=0.0 tec1=0 tec2=0 fan=0 mode=0 alarm=0x0000 m207=1 sensor=0 esp=1 ctrl=0 arm=0(0x08=0) loop=3173 drops=0
+lrx=11937 snap=157 gapmax=1156 gaplast=140 echo=0 wdir=0 arq=1 txfail=0 vr=0 vrlast=3 ackbad=0 wbad=0 wclamp=0 wbusy=0 fresh=1000 bdg=0 stl=0
+=== D10 end 00:19:21

@@ -1252,7 +1252,8 @@ int main(void)
         control_manual_tec(1, 1);
         control_tec_echo_set(1, 1);                   /* 模块回读：开着（i3 起回显是独立字段）*/
         CHECK(control_tec_cmd(1) == 1 && control_tec_act(1) == 1, "K18 precondition: command on, echo on");
-        control_tec_echo_set(1, 0);                   /* 晚到的回显：模块回的是"关" */
+        control_tec_echo_set(1, 0);                   /* 晚到的回显：模块回的是"关"（独立字段）*/
+        g_tcs.tec1_on = 0;                            /* 同一应答也写旧混用字段——真机的 RX 处理是两处都写 */
         CHECK(control_tec_cmd(1) == 1 && control_tec_act(1) == 0,
               "K18 command intent and module echo are two different quantities");
         g_tcs.tc1_act = 30.0f; tick();                /* 喂进第一个水温样本 */

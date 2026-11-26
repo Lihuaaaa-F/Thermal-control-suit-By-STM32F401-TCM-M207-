@@ -401,6 +401,55 @@ static int cmd_linkloop(int argc, char **argv)
 }
 #endif
 
+#if CONFIG_TCS_DIAG || CONFIG_TCS_SIM
+/* mstat — 模块保护状态与读数抖动的只读出口（S 线 i3，条目 8；X04-F-05 的读数先靠它拿）：
+ *   两路各一行：TCERRORSTATUS / TCOTPSTATUS 原值、故障位掩码与位名、数据龄；
+ *   再一行：体温 / 水温读数"逐位不变"的最长连续时长（含当前这一段）——量 TEC 开着时的读数抖动（F2 §4.3）。
+ * 只读：不报警、不进安全态、不动执行器。交付档不编译（verify_prod_clean 的禁入清单里查"读数抖动"）。*/
+static int cmd_mstat(int argc, char **argv)
+{
+    (void)argc; (void)argv;
+    for (uint8_t ch = 1; ch <= 2; ch++) {
+        m207_mod_status_t st;
+        char bits[80];
+        size_t o = 0;
+        if (m207_module_status(ch, &st) != 0) {
+            printf("TC%u: status unavailable (bad channel)\n", (unsigned)ch);
+            continue;
+        }
+        bits[0] = 0;
+        if (st.fault_mask) {
+            for (int b = 0; b < 7; b++) {
+                if (!(st.fault_mask & (1u << b))) continue;
+                int n = snprintf(bits + o, sizeof bits - o, "%s%s", o ? "|" : "",
+                                 m207_fault_bit_name((uint8_t)b));
+                if (n > 0) o += (size_t)n;
+            }
+        } else {
+            snprintf(bits, sizeof bits, "none");
+        }
+        char otp[16], age[24];
+        if (st.otpstat == 0xFFFFu) snprintf(otp, sizeof otp, "?");
+        else                       snprintf(otp, sizeof otp, "%u(0x%02X)",
+                                            (unsigned)st.otpstat, (unsigned)(st.otpstat & 0xFFu));
+        if (st.age_ms == 0xFFFFFFFFu) snprintf(age, sizeof age, "?");
+        else                          snprintf(age, sizeof age, "%lums", (unsigned long)st.age_ms);
+        printf("TC%u errstat=%u(0x%02X) otpstat=%s fault=0x%02X(%s) age=%s valid=%u\n",
+               (unsigned)ch, (unsigned)st.errstat, (unsigned)(st.errstat & 0xFFu), otp,
+               (unsigned)st.fault_mask, bits, age, (unsigned)st.valid);
+    }
+    {
+        /* 卡死判据的两个输入：最长连续"逐位不变"时长（含正在进行的这一段）*/
+        uint32_t now = (uint32_t)(esp_timer_get_time() / 1000);
+        printf("stuck: body max=%lums water max=%lums (longest bit-identical run, current one included)\n",
+               (unsigned long)control_stuck_max_ms(1u, now),
+               (unsigned long)control_stuck_max_ms(2u, now));
+    }
+    printf("note: TCERRORSTATUS 含上电锁存位（模块断电才清）——fault!=0 不等于此刻有故障；本命令只读\n");
+    return 0;
+}
+#endif /* CONFIG_TCS_DIAG || CONFIG_TCS_SIM */
+
 #if CONFIG_TCS_DIAG
 static int cmd_ltx(int argc, char **argv)
 {
@@ -470,6 +519,8 @@ int tcs_console_start(void)
           .func=cmd_webtest, .argtable=NULL },
         { .command="linkmute", .help="linkmute <秒>：链路静默（不收不发，快照也停发），用来诱导断链再恢复；0=恢复；静默>=3s 触发断链急停", .hint="<0-3600>",
           .func=cmd_linkmute, .argtable=NULL },
+        { .command="mstat", .help="模块保护状态与读数抖动（只读）：TCERRORSTATUS / TCOTPSTATUS 原值、故障位掩码与位名、数据龄；体温 / 水温读数逐位不变的最长连续时长", .hint=NULL,
+          .func=cmd_mstat, .argtable=NULL },
 #endif
 #if CONFIG_TCS_DIAG
         { .command="m207", .help="m207 raw <帧>（台架直查/注入；自动补 \r）", .hint="raw <frame>",

@@ -1443,6 +1443,37 @@ int main(void)
         CHECK(tcs_alarm_active(ALM_EEPROM) == 1, "E3 re-raised on the next tick while the failure count stands");
     }
 
+#if CONFIG_TCS_DIAG || CONFIG_TCS_SIM
+    /* ====== S 线 i3（条目 8）：读数"逐位不变"的最长连续时长（mstat 的输入；只在诊断 / 仿真档编译）======
+     * 交付档不编译这段实现（control_stuck_max_ms），所以这两条也在同一个 #if 里。*/
+    {
+        control_init(&(control_ops_t){
+            .fan_set = stub_fan, .tec_sw = stub_tec, .tec_temp = stub_temp, .on_state = 0,
+        });
+        param_registry_init(&(param_hooks_t){0});
+        set_armed(0);
+        g_tcs.body_sensor_ok = 1; g_tcs.m207_online = 1; g_tcs.m207_sensor_open = 0;
+        g_tcs.body_temp = 37.0f; g_tcs.tc1_act = 25.0f;
+        s_now = 10000u;
+        poll100();
+        /* 水温每拍变一次（0.01°C 级），体温一直冻着：10 秒 */
+        for (int i = 0; i < 100; i++) {
+            g_tcs.tc1_act = (i & 1) ? 24.99f : 25.01f;
+            poll100();
+        }
+        CHECK(control_stuck_max_ms(2u, s_now) < 1000u, "S1 water keeps moving: its longest frozen run stays small");
+        CHECK(control_stuck_max_ms(1u, s_now) >= 9900u && control_stuck_max_ms(1u, s_now) <= 10100u,
+              "S1 body: the ongoing frozen run is counted (>= 9.9 s)");
+        uint32_t mx = control_stuck_max_ms(1u, s_now);
+        g_tcs.body_temp = 37.5f; poll100();      /* 变一下：这一段收尾（记进最大值）*/
+        CHECK(control_stuck_max_ms(1u, s_now) >= mx, "S1 after the change the closed run is kept as the max");
+        for (int i = 0; i < 150; i++) poll100(); /* 再冻 15 秒：当前这一段比最大值长 */
+        CHECK(control_stuck_max_ms(1u, s_now) > mx,
+              "S1 the current run takes over once it is longer than the closed one");
+        CHECK(control_stuck_max_ms(3u, s_now) == 0, "S1 bad channel -> 0");
+    }
+#endif
+
     printf("test_control: PASS=%d FAIL=%d\n", g_pass, g_fail);
     return g_fail ? 1 : 0;
 }

@@ -94,6 +94,9 @@ run m207force tests/test_m207_force.c components/tcs_m207/m207_core.c components
 # 覆盖对外读数、生效状态给 control 的卡死豁免用。这一行同时验证 SIM 档的实现体编得过、跑得对。
 EXTRA_DEF="/DCONFIG_TCS_SIM=1"
 run m207sim tests/test_m207_sim.c components/tcs_m207/m207_core.c components/tcs_m207/m207_proto.c components/tcs_core/control.c components/tcs_core/control_manual.c components/tcs_core/param_registry.c components/tcs_core/post_pure.c components/tcs_link/proto.c
+# S-G i3（条目 8）：诊断 / 仿真档的只读导出（读数"逐位不变"的最长连续时长）按 SIM 档再编一遍同一个用例，
+# 让那段 #if 里的实现体与用例都在让它生效的档上跑（交付档不编译它）。
+run ctlstat tests/test_control_esp32.c components/tcs_core/control.c components/tcs_core/control_manual.c components/tcs_core/param_registry.c components/tcs_core/post_pure.c components/tcs_link/proto.c
 EXTRA_DEF=""
 
 # S-G l1（2026-11-25）：R5-01 / R5-10 的 ESP32 侧用例——components/tcs_link/link_task.c 原样编译

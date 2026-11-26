@@ -247,6 +247,21 @@ def main():
         if corec2.count(anchor) != 1:
             fails.append("tcs_core/control.c 的变异锚点被改了（i3b 要求原文不动）：%s" % anchor)
 
+    # 10) S 线 i3（条目 8）：mstat —— 模块保护状态与读数抖动的只读出口；最长连续时长在 control.c 里、
+    #     实现体与导出都进 #if（交付档不编译），命令的帮助文本进 verify_prod_clean 的禁入清单。
+    for needle in ("uint32_t control_stuck_max_ms(uint8_t which, uint32_t now_ms)",
+                   "static uint32_t   s_stuck_max_ms[2];"):
+        if needle not in corec2:
+            fails.append("tcs_core/control.c 缺（i3）：%s" % needle)
+    if "uint32_t control_stuck_max_ms(uint8_t which, uint32_t now_ms);" not in coreh2:
+        fails.append("tcs_core/control.h 缺（i3）：control_stuck_max_ms 没声明")
+    for needle in ('{ .command="mstat",', "static int cmd_mstat(int argc, char **argv)"):
+        if needle not in con:
+            fails.append("esp32/main/tcs_console.c 缺（i3）：%s" % needle)
+    vpc = read(ESP, os.pardir, "project_tcs", "tools", "site", "verify_prod_clean.py")
+    if '"mstat":' not in vpc or "读数抖动" not in vpc:
+        fails.append("verify_prod_clean.py 缺（i3）：mstat 的帮助文本没进禁入清单")
+
     if fails:
         print("[m1gates] FAIL")
         for f in fails:

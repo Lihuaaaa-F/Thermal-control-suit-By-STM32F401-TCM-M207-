@@ -209,7 +209,7 @@ if [ "$DO_ESP32" = 1 ] || [ "$DO_DIAG" = 1 ] || [ "$DO_SITE" = 1 ]; then
             fi
             if [ -f "build-matrix-site/$APP" ]; then
                 python "$V" --esp32 "build-matrix-site/$APP" --esp32-expect linkmute --esp32-expect linkloop \
-                    --esp32-expect webtest --esp32-expect water || { echo "[esp32-site] 命令集与现场档不符"; exit 1; }
+                    --esp32-expect webtest --esp32-expect water --esp32-expect mstat || { echo "[esp32-site] 命令集与现场档不符"; exit 1; }
             fi
             echo "[esp32] 干净核对 PASS（默认档无台架命令；诊断档 / 现场档命令集相符）"
             exit 0

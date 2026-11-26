@@ -115,8 +115,13 @@ static volatile uint8_t s_stuck_chn;   /* 本轮 STUCK 锁存由谁引起：bit0
 static uint32_t   s_tec_on_since[2];   /* TCx 有效命令最近一次 0→1 的时间（out_tec_sw 里记）*/
 static uint8_t    s_tec_cmd_on[2];       /* TEC 命令意图（只有 out_tec_sw 写；取值 control_tec_cmd，X03-F-08）*/
 static uint32_t   s_poll_now_ms;       /* 最近一拍的时间戳：out_tec_sw 在拍外被调时用它给 TEC 开沿计时*/
+#if CONFIG_TCS_DIAG || CONFIG_TCS_SIM
+/* S 线 i3（条目 8）：读数"逐位不变"的最长连续时长（[0] 体温、[1] 水温）。mstat 用它量 TEC 开着时的
+ * 读数抖动（F2 第四节第 3 点）；只读导出，不参与任何判据。交付档不编译。*/
+static uint32_t   s_stuck_max_ms[2];
+#endif
 
-static void stuck_feed(stuck_src_t *c, float v, uint32_t now_ms, uint8_t src_ok)
+static void stuck_feed(stuck_src_t *c, float v, uint32_t now_ms, uint8_t src_ok, uint8_t idx)
 {
     uint32_t b;
     if (!src_ok) {                       /* 源不健康：从头再来，恢复后要有完整的一个窗口 */
@@ -125,6 +130,11 @@ static void stuck_feed(stuck_src_t *c, float v, uint32_t now_ms, uint8_t src_ok)
     }
     memcpy(&b, &v, sizeof(b));
     if (!c->last_change || b != c->bits) {
+#if CONFIG_TCS_DIAG || CONFIG_TCS_SIM
+        if (c->last_change && now_ms > c->last_change &&
+            (now_ms - c->last_change) > s_stuck_max_ms[idx])      /* 一段收尾：记最长 */
+            s_stuck_max_ms[idx] = now_ms - c->last_change;
+#endif
         c->bits = b;
         c->last_change = now_ms ? now_ms : 1u;   /* 0 是"时间基准未建立"，不能当时间戳 */
     }
@@ -364,6 +374,9 @@ void control_init(const control_ops_t *ops)
     /* 卡死判据从头开始：上电没有"读数多久没变""TEC 开了多久"可言 */
     memset(&s_stuck_body, 0, sizeof(s_stuck_body));
     memset(&s_stuck_tc1, 0, sizeof(s_stuck_tc1));
+#if CONFIG_TCS_DIAG || CONFIG_TCS_SIM
+    s_stuck_max_ms[0] = s_stuck_max_ms[1] = 0;   /* S 线 i3：最长连续时长从这次上电算起 */
+#endif
     s_stuck_chn = 0;
     memset(s_tec_on_since, 0, sizeof(s_tec_on_since));
     memset(s_tec_cmd_on, 0, sizeof(s_tec_cmd_on));
@@ -726,8 +739,8 @@ void control_poll(uint32_t now_ms)
     {
         uint8_t m207_src_ok = (uint8_t)(g_tcs.m207_online && !g_tcs.m207_sensor_open);
         uint8_t tc1_stuck, body_stuck, stuck_chn;
-        stuck_feed(&s_stuck_body, g_tcs.body_temp, now_ms, g_tcs.body_sensor_ok);
-        stuck_feed(&s_stuck_tc1, g_tcs.tc1_act, now_ms, m207_src_ok);
+        stuck_feed(&s_stuck_body, g_tcs.body_temp, now_ms, g_tcs.body_sensor_ok, 0u);
+        stuck_feed(&s_stuck_tc1, g_tcs.tc1_act, now_ms, m207_src_ok, 1u);
         tc1_stuck  = (uint8_t)(s_tec_cmd_on[0] && stuck_is(&s_stuck_tc1, now_ms, s_tec_on_since[0]));   /* X03-F-08：读命令意图，不读回显 */
         tc1_stuck  = (uint8_t)(tc1_stuck && stuck_water_is(&s_stuck_tc1, now_ms));   /* 水温窗口 10 分钟（2026-11-26）*/
         body_stuck = (uint8_t)(g_tcs.mode != 0 && (s_state == CTRL_HEAT || s_state == CTRL_COOL)
@@ -898,6 +911,26 @@ uint32_t control_ms_from_us(int64_t us)
 /* ====== 安全锁存/急停投递读侧（console/网页/诊断）====== */
 uint8_t control_safety_latched(void) { return s_safety_latch; }
 void    control_safety_trip(uint8_t bit) { safety_trip(bit); }
+
+#if CONFIG_TCS_DIAG || CONFIG_TCS_SIM
+/* S 线 i3（条目 8）：体温 / 水温读数"逐位不变"的最长连续时长（毫秒；含正在进行的这一段）。
+ * which：1 = 体温、2 = 水温。只给 mstat 读，不参与判据；交付档不编译。*/
+uint32_t control_stuck_max_ms(uint8_t which, uint32_t now_ms)
+{
+    uint8_t i;
+    const stuck_src_t *c;
+    uint32_t mx;
+    if (which != 1u && which != 2u) return 0;
+    i = (which == 1u) ? 0u : 1u;
+    c = (which == 1u) ? &s_stuck_body : &s_stuck_tc1;
+    mx = s_stuck_max_ms[i];
+    if (c->last_change && now_ms > c->last_change) {
+        uint32_t cur = now_ms - c->last_change;
+        if (cur > mx) mx = cur;
+    }
+    return mx;
+}
+#endif
 
 /* m1（模式页）：快照用的"输出方向"（低半字节第一路、高半字节第二路）。
  *   通道关 → 暂停；自动模式第一路 → 状态机（COOL 制冷 / HEAT 制热）；

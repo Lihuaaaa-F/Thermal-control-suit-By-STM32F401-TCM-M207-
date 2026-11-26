@@ -119,6 +119,13 @@ void    control_tec_echo_set(uint8_t ch, uint8_t on);
 /* N-01：设备服务层（M207 解析等）可直接置安全锁存——超温切断不得只依赖 control 任务存活。*/
 void    control_safety_trip(uint8_t bit);
 
+#if CONFIG_TCS_DIAG || CONFIG_TCS_SIM
+/* 只读导出（S 线 i3，条目 8）：体温 / 水温读数"逐位不变"的最长连续时长（毫秒；含正在进行的这一段）。
+ * which：1 = 体温、2 = 水温。给 mstat 量 TEC 开着时的读数抖动（F2 第四节第 3 点）；不参与判据。
+ * 交付档不编译（诊断功能的实现体也进 #if）。*/
+uint32_t control_stuck_max_ms(uint8_t which, uint32_t now_ms);
+#endif
+
 /* 统一命令执行端（网页 WS 与屏幕 0x15 共用一份语义，避免两处 switch 漂移）。
  * 覆盖 cmd 1..9（TEC1/2 开/关、风扇切换、自动/手动、急停、确认）；
  * 返回 0=执行成功，-1=未知命令，-2=被拒绝（SAFE 下的手动执行器命令，或急停/超温锁存期间

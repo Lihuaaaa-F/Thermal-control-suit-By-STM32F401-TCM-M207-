@@ -1,0 +1,24 @@
+S 线 D9 — 最终门禁版（f2c7855 / 协议 3）两端重烧与冒烟（2026-11-26 23:03–23:09）— 证据
+固件：集成分支 fix/s-u-int2 的代码门禁头 f2c7855（tag s-gate-20261126-2245；含 h1a、l1、e2、e3a、m1、e3b、i3、r7f、x3、e1、r8f、r9f 十二个批次）。
+      屏：build=2026-11-26 14:34 UTC git=f2c7855d2；主控交付档 app sha256（前 16 位）5269654510b68554；现场档 b6e64d05fa7a7e4a。
+      （工作树 HEAD 当时是 763d2c8 = 代码门禁头之上的 x4 文档提交；guard 先按 f2c7855 拒了一次，改按当前 HEAD 才放行——护栏按设计工作。）
+原始输出：同目录 D9_运行输出.out.txt。
+收尾状态：两端交付档 f2c7855（屏 proto=v3、vr=0），无报警、TEC 关、模块在线。
+
+一、⓪ 两端交付档：版本、协议、新诊断量
+  屏 `ver`：`... git=f2c7855d2 params=v1(8+0x100resv) proto=v3`；`stat` 新字段：`vr=0 ackbad=0 wbad=0 wclamp=0 wbusy=0 fresh=1000→750 bdg=0 stl=0`。
+    → 协议 3 配对、没有按版本丢帧（vr=0）、没有坏应答（ackbad=0）、屏端新鲜度正常（fresh≈0.75–1.0 s，stl=0）。
+  主控 `status`：m207=1、alarm=0、state=0；`ack` 干净。
+
+二、① 现场档：webtest 与断链急停 / 首页横幅解除
+  - webtest：`HTTP 9/9 PASS`、`ws loopback: 17/17 PASS`、`webtest: HTTP 9/9, WS 17/17 -> ALL PASS`。
+  - `linkmute 5` → 第 2 秒 `state=3 alarm=0x0004 latch=0x08 fan=100%`（与 D8 一致）；链路恢复后仍锁存。
+  - **首页横幅 (400,36) 单次点击没有解除**（点后 state 仍是 3）。后续用控制台 `ack` 一次即解除（`alarm=0x0000 state=0`）。
+    原因（与 R9-01 的设计一致）：`linkmute` 刚结束时主控对"屏链路"的判活还没恢复，这一拍收到 ack 会按 `link_down` 拒绝（不清位、不落盘）；
+    链路新鲜之后再点一次即可（D8b 那次链路已新鲜，一点就过）。
+    → 待办一句：真机上"刚断链恢复后点横幅"会先被拒一次，用户会看到"主控没有响应"一类提示，再点一次成功；要不要给更明确的文案是界面层的小事（记入低优先级）。
+  - 期间主控日志有一条 `FAN: fan readback mismatch: cmd=0% but LEDC duty / pin level disagree (count=1)`（webtest 切风扇时的一次读数不一致）。
+    一次、随后自愈（webtest 全过）；如实记录，留给后面看是否需要放宽判据或加去抖。
+
+三、② 收尾
+  两端烧回交付档 f2c7855；`ack` 后 state=0、alarm=0、latch=0；屏 `vr=0 ackbad=0 fresh=850 stl=0`；m207=1、TEC 关。

@@ -155,6 +155,11 @@ python tests/check_layout.py || FAIL=1
 # S-G e3a：版本单一源（X06-F-09）——头文件可解析、CMake / 注册表都从它推导、没有第二处写死的版本号
 python ../tools/version_bump.py --check || FAIL=1
 
+# ---- S-G e1（2026-11-26）------------------------------------------------------------------------
+# X01-F-05：待发队列深度进协议契约。同一个源文件在屏端 run_all.sh 里编屏的那一份 comm.h，
+# 这里编主控这一份——两端的值都必须等于 protocol/tcs_proto.h 的 TCS_MAX_TXQ（_Static_assert
+# 在头文件里，值漂移连编译都过不去；用例再断言一次运行期看到的数）。
+run linkcontract ../project_tcs/tests/test_link_contract.c
 
 [ $FAIL = 0 ] && echo "esp32-tests: ALL GREEN" || echo "esp32-tests: HAS FAILURES"
 exit $FAIL

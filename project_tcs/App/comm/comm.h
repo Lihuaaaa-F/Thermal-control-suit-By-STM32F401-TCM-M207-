@@ -44,7 +44,13 @@
 #define COMM_MAX_RETRIES      3      /* 最大重传次数（不含首传） */
 #define COMM_MAX_PENDING      8      /* 同时等 ACK 的帧上限（下行少，8 够） */
 #define COMM_RX_GAP_MS        50     /* M04-F-03：帧内静默 > 此值即丢弃半帧（见 comm.c 说明）*/
-#define MAX_TXQ               16     /* 待发队列深度（WP-A.5：注册表 8 条目+ACK 全量入队不丢；RAM +2KB 可承受） */
+/* X01-F-05（2026-11-26）：待发队列深度进协议契约——值只在 protocol/tcs_proto.h 里写一次
+ * （TCS_MAX_TXQ），两端 comm.h 都从它取，下面两条断言把"两端一致"和"装得下整批重传"钉住。
+ * 容量模型（16 = 8 条等 ACK 在途 + 8 条免 ARQ 周期帧与应答）见协议头的 TCS_MAX_TXQ 注释。*/
+#include "tcs_proto.h"       /* TCS_MAX_TXQ（协议唯一源）*/
+#define MAX_TXQ               TCS_MAX_TXQ
+_Static_assert(MAX_TXQ == TCS_MAX_TXQ, "MAX_TXQ must follow protocol/tcs_proto.h TCS_MAX_TXQ");
+_Static_assert(MAX_TXQ >= COMM_MAX_PENDING + 8, "MAX_TXQ must hold a full retransmission burst + 8 frames");
 #define COMM_LINK_OK_TRUE     1
 #define COMM_LINK_OK_FALSE    0
 /* R5-01：回声按消息号分计的桶数 = 消息号去掉方向位（bit6）后的取值范围 0x00..0xBF */

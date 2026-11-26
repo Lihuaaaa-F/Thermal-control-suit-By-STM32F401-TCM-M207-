@@ -532,6 +532,13 @@ run ui_svc      tests/test_ui_svc.c          App/lvgl_ui/ui_model.c
 run ui_mismatch tests/test_ui_mismatch.c     App/lvgl_ui/ui_model.c
 if [ -n "$PYBIN" ] && "$PYBIN" tools/proto_ref.py selftest; then :; else echo "[proto_ref_selftest] FAIL"; FAIL=1; fi
 
+# ---- S-G e1（2026-11-26）------------------------------------------------------------------------
+# X01-F-05：待发队列深度进协议契约（TCS_MAX_TXQ 16 = 8 条等 ACK 在途 + 8 条周期帧余量），
+# 两端 comm.h 从它取并各带两条 _Static_assert。用例编译本端 comm.h 一次（esp32 的
+# run_m207_tests.sh 用同一个源文件编译主控那一份），源码门禁核对两份 comm.h 与注释。
+run linkcontract tests/test_link_contract.c
+if [ -n "$PYBIN" ] && "$PYBIN" -I tests/test_link_contract.py; then :; else echo "[linkcontract_src] FAIL"; FAIL=1; fi
+
 echo "==================="
 if [ "$FAIL" = 0 ]; then echo "run_all: ALL GREEN"; else echo "run_all: HAS FAILURES"; fi
 exit $FAIL

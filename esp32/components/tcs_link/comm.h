@@ -39,7 +39,13 @@
 #define COMM_MAX_RETRIES      3      /* 最大重传次数（不含首传） */
 #define COMM_MAX_PENDING      8      /* 同时等 ACK 的帧上限（下行少，8 够） */
 #define COMM_RX_GAP_MS        50     /* M04-F-03：帧内静默 > 此值即丢弃半帧（见 comm.c 说明）*/
-#define MAX_TXQ               16     /* 待发队列深度（协议契约：与 H743 一致；注册表突发 50 帧）*/
+/* X01-F-05（2026-11-26）：待发队列深度进协议契约——值只在 protocol/tcs_proto.h 里写一次
+ * （TCS_MAX_TXQ），两端 comm.h 都从它取，下面两条断言把"两端一致"和"装得下整批重传"钉住。
+ * 容量模型（16 = 8 条等 ACK 在途 + 8 条免 ARQ 周期帧与应答）见协议头的 TCS_MAX_TXQ 注释。*/
+#include "tcs_proto.h"       /* TCS_MAX_TXQ（协议唯一源）*/
+#define MAX_TXQ               TCS_MAX_TXQ
+_Static_assert(MAX_TXQ == TCS_MAX_TXQ, "MAX_TXQ must follow protocol/tcs_proto.h TCS_MAX_TXQ");
+_Static_assert(MAX_TXQ >= COMM_MAX_PENDING + 8, "MAX_TXQ must hold a full retransmission burst + 8 frames");
 #define COMM_LINK_OK_TRUE     1
 #define COMM_LINK_OK_FALSE    0
 /* R5-01：回声按消息号分计的桶数 = 消息号去掉方向位（bit6）后的取值范围 0x00..0xBF */
@@ -55,6 +61,12 @@ typedef struct {
     uint8_t  retries;         /* 已重传次数（不含首传） */
     uint32_t deadline_ms;     /* 下次重传/判失败时刻（ms） */
     uint32_t enq_ms;          /* M04-F-05：登记时刻（pending 满时逐最老用）*/
+    /* X01-F-03（2026-11-26）：应答的业务结果。原来 0x90 的 status/ret 在 comm 层就被丢掉了，
+     * BAD_ID / CLAMP / BUSY 一律被当成功。现在清 pending 之前先落到这里（in_use=0 之后仍可读，
+     * 直到该槽被下一帧复用），并通过 on_ack_result 回调交给上层。*/
+    uint8_t  ack_status;      /* 最近一次清掉本槽的应答 status（已按 TCS_ACK_STATUS_MASK 取值）*/
+    uint8_t  ack_have;        /* 1 = 本槽自登记以来收到过匹配的应答 */
+    float    ack_ret;         /* 应答里的 ret（SET_PARAM 回实际写入值）*/
 } comm_pending_t;
 
 /* 链路实例 */
@@ -88,6 +100,15 @@ typedef struct {
     uint32_t retry_cnt;          /* M11-F-10：累计重传次数 */
     uint32_t txq_drop;           /* M11-F-10：tx 环满被挤出丢弃的帧数 */
     uint32_t tx_fail_cnt;        /* X03-F-09：send_fn 报"没有上线"的帧数（ARQ 帧会被重传，免 ARQ 帧就此丢失）*/
+    /* —— X01-F-03：应答的业务结果（status/ret 不再被丢弃）—— */
+    uint32_t ack_nonok_cnt;      /* status != TCS_ACK_OK 的应答数（含未匹配到 pending 的）*/
+    uint8_t  last_ack_mt;        /* 最近一条应答确认的消息号（0 = 还没收到过应答）*/
+    uint8_t  last_ack_status;
+    float    last_ack_ret;
+    uint8_t  last_ack_have;
+    /* 匹配到 pending 时调用（在临界区之外，回调里可以安全再调 comm_*）。
+     * 参数 = 被确认的 (seq, mt) + 应答的业务结果。NULL = 不通知。*/
+    void   (*on_ack_result)(uint8_t acked_seq, uint8_t acked_mt, uint8_t status, float ret);
     /* —— §0E 待发队列（环形，TX 串行化；生产模型见文件头）—— */
     uint8_t  tx_queue[MAX_TXQ][MAX_FRAME];
     uint16_t tx_len[MAX_TXQ];
@@ -178,8 +199,36 @@ void comm_tick(comm_link_t *L);
 /**
  * 收到对端 ACK 帧时调。按 (acked_seq, acked_mt) 清对应 pending，link_ok=True。
  * 返回 1=匹配到并清掉，0=没匹配。
+ *
+ * X01-F-03：本函数是"只有链路保活信息"的旧入口，等价于 status = TCS_ACK_OK、ret = 0。
+ * 真实应答请用 comm_on_ack_ex（comm.c 收帧路径已改用它），业务结果由它交给上层。
  */
 int comm_on_ack(comm_link_t *L, uint8_t acked_seq, uint8_t acked_mt);
+
+/**
+ * X01-F-03：带业务结果的应答入口（comm.c 的收帧路径调用）。
+ *   - status 已按 TCS_ACK_STATUS_MASK 掩过；非 TCS_ACK_OK 计入 ack_nonok_cnt（无论是否匹配）；
+ *   - 匹配到 pending 时：结果写进该条目（ack_status / ack_ret / ack_have）再清 in_use，
+ *     link_ok 置真，并在临界区之外调用 on_ack_result（若已注册）；
+ *   - 返回 1 = 匹配到并清掉，0 = 没匹配（仍然记了 last_ack_* 与非 OK 计数）。
+ */
+int comm_on_ack_ex(comm_link_t *L, uint8_t acked_seq, uint8_t acked_mt,
+                   uint8_t status, float ret);
+
+/**
+ * X01-F-03：注册"应答结果"回调（匹配到 pending 时调用，临界区之外）。
+ * NULL = 不通知。callback 里可以再调 comm_*。
+ */
+void comm_set_on_ack_result(comm_link_t *L,
+                            void (*cb)(uint8_t acked_seq, uint8_t acked_mt,
+                                       uint8_t status, float ret));
+
+/**
+ * X01-F-03：取最近一条应答的业务结果（排障/上报用）。
+ * 返回 1 = 自上一次调用以来收到过应答（读后清标记），0 = 没有新的。
+ * out_* 都可以为 NULL。
+ */
+int comm_last_ack(comm_link_t *L, uint8_t *out_mt, uint8_t *out_status, float *out_ret);
 
 /**
  * 接收侧：喂一个字节。若凑成完整且 CRC 正确的帧：

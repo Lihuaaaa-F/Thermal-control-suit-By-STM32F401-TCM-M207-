@@ -643,6 +643,25 @@ fi
 if [ -n "$PYBIN" ] && "$PYBIN" -X utf8 tests/check_build_scripts.py; then :; else
     echo "[build_scripts] FAIL"; FAIL=1
 fi
+
+# ---- S-G e1（2026-11-26）------------------------------------------------------------------------
+# X01-F-05：待发队列深度进协议契约（TCS_MAX_TXQ 16 = 8 条等 ACK 在途 + 8 条周期帧余量），
+# 两端 comm.h 从它取并各带两条 _Static_assert。用例编译本端 comm.h 一次（esp32 的
+# run_m207_tests.sh 用同一个源文件编译主控那一份），源码门禁核对两份 comm.h 与注释。
+run linkcontract tests/test_link_contract.c
+if [ -n "$PYBIN" ] && "$PYBIN" -I tests/test_link_contract.py; then :; else echo "[linkcontract_src] FAIL"; FAIL=1; fi
+# X01-F-03：0x90 应答的 status/ret 交给上层（comm 层的完成回调 + pending 结果字段；link_send 层
+# 按 (seq,mt) 找回参数 id 并上报 CLAMP/BAD_ID/BUSY）。esp32 的 run_m207_tests.sh 用同一份用例
+# 编主控那一份 comm.c（只跑 comm 层那几节）。
+run linkack     tests/test_link_ack.c        App/comm/comm.c App/proto/proto.c App/comm/link_send.c
+# X01-F-04：0x20 的 fresh_ms / badge 有消费者（快照镜像 + 界面现算的"陈旧"判定）。
+# 修复前 snap_apply 完全不取这两个字段（全仓零消费者），用例里 apply/stale_at 两组判定
+# 覆盖 新鲜 → 陈旧（0xFFFF / >3000ms）→ 恢复，以及断链 2s 后陈旧、badge=2 原值保留。
+run snapfresh   tests/test_snap_fresh.c
+# 接线门禁：snap_apply / 0x21 的 TCS_D_BADGE 真的把字段写进镜像（main.c 依赖 HAL，主机编不了），
+# 以及协议 badge 没有被接到本地 POST 角标上（修复前的"同名异义"坑）。
+if [ -n "$PYBIN" ] && "$PYBIN" -I tests/check_snap_fresh.py; then :; else echo "[snapfresh_src] FAIL"; FAIL=1; fi
+
 echo "==================="
 if [ "$FAIL" = 0 ]; then echo "run_all: ALL GREEN"; else echo "run_all: HAS FAILURES"; fi
 exit $FAIL

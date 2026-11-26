@@ -421,9 +421,19 @@ static tcs_snap_pl_t s_last_snap;   /* v2：屏为纯显示终端，链路存活
  * 界面只读（tcs_link_tec_copy）；链路断了由界面按"快照陈旧"整体转灰，这里不另作失效处理。*/
 static tcs_link_tec_t s_tec;
 
+/* X01-F-04（S 线 e1）：0x20 的 fresh_ms / badge 镜像。修复前这两个字段解出来就没人用——
+ * 温度卡永远显示主控最后一次给的数（可能早已陈旧），布防状态（含失联报警）到不了屏。
+ * 语义与显示规则见 link_snap.h；界面层怎么画不在本批次（方案见 results 文档）。*/
+static tcs_link_fresh_t s_fresh;
+
 void tcs_link_tec_copy(tcs_link_tec_t *out)
 {
     if (out) *out = s_tec;
+}
+
+void tcs_link_fresh_copy(tcs_link_fresh_t *out)
+{
+    if (out) *out = s_fresh;
 }
 
 /* S 线 i3（条目 11）：被版本校验拒掉的快照数（只增；上电清零）*/
@@ -471,6 +481,7 @@ static void snap_apply(const tcs_snap_pl_t *s)
     tcs_link_tec_set_dirs(&s_tec, s->tec_dir);                       /* m1（模式页）：末尾追加的 9 字节 */
     tcs_link_tec_set_elec(&s_tec, s->tec1_v, s->tec1_i, s->tec2_v, s->tec2_i);
     tcs_link_tec_set_state(&s_tec, s->tec_cmd, s->tec_act, s->tec_known);   /* S 线 i3：末尾追加的 3 字节 */
+    tcs_link_fresh_apply(&s_fresh, s->fresh_ms, s->badge);                  /* X01-F-04：数据龄 + 布防角标 */
     s_last_snap = *s;
 }
 
@@ -490,6 +501,25 @@ static void snap_reassert(void)
     if (control_estop_latched())    g_tcs.alarm_bits |= ALM_ESTOP;
     if (control_overtemp_latched()) g_tcs.alarm_bits |= ALM_OVERTEMP;
     if (tcs_alarm_active(ALM_EEPROM)) g_tcs.alarm_bits |= ALM_EEPROM;
+}
+
+/* X01-F-03（2026-11-26）：参数写入的应答结果（0x90 的 status/ret 不再被 comm 层丢掉）。
+ *  - OK：不做事——快照（0x20）与镜像泵（0x11）本来就会把权威值带回来。
+ *  - CLAMP：主控限幅，ret 是实际写入值 → 本地立刻采用它，屏上显示的就是真值。
+ *  - BAD_ID / BUSY / 其它：提示（RTT 与控制台的 WARN 行）+ 把设定值回退到最近一帧快照里的
+ *    权威值；其它参数的回退由 0x11 镜像泵（每 800ms 一条、约 41s 一轮）完成。
+ * 本函数不驱动任何执行器，交付档也有意义。*/
+static void on_param_write_result(uint16_t id, uint8_t status, float ret, float requested)
+{
+    if (status == TCS_ACK_OK) return;
+    tcs_log("[WARN]", "param write rejected id=0x%02x v=%.2f st=%u ret=%.2f",
+            (unsigned)id, (double)requested, (unsigned)status, (double)ret);
+    if (status == TCS_ACK_CLAMP) {
+        param_link_sync(id, ret);                       /* 主控回的实际写入值 */
+        return;
+    }
+    if (s_snap_have && id == PARAM_ID_TC1_SET)      param_link_sync(id, s_last_snap.tc1_set);
+    else if (s_snap_have && id == PARAM_ID_TC2_SET) param_link_sync(id, s_last_snap.tc2_set);
 }
 
 /* R2：屏侧写 M207 温度参数 → 链路 0x12 发 ESP32（权威→M207 verify）；
@@ -629,6 +659,7 @@ void on_frame(const uint8_t *payload, size_t len)
         if (mask & TCS_D_ALARM)   /* X01-F-02：与 0x20 同规——本机独占位不被覆盖 */
             g_tcs.alarm_bits = alarm_merge_peer(d.alarm, ALM_SRC_LOCAL_H743, g_tcs.alarm_bits);
         if (mask & TCS_D_BODY)    g_tcs.body_temp = d.body;
+        if (mask & TCS_D_BADGE)   tcs_link_fresh_badge(&s_fresh, d.badge);   /* X01-F-04：布防角标（增量）*/
         if (mask & TCS_D_TEC_DIR) tcs_link_tec_set_dirs(&s_tec, d.tec_dir);                              /* m1（模式页）*/
         if (mask & TCS_D_ELEC)    tcs_link_tec_set_elec(&s_tec, d.tec1_v, d.tec1_i, d.tec2_v, d.tec2_i); /* m1（模式页）*/
         break;
@@ -1050,6 +1081,10 @@ int main(void)
     comm_init(&g_link, link_uart_send, now_ms_fn, on_link_down, crit_enter, crit_exit,
               TCS_SIDE_H743);
     comm_set_on_link_up(&g_link, on_link_up);   /* M04-F-06：与 on_link_down 成对的"恢复"日志 */
+    /* X01-F-03（2026-11-26）：0x90 的 status/ret 交给上层。参数写入的结果由 link_send.c
+     * 按 (seq, mt) 找回参数 id，再回调 on_param_write_result 提示 / 回退。*/
+    comm_set_on_ack_result(&g_link, link_send_on_ack_result);
+    link_send_on_result(on_param_write_result);
 
 #ifdef ENABLE_LCD
     tcs_lvgl_init();     /* LVGL 单栈（2026-11-15：旧 tcs_ui 已删除） */

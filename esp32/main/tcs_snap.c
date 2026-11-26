@@ -6,6 +6,7 @@
  * 0x21 触发：与上次发送的差异位图非零即发（同拍先 0x21 后 0x20）。
  */
 #include "tcs_snap.h"
+#include "snap_time.h"     /* S 线 e1：M11-F-13（int64 时间）/ M08-F-07（节拍迟到）——纯算术，主机可测 */
 #include "tcs_proto.h"
 #include "link_task.h"
 #include "param_registry.h"
@@ -85,6 +86,9 @@ static void snap_sample(snap_cycle_t *c)
     c->tec_cmd   = (uint8_t)((control_tec_cmd(1) ? 1u : 0u) | (control_tec_cmd(2) ? 2u : 0u));
     c->tec_act   = (uint8_t)((control_tec_act(1) ? 1u : 0u) | (control_tec_act(2) ? 2u : 0u));
     c->tec_known = (uint8_t)(control_tec_known() & 0x03u);
+    /* M11-F-09：协议版本不一致的提示位只在这一帧的 alarm 里按位或（不改 g_tcs——控制任务每拍
+     * 重建 alarm_bits，外部写进去最多活一拍，会闪）。0x20/0x21 同源（build_delta_src 取同一份）。*/
+    c->st.alarm_bits |= link_alarm_hint();
     taskEXIT_CRITICAL(&s_snap_mux);
 }
 
@@ -153,10 +157,22 @@ static void snap_task(void *arg)
     (void)arg;
     TickType_t last_wake = xTaskGetTickCount();
     uint32_t p_win = 0;
+    uint32_t late_max = 0;    /* M08-F-07：10s 窗口内的最大节拍迟到（ms）*/
     for (;;) {
         esp_task_wdt_reset();
         vTaskDelayUntil(&last_wake, pdMS_TO_TICKS(SNAP_PERIOD_MS));
-        int32_t t0 = (int32_t)esp_timer_get_time();
+        /* M08-F-07：vTaskDelayUntil 醒来后 last_wake 是"本该醒来的 tick"，实际 tick 比它大
+         * 多少就是这个任务的节拍迟到（被 WiFi/httpd/控制任务抢占）。修复前没有任何统计，
+         * 节拍抖动只能从 H743 的 g_dbg_snap_gap_max 反推。算术在 snap_time.c（主机可测）。*/
+        {
+            uint32_t late = snap_late_ms((uint32_t)xTaskGetTickCount(),
+                                         (uint32_t)last_wake,
+                                         (uint32_t)portTICK_PERIOD_MS);
+            if (late > late_max) late_max = late;
+        }
+        /* M11-F-13：int64 承接 esp_timer；修复前先截 int32 再除 1000，35.8 分钟后 ms 跳变、
+         * 71.6 分钟回绕、enc_max 固化伪值。*/
+        int64_t t0 = esp_timer_get_time();
 
         /* ① 参数镜像泵（裁决 2026-11-23）：PROD 的 H743 不做本地持久化，
          * 启动是默认值，必须靠 0x11 镜像拿全量权威值。变更即推已覆盖"改一次推一次"，
@@ -211,7 +227,7 @@ static void snap_task(void *arg)
         tcs_snap_pl_t s = {
             .ver = TCS_PROTO_VER,
             .seq = ++s_seq,
-            .ms  = (uint32_t)(t0 / 1000),
+            .ms  = snap_ms_from_us(t0),   /* M11-F-13：64 位微秒直接换算，不经 int32 */
             .tc1_act = cy.st.tc1_act,
             .tc2_act = cy.st.tc2_act,
             .body    = cy.st.body_temp,
@@ -240,15 +256,21 @@ static void snap_task(void *arg)
         s_last = now;
         s_last_valid = 1;
 
-        int32_t dt = (int32_t)esp_timer_get_time() - t0;
-        if (dt > 0 && (uint32_t)dt > s_enc_max_us) s_enc_max_us = (uint32_t)dt;
+        uint32_t dt = snap_elapsed_us(t0, esp_timer_get_time());
+        if (dt > s_enc_max_us) s_enc_max_us = dt;
 
         if (++p_win >= 50) {               /* 10s perf 行（第八章预算 500µs）*/
             p_win = 0;
-            ESP_LOGI(TAG, "[SNAPP] enc_max=%luus (budget 500) snap=%lu delta=%lu drop=%lu skip=%lu",
-                     (unsigned long)s_enc_max_us, (unsigned long)s_snap_cnt,
-                     (unsigned long)s_delta_cnt, (unsigned long)s_send_drop,
-                     (unsigned long)s_send_skip);
+            /* M08-F-07：late_max = 这个 10s 窗口里 200ms 节拍的最大迟到（ms）。准时醒来是 0～1 个
+             * tick；持续增长说明快照任务被抢占，"每 200ms 一帧"的承诺不成立。
+             * M11-F-13：enc_max 现在只统计本拍编码+入队的耗时（int64 差、无符号），不会固化伪值。*/
+            ESP_LOGI(TAG, "[SNAPP] enc_max=%luus (budget 500) late_max=%lums (period %lums) "
+                          "snap=%lu delta=%lu drop=%lu skip=%lu",
+                     (unsigned long)s_enc_max_us, (unsigned long)late_max,
+                     (unsigned long)SNAP_PERIOD_MS,
+                     (unsigned long)s_snap_cnt, (unsigned long)s_delta_cnt,
+                     (unsigned long)s_send_drop, (unsigned long)s_send_skip);
+            late_max = 0;
         }
     }
 }

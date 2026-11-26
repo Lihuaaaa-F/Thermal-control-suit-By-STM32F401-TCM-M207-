@@ -762,6 +762,64 @@ static void act_m1(int ph)
     CHECK(s.arq_ok == 1, "M: 对端的非 ACK 帧把 link_ok 置回真（旧实现只能被 ACK 复位）");
 }
 
+/* ---- N：M11-F-09 收帧校验 ver——版本不符要计数 + 提示位，且不把错位字段当真值 ---- */
+static void act_n0(int ph)
+{
+    (void)ph;
+    /* 先给一帧正常 STATUS 建立"好数据"基线（tc1_act = 25.5）*/
+    tcs_status_pl_t st; memset(&st, 0, sizeof(st));
+    st.ver = TCS_PROTO_VER; st.seq = 0x60; st.tc1_act = 25.5f;
+    uint8_t spl[TCS_STATUS_PL_LEN]; (void)tcs_pl_status(spl, sizeof(spl), &st);
+    peer_send(MT_TCS_STATUS, 0x60, spl, sizeof(spl));
+}
+static void act_n1(int ph)
+{
+    (void)ph;
+    /* 版本不符的一帧：tc1_act 写 99.0，若被 publish 就会覆盖上面的 25.5 */
+    tcs_status_pl_t st; memset(&st, 0, sizeof(st));
+    st.ver = (uint8_t)(TCS_PROTO_VER + 1u); st.seq = 0x61; st.tc1_act = 99.0f;
+    uint8_t spl[TCS_STATUS_PL_LEN]; (void)tcs_pl_status(spl, sizeof(spl), &st);
+    peer_send(MT_TCS_STATUS, 0x61, spl, sizeof(spl));
+}
+static void act_n2(int ph)
+{
+    (void)ph;
+    link_status_t lst;
+    link_stats_t  sst;
+    link_status_copy(&lst);
+    link_stats_get(&sst);
+    printf("  [N] 版本不符：verg=%lu peer_ver=%u hint=0x%04x tc1_act=%.1f alive=%d\n",
+           (unsigned long)sst.proto_mismatch, (unsigned)sst.peer_ver,
+           (unsigned)link_alarm_hint(), (double)lst.tc1_act, (int)link_alive());
+    CHECK(sst.proto_mismatch == 1, "N: 版本不符的 STATUS 计数 +1");
+    CHECK(sst.peer_ver == (uint8_t)(TCS_PROTO_VER + 1u), "N: 网页能读到实际收到的对端版本");
+    CHECK(link_alarm_hint() == (uint16_t)ALM_PROTO, "N: 版本不符置提示位 ALM_PROTO");
+    CHECK(lst.tc1_act != 99.0f, "N: 版本不符的帧不被当成当前布局解析后 publish（仍是 25.5）");
+    CHECK(link_alive(), "N: 版本不符仍算链路有帧（不是'离线'，差异由 ver 提示位表达）");
+
+    /* 版本对上的下一帧：提示位清回 0，计数保留 */
+    tcs_status_pl_t st; memset(&st, 0, sizeof(st));
+    st.ver = TCS_PROTO_VER; st.seq = 0x62; st.tc1_act = 26.0f;
+    uint8_t spl[TCS_STATUS_PL_LEN]; (void)tcs_pl_status(spl, sizeof(spl), &st);
+    peer_send(MT_TCS_STATUS, 0x62, spl, sizeof(spl));
+}
+static void act_n3(int ph)
+{
+    (void)ph;
+    link_status_t lst; link_stats_t sst;
+    link_status_copy(&lst); link_stats_get(&sst);
+    printf("  [N] 版本恢复：verg=%lu peer_ver=%u hint=0x%04x tc1_act=%.1f alarms=0x%04x\n",
+           (unsigned long)sst.proto_mismatch, (unsigned)sst.peer_ver,
+           (unsigned)link_alarm_hint(), (double)lst.tc1_act, (unsigned)lst.alarm);
+    CHECK(link_alarm_hint() == 0, "N: 版本对上后提示位清回 0");
+    CHECK(sst.proto_mismatch == 1, "N: 计数只增（不清）");
+    CHECK(lst.tc1_act == 26.0f, "N: 版本对上后字段照常 publish");
+    CHECK(sst.peer_ver == TCS_PROTO_VER, "N: 对端版本跟着刷新");
+    /* ALM_PROTO 由 tcs_snap 按位或进 0x20/0x21 的 alarm（tcs_snap.c 依赖 IDF，主机编不了）；
+     * 这里只钉住"提示位的来源函数"。 */
+    CHECK((link_alarm_hint() & (uint16_t)ALM_PROTO) == 0, "N: 提示位是 ALM_PROTO 这一位本身");
+}
+
 /* ======================= main ======================= */
 static int cmp_act(const void *a, const void *b)
 {
@@ -799,9 +857,10 @@ int main(void)
     at(11800, act_i0, 0);  at(12300, act_i1, 0);
     at(12600, act_l0, 0);  at(32600, act_l1, 0);
     at(32900, act_m0, 0);  at(33200, act_m1, 0);
+    at(33500, act_n0, 0);  at(33800, act_n1, 0);  at(34100, act_n2, 0);  at(34400, act_n3, 0);
 
     qsort(g_act, (size_t)g_nact, sizeof(g_act[0]), cmp_act);
-    sim_until(33400);
+    sim_until(34800);
 
     /* P1-12 的另一半（S 线 i3）：link_start 把任务创建的结果带出来。原来是 void 接口，
      * 启动汇总只能把它记成"未核实"；任务没起来时屏链整个不存在，汇总里却看不出来。*/

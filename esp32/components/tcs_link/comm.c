@@ -229,14 +229,60 @@ void comm_tick(comm_link_t *L)
 
 int comm_on_ack(comm_link_t *L, uint8_t acked_seq, uint8_t acked_mt)
 {
+    /* X01-F-03：旧入口 = 只有链路信息、业务结果按 OK。真实应答走 comm_on_ack_ex。*/
+    return comm_on_ack_ex(L, acked_seq, acked_mt, TCS_ACK_OK, 0.0f);
+}
+
+void comm_set_on_ack_result(comm_link_t *L,
+                            void (*cb)(uint8_t acked_seq, uint8_t acked_mt,
+                                       uint8_t status, float ret))
+{
+    comm_lock(L);
+    L->on_ack_result = cb;
+    comm_unlock(L);
+}
+
+int comm_on_ack_ex(comm_link_t *L, uint8_t acked_seq, uint8_t acked_mt,
+                   uint8_t status, float ret)
+{
+    /* X01-F-03（2026-11-26）：0x90 的 status/ret 移交上层。原先只按 (seq,mt) 清 pending，
+     * BAD_ID / CLAMP / BUSY 一律当成功。现在：结果落进 pending 条目 → 非 OK 计数 →
+     * 清 in_use → 锁外调 on_ack_result（回调里可以安全再调 comm_*）。*/
+    void (*cb)(uint8_t, uint8_t, uint8_t, float) = NULL;
+    status = (uint8_t)(status & TCS_ACK_STATUS_MASK);
     comm_lock(L);                       /* M11-F-07：与 comm_send 的登记互斥 */
+    L->last_ack_mt = acked_mt;
+    L->last_ack_status = status;
+    L->last_ack_ret = ret;
+    L->last_ack_have = 1;
+    if (status != TCS_ACK_OK && L->ack_nonok_cnt != 0xFFFFFFFFu) L->ack_nonok_cnt++;
     int idx = find_pending(L, acked_seq, acked_mt);
     if (idx >= 0) {
+        L->pending[idx].ack_status = status;
+        L->pending[idx].ack_ret = ret;
+        L->pending[idx].ack_have = 1;
         L->pending[idx].in_use = 0;
         L->link_ok = COMM_LINK_OK_TRUE;  /* 任一 ACK 到即链路恢复 */
+        cb = L->on_ack_result;
     }
     comm_unlock(L);
+    if (idx >= 0 && cb) cb(acked_seq, acked_mt, status, ret);
     return idx >= 0 ? 1 : 0;
+}
+
+int comm_last_ack(comm_link_t *L, uint8_t *out_mt, uint8_t *out_status, float *out_ret)
+{
+    int have;
+    comm_lock(L);
+    have = L->last_ack_have;
+    if (have) {
+        if (out_mt) *out_mt = L->last_ack_mt;
+        if (out_status) *out_status = L->last_ack_status;
+        if (out_ret) *out_ret = L->last_ack_ret;
+        L->last_ack_have = 0;   /* 读后清标记（值本身保留，排障时还能看）*/
+    }
+    comm_unlock(L);
+    return have ? 1 : 0;
 }
 
 /* 记最近重复帧信息（去重命中时上层回 ACK 用） */
@@ -322,8 +368,15 @@ int comm_rx_feed_byte(comm_link_t *L, uint8_t b,
 
     /* ACK 帧：交给发送侧清 pending，不交上层 */
     /* TCS 扩展（任务书 §4.2）：0x90 = TCS_ACK，布局与 GS ACK 兼容（[2]acked_seq [3]acked_mt）
-     * R5-01：载荷里的被确认消息号按"去掉方向位"解释（comm 层往上只认去掉方向位的消息号）。*/
-    if (mt == MT_UPLINK_ACK || mt == MT_DOWNLINK_ACK || mt == MT_TCS_ACK) {
+     * R5-01：载荷里的被确认消息号按"去掉方向位"解释（comm 层往上只认去掉方向位的消息号）。
+     * X01-F-03（2026-11-26）：0x90 的 status/ret 现在按协议解出来交给上层——不再只取前两字节。*/
+    if (mt == MT_TCS_ACK) {
+        tcs_ack_pl_t a;
+        if (tcs_scan_ack(&payload[2], plen - 2, &a) != 0) return 0;   /* 长度不足：丢弃，不猜 */
+        comm_on_ack_ex(L, a.acked_seq, tcs_frame_mt(a.acked_mt), a.status, a.ret);
+        return 0;
+    }
+    if (mt == MT_UPLINK_ACK || mt == MT_DOWNLINK_ACK) {   /* GS 遗留 0x04/0x84：4 字节，没有 status/ret */
         if (plen < 4) return 0;
         comm_on_ack(L, payload[2], tcs_frame_mt(payload[3]));
         return 0;

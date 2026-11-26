@@ -322,13 +322,16 @@ static int cmd_linkstat(int argc, char **argv)
      * 异常或 linkloop 1 时增长；arq：comm 层 link_ok（0 = 有一帧等 ACK 重传耗尽）；
      * wdir：方向位说是屏、但屏不会发的消息号（坏帧或两端版本不匹配，不是回声）。*/
     printf("link rx_b=%lu rx_f=%lu crc=%lu len=%lu gap=%lu dup=%lu retry=%lu "
-           "txqdrop=%lu uartdrop=%lu echo=%lu evict=%lu verg=%lu arq=%u wdir=%lu txwdir=%lu txfail=%lu",
+           "txqdrop=%lu uartdrop=%lu echo=%lu evict=%lu verg=%lu ver=%u ackbad=%lu "
+           "arq=%u wdir=%lu txwdir=%lu txfail=%lu",
            (unsigned long)st.rx_bytes, (unsigned long)st.rx_frames,
            (unsigned long)st.crc_err, (unsigned long)st.len_err,
            (unsigned long)st.gap_resets, (unsigned long)st.dup,
            (unsigned long)st.retry, (unsigned long)st.txq_drop,
            (unsigned long)st.uart_txdrop, (unsigned long)st.echo_drop,
            (unsigned long)st.pending_evict, (unsigned long)st.proto_mismatch,
+           (unsigned)st.peer_ver,   /* M11-F-09：对端报的协议版本（0 = 还没收到过 STATUS）*/
+           (unsigned long)st.ack_bad,   /* X01-F-03：status != OK 的应答数 */
            (unsigned)st.arq_ok, (unsigned long)st.wrongdir, (unsigned long)st.tx_wrongdir,
            (unsigned long)st.tx_fail);
     printf("\n");

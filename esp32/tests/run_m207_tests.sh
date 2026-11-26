@@ -103,7 +103,7 @@ EXTRA_DEF=""
 # （IDF / FreeRTOS 用 tests/host_stubs 里的桩，按诊断档），在虚拟时钟上跑一条时间线：
 # 自己发出的帧被回送的三种情形、屏写参数紧跟本端发送之后到达、ACK 回声、方向表、linkloop 20s。
 EXTRA_INC="/I..\..\tests\host_stubs"
-run linkdir tests/test_link_dir.c components/tcs_link/link_task.c components/tcs_link/comm.c components/tcs_link/proto.c
+run linkdir tests/test_link_dir.c components/tcs_link/link_task.c components/tcs_link/link_dispatch.c components/tcs_link/link_registry.c components/tcs_link/link_demo.c components/tcs_link/link_selftest.c components/tcs_link/link_send.c components/tcs_link/link_status.c components/tcs_link/comm.c components/tcs_link/proto.c
 EXTRA_INC=""
 # m1（模式页）：对端帧时刻只在方向闸门之后刷新——"屏链路断开 3 秒 = 急停"的计时起点（comm.c 原样编译）
 run linkpeer tests/test_link_peer.c components/tcs_link/comm.c components/tcs_link/proto.c
@@ -155,6 +155,20 @@ python tests/check_layout.py || FAIL=1
 # S-G e3a：版本单一源（X06-F-09）——头文件可解析、CMake / 注册表都从它推导、没有第二处写死的版本号
 python ../tools/version_bump.py --check || FAIL=1
 
+# ---- S-G e1（2026-11-26）------------------------------------------------------------------------
+# X01-F-05：待发队列深度进协议契约。同一个源文件在屏端 run_all.sh 里编屏的那一份 comm.h，
+# 这里编主控这一份——两端的值都必须等于 protocol/tcs_proto.h 的 TCS_MAX_TXQ（_Static_assert
+# 在头文件里，值漂移连编译都过不去；用例再断言一次运行期看到的数）。
+run linkcontract ../project_tcs/tests/test_link_contract.c
+# M11-F-13 / M08-F-07：快照任务的纯时间算术——修复前的 int32 承接 2^31 微秒就跳变
+# （用例里逐字抄了旧写法做对照），修复后跨 2^31 / 2^32 / 50 天连续；节拍迟到跨 tick 回绕、
+# 极大差值钳位。main/snap_time.c 零 IDF 依赖。
+EXTRA_INC="/I..\..\main"
+run snaptime tests/test_snap_time.c main/snap_time.c
+EXTRA_INC=""
+# X01-F-03：0x90 应答的 status/ret 交给上层——主控这一份 comm.c 跑同一组 comm 层断言
+# （用例本体在 project_tcs/tests/test_link_ack.c，这里用 LINK_ACK_COMM_ONLY 跳过 link_send 那几节）。
+run linkack tests/test_link_ack_comm.c components/tcs_link/comm.c components/tcs_link/proto.c
 
 [ $FAIL = 0 ] && echo "esp32-tests: ALL GREEN" || echo "esp32-tests: HAS FAILURES"
 exit $FAIL

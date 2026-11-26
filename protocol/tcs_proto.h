@@ -228,6 +228,11 @@ static inline int tcs_rx_verdict(uint8_t mt_wire, uint8_t self,
 #define TCS_ACK_CLAMP          1
 #define TCS_ACK_BAD_ID         2
 #define TCS_ACK_BUSY           3
+/* X01-F-03（S 线 e1，2026-11-26）：status 的有效位。l1 把"这帧是谁发的"放在**消息号字节**
+ * 的 bit6（见上面的方向一节），status 字节本身没有方向位；这里仍只认低 4 位——
+ * 将来若有人往 status 的高位塞标志（曾经的计划是在最高位放方向位），解析方不会把它当成
+ * 一个未知状态码。comm 层收到 0x90 后按本掩码取 status 再交给上层。*/
+#define TCS_ACK_STATUS_MASK    0x0Fu
 
 /* 0x10 online 位定义 */
 #define TCS_ONLINE_M207        0x01
@@ -242,6 +247,9 @@ static inline int tcs_rx_verdict(uint8_t mt_wire, uint8_t self,
 #define ALM_EEPROM             0x0010
 #define ALM_SENSOR_OPEN        0x0020  /* 通道探头开路（M207 在线但该通道温度不可用；与 ALM_M207 通信失联分离）*/
 #define ALM_SERVICE            0x0040  /* 有后台服务没能启动（P1-12，S 线 e3a）：相应功能不可用，重启前不清。屏端与网页还没有这一位的文案 */
+#define ALM_PROTO              0x0080  /* 对端协议版本与本地不一致（M11-F-09，S 线 e1）：0x10 STATUS 的 ver != TCS_PROTO_VER。
+                                        * ESP32 在组 0x20/0x21 时按位或进 alarm；计数见 link_stats_t.proto_mismatch。
+                                        * 屏端与网页还没有这一位的文案，位本身不参与任何安全判定。*/
 
 /* ====== 0x10 TCS_STATUS（19B 小端）====== */
 typedef struct {
@@ -279,6 +287,24 @@ typedef struct {
 } tcs_ack_pl_t;
 
 #define TCS_ACK_PL_LEN      7
+
+/* ====== 链路待发队列深度（X01-F-05，S 线 e1，2026-11-26）======
+ * 两端 comm.h 的 MAX_TXQ 都取本值，两边各有一条 _Static_assert 与之相等——原先一边 16
+ * 一边 8，同一条 0x14 突发在两端进入不同深度的队列，8 那一边更早"满丢最老"。
+ *
+ * 容量模型（16 = 8 + 8）：
+ *   8 = 同时等 ACK 的在途帧上限（COMM_MAX_PENDING：屏写参数 / 请求注册表 / 急停命令），
+ *       comm_tick 的超时重传会把它们**同时**塞回待发队列，队列必须能整批容纳；
+ *   8 = 免 ARQ 的周期帧与应答余量（快照 0x20 每 200ms 一帧、增量 0x21 变化即发、
+ *       参数镜像 0x11 每 800ms、设备信息 0x22 每 3.2s、每次收帧回一条 0x90）。
+ *
+ * 为什么不按 param_count() 静态推导：注册表条数是运行期常量（表在 param_registry.c 里，
+ * param_count() 不是编译期表达式），而待发队列是静态数组，尺寸必须是编译期常量。注册表
+ * 全量下发（0x14 ×约 50 条）本身也不是一次塞满队列——H743 的 registry_dump_tick 每拍只下发
+ * 1 帧，与 comm_poll_tx 的消费速率相等，队列稳态深度只有 1～2 帧。下面两条断言的职责分工：
+ *   TCS_MAX_TXQ >= 16           —— 8 条在途重传 + 8 条周期帧余量（就是上面的模型）；
+ *   MAX_TXQ >= COMM_MAX_PENDING —— 队列装得下整批重传（少一条就会在重传风暴里丢急停命令）。*/
+#define TCS_MAX_TXQ         16u
 
 /* ====== 0x14 REGISTRY_ENTRY（变长：count+idx 头 + 条目）====== */
 typedef struct {

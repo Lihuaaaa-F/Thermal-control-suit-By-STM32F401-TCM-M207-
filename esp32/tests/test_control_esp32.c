@@ -1333,6 +1333,40 @@ int main(void)
             CHECK(control_state() == CTRL_IDLE && control_safety_latched() == 0,
                   "K23 TC2 reading moves again -> self-heals out of SAFE");
         }
+
+        /* ====== K25（R8-01，独立复核 r8f）：TC2-only 卡死的“解除”不得把借来的 ALM_SENSOR_OPEN 清掉 ======
+         * 通道归属已经扩到 bit2（判据 / 自愈 / ack 的 ok 判据三处都认 4u），只有“报警位清除”这一处还只认
+         * bit1。TC2-only 卡死时按一次“解除”：锁存正确留着（设备仍在 SAFE），报警位却被清空——屏与网页
+         * 一条横幅都不出，屏还回“已解除”。STUCK 不落盘，操作员的下一步通常是断电重启，重启后这个仍冻着
+         * 的 TC2 探头不再有任何保护。判别性：tests/mutation_control.py 的 M77（改回只认 bit1 必须被抓红）。*/
+        enter_auto_healthy();
+        (void)param_set(PARAM_ID_MODE, 0.0f, 4);        /* 手动 */
+        g_tcs.body_temp = 37.0f; g_tcs.tc1_act = 25.0f; g_tcs.tc2_act = 25.0f;
+        tick();
+        for (int i = 0; i < 6100; i++) { g_tcs.tc1_act = (i & 1) ? 24.99f : 25.01f; tick100(); }
+        CHECK(control_safety_latched() == 0, "K25 precondition: TC2 frozen 610 s with TC2 off -> no trip");
+        control_manual_tec(2, 1);                       /* 开 TC2：预冻判据当拍判卡死 */
+        poll100();
+        CHECK((control_safety_latched() & SAFETY_BIT_STUCK) != 0 && control_state() == CTRL_SAFE,
+              "K25 prefrozen TC2 water trips on the first poll after 'on'");
+        CHECK(tcs_alarm_active(ALM_SENSOR_OPEN) == 1 && tcs_alarm_active(ALM_BODY_SENSOR) == 0,
+              "K25 ALM_SENSOR_OPEN visible before ack (TC2 is the only blamed channel)");
+        tcs_alarm_ack();
+        CHECK((control_safety_latched() & SAFETY_BIT_STUCK) != 0 && control_state() == CTRL_SAFE,
+              "K25 ack cannot clear the latch while the TC2 reading is still frozen");
+        CHECK(tcs_alarm_active(ALM_SENSOR_OPEN) == 1,
+              "K25 [R8-01] ALM_SENSOR_OPEN survives the ack (the only visible reason for this SAFE)");
+        {   /* TC2 读数恢复变化 → 2 秒自愈退出 */
+            int n = 0;
+            while (control_state() == CTRL_SAFE && n < 40) {
+                g_tcs.tc2_act = (n & 1) ? 24.99f : 25.01f;
+                g_tcs.tc1_act = (n & 1) ? 24.99f : 25.01f;
+                poll100();
+                n++;
+            }
+            CHECK(control_state() == CTRL_IDLE && control_safety_latched() == 0,
+                  "K25 TC2 reading moves again -> self-heals out of SAFE");
+        }
     }
 
     /* ====== 2026-11-25 S 线 e3a（P1-09）：SAFE 必须到得了执行器 ======

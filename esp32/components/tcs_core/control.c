@@ -573,8 +573,11 @@ void tcs_alarm_ack(void)
         g_tcs.alarm_bits &= (uint16_t)~ALM_BODY_SENSOR;
     if (!(lat & SAFETY_BIT_M207_LOST) && g_tcs.m207_online)
         g_tcs.alarm_bits &= (uint16_t)~ALM_M207;
-    /* 卡死借用的报警位：涉事通道读数还没恢复变化时不清——否则设备停在 SAFE 而屏上说不出原因 */
-    if (!(lat & SAFETY_BIT_M207_LOST) && !g_tcs.m207_sensor_open && !(stuck_chn & 2u))
+    /* 卡死借用的报警位：涉事通道读数还没恢复变化时不清——否则设备停在 SAFE 而屏上说不出原因。
+     * R8-01（独立复核 r8f，2026-11-26）：通道归属按 bit1 / bit2 **两路都在**看。原先只认 bit1（TC1），
+     * TC2-only 卡死时一次“解除”就把这一位清掉了：锁存仍在 SAFE（正确），屏/网页却一条横幅都不出、
+     * 屏还回“已解除”。STUCK 不落盘 → 操作员通常接着断电重启，重启后仍冻着的 TC2 探头不再有保护。*/
+    if (!(lat & SAFETY_BIT_M207_LOST) && !g_tcs.m207_sensor_open && !(stuck_chn & (2u | 4u)))
         g_tcs.alarm_bits &= (uint16_t)~ALM_SENSOR_OPEN;
     if (!(lat & SAFETY_BIT_OVERTEMP) && !water_overtemp())   /* r7f R7-08：两路水温 */
         g_tcs.alarm_bits &= (uint16_t)~ALM_OVERTEMP;

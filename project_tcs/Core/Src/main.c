@@ -504,22 +504,28 @@ static void snap_reassert(void)
 }
 
 /* X01-F-03（2026-11-26）：参数写入的应答结果（0x90 的 status/ret 不再被 comm 层丢掉）。
- *  - OK：不做事——快照（0x20）与镜像泵（0x11）本来就会把权威值带回来。
- *  - CLAMP：主控限幅，ret 是实际写入值 → 本地立刻采用它，屏上显示的就是真值。
- *  - BAD_ID / BUSY / 其它：提示（RTT 与控制台的 WARN 行）+ 把设定值回退到最近一帧快照里的
- *    权威值；其它参数的回退由 0x11 镜像泵（每 800ms 一条、约 41s 一轮）完成。
+ *  - OK：清掉"上次被拒"标记（同值写回到本地短路）。
+ *  - CLAMP：主控限幅，ret 是实际写入值 → 本地立刻采用它（同时成为权威值影子）。
+ *  - BAD_ID / BUSY / 其它：提示（RTT 与控制台的 WARN 行）+ 立刻回退到**最近一次从主控回来的
+ *    权威值**（0x20 快照的设定值 / 0x11 镜像泵；R9-05 把范围从 tc1_set/tc2_set 两个扩到所有屏
+ *    可写参数），并标记"这次写被拒"——用户再点同一个值时不会被本地相等短路吞掉。
+ *    还没有权威值（上电后镜像泵还没轮到它）时退回老行为：两个设定值用最近一帧快照，其余等镜像泵。
  * 本函数不驱动任何执行器，交付档也有意义。*/
 static void on_param_write_result(uint16_t id, uint8_t status, float ret, float requested)
 {
-    if (status == TCS_ACK_OK) return;
+    if (status == TCS_ACK_OK) { param_note_write_result(id, 0); return; }
     tcs_log("[WARN]", "param write rejected id=0x%02x v=%.2f st=%u ret=%.2f",
             (unsigned)id, (double)requested, (unsigned)status, (double)ret);
     if (status == TCS_ACK_CLAMP) {
         param_link_sync(id, ret);                       /* 主控回的实际写入值 */
+        param_note_write_result(id, 0);                 /* 收下了（限幅后），同值重试回到短路 */
         return;
     }
-    if (s_snap_have && id == PARAM_ID_TC1_SET)      param_link_sync(id, s_last_snap.tc1_set);
-    else if (s_snap_have && id == PARAM_ID_TC2_SET) param_link_sync(id, s_last_snap.tc2_set);
+    if (!param_revert_to_authority(id)) {
+        if (s_snap_have && id == PARAM_ID_TC1_SET)      param_link_sync(id, s_last_snap.tc1_set);
+        else if (s_snap_have && id == PARAM_ID_TC2_SET) param_link_sync(id, s_last_snap.tc2_set);
+    }
+    param_note_write_result(id, 1);                     /* 允许同值再发一次 */
 }
 
 /* R2：屏侧写 M207 温度参数 → 链路 0x12 发 ESP32（权威→M207 verify）；

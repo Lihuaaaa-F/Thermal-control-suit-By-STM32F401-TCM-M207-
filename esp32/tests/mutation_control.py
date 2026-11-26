@@ -179,6 +179,14 @@ MUTATIONS = [
        "static void out_tec_sw(uint8_t ch, uint8_t on) { out_tec_sw_ex(ch, on, 1); }")], ""),
     ("M46 模块离线时开关状态仍显示“已知”",
      [("    return (uint8_t)(g_tcs.m207_online ? 0x03u : 0x00u);", "    return 0x03u;")], ""),
+    # ---- 2026-11-26 r7f（独立复核 R7-02，P1）：急停"模式 = 手动"与急停锁存一起落盘、上电再兜一次。
+    #      用例 R7-02a…e 在 test_control_esp32.c ----
+    ("M57 上电读到急停锁存不把模式置回手动（回到修前：重启带回自动模式）",
+     [("    if (s_safety_latch & SAFETY_BIT_ESTOP) estop_boot_force_manual();", "    ;")], ""),
+    ("M58 上电置回手动之后不立刻落盘（等 2 秒防抖）",
+     [("    (void)param_persist_now();                  /* r7f R7-02 ① */", "    ;")], ""),
+    ("M59 急停路径里模式 = 手动不同步落盘（回到只置脏）",
+     [("    (void)param_persist_now();                  /* r7f R7-02 ② */", "    ;")], ""),
     # ---- 2026-11-26 S 线 e3a（X06-F-03）：把 5 条 P0 安全路径的修复回退成修前写法，必须被抓住 ----
     ("M47 超温只报警不锁存（回到 P0-01 修前）",
      [("        safety_trip(SAFETY_BIT_OVERTEMP);", "        ;")], ""),

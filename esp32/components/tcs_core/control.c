@@ -309,6 +309,18 @@ static void goto_state(ctrl_state_t st)
     if (s_ops.on_state) s_ops.on_state(st);
 }
 
+/* r7f（独立复核 R7-02 ①，2026-11-26）：上电读到急停锁存 → 模式无条件置回手动，并立刻落盘。
+ * 为什么：急停把模式切回手动原先走普通写路径（置脏 → 2 秒防抖 + 500ms 冲洗才落盘），急停锁存却是
+ * 立刻落盘的；这 2.5 秒内掉电重启，NVS 里就是"自动模式 + 急停锁存"——人工点一次"解除"，状态机当拍
+ * 按体温把 TEC 重新开起来，用户没有重新切过自动（不变量 I1）。这里不等防抖：写不进（返回 < 0）时脏位
+ * 还在，persist_worker 会按防抖重试；而且每次上电读到急停锁存都会再置一次。急停路径里那一次同步落盘
+ * 见 tcs_emergency_stop_src（②）。用例：tests/test_control_esp32.c 的 R7-02a…e。*/
+static void estop_boot_force_manual(void)
+{
+    (void)param_set(PARAM_ID_MODE, 0.0f, PARAM_SRC_KERNEL);
+    (void)param_persist_now();                  /* r7f R7-02 ① */
+}
+
 void control_init(const control_ops_t *ops)
 {
     if (ops) s_ops = *ops;
@@ -354,6 +366,8 @@ void control_init(const control_ops_t *ops)
     if (s_safety_latch & SAFETY_BIT_BODY_LOST)  g_tcs.alarm_bits |= ALM_BODY_SENSOR;
     if (s_safety_latch & SAFETY_BIT_M207_LOST)  g_tcs.alarm_bits |= ALM_M207;
     if (s_safety_latch) s_state = CTRL_SAFE;   /* 绕过 on_state：ops 可能尚未装配回调 */
+    /* r7f（独立复核 R7-02 ①）：读到急停锁存 → 模式无条件回手动并立刻落盘，理由见 estop_boot_force_manual */
+    if (s_safety_latch & SAFETY_BIT_ESTOP) estop_boot_force_manual();
 }
 
 void tcs_alarm_raise(uint16_t bit)
@@ -510,6 +524,11 @@ void tcs_emergency_stop_src(uint8_t src)
      * 分清是网页、屏幕还是控制台按的急停（原先一律记成"控制台：控制模式 改为 0"）。*/
     (void)param_set(PARAM_ID_MODE, 0.0f, src);
     safe_outputs();
+    /* r7f（独立复核 R7-02 ②，2026-11-26）：模式 = 手动必须与急停锁存一起落盘，不能等 2 秒防抖 + 500ms 冲洗。
+     * 急停后这 2.5 秒内掉电重启，NVS 里就是"自动 + 急停锁存"：人工点一次解除，状态机当拍就把 TEC 开回来。
+     * 放在 safe_outputs() 之后：先把两路 TCSW=0 发出去，再做这次可能阻塞几十~几百毫秒的 NVS 写。
+     * 值没变（已经是手动）时不产生写；写不进时脏位还在，persist_worker 会重试，上电还有 ① 兜底。*/
+    (void)param_persist_now();                  /* r7f R7-02 ② */
     /* m1（模式页）：两路手动输出回暂停（输出上面已全停）。急停可能来自别的任务：只登记请求，
      * 由 control_poll 在控制任务里执行，见 s_manual_reset_req。*/
     s_manual_reset_req = 1;

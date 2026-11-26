@@ -96,6 +96,79 @@ static void enter_auto_healthy(void)
     reset_stubs();
 }
 
+/* ====== r7f（独立复核 R7-02，2026-11-26）：带 NVS 的重启往返 =====
+ * 两份"掉电也在"的副本各一个桩：参数镜像（eeprom_commit 写的那一张）、安全锁存（safety_persist 写的那个字节）。
+ * boot_nvs() 的顺序与 main.c 相同：注册表默认 + 钩子 → 读镜像 → control_init（读回锁存）。*/
+static uint8_t g_nv_img[EE_IMG_SIZE];    /* NVS 里的参数镜像 */
+static int     g_nv_img_have;
+static uint8_t g_nv_latch;               /* NVS 里的安全锁存 */
+static int     g_nv_latch_have;
+static int     g_nv_dead;                /* 1 = 掉电了：之后的镜像写一律不生效（上电前置 0）*/
+static int     g_nv_cut;                 /* 1 = 下一次锁存写完就掉电（卡在"锁存已落盘、模式还没落盘"之间）*/
+static int     g_nv_commits;             /* eeprom_commit 被调用的次数 */
+static int nv_commit(const uint8_t *img)
+{
+    g_nv_commits++;
+    if (g_nv_dead) return -1;
+    memcpy(g_nv_img, img, sizeof g_nv_img);
+    g_nv_img_have = 1;
+    return 0;
+}
+static void nv_latch_save(uint8_t latch)
+{
+    g_nv_latch = latch; g_nv_latch_have = 1;
+    if (g_nv_cut) { g_nv_cut = 0; g_nv_dead = 1; }
+}
+static uint8_t nv_latch_load(void) { return g_nv_latch_have ? g_nv_latch : 0u; }
+static int nv_img_mode(void)             /* NVS 镜像里 0x06（控制模式）的值；没有镜像 / 没有记录 = -1 */
+{
+    if (!g_nv_img_have) return -1;
+    for (int i = 0; i < g_nv_img[2]; i++) {
+        const uint8_t *r = &g_nv_img[4 + 8 * i];
+        if (r[0] == 0x06 && r[1] == 0x00) return r[4];
+    }
+    return -1;
+}
+static void boot_nvs(int with_nvs)
+{
+    param_registry_init(&(param_hooks_t){ .eeprom_commit = nv_commit,
+                                          .on_mode_change = control_on_mode_change,
+                                          .on_check = control_param_check });
+    if (with_nvs && g_nv_img_have) { int sk = 0; (void)param_deserialize_ex(g_nv_img, &sk); }
+    control_init(&(control_ops_t){
+        .fan_set = stub_fan, .tec_sw = stub_tec, .tec_temp = stub_temp, .on_state = 0,
+        .safety_persist = nv_latch_save, .safety_load = nv_latch_load,
+    });
+}
+/* 控制节拍 + 落盘冲洗（固件里 persist_worker 每 500ms 调一次 param_persist_flush）*/
+static void nv_run(uint32_t ms)
+{
+    for (uint32_t t = 0u; t < ms; t += 100u) {
+        poll100();
+        if (((t + 100u) % 500u) == 0u) param_persist_flush(s_now);
+    }
+}
+static void nv_sources_ok(void)
+{
+    set_armed(1);
+    g_tcs.body_sensor_ok = 1; g_tcs.m207_online = 1; g_tcs.m207_sensor_open = 0;
+    g_tcs.tc1_act = 25.0f; g_tcs.body_temp = 36.0f;      /* 体温低于 cold-hyst：一旦是自动模式就会制热 */
+}
+/* 全新上电（NVS 空）→ 自动制热，"模式 = 自动"已落盘 */
+static void nv_fresh_auto_heat(void)
+{
+    memset(g_nv_img, 0, sizeof g_nv_img);
+    g_nv_img_have = 0; g_nv_latch = 0; g_nv_latch_have = 0;
+    g_nv_dead = 0; g_nv_cut = 0; g_nv_commits = 0;
+    nv_sources_ok();
+    boot_nvs(0);
+    nv_sources_ok();
+    s_now = 10000u;
+    (void)param_set(PARAM_ID_MODE, 1.0f, PARAM_SRC_WEB);
+    reset_stubs();
+    nv_run(4000u);
+}
+
 /* W2-22：记录最近一次参数广播的 id 与来源（钩子须是文件作用域：MSVC 不支持嵌套函数）*/
 static uint16_t g_bc_id;
 static uint8_t  g_bc_src;
@@ -1353,6 +1426,99 @@ int main(void)
         CHECK(tcs_alarm_active(ALM_EEPROM) == 0, "E3 ALM_EEPROM is informational: ack clears it");
         control_poll(s_now + 100u);
         CHECK(tcs_alarm_active(ALM_EEPROM) == 1, "E3 re-raised on the next tick while the failure count stands");
+    }
+
+    /* ====== r7f（独立复核 R7-02，2026-11-26，P1）：急停后 2.5 秒内掉电重启带回"自动 + 急停锁存" =====
+     * 不变量 I1：急停之后人工确认也不恢复任何输出，只有用户重新按才恢复。
+     * 现象（R7 的 t2 复现）：急停把模式切回手动走普通写路径（置脏 → 2 秒防抖 + 500ms 冲洗才落盘），
+     * 急停锁存却是立刻落盘的——这 2.5 秒内掉电重启，NVS 里就是"自动模式 + 急停锁存"；人工点一次"解除"，
+     * 状态机当拍按体温把 TEC 又开了起来，用户没有重新切过自动。
+     * 修法两处：① 上电读到急停锁存 → 模式无条件置回手动并立刻落盘；② 急停路径里"模式 = 手动"同步落盘。
+     * 用例：急停之后 0 ~ 3 秒每隔 100ms 做一次"重新 init + 读回镜像与锁存"，断言重启后的
+     * （模式, 锁存, 状态）与事件之后一致、人工确认后没有任何输出。*/
+    {
+        int n0, bad_mode = 0, bad_out = 0, iters = 0;
+
+        /* R7-02 a（②）：急停路径同步落盘——急停返回时 NVS 镜像里已经是"手动"，不必等任何冲洗节拍 */
+        nv_fresh_auto_heat();
+        CHECK(g_nv_img_have && nv_img_mode() == 1, "R7-02a setup: mode=auto already persisted before the estop");
+        n0 = g_nv_commits;
+        tcs_emergency_stop_src(PARAM_SRC_TOUCH);
+        CHECK(g_nv_commits == n0 + 1 && nv_img_mode() == 0,
+              "R7-02a the estop path persists mode=manual at once (no debounce tick in between)");
+        CHECK(g_tcs.mode == 0 && (g_nv_latch & SAFETY_BIT_ESTOP) != 0,
+              "R7-02a RAM: manual + estop latched");
+
+        /* R7-02 b（①）：掉电正好卡在"锁存已落盘、模式还没落盘"之间 → 重启仍必须是手动 */
+        nv_fresh_auto_heat();
+        g_nv_cut = 1;                              /* 下一次锁存写完就掉电：之后的镜像写不生效 */
+        tcs_emergency_stop_src(PARAM_SRC_TOUCH);
+        CHECK((g_nv_latch & SAFETY_BIT_ESTOP) != 0 && nv_img_mode() == 1,
+              "R7-02b setup: latch saved, the image still says auto (the 2.5 s window)");
+        g_nv_dead = 0;                             /* 上电 */
+        n0 = g_nv_commits;
+        boot_nvs(1);
+        CHECK(g_tcs.mode == 0 && control_state() == CTRL_SAFE
+              && control_safety_latched() == SAFETY_BIT_ESTOP,
+              "R7-02b boot with an estop latch forces manual mode (mode, latch, state)");
+        CHECK(nv_img_mode() == 0 && g_nv_commits > n0,
+              "R7-02b the forced manual mode is persisted right at boot");
+        nv_sources_ok();
+        reset_stubs();
+        tcs_alarm_ack();
+        nv_run(1500u);
+        CHECK(control_state() == CTRL_IDLE && tec_on_calls == 0 && control_tec_cmd(1) == 0 && g_tcs.mode == 0,
+              "R7-02b after the ack: no output at all (the user never re-selected auto)");
+
+        /* R7-02 c：急停之后 0 ~ 3 秒每隔 100ms 掉电重启一次（31 次），每次都要（手动, 急停, SAFE），
+         *          人工确认后没有任何输出。修前：2.5 秒内的 25 次都带回自动模式，确认后 TEC1 被重新开起来。*/
+        for (uint32_t waited = 0u; waited <= 3000u; waited += 100u) {
+            nv_fresh_auto_heat();
+            tcs_emergency_stop_src(PARAM_SRC_TOUCH);
+            nv_run(waited);                        /* 防抖窗口里等这么久，然后掉电 */
+            g_nv_dead = 0;
+            boot_nvs(1);                           /* 上电 */
+            iters++;
+            if (!(g_tcs.mode == 0 && control_safety_latched() == SAFETY_BIT_ESTOP
+                  && control_state() == CTRL_SAFE)) bad_mode++;
+            nv_sources_ok();
+            reset_stubs();
+            tcs_alarm_ack();
+            nv_run(1500u);
+            if (!(control_state() == CTRL_IDLE && tec_on_calls == 0
+                  && control_tec_cmd(1) == 0 && control_tec_cmd(2) == 0)) bad_out++;
+        }
+        printf("   R7-02c 急停后 0~3000ms 掉电重启 %d 次：带回自动模式 %d 次，确认后 TEC 被开 %d 次\n",
+               iters, bad_mode, bad_out);
+        CHECK(bad_mode == 0, "R7-02c a reboot 0~3 s after the estop always comes back manual + estop + SAFE");
+        CHECK(bad_out == 0, "R7-02c acknowledging after such a reboot never restarts any output");
+
+        /* R7-02 d（对照）：超温事件不碰模式——重启前后的（模式, 锁存, 状态）本来就一致，
+         *      说明上面的扫描真的在读重启后的值，不是恒过 */
+        for (uint32_t waited = 0u; waited <= 3000u; waited += 1500u) {
+            nv_fresh_auto_heat();
+            g_tcs.tc1_act = 49.0f;
+            poll100();
+            CHECK(control_state() == CTRL_SAFE && (control_safety_latched() & SAFETY_BIT_OVERTEMP) != 0
+                  && g_tcs.mode == 1, "R7-02d setup: auto mode, overtemp latched");
+            nv_run(waited);
+            g_nv_dead = 0;
+            boot_nvs(1);
+            CHECK(g_tcs.mode == 1 && control_safety_latched() == SAFETY_BIT_OVERTEMP
+                  && control_state() == CTRL_SAFE,
+                  "R7-02d overtemp does not touch the mode: (mode, latch, state) survive the reboot as they were");
+        }
+
+        /* R7-02 e（写不进时）：镜像写一直失败也要保证①——RAM 里是手动、状态是 SAFE；NVS 恢复后
+         *      防抖冲洗把"手动"补上 */
+        nv_fresh_auto_heat();
+        g_nv_dead = 1;                             /* 掉电以后的镜像写全部失败 */
+        tcs_emergency_stop_src(PARAM_SRC_TOUCH);
+        CHECK(g_tcs.mode == 0 && control_state() == CTRL_SAFE && (g_nv_latch & SAFETY_BIT_ESTOP) != 0,
+              "R7-02e the estop still leaves the RAM state safe when the image write fails");
+        g_nv_dead = 0;                             /* NVS 恢复 */
+        nv_run(3500u);
+        CHECK(nv_img_mode() == 0, "R7-02e the dirty 'manual' is retried and lands once NVS works again");
     }
 
     printf("test_control: PASS=%d FAIL=%d\n", g_pass, g_fail);

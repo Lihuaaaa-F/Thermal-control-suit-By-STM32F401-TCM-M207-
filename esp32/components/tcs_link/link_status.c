@@ -46,7 +46,11 @@ void link_on_event(link_event_cb_t cb) { s_cb = cb; }
 
 bool link_alive(void)
 {
-    /* 只看真链路心跳（demo_step 不更新 s_real_status_ms，防演示模式自锁）*/
+    /* 只看真链路心跳（demo_step 不更新 s_real_status_ms，防演示模式自锁）
+     * R9-06（独立复核 R9，2026-11-26，只记录不改行为）：e1 拆分时这里的边界从旧 link_task.c 的
+     * `< 3000` 变成 `<= 3000`——恰好 3000 ms 时由"断"变"连"，1 ms 的差，无实际影响。
+     * 保持现状：断链急停的判定走 link_peer_age_ms + `peer_age >= TCS_LINK_LOST_ESTOP_MS`（不是
+     * link_alive），两者本来就不必逐毫秒一致；把这里改回 `<` 只会与"活着 = 3 秒内有过帧"的读法相悖。*/
     uint32_t last = s_real_status_ms;
     return last && (uint32_t)((uint32_t)(esp_timer_get_time() / 1000LL) - last) <= 3000u;
 }

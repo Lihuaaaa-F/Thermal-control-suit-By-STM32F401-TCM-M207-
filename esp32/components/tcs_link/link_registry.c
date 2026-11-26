@@ -106,7 +106,12 @@ void link_registry_apply_entry(tcs_reg_entry_t *e)
 void link_registry_note_param(uint16_t id, float v)
 {
     /* 复核 G3：与 link_last_param_copy()/link_get_registry() 的读共用一把锁，
-     * 否则 DEMO 下 httpd 任务可能读到"新 id + 旧值"。*/
+     * 否则 DEMO 下 httpd 任务可能读到"新 id + 旧值"。
+     * R9-06（独立复核 R9，2026-11-26，只记录不改行为）：e1 把 link_task.c 拆成 7 个文件时，这里比
+     * 旧 0x12 分支多写了 s_param_val[i] / s_param_valid[i]（旧版只有 demo_push_param 才写参数缓存）。
+     * "纯重构、行为一字不变"的陈述在这一处不成立——但 link_param_value() 在当前固件里没有任何
+     * 消费者，所以没有可观察的行为差。保持现状：收到 0x12 就把最新值记进注册表缓存语义上更自洽，
+     * 为一个没人读的缓存回退反而更奇怪。*/
     link_internal_lock();
     s_last_param.id = id;
     s_last_param.v = v;

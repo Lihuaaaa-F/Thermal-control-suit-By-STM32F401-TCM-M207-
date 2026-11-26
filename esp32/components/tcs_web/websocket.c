@@ -29,6 +29,7 @@
 #include "esp_app_desc.h"
 #include "cJSON.h"
 #include "link_task.h"
+#include "link_loss_guard.h"   /* R9-01：断链期间不接网页"解除"（阈值与急停判定同一处：TCS_LINK_LOST_ESTOP_MS）*/
 #include "param_registry.h"
 #include "control.h"
 #include "post.h"
@@ -642,6 +643,19 @@ static void handle_cmd(const cJSON *root, int fd)
         web_log_addf(now_ms(), rv < 0 ? 'w' : 'i', "m207_save",
                      rv < 0 ? "保存到模块失败（模块离线）" : "高级参数已下发模块保存：%d 条", rv);
     } else {
+        /* R9-01 / R9-04（独立复核 R9，2026-11-26）：屏链路断开期间**不接**"解除"。
+         * 口径：急停只能在屏上确认；断链满 3 秒后锁存里的急停位每一拍都会被 link_loss_check 重新锁上，
+         * 网页这一下 ack 只会"先成功、下一拍闪回"，每点一次还白写两次 NVS（ack 清位一次、重锁一次；
+         * 10 Hz 一小时 72k 次）。所以如实回 link_down，不清位、不写盘。
+         * 只在"上电后连上过、现在断了"时拒绝：屏从没连上过的台架用法不触发断链急停，ack 照常放行。*/
+        uint32_t peer_age = 0u;
+        if (cv == TCS_CMD_ALARM_ACK
+            && link_peer_age_ms(&peer_age) && peer_age >= TCS_LINK_LOST_ESTOP_MS) {
+            web_log_addf(now_ms(), 'w', "web_cmd", "网页：确认恢复被拒绝（屏链路断开）");
+            ws_send_str("{\"t\":\"err\",\"code\":\"link_down\","
+                        "\"msg\":\"屏链路断开，急停只能在屏上确认\"}", fd);
+            return;
+        }
         rv = control_apply_cmd_src((uint8_t)cv, PARAM_SRC_WEB);   /* 与屏幕 0x15 同一份语义 */
         if (cv == TCS_CMD_ESTOP || cv == TCS_CMD_ALARM_ACK) {
             web_log_addf(now_ms(), 'i', "web_cmd", "%s", cv == TCS_CMD_ESTOP

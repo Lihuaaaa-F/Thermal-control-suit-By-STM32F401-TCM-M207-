@@ -151,6 +151,16 @@ void  param_link_sync(uint16_t id, float v);
 /* v2 补口：对端（ESP32 权威）参数镜像落表；NaN/未知 id 拒绝。
  * 抽成函数以便 PC 单测（main.c 不可测）。*/
 int   param_mirror_apply(uint16_t id, float v);
+
+/* R9-05（独立复核 R9，2026-11-26）：屏可写参数被主控拒绝后的收敛。
+ *  - param_link_sync / param_mirror_apply 会把"从主控回来的值"记成权威值影子；
+ *  - 写被拒（BAD_ID / BUSY / 跨参数约束拒绝…）时用 param_revert_to_authority 立刻把屏上的值换回影子，
+ *    不再只覆盖 tc1_set / tc2_set 两个、其余等镜像泵下一轮（51 条约 41 秒）；
+ *  - param_note_write_result 由 main.c 的应答回调转述：rejected != 0 = 这次写被拒（允许同值再发一次），
+ *    0 = 成功/已收下（清掉标记，同值写回到"本地短路"）。
+ * 三个都只动本地显示副本，不驱动执行器、不广播。主机用例 tests/test_param_registry.c。*/
+int   param_revert_to_authority(uint16_t id);      /* 1 = 有权威值并已回写；0 = 还没有权威值 */
+void  param_note_write_result(uint16_t id, uint8_t rejected);
 /* X01-F-02：对端快照报警位与本机独占位合并（本机位不被整字覆盖）。*/
 uint16_t alarm_merge_peer(uint16_t remote, uint16_t local_owned, uint16_t local_now);
 

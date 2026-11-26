@@ -49,6 +49,8 @@
 
 
 
+
+
 复现命令（仓库根 `/d/Espressif/ws/tcs`，Git Bash；raw 输出路径分隔符为 `\`，表内归一为 `/`）：
 
 ```bash
@@ -57,6 +59,8 @@ grep -rnE "HAL_GPIO_|HAL_EXTI_" project_tcs/App project_tcs/Core/Src --include=*
 ```
 
 vendor 域说明：`App/rtt/`（SEGGER RTT vendor 五文件）同一 pattern 单独跑=**0 命中**（无需列行）。
+
+
 
 
 
@@ -135,14 +139,14 @@ vendor 域说明：`App/rtt/`（SEGGER RTT vendor 五文件）同一 pattern 单
 | 47 | project_tcs/Core/Src/ltdc.c:493 | HAL_GPIO_Init(GPIOI, &gi) | LTDC PI0/1/2/4/5/6/7=G6/G7/B4-B7（AF14） |
 | 48 | project_tcs/Core/Src/main.c:172 | HAL_GPIO_Init(GPIOA, &gi) | KILL_KEY=PA1 输入+内部下拉初始化（急停键，按下=高） |
 | 49 | project_tcs/Core/Src/main.c:182 | HAL_GPIO_Init | gpio 初始化块：PA3 输入上拉（链路 RX 探针位）等引脚配置 |
-| 50 | project_tcs/Core/Src/main.c:811 | HAL_GPIO_Init(GPIOB, &gi) | LED1/LED2 引脚推挽输出初始化 |
-| 51 | project_tcs/Core/Src/main.c:812 | HAL_GPIO_WritePin(GPIOB, LED1_Pin\ | LED2_Pin, SET) | LED 初始高电平（灭） |
-| 52 | project_tcs/Core/Src/main.c:817 | HAL_GPIO_Init | KEY0(PA1) 输入下拉初始化（急停键，MX_GPIO 块） |
-| 53 | project_tcs/Core/Src/main.c:836 | HAL_GPIO_Init(port, &gi) | uart_gpio_af 通用函数：UART 引脚 AF_PP+VERY_HIGH 复用配置（三路复用同一实现） |
-| 54 | project_tcs/Core/Src/main.c:907 | HAL_GPIO_Init(GPIOB, &gi) | I2C1 MspInit 内 PB8/PB9 AF4_OD+上拉（板上无上拉→飞线 4.7kΩ 外接兜底） |
-| 55 | project_tcs/Core/Src/main.c:939 | HAL_GPIO_TogglePin(LED1_GPIO_Port, LED1_Pin) | Error_Handler 死循环闪 LED1 指示故障 |
-| 56 | project_tcs/Core/Src/main.c:951 | HAL_GPIO_ReadPin(KILL_KEY_GPIO_Port, KILL_KEY_Pin) | 急停键轮询电平读（~10ms 去抖状态机） |
-| 57 | project_tcs/Core/Src/main.c:1249 | HAL_GPIO_WritePin(LED1_GPIO_Port, LED1_Pin, …) | 主循环运行心跳指示翻转 |
+| 50 | project_tcs/Core/Src/main.c:817 | HAL_GPIO_Init(GPIOB, &gi) | LED1/LED2 引脚推挽输出初始化 |
+| 51 | project_tcs/Core/Src/main.c:818 | HAL_GPIO_WritePin(GPIOB, LED1_Pin\ | LED2_Pin, SET) | LED 初始高电平（灭） |
+| 52 | project_tcs/Core/Src/main.c:823 | HAL_GPIO_Init | KEY0(PA1) 输入下拉初始化（急停键，MX_GPIO 块） |
+| 53 | project_tcs/Core/Src/main.c:842 | HAL_GPIO_Init(port, &gi) | uart_gpio_af 通用函数：UART 引脚 AF_PP+VERY_HIGH 复用配置（三路复用同一实现） |
+| 54 | project_tcs/Core/Src/main.c:913 | HAL_GPIO_Init(GPIOB, &gi) | I2C1 MspInit 内 PB8/PB9 AF4_OD+上拉（板上无上拉→飞线 4.7kΩ 外接兜底） |
+| 55 | project_tcs/Core/Src/main.c:945 | HAL_GPIO_TogglePin(LED1_GPIO_Port, LED1_Pin) | Error_Handler 死循环闪 LED1 指示故障 |
+| 56 | project_tcs/Core/Src/main.c:957 | HAL_GPIO_ReadPin(KILL_KEY_GPIO_Port, KILL_KEY_Pin) | 急停键轮询电平读（~10ms 去抖状态机） |
+| 57 | project_tcs/Core/Src/main.c:1255 | HAL_GPIO_WritePin(LED1_GPIO_Port, LED1_Pin, …) | 主循环运行心跳指示翻转 |
 | 58 | project_tcs/Core/Src/stm32h7xx_it.c:95 | HAL_GPIO_TogglePin(LED2_GPIO_Port, LED2_Pin) | Fault_Handler 死循环闪 LED2 指示（不喂 IWDG→2s 复位自恢复，WP-C） |
 
 ## ④ 对照结论

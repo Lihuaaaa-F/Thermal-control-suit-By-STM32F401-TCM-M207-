@@ -17,10 +17,13 @@ static int g_pass, g_fail;
 
 static int commit_cnt;
 static int stub_commit(const uint8_t *img) { (void)img; commit_cnt++; return 0; }
+/* R9-05：广播次数（同值重试要真发帧）*/
+static int bcast_cnt;
+static void stub_bcast(param_desc_t *p, uint8_t src) { (void)p; (void)src; bcast_cnt++; }
 
 int main(void)
 {
-    param_registry_init(&(param_hooks_t){ .eeprom_commit = stub_commit });
+    param_registry_init(&(param_hooks_t){ .eeprom_commit = stub_commit, .on_broadcast = stub_bcast });
 
     /* 初值 */
     CHECK(param_get(PARAM_ID_TC1_SET) == 25.0f, "default tc1");
@@ -230,6 +233,44 @@ int main(void)
         CHECK(alarm_merge_peer(0, own, ALM_EEPROM) == ALM_EEPROM, "local bit survives peer 0");
         CHECK(alarm_merge_peer(ALM_OVERTEMP, own, 0) == ALM_OVERTEMP, "peer bits accepted");
         CHECK(alarm_merge_peer(0xFFFF, own, ALM_EEPROM) == 0xFFFF, "peer all + local");
+    }
+
+    /* R9-05（独立复核 R9）：屏可写参数被主控拒绝后的收敛——回退到权威值 + 同值重试。
+     * 修前：只有 tc1_set / tc2_set 两个回退（main.c），其余参数的被拒值留在屏上直到镜像泵
+     * 下一轮（51 条约 41 秒）；且同值再点被参数表的"相等短路"吞掉，根本发不出帧。*/
+    {
+        /* 主控回来的权威值（0x20 快照 / 0x11 镜像泵的共同落点）*/
+        param_link_sync(PARAM_ID_BODY_HOT, 37.5f);
+        bcast_cnt = 0;
+        CHECK(param_set(PARAM_ID_BODY_HOT, 40.0f, PARAM_SRC_TOUCH) == 0
+              && param_get(PARAM_ID_BODY_HOT) == 40.0f && bcast_cnt == 1,
+              "R9-05 precondition: a changed value is written and broadcast");
+        /* 主控拒绝（BAD_ID / BUSY）→ 立刻回退到权威值，不等镜像泵 */
+        CHECK(param_revert_to_authority(PARAM_ID_BODY_HOT) == 1
+              && param_get(PARAM_ID_BODY_HOT) == 37.5f,
+              "R9-05 [reject] the screen value falls back to the last authoritative value at once");
+        /* 被拒过的参数：同一个值再写一次要真的发帧（不再被本地相等短路吞掉）*/
+        param_note_write_result(PARAM_ID_BODY_HOT, 1);
+        bcast_cnt = 0;
+        CHECK(param_set(PARAM_ID_BODY_HOT, 37.5f, PARAM_SRC_TOUCH) == 0 && bcast_cnt == 1,
+              "R9-05 [retry] after a rejection the same value is sent again");
+        /* 只放行一次：发出去之后标记清掉，再点同一个值回到短路 */
+        bcast_cnt = 0;
+        CHECK(param_set(PARAM_ID_BODY_HOT, 37.5f, PARAM_SRC_TOUCH) == 0 && bcast_cnt == 0,
+              "R9-05 the retry window is one shot (the next same-value write is short-circuited again)");
+        /* 成功 / CLAMP 回执都清标记：用户不必为一次成功写多付一帧 */
+        bcast_cnt = 0;
+        param_note_write_result(PARAM_ID_BODY_HOT, 0);
+        CHECK(param_set(PARAM_ID_BODY_HOT, 37.5f, PARAM_SRC_TOUCH) == 0 && bcast_cnt == 0,
+              "R9-05 an OK/clamp result clears the rejection flag");
+        /* 还没有权威值的参数：不回退（返回 0，调用方退回老行为——等镜像泵）*/
+        CHECK(param_revert_to_authority(PARAM_ID_BODY_COLD) == 0,
+              "R9-05 no authoritative value yet -> no revert (old path: wait for the mirror pump)");
+        /* 任意屏可写参数都走同一条：权威值影子不限于两个设定值 */
+        param_link_sync(PARAM_ID_BODY_COLD, 36.0f);
+        CHECK(param_revert_to_authority(PARAM_ID_BODY_COLD) == 1
+              && param_get(PARAM_ID_BODY_COLD) == 36.0f,
+              "R9-05 the authority shadow works for any screen-writable parameter (body_cold here)");
     }
 
     printf("test_param_registry: PASS=%d FAIL=%d\n", g_pass, g_fail);

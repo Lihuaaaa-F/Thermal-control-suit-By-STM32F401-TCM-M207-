@@ -143,6 +143,9 @@ MUTATIONS = [
     ("M34 模式页：TEC2 的可信度看错位（跟着 TEC1 走）",
      "    out->dir[1] = ((in->tec_known >> 1) & 1u) ? ui_mode_dir_of(in->dir2) : UI_TD_UNKNOWN;",
      "    out->dir[1] = (in->tec_known & 1u) ? ui_mode_dir_of(in->dir2) : UI_TD_UNKNOWN;", TEST_KNOWN),
+    # S-G r9f（R9-08，2026-11-26）：ALM_PROTO 是提示位——不进"还有 N 条"（用户找不到那一条）。
+    ("M35 ALM_PROTO 重新算进\"还有 N 条\"（提示位虚增未知报警）",
+     "    alarm = (uint16_t)(alarm & (uint16_t)~UI_ALARM_TIPS_MASK);\n", ""),
 ]
 
 

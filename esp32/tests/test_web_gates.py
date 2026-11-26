@@ -255,6 +255,27 @@ check(canon is not None and u"口令非机密" in canon and u"NVS 不加密" in 
 check(canon is not None and u"产线" in canon and u"后续项" in canon,
       "canon: production encryption is listed as a follow-up item that needs the production line")
 
+# ---------------------------------------------------------------- R9-01 / R9-04：断链期间网页"解除"如实回绝
+# 口径（用户 2026-11-26）：急停只能在屏上确认。屏链路断开期间网页 ack 只会"先成功、下一拍闪回"，
+# 每点一次还白写两次 NVS（ack 清位 + 断链重锁）。这里核对：handle_cmd 在调用 control_apply_cmd_src
+# **之前**拦住 ALARM_ACK，回 link_down，阈值与《断链 3 秒 = 急停》同一处（TCS_LINK_LOST_ESTOP_MS）。
+print("[gate] R9-01/R9-04 alarm ack from the web is refused while the screen link is down (code=link_down)")
+_cmd = function_body(ws, "static void handle_cmd(")
+check(_cmd != "", "handle_cmd found in websocket.c")
+_refuse = _cmd.find('"code\\":\\"link_down')
+_apply = _cmd.find("control_apply_cmd_src(")
+check(_refuse > 0, "handle_cmd sends a link_down refusal")
+check(_apply > 0 and 0 < _refuse < _apply,
+      "the refusal is placed before control_apply_cmd_src (nothing is cleared, nothing is persisted)")
+check("TCS_CMD_ALARM_ACK" in _cmd[:_apply] if _apply > 0 else False,
+      "the refusal only covers TCS_CMD_ALARM_ACK")
+check("link_peer_age_ms(&peer_age)" in _cmd and "TCS_LINK_LOST_ESTOP_MS" in _cmd,
+      "the refusal uses the same 3 s link-loss threshold as the estop guard")
+check("link_loss_guard.h" in read(ESP, W, "websocket.c"),
+      "websocket.c includes link_loss_guard.h (single source for the threshold)")
+check(u"急停只能在屏上确认" in read(ESP, W, "websocket.c"),
+      "the refusal message says the estop can only be confirmed on the screen")
+
 print("===================")
 if FAIL == 0:
     print("test_web_gates: PASS")

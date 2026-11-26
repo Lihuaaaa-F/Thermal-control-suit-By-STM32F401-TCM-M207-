@@ -174,6 +174,38 @@ static param_hooks_t s_hooks;
 static uint32_t s_armed_at_ms;    /* 首个脏参出现后由 flush 起算的 2s 防抖窗口 */
 static uint8_t  s_flush_armed;
 
+/* R9-05（独立复核 R9，2026-11-26）：屏可写参数的两份旁路状态（按表下标）。
+ *   s_auth_val / s_auth_valid：最近一次**从主控回来**的值（0x20 快照的设定值、0x11 镜像泵、
+ *     0x90 应答的 CLAMP ret 都经过 param_link_sync）。写被拒时用它把屏上的值换回去，
+ *     不用等镜像泵下一轮（51 条约 41 秒）。
+ *   s_write_rejected：这次写被主控拒了。置位后同值再写一次不再被"相等短路"吞掉
+ *     （被拒的值已经写进本地表，用户再点同一个值本来会被判"没变"而不发帧）。*/
+static float   s_auth_val[PARAM_N_REGISTERED];
+static uint8_t s_auth_valid[PARAM_N_REGISTERED];
+static uint8_t s_write_rejected[PARAM_N_REGISTERED];
+
+static int param_index(const param_desc_t *p)
+{
+    if (!p) return -1;
+    int i = (int)(p - s_params);
+    return (i >= 0 && i < PARAM_N_REGISTERED) ? i : -1;
+}
+
+int param_revert_to_authority(uint16_t id)
+{
+    param_desc_t *p = param_find(id);
+    int i = param_index(p);
+    if (i < 0 || !s_auth_valid[i]) return 0;
+    p->value = s_auth_val[i];          /* 影子里存的就是量化后的值 */
+    return 1;
+}
+
+void param_note_write_result(uint16_t id, uint8_t rejected)
+{
+    int i = param_index(param_find(id));
+    if (i >= 0) s_write_rejected[i] = rejected ? 1u : 0u;
+}
+
 /* ====== 基础 ====== */
 void param_registry_init(const param_hooks_t *h)
 {
@@ -284,9 +316,16 @@ int param_set(uint16_t id, float v, uint8_t src)
     int clamped = (c != v);
 
     /* 相等短路：值没变就什么都不做（R1 修复 M05-F-19：原来仍广播 0x11，与"变更即推"不符）。
-     * ACK 的 ret 由调用方用 param_get 回填，不依赖广播。*/
-    if (c == p->value) {
-        return clamped ? 1 : 0;
+     * ACK 的 ret 由调用方用 param_get 回填，不依赖广播。
+     * R9-05（独立复核 R9，2026-11-26）：上一次写被主控拒过的参数例外——用户再点同一个值
+     * 本来会被判"没变"而不发帧，只能先改成别的值再改回来。放行一次，发出去之后清标记。*/
+    {
+        int idx = param_index(p);
+        int retry = (idx >= 0 && s_write_rejected[idx]) ? 1 : 0;
+        if (c == p->value && !retry) {
+            return clamped ? 1 : 0;
+        }
+        if (idx >= 0) s_write_rejected[idx] = 0;   /* 这一次已经发出去了（再被拒会由应答回调置回）*/
     }
 
     /* 跨参数约束：body_cold < body_hot（写任一侧校验另一侧，违反拒写）*/
@@ -308,6 +347,11 @@ void param_link_sync(uint16_t id, float v)
     if (!p) return;
     if (!isfinite(v)) return;   /* R1 P1-05：对端快照里的坏值不得写入镜像 */
     float c = param_clamp_quantize(p, v);
+    {
+        /* R9-05：这就是"权威值影子"的来源之一（0x20 快照 / 0x11 镜像泵 / CLAMP 回执都走这里）。*/
+        int idx = param_index(p);
+        if (idx >= 0) { s_auth_val[idx] = c; s_auth_valid[idx] = 1u; }
+    }
     if (c != p->value) {
         p->value = c;
         /* M05-F-10：原 `dirty_ui = 1` 是死状态——LVGL 单栈后的 UI 是"拉"模型

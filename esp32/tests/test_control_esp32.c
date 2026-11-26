@@ -59,7 +59,8 @@ static uint8_t stub_exempt(uint8_t ch)
 
 /* P0-08 持久化钩子桩（文件作用域：MSVC 不支持嵌套函数定义）*/
 static uint8_t s_persisted;
-static void    persist_cb(uint8_t latch) { s_persisted = latch; }
+static int     s_persist_calls;          /* R9-04：落盘次数（只含 STUCK 的锁存不该产生写）*/
+static void    persist_cb(uint8_t latch) { s_persisted = latch; s_persist_calls++; }
 static uint8_t load_cb(void)             { return SAFETY_BIT_ESTOP; }
 /* S 线 e3a（卡死判据）用：上电无锁存 / 存储里留着 STUCK 位 */
 static uint8_t load0_cb(void)            { return 0; }
@@ -1171,8 +1172,10 @@ int main(void)
         CHECK(control_state() == CTRL_SAFE && (control_safety_latched() & SAFETY_BIT_STUCK) != 0,
               "K9b one window after TEC turn-on the body reading is judged stuck");
 
-        /* K9c（r7f R7-04）水温在 TC1 没开的时候就冻了 11 分钟：TC1 一开就当拍判卡死。
-         *     修前要等 TEC 开满 30 秒，而水温窗口是 10 分钟——这 11 分钟里读数一直是冻的，没有可等的响应。*/
+        /* K9c（r7f R7-04 / R9-03）水温在 TC1 没开的时候就冻了 11 分钟：TC1 一开不再"当拍"判卡死，
+         *     先挂起进 30 秒确认窗（R9-03：热稳态下 10 分钟逐位不变完全可能，"按制热就报探头断线"
+         *     会让人去拔插探头）；窗口内读数一次都没动才判。旧的"开沿当拍"断言在 R9-03 之后按设计
+         *     不再成立，判别力转移到下面两条（不是削弱：还多了"动一下就撤销"的反向用例 K27）。*/
         enter_auto_healthy();
         (void)param_set(PARAM_ID_MODE, 0.0f, 4);
         g_tcs.tc1_act = 30.0f; tick();                    /* 喂进第一个样本，之后不再变 */
@@ -1180,9 +1183,12 @@ int main(void)
         CHECK(control_state() == CTRL_IDLE && control_safety_latched() == 0,
               "K9c precondition: water frozen for 11 min with TC1 off, no trip");
         control_manual_tec(1, 1);                         /* TC1 开（开沿记在最近一拍的时间戳上）*/
-        for (int i = 0; i < 5 && control_state() == CTRL_IDLE; i++) tick100();
+        for (int i = 0; i < 299; i++) tick100();          /* 29.9 秒：确认窗还没满 */
+        CHECK(control_state() == CTRL_IDLE && control_safety_latched() == 0,
+              "K9c [R9-03] prefrozen water is not judged on the turn-on tick (30 s confirmation)");
+        tick100(); tick100();                             /* 30.1 秒，一次都没动 */
         CHECK(control_state() == CTRL_SAFE && (control_safety_latched() & SAFETY_BIT_STUCK) != 0,
-              "K9c water frozen long before TC1 turn-on trips at once");
+              "K9c prefrozen water trips once the 30 s confirmation window expires without movement");
 
         /* K24（R8-02，独立复核 r8f）体温先判出来时，水温如果只是**稳态不动**（30 秒级；健康读数的常态，
          *     F2 实测 30–53 秒）不得记进涉事通道。否则体温一恢复，2 秒自愈还要求“水温也活”，设备被按在
@@ -1248,6 +1254,79 @@ int main(void)
             CHECK(control_state() == CTRL_HEAT,
                   "K24b once the water reading moves too -> self-heals back to HEAT");
         }
+
+        /* K26（R9-02，独立复核 R9）两路**同时**冻住、体温先判出来：水温自己的长窗口（10 分钟）
+         *     在锁存期间满了之后必须记进涉事通道并报借来的水温位。否则体温那一路一恢复，
+         *     锁存连同涉事通道一起清掉，输出就对着一个真冻住的水温读数开下去——48°C 硬切断对
+         *     冻住的读数是失明的（R9 在主机上量到 557.9 秒）。判别性：mutation_control.py 的 M80。*/
+        enter_auto_healthy();
+        g_tcs.body_temp = 30.0f; g_tcs.tc1_act = 25.0f;
+        tick();                                           /* HEAT，TEC1 开；两路读数从此都不动 */
+        for (int i = 0; i < 301; i++) tick100();          /* 30.1 s：体温先判出 */
+        CHECK(control_state() == CTRL_SAFE && (control_safety_latched() & SAFETY_BIT_STUCK) != 0,
+              "K26 precondition: body first -> STUCK");
+        CHECK(tcs_alarm_active(ALM_SENSOR_OPEN) == 0, "K26 precondition: the water channel is not blamed yet");
+        for (int i = 0; i < 6100; i++) tick100();         /* 两路都还冻着：水温的长窗口也满了 */
+        CHECK(tcs_alarm_active(ALM_SENSOR_OPEN) == 1,
+              "K26 [R9-02] the water channel is recorded once its own 10-minute window is full");
+        {
+            int on = 0;
+            for (int i = 0; i < 30; i++) {                /* 体温恢复变化、水温仍冻着 */
+                g_tcs.body_temp = (i & 1) ? 29.99f : 30.01f;
+                tick100();
+                if (control_tec_cmd(1) || control_tec_cmd(2)) on++;
+            }
+            CHECK(control_state() == CTRL_SAFE && on == 0,
+                  "K26 [R9-02] body recovery alone does not resume output while the water is frozen");
+        }
+        {
+            int n = 0;
+            while (control_state() == CTRL_SAFE && n < 40) {   /* 水温也动起来 → 2 秒自愈 */
+                g_tcs.body_temp = (n & 1) ? 29.99f : 30.01f;
+                g_tcs.tc1_act   = (n & 1) ? 24.99f : 25.01f;
+                tick100();
+                n++;
+            }
+            CHECK(control_state() == CTRL_HEAT, "K26 once the water reading moves too -> self-heals back to HEAT");
+        }
+
+        /* K27（R9-03）预冻挂起后、确认窗内读数动过一次 → 撤销，不判卡死。
+         *     判别性：mutation_control.py 的 M82。*/
+        enter_auto_healthy();
+        (void)param_set(PARAM_ID_MODE, 0.0f, 4);          /* 手动：TC1 关着 */
+        g_tcs.tc1_act = 30.0f; tick();                    /* 喂进第一个样本 */
+        for (int i = 0; i < 6800; i++) tick100();         /* 水温冻 680 秒（TC1 关着，不判）*/
+        control_manual_tec(1, 1);                         /* 开 TC1 → 预冻挂起 */
+        for (int i = 0; i < 50; i++) tick100();           /* 5 秒 */
+        g_tcs.tc1_act = 30.5f;                            /* 读数动一下 → 撤销 */
+        for (int i = 0; i < 600; i++) tick100();          /* 再 60 秒；冻结从这次变化重新算 */
+        CHECK(control_safety_latched() == 0 && control_state() != CTRL_SAFE,
+              "K27 [R9-03] a reading that moves inside the confirmation window cancels the trip");
+
+        /* K28（R9-04，独立复核 R9）只含 STUCK 的锁存不落盘（STUCK 不在 SAFETY_PERSIST_MASK 里）：
+         *     trip 与 ack 都不该产生 NVS 写——写进去的值和原来逐位一样。操作员连点"解除"时的
+         *     写放大（ack + 重锁 = 2 次写/对）就是靠这一条与 R9-01 的 link_down 回绝一起消掉的。*/
+        control_init(&(control_ops_t){
+            .fan_set = stub_fan, .tec_sw = stub_tec, .tec_temp = stub_temp,
+            .on_state = 0, .safety_persist = persist_cb, .safety_load = load0_cb,
+        });
+        param_registry_init(&(param_hooks_t){0});
+        set_armed(1);
+        g_tcs.body_sensor_ok = 1; g_tcs.m207_online = 1; g_tcs.m207_sensor_open = 0;
+        g_tcs.body_temp = 30.0f; g_tcs.tc1_act = 25.0f;
+        s_now = 10000u;
+        (void)param_set(PARAM_ID_MODE, 1.0f, 4);
+        tick();
+        s_persist_calls = 0;
+        for (int i = 0; i < 301; i++) tick100();
+        CHECK((control_safety_latched() & SAFETY_BIT_STUCK) != 0, "K28 precondition: STUCK latched");
+        CHECK(s_persist_calls == 0, "K28 [R9-04] tripping a STUCK-only latch writes nothing");
+        g_tcs.body_temp = 30.5f;                          /* 读数动一下 → stuck_recovered 成立 */
+        tick100();
+        s_persist_calls = 0;
+        tcs_alarm_ack();
+        CHECK(control_safety_latched() == 0, "K28 precondition: the ack cleared the STUCK latch");
+        CHECK(s_persist_calls == 0, "K28 [R9-04] clearing a STUCK-only latch writes nothing either");
 
         /* K14 源不健康时不累计：未布防 + 模块离线 + TC1 开着 + 水温陈旧不变
          *     → 走既有失联路径，不报卡死（离线不是"读数冻结"）*/
@@ -1382,10 +1461,13 @@ int main(void)
         tick();
         for (int i = 0; i < 6100; i++) { g_tcs.tc1_act = (i & 1) ? 24.99f : 25.01f; tick100(); }
         CHECK(control_safety_latched() == 0, "K25 precondition: TC2 frozen 610 s with TC2 off -> no trip");
-        control_manual_tec(2, 1);                       /* 开 TC2：预冻判据当拍判卡死 */
-        poll100();
+        control_manual_tec(2, 1);                       /* 开 TC2：预冻挂起 → 30 秒确认窗后判卡死 */
+        for (int i = 0; i < 299; i++) tick100();          /* 29.9 秒：确认窗还没满 */
+        CHECK(control_safety_latched() == 0 && control_state() == CTRL_IDLE,
+              "K25 [R9-03] prefrozen TC2 water is not judged on the first poll after 'on'");
+        tick100(); tick100();                             /* 30.1 秒，一次都没动 */
         CHECK((control_safety_latched() & SAFETY_BIT_STUCK) != 0 && control_state() == CTRL_SAFE,
-              "K25 prefrozen TC2 water trips on the first poll after 'on'");
+              "K25 prefrozen TC2 water trips once the 30 s confirmation window expires");
         CHECK(tcs_alarm_active(ALM_SENSOR_OPEN) == 1 && tcs_alarm_active(ALM_BODY_SENSOR) == 0,
               "K25 ALM_SENSOR_OPEN visible before ack (TC2 is the only blamed channel)");
         tcs_alarm_ack();

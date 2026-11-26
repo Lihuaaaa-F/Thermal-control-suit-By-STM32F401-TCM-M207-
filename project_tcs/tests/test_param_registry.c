@@ -209,6 +209,21 @@ int main(void)
         CHECK(cm && (cm->flags & PF_DANGER), "0x08 commissioned is PF_DANGER");
     }
 
+    /* r7f（独立复核 R7-12，2026-11-26）：交付档邮箱 p set 的拒绝表——执行器类参数（0x06 控制模式 /
+     * 0x09、0x0A 两路手动输出）在交付档一律拒（等效于交付档删掉的 mode / tec / fan）；
+     * 台架档放行（台架要能直控）；非执行器参数两档都放行（屏幕调参页本来就能写）。*/
+    {
+        CHECK(param_mailbox_blocked(PARAM_ID_MODE, 1) == 1, "R7-12 prod: p set 0x06 mode is refused");
+        CHECK(param_mailbox_blocked(PARAM_ID_TEC1_MANUAL, 1) == 1, "R7-12 prod: p set 0x09 TEC1 output is refused");
+        CHECK(param_mailbox_blocked(PARAM_ID_TEC2_MANUAL, 1) == 1, "R7-12 prod: p set 0x0A TEC2 output is refused");
+        CHECK(param_mailbox_blocked(PARAM_ID_MODE, 0) == 0 && param_mailbox_blocked(PARAM_ID_TEC1_MANUAL, 0) == 0
+              && param_mailbox_blocked(PARAM_ID_TEC2_MANUAL, 0) == 0,
+              "R7-12 bench: the same ids stay writable (bench needs direct control)");
+        CHECK(param_mailbox_blocked(PARAM_ID_BODY_HOT, 1) == 0
+              && param_mailbox_blocked(PARAM_ID_COMMISSIONED, 1) == 0,
+              "R7-12 prod: non-actuator parameters are still writable");
+    }
+
     /* X01-F-02：对端快照不得抹掉本机独占报警位 */
     {
         const uint16_t own = ALM_EEPROM;

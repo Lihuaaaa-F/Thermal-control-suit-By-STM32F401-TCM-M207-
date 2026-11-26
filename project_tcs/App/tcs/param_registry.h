@@ -136,6 +136,13 @@ int   param_persist_now(void);
 int   param_persist_all(void);
 uint32_t param_persist_fail_count(void);   /* R1 P1-04：连续落盘失败次数 */
 
+/* r7f（独立复核 R7-12，2026-11-26）：交付档的邮箱命令 p set 该不该拒。
+ * prod != 0（TCS_PROFILE < 1 的交付档）时，执行器类参数一律拒：0x06 控制模式 / 0x09、0x0A 两路手动输出
+ * ——它们与交付档已经删掉的 mode / tec / fan 命令等效（console.c 的 TCS_PROFILE >= 1 那一段）。
+ * 非执行器参数照旧放行：屏幕调参页本来就能写它们，邮箱不多开任何能力。
+ * 返回 1 = 拒；0 = 放行。纯逻辑，主机用例 tests/test_param_registry.c。*/
+int param_mailbox_blocked(uint16_t id, uint8_t prod);
+
 /* 广播（param_set 内部已调；模式等非参数变更可手动调）*/
 void  param_broadcast(param_desc_t *p, uint8_t src);
 

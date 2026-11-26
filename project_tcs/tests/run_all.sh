@@ -583,7 +583,7 @@ if [ -n "$PYBIN" ] && "$PYBIN" tools/proto_ref.py selftest; then :; else echo "[
 # S-G x3（X06-F-06）：恒真断言静态扫描。抓 `|| 1`、`CHECK(1,`、对无符号/枚举值 `>= 0`、
 # 以及"循环条件就是 *p、体内还写 || *p == '\0'"这类死项。起因：审计在 4 处断言里找到永不红的写法，
 # 其中 `comm_txq_count(...) == 0 || 1` 是字面恒真（comm 丢帧时仍然绿）。
-# 先跑 --self-test（4 个构造样例必须全被抓到），再扫全仓测试源码。
+# 先跑 --self-test（5 个构造样例：4 个 C 写法 + 1 个 python，必须全被抓到），再扫全仓测试源码。
 if [ -n "$PYBIN" ] && "$PYBIN" -X utf8 tests/check_tautology.py --self-test; then :; else
     echo "[tautology_selftest] FAIL"; FAIL=1
 fi

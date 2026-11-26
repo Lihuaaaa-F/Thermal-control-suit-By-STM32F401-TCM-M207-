@@ -8,7 +8,6 @@
 探测一次约 0.35 秒，所以分辨率就是 0.35 秒；要更准请看固件里的计时埋点。
 帧缓冲地址固定 0xC0000000（LTDC CFBAR），1024x600 RGB565。
 """
-import struct
 import sys
 import time
 
@@ -30,10 +29,8 @@ def main():
         return mb.pr_read("b16", addr, 1)[0]
 
     before = pix()
-    a = mb.nm_addr("g_tap_inject")
-    mb.pr_write(a + 4, struct.pack("<III", 1, tx, ty))
-    seq = (mb.pr_read("b32", a, 1)[0] + 1) & 0xFFFFFFFF
-    mb.pr_write(a, struct.pack("<I", seq))
+    # S-G x3（2026-11-26）：注入统一走 site_common.tap_guarded（模式页执行器禁区在这里同样生效）。
+    sc.tap_guarded(mb, tx, ty, 1)
     t0 = time.time()
     prev = None
     for i in range(n):

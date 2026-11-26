@@ -622,6 +622,18 @@ PYEOF
 else
     echo "[golden_corpus] SKIP: python not found"; FAIL=1
 fi
+
+# S-G x3（条目 3，2026-11-26 D7 事故）：现场工具的"带禁区的点击"。
+# 事故：estop_matrix 在模式页点确认框的"取消"，确认框已不在，那一下落到 TEC2"制冷"上——
+# 主控向 M207 发了一条真实的 TEC2 制冷命令。禁区逻辑现在只有一份实现（site_common.tap_guarded）。
+# 这两行不碰探针：test_tap_guard 用假页号/假探针证明六个矩形全拦、急停/返回/导航键放行；
+# check_site_tap_guard 是静态门禁，禁止 tools/site 下再出现第二份写 g_tap_inject 或矩形表的代码。
+if [ -n "$PYBIN" ] && "$PYBIN" -X utf8 tests/test_tap_guard.py; then :; else
+    echo "[tap_guard] FAIL"; FAIL=1
+fi
+if [ -n "$PYBIN" ] && "$PYBIN" -X utf8 tests/check_site_tap_guard.py; then :; else
+    echo "[tap_guard_gate] FAIL"; FAIL=1
+fi
 echo "==================="
 if [ "$FAIL" = 0 ]; then echo "run_all: ALL GREEN"; else echo "run_all: HAS FAILURES"; fi
 exit $FAIL

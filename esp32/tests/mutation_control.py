@@ -189,6 +189,15 @@ MUTATIONS = [
     ("M50 超温门控受布防影响",
      [("    if (g_tcs.tc1_act > ALM_OVERTEMP_HARD_C) {",
        "    if (g_tcs.tc1_act > ALM_OVERTEMP_HARD_C && commissioned()) {")], ""),
+    # ---- 2026-11-26：水温卡死窗口由 30 秒改为 10 分钟（真机 F2：健康读数逐位不变 30–53 秒是常事）。
+    #      用例 K6 / K17 / K18 在 test_control_esp32.c；手动模式下的 M13 在 test_control_manual.c。
+    ("M52 水温卡死窗口等同体温的 30 秒（健康读数会被误判）",
+     [("#define CTRL_STUCK_WATER_WINDOW_MS 600000u", "#define CTRL_STUCK_WATER_WINDOW_MS 30000u")], ""),
+    ("M53 水温卡死窗口无限长（水温冻结永远判不出）",
+     [("#define CTRL_STUCK_WATER_WINDOW_MS 600000u", "#define CTRL_STUCK_WATER_WINDOW_MS 0xFFFFFFFFu")], ""),
+    ("M54 水温的长窗口不生效（30 秒一成立就判）",
+     [("        tc1_stuck  = (uint8_t)(tc1_stuck && stuck_water_is(&s_stuck_tc1, now_ms));",
+       "        ;")], ""),
 ]
 
 

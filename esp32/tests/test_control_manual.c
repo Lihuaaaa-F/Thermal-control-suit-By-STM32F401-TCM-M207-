@@ -136,9 +136,12 @@ int main(void)
     CHECK(count_kind('S') == 1 && has_sw(2, 0) && count_kind('T') == 0, "M02 pause: only TCSW=0, no target");
     CHECK(control_tec_dir(2) == TEC_DIR_PAUSE, "M02 snapshot dir TEC2 = pause");
 
-    /* ====== M03 只在变化时下发 ====== */
+    /* ====== M03 只在变化时下发 ======
+     * 水温读数要"活着"（每拍都在变）：合并进 e3a 的卡死判据之后，手动制热 + 水温读数 30 秒不变会进安全态
+     * （那正是 M13 要验证的行为）；读数不抖的话这里量到的是安全态的输出，不是"没有重发"。*/
     log_reset();
-    for (int i = 0; i < 100; i++) tick();            /* 50 秒，参数不变 */
+    for (int i = 0; i < 100; i++) { g_tcs.tc1_act = (i & 1) ? 24.99f : 25.01f; tick(); }   /* 50 秒，参数不变 */
+    CHECK(control_state() == CTRL_IDLE, "M03 live water: no SAFE");
     CHECK(g_n == 0, "M03 no re-send while params unchanged (100 ticks, 0 outputs)");
 
     /* ====== M04 越界拒绝（不钳制）===== */
@@ -148,7 +151,7 @@ int main(void)
     CHECK(param_get(PARAM_ID_TEC1_MANUAL) == 2.0f && param_get(PARAM_ID_TEC2_MANUAL) == 0.0f,
           "M04 rejected writes leave values untouched (old code clamped 3 -> 2)");
     log_reset();
-    tick();
+    g_tcs.tc1_act = 24.99f; tick();
     CHECK(g_n == 0, "M04 rejected writes produce no output");
 
     /* ====== M05 非手动模式拒绝 ====== */
@@ -401,6 +404,41 @@ int main(void)
                   "L03 never connected -> never estop");
         CHECK(control_state() == CTRL_IDLE && g_tcs.tec1_on == 1, "L03 manual output keeps running (web-only bench)");
     }
+
+    /* ====== M13–M15 水温卡死在手动模式下的口径（2026-11-26，合并 e3a 之后加的）======
+     * 合并之后这里当场变红：e3a 的水温卡死按 30 秒判，而手动模式是把水稳在一个固定目标上的，
+     * 读数 30 秒不变是常态（真机实测 F2：健康读数逐位不变 30–53 秒是常事）。现在水温窗口是 10 分钟。*/
+    /* M13 手动制热、水温冻在 25°C：10 分钟内不判（制热照常），满 10 分钟进安全态。*/
+    enter_manual();
+    g_tcs.tc1_act = 25.0f; tick();
+    (void)param_set(PARAM_ID_TEC1_MANUAL, 2.0f, PARAM_SRC_LINK);   /* 制热 */
+    tick();
+    CHECK(control_tec_dir(1) == TEC_DIR_HEAT && g_tcs.tec1_on == 1, "M13 precondition: manual heat on");
+    for (int i = 0; i < 1160; i++) tick();                           /* 累计 580 秒 */
+    CHECK(control_state() == CTRL_IDLE && (control_safety_latched() & SAFETY_BIT_STUCK) == 0 && g_tcs.tec1_on == 1,
+          "M13 frozen water: no trip before 10 min (manual heat keeps running)");
+    for (int i = 0; i < 60; i++) tick();                              /* 累计 610 秒 */
+    CHECK(control_state() == CTRL_SAFE && (control_safety_latched() & SAFETY_BIT_STUCK) != 0,
+          "M13 frozen water for 10 min + heat -> SAFE");
+    CHECK(g_tcs.tec1_on == 0, "M13 TEC1 off");
+    /* M14 手动制冷、水温冻住：30 秒不判（制冷能力不足时水会停在稳态上）。*/
+    enter_manual();
+    g_tcs.tc1_act = 25.0f; tick();
+    (void)param_set(PARAM_ID_TEC1_MANUAL, 1.0f, PARAM_SRC_LINK);   /* 制冷 */
+    tick();
+    CHECK(control_tec_dir(1) == TEC_DIR_COOL && g_tcs.tec1_on == 1, "M14 precondition: manual cool on");
+    for (int i = 0; i < 400; i++) tick();                             /* 200 秒 */
+    CHECK(control_state() == CTRL_IDLE && control_safety_latched() == 0 && g_tcs.tec1_on == 1,
+          "M14 frozen water while cooling: no trip at 30 s (nor at 200 s)");
+    /* M15 手动制热、水温冻在 42°C（已到目标附近）：30 秒不判。*/
+    enter_manual();
+    g_tcs.tc1_act = 42.0f; tick();
+    (void)param_set(PARAM_ID_TEC1_MANUAL, 2.0f, PARAM_SRC_LINK);
+    tick();
+    CHECK(control_tec_dir(1) == TEC_DIR_HEAT && g_tcs.tec1_on == 1, "M15 precondition: manual heat on at 42.0");
+    for (int i = 0; i < 400; i++) tick();
+    CHECK(control_state() == CTRL_IDLE && control_safety_latched() == 0 && g_tcs.tec1_on == 1,
+          "M15 frozen water near the heat target: no trip at 30 s (nor at 200 s)");
 
     printf("test_control_manual: PASS=%d FAIL=%d\n", g_pass, g_fail);
     return g_fail ? 1 : 0;

@@ -80,7 +80,8 @@ static uint32_t s_comm_ok_since;
 
 /* 落盘的锁存位：STUCK 只在运行时成立，不跨复位（理由见 control.h 的 SAFETY_BIT_STUCK）*/
 #define SAFETY_PERSIST_MASK     ((uint8_t)~SAFETY_BIT_STUCK)
-#define CTRL_STUCK_WINDOW_MS    30000u  /* 卡死窗口：300 拍 × 100ms（审查方案 M09-F-09 的 N=300）*/
+#define CTRL_STUCK_WINDOW_MS    30000u  /* 体温卡死窗口：300 拍 × 100ms（审查方案 M09-F-09 的 N=300）*/
+#define CTRL_STUCK_WATER_WINDOW_MS 600000u   /* 水温卡死窗口：10 分钟。为什么比体温长得多，见下面的说明 */
 
 /* ====== 卡死值活性判据（M09-F-09 / X04-F-06，审查方案 AD-2）======
  * 合理性滤波只查范围与变化率：恒定值永远"合理"。于是——
@@ -90,14 +91,20 @@ static uint32_t s_comm_ok_since;
  * 判据：源自报健康（体温 ok / 模块在线且探头未开路），但读数**逐位**不变满一个窗口，
  *   且 TEC 已连续开满同一个窗口（两者取较晚者：刚开 TEC 时给被控对象留出响应时间）。
  *   - 体温：只在自动模式的 HEAT / COOL 下判——那里是这个读数在驱动决策；手动模式下体温读数不驱动任何输出。
- *   - 水温：TC1 开着就判（自动、手动都算；手动模式下 48°C 硬切断同样依赖这个读数）。
+ *   - 水温：TC1 开着就判（自动、手动都算；手动模式下 48°C 硬切断同样依赖这个读数），
+ *     但窗口是 10 分钟（CTRL_STUCK_WATER_WINDOW_MS），不是 30 秒。2026-11-26 真机实测（F2，TEC 未开）：
+ *     健康的 TCACTTEMP 逐位不变的连续段经常超过 30 秒——风扇关的 3 分钟里两路各 1 段（最长 33 秒），
+ *     风扇 100% 的 10 分钟里共 3 段（最长 53 秒）。按 30 秒判，正常恒温时就会误报进安全态。
+ *     10 分钟 ≈ 实测最长段的 11 倍。代价：水温冻结要 10 分钟才被发现；每不到 10 分钟"动一下"的冻结读数判不出来。
+ *     TEC 开着时的读数抖动还没有实测（用户做 TEC 实测时量，方法见 docs/evidence/S_线/F2_水温读数逐位不变的连续时长.txt）。
  *   源不健康期间不累计（离线 / 探头开路走既有失联路径，不重复报）。
  * 进 SAFE，不受布防门控。报警位借用 ALM_BODY_SENSOR / ALM_SENSOR_OPEN：屏与网页只对已知位出文案，
  *   新增位在两端都不可见（界面文件不在本批次）。这两位在两端都归"自动恢复类"，所以 STUCK 也按
  *   通信类自愈：涉事通道的读数重新开始变化后 2s 清锁存；读数一直不变就一直留在 SAFE。
  *   （代价：时冻时动的传感器每次"动一下"最多换来一个窗口的输出，见结果文档风险一节。）
- * 真机旁证（docs/evidence/S_线/B10_风扇复现.txt）：健康的 TCACTTEMP 以 0.01°C 上报，相邻两次
- *   读数在 ±0.01~0.07°C 内持续抖动，不会 30s 逐位不变。*/
+ * 真机旁证：docs/evidence/S_线/F2_水温读数逐位不变的连续时长.txt。
+ *   （更正：e3a 批次曾引 B10 为"健康读数不会 30 秒逐位不变"——B10 是每分钟一个样本，只能说明
+ *     相邻两分钟多半不同，推不出 30 秒这一级；F2 用 2–4 Hz 连续采样，结论相反。）*/
 typedef struct {
     uint32_t bits;         /* 最近一个**不同**的读数（按位比较；不用 ==，NaN 也算变化）*/
     uint32_t last_change;  /* 读数最近一次变化的时间；0 = 没有样本（源不健康期间复位）*/
@@ -135,6 +142,14 @@ static uint8_t stuck_is(const stuck_src_t *c, uint32_t now_ms, uint32_t on_since
 {
     if (!c->last_change || stuck_live(c, now_ms) || !on_since) return 0;
     return (uint8_t)((uint32_t)(now_ms - on_since) >= CTRL_STUCK_WINDOW_MS);
+}
+
+/* 水温卡死的窗口比体温长（2026-11-26，真机实测之后改的；理由见上面"卡死值活性判据"一段）。
+ * stuck_is() 仍按 30 秒把一遍（样本存在、TEC 开沿、30 秒没变），再要求距读数最后一次变化已满
+ * CTRL_STUCK_WATER_WINDOW_MS。调用方保证 stuck_is(&s_stuck_tc1, …) 已经成立（last_change 非 0）。*/
+static uint8_t stuck_water_is(const stuck_src_t *c, uint32_t now_ms)
+{
+    return (uint8_t)((uint32_t)(now_ms - c->last_change) >= CTRL_STUCK_WATER_WINDOW_MS);
 }
 
 /* 涉事通道的读数是否都已重新开始变化（STUCK 自愈与 ack 的依据）*/
@@ -675,6 +690,7 @@ void control_poll(uint32_t now_ms)
         stuck_feed(&s_stuck_body, g_tcs.body_temp, now_ms, g_tcs.body_sensor_ok);
         stuck_feed(&s_stuck_tc1, g_tcs.tc1_act, now_ms, m207_src_ok);
         tc1_stuck  = (uint8_t)(s_tec_cmd_on[0] && stuck_is(&s_stuck_tc1, now_ms, s_tec_on_since[0]));   /* X03-F-08：读命令意图，不读回显 */
+        tc1_stuck  = (uint8_t)(tc1_stuck && stuck_water_is(&s_stuck_tc1, now_ms));   /* 水温窗口 10 分钟（2026-11-26）*/
         body_stuck = (uint8_t)(g_tcs.mode != 0 && (s_state == CTRL_HEAT || s_state == CTRL_COOL)
                                && stuck_is(&s_stuck_body, now_ms, s_tec_on_since[0]));
         if (tc1_stuck || body_stuck) {

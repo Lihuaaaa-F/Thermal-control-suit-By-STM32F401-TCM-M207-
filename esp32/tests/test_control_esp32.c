@@ -882,7 +882,7 @@ int main(void)
 
     /* ====== 2026-11-25 S 线 e3a（M09-F-09 / X04-F-06）：读数卡死 → SAFE ======
      * 合理性滤波只查范围与变化率，恒定读数永远"合理"：体温冻结则自动模式永远停在 HEAT/COOL，
-     * 水温冻结则 48°C 硬切断失明。判据：源自报健康 + 读数逐位不变 ≥30s + TEC 已开 ≥30s → 锁存 STUCK、
+     * 水温冻结则 48°C 硬切断失明。判据：源自报健康 + 读数逐位不变 ≥30s（水温是 10 分钟，2026-11-26 真机实测后改）+ TEC 已开 ≥30s → 锁存 STUCK、
      * 进 SAFE，不受布防门控。时间全部用 100ms 拍推进（现场服务就是 100ms 一拍）。
      * 判别性与变异验证见 tests/mutation_control.py 的 M31 起。*/
     {
@@ -977,7 +977,9 @@ int main(void)
         CHECK(control_state() == CTRL_IDLE && control_safety_latched() == 0,
               "K5 manual mode: frozen body does not trip");
 
-        /* K6 水温读数冻结（48°C 硬切断对它失明）：TC1 开着 30 s → SAFE + ALM_SENSOR_OPEN（手动模式同样判）*/
+        /* K6 水温读数冻结（48°C 硬切断对它失明）：TC1 开着满**水温窗口**（10 分钟）→ SAFE + ALM_SENSOR_OPEN
+         *     （手动模式同样判）。2026-11-26 真机实测（F2）之后窗口由 30 秒改为 10 分钟：健康的读数逐位不变
+         *     30–53 秒是常事，按 30 秒判会在正常恒温时误报。*/
         enter_auto_healthy();
         (void)param_set(PARAM_ID_MODE, 0.0f, 4);
         tick();                                         /* 喂进第一个水温样本 */
@@ -987,25 +989,29 @@ int main(void)
               "K6 precondition: manual, TC1 on, water frozen at 30.0");
         for (int i = 0; i < 299; i++) tick100();
         CHECK(control_state() == CTRL_IDLE, "K6 frozen water: no trip before 30 s");
-        tick100();
+        for (int i = 0; i < 5600; i++) tick100();       /* 累计 589.9 s */
+        CHECK(control_state() == CTRL_IDLE, "K6 frozen water: no trip before 600 s (589.9 s)");
+        for (int i = 0; i < 200; i++) tick100();        /* 累计 609.9 s */
         CHECK(control_state() == CTRL_SAFE && (control_safety_latched() & SAFETY_BIT_STUCK) != 0,
-              "K6 frozen water + TC1 on for 30 s -> SAFE");
+              "K6 frozen water + TC1 on for 600 s -> SAFE");
         CHECK(tcs_alarm_active(ALM_SENSOR_OPEN) == 1 && tcs_alarm_active(ALM_BODY_SENSOR) == 0,
               "K6 ALM_SENSOR_OPEN raised (water channel)");
         CHECK(g_tcs.tec1_on == 0, "K6 TC1 off");
 
-        /* K17 X04-F-06 关单条件：体温活着（一直在动）、水温冻在 30°C，TC1 加热 30 s → 进 SAFE */
+        /* K17 X04-F-06 关单条件：体温活着（一直在动）、水温冻在 30°C，TC1 加热满水温窗口（10 分钟）→ 进 SAFE */
         enter_auto_healthy();
         g_tcs.body_temp = 37.0f; tick();                            /* 带内：先喂一拍 IDLE 样本 */
         g_tcs.tc1_act = 30.0f; g_tcs.body_temp = 30.0f; tick();     /* 这一拍进 HEAT */
         CHECK(control_state() == CTRL_HEAT, "K17 precondition: HEAT with water frozen at 30.0");
-        for (int i = 0; i < 300; i++) { g_tcs.body_temp = (i & 1) ? 29.99f : 30.01f; tick100(); }
+        for (int i = 0; i < 5900; i++) { g_tcs.body_temp = (i & 1) ? 29.99f : 30.01f; tick100(); }
+        CHECK(control_state() == CTRL_HEAT, "K17 frozen water: no trip before 600 s");
+        for (int i = 0; i < 200; i++) { g_tcs.body_temp = (i & 1) ? 29.99f : 30.01f; tick100(); }
         CHECK(control_state() == CTRL_SAFE && (control_safety_latched() & SAFETY_BIT_STUCK) != 0,
-              "K17 frozen water while heating -> SAFE even though the body reading is live");
+              "K17 frozen water while heating for 600 s -> SAFE even though the body reading is live");
         CHECK(tcs_alarm_active(ALM_SENSOR_OPEN) == 1 && tcs_alarm_active(ALM_BODY_SENSOR) == 0,
               "K17 water channel blamed, not body");
 
-        /* K7 反证：真实模块的 TCACTTEMP 以 0.01°C 持续抖动（真机旁证 B10），TC1 开 60 s 不误报 */
+        /* K7 反证：水温读数每拍都在变（活着的传感器），TC1 开 60 s 不误报 */
         enter_auto_healthy();
         (void)param_set(PARAM_ID_MODE, 0.0f, 4);
         tick();
@@ -1014,12 +1020,39 @@ int main(void)
         CHECK(control_state() == CTRL_IDLE && control_safety_latched() == 0,
               "K7 live water reading: no trip after 60 s with TC1 on");
 
-        /* K8 反证：水温不变但 TC1 没开 → 不判 */
+        /* K20 反证（2026-11-26 真机 F2）：健康的水温读数会连续 50 秒逐位不变、然后才跳 0.01°C。
+         *     TC1 开着按这个节奏走 11 分钟 → 不判卡死（30 秒的窗口会把这种读数误判掉）。*/
         enter_auto_healthy();
         (void)param_set(PARAM_ID_MODE, 0.0f, 4);
-        for (int i = 0; i < 120; i++) tick();
+        g_tcs.tc1_act = 18.30f; tick();
+        control_manual_tec(1, 1);
+        for (int i = 0; i < 6600; i++) {
+            if ((i % 500) == 499) g_tcs.tc1_act += 0.01f;       /* 每 50 秒跳一次 */
+            tick100();
+        }
+        CHECK(control_state() == CTRL_IDLE && control_safety_latched() == 0 && g_tcs.tec1_on == 1,
+              "K20 healthy reading with 50 s constant runs: no trip in 11 min with TC1 on");
+
+        /* K21 代价（如实钉住）：读数每 9 分钟才动一下 → 判不出卡死（水温窗口 10 分钟）*/
+        enter_auto_healthy();
+        (void)param_set(PARAM_ID_MODE, 0.0f, 4);
+        g_tcs.tc1_act = 18.30f; tick();
+        control_manual_tec(1, 1);
+        for (int i = 0; i < 10800; i++) {                      /* 18 分钟 */
+            if ((i % 5400) == 5399) g_tcs.tc1_act += 0.01f;
+            tick100();
+        }
         CHECK(control_state() == CTRL_IDLE && control_safety_latched() == 0,
-              "K8 frozen water with TC1 off -> no trip");
+              "K21 a reading that moves once every 9 min is not called stuck (cost of the 10 min window)");
+
+        /* K8 反证：水温不变但 TC1 没开 → 不判。要跑满水温窗口（10 分钟）：
+         *     只跑 60 秒的话，"不看 TEC 是否开着"的变异（M34）在 10 分钟窗口下抓不到。*/
+        enter_auto_healthy();
+        (void)param_set(PARAM_ID_MODE, 0.0f, 4);
+        tick();
+        for (int i = 0; i < 6200; i++) tick();
+        CHECK(control_state() == CTRL_IDLE && control_safety_latched() == 0,
+              "K8 frozen water with TC1 off -> no trip, even after 10 min");
 
         /* K9 读数早就冻住了、TEC 后开：从 TEC 开起再等满一个窗口才判（给被控对象留响应时间），
          *     不是一开 TEC 就判 */
@@ -1046,7 +1079,7 @@ int main(void)
         s_now += 5000u;                                 /* 越过 M207 上电宽限 */
         g_tcs.m207_online = 0;
         control_manual_tec(1, 1);
-        for (int i = 0; i < 120; i++) tick();
+        for (int i = 0; i < 6200; i++) tick();     /* 跑满水温窗口：M36（源不健康不清样本）要靠这里抓 */
         CHECK((control_safety_latched() & SAFETY_BIT_STUCK) == 0, "K14 unhealthy source is not a stuck reading");
         CHECK(control_state() != CTRL_SAFE, "K14 unarmed + module offline: no SAFE (existing semantics untouched)");
 
@@ -1211,9 +1244,12 @@ int main(void)
         g_tcs.tc1_act = 30.0f; tick();                /* 喂进第一个水温样本 */
         for (int i = 0; i < 299; i++) tick100();
         CHECK(control_state() == CTRL_IDLE, "K18 no trip before the window");
-        tick100();
+        /* 水温窗口 2026-11-26 起是 10 分钟（见 K6）：回显是"关"也照样判，只是要等满水温窗口 */
+        for (int i = 0; i < 5600; i++) tick100();
+        CHECK(control_state() == CTRL_IDLE, "K18 no trip before 600 s either");
+        for (int i = 0; i < 200; i++) tick100();
         CHECK(control_state() == CTRL_SAFE && (control_safety_latched() & SAFETY_BIT_STUCK) != 0,
-              "K18 a late 'off' echo cannot hide a frozen water reading while TC1 is commanded on");
+              "K18 a late 'off' echo cannot hide a frozen water reading while TC1 is commanded on (600 s)");
         /* 关断后两个量一致：都是"关" */
         control_manual_tec(2, 1);                     /* SAFE 期被拒 */
         CHECK(control_tec_cmd(2) == 0 && control_tec_act(2) == 0, "K18 in SAFE both channels read off");

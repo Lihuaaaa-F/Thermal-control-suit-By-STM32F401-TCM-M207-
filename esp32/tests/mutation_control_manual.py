@@ -98,6 +98,12 @@ MUTATIONS = [
      "    if (0) s_tec2_before_safe = 0;", ""),
     (CT, "C10 记风扇时不取用户的选择", "    s_fan_before_safe  = control_manual_fan_pref();",
      "    s_fan_before_safe  = g_tcs.fan_on;", ""),
+    # ---- control.c：水温卡死窗口 10 分钟（2026-11-26 真机实测之后改的；这里用 M13，自动模式的 K6 / K17 / K18 在
+    #      test_control_esp32.c，对应的变异是 mutation_control.py 的 M52–M54）----
+    (CT, "C11 水温长窗口那一行不生效（回到 30 秒就判）",
+     "        tc1_stuck  = (uint8_t)(tc1_stuck && stuck_water_is(&s_stuck_tc1, now_ms));", "        ;", ""),
+    (CT, "C12 水温卡死窗口无限长（永不判）",
+     "#define CTRL_STUCK_WATER_WINDOW_MS 600000u", "#define CTRL_STUCK_WATER_WINDOW_MS 0xFFFFFFFFu", ""),
     # ---- param_registry.c ----
     (PR, "D01 越界不拒绝（退回钳制）",
      "        if (!(v >= p->min && v <= p->max) || v != (float)(uint8_t)v) return PARAM_REJECT_RANGE;",

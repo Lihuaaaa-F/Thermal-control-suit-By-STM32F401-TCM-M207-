@@ -203,6 +203,15 @@ MUTATIONS = [
        "    safety_set_ok(SAFETY_BIT_OVERTEMP, (uint8_t)(g_tcs.tc1_act <= ALM_OVERTEMP_HARD_C));"),
       ("    if (!(lat & SAFETY_BIT_OVERTEMP) && !water_overtemp())   /* r7f R7-08：两路水温 */",
        "    if (!(lat & SAFETY_BIT_OVERTEMP) && g_tcs.tc1_act <= ALM_OVERTEMP_HARD_C)")], ""),
+    # ---- 2026-11-26 r7f（独立复核 R7-04，P2）：卡死判据的 30 秒起步盲窗 + 体温遮住水温。
+    #      用例 K9b / K9c / K24 在 test_control_esp32.c ----
+    ("M66 TEC 开沿不预判「读数早就冻住」（回到 30 秒起步盲窗）",
+     [("    if (!c->last_change || !on_since) return 0;", "    if (1) return 0;")], ""),
+    ("M67 体温先触发时不把同拍也冻着的水温记进涉事通道（体温遮住水温）",
+     [("            if (body_stuck && tc1_pre) s_stuck_chn |= 2u;", "            ;")], ""),
+    ("M68 体温先触发时不报水温的报警位",
+     [("            if (body_stuck && tc1_pre)   tcs_alarm_raise(ALM_SENSOR_OPEN);   /* r7f R7-04：见下面那一行 */",
+       "            ;")], ""),
     ("M62 ack 的超温判据只看 TC1",
      [("    safety_set_ok(SAFETY_BIT_OVERTEMP, (uint8_t)!water_overtemp());   /* r7f R7-08：两路水温 */",
        "    safety_set_ok(SAFETY_BIT_OVERTEMP, (uint8_t)(g_tcs.tc1_act <= ALM_OVERTEMP_HARD_C));")], ""),

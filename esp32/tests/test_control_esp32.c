@@ -1127,21 +1127,82 @@ int main(void)
         CHECK(control_state() == CTRL_IDLE && control_safety_latched() == 0,
               "K8 frozen water with TC1 off -> no trip, even after 10 min");
 
-        /* K9 读数早就冻住了、TEC 后开：从 TEC 开起再等满一个窗口才判（给被控对象留响应时间），
-         *     不是一开 TEC 就判 */
+        /* K9 读数在 TEC 开之前**不久**冻住（10 秒）：从 TEC 开起再等满一个窗口才判（给被控对象留响应时间）。
+         *     r7f（R7-04）之后这句话的适用范围变窄了：读数如果早在 TEC 开之前就冻满了一个窗口，当拍就判，
+         *     见 K9b / K9c。*/
         enter_auto_healthy();
         (void)param_set(PARAM_ID_MODE, 0.0f, 4);
         g_tcs.body_temp = 30.0f; tick();
-        for (int i = 0; i < 120; i++) tick_tc1_live();   /* 手动模式下体温冻 60 s */
+        for (int i = 0; i < 20; i++) tick_tc1_live();    /* 手动模式下体温冻 10 s（不足一个窗口）*/
         (void)param_set(PARAM_ID_MODE, 1.0f, 4);       /* 切自动：下一拍进 HEAT */
         tick();
-        CHECK(control_state() == CTRL_HEAT, "K9 precondition: HEAT starts with an already-frozen reading");
+        CHECK(control_state() == CTRL_HEAT, "K9 precondition: HEAT starts with a recently-frozen reading");
         for (int i = 0; i < 299; i++) tick100_tc1_live();
         CHECK(control_state() == CTRL_HEAT,
-              "K9 window counts from TEC turn-on, not from when the reading froze");
+              "K9 a reading frozen shortly before TEC turn-on: the window counts from the turn-on");
         tick100_tc1_live();
         CHECK(control_state() == CTRL_SAFE && (control_safety_latched() & SAFETY_BIT_STUCK) != 0,
               "K9 trips one window after TEC turn-on");
+
+        /* K9b（r7f R7-04）读数在 TEC 开之前已经冻了 60 秒：一开 TEC 当拍就判卡死。
+         *     修前还要再等 30 秒——这 30 秒里 48°C 硬切断与卡死判据一起失明（真机场景：探头在 TEC 没开时就冻住了）。*/
+        enter_auto_healthy();
+        (void)param_set(PARAM_ID_MODE, 0.0f, 4);
+        g_tcs.body_temp = 30.0f; tick();
+        for (int i = 0; i < 120; i++) tick_tc1_live();   /* 手动模式下体温已冻 60 s（超过一个窗口）*/
+        (void)param_set(PARAM_ID_MODE, 1.0f, 4);
+        tick();                                           /* 这一拍进 HEAT、TEC1 开 */
+        CHECK(control_state() == CTRL_HEAT, "K9b precondition: HEAT starts with a long-frozen reading");
+        for (int i = 0; i < 5 && control_state() == CTRL_HEAT; i++) tick100_tc1_live();
+        CHECK(control_state() == CTRL_SAFE && (control_safety_latched() & SAFETY_BIT_STUCK) != 0,
+              "K9b a reading frozen long before TEC turn-on trips at once (no 30 s blind window)");
+
+        /* K9c（r7f R7-04）水温在 TC1 没开的时候就冻了 11 分钟：TC1 一开就当拍判卡死。
+         *     修前要等 TEC 开满 30 秒，而水温窗口是 10 分钟——这 11 分钟里读数一直是冻的，没有可等的响应。*/
+        enter_auto_healthy();
+        (void)param_set(PARAM_ID_MODE, 0.0f, 4);
+        g_tcs.tc1_act = 30.0f; tick();                    /* 喂进第一个样本，之后不再变 */
+        for (int i = 0; i < 6800; i++) tick100();         /* 11 分钟，TC1 关着 → 不判 */
+        CHECK(control_state() == CTRL_IDLE && control_safety_latched() == 0,
+              "K9c precondition: water frozen for 11 min with TC1 off, no trip");
+        control_manual_tec(1, 1);                         /* TC1 开（开沿记在最近一拍的时间戳上）*/
+        for (int i = 0; i < 5 && control_state() == CTRL_IDLE; i++) tick100();
+        CHECK(control_state() == CTRL_SAFE && (control_safety_latched() & SAFETY_BIT_STUCK) != 0,
+              "K9c water frozen long before TC1 turn-on trips at once");
+
+        /* K24（r7f R7-04）体温、水温同时冻住：体温先判出来（30 秒）时，水温这一路也要记进涉事通道；
+         *     体温读数恢复变化之后**不得**重开 TEC（水温仍冻着 → 48°C 硬切断对它失明），
+         *     要等水温也动了才 2 秒自愈。*/
+        enter_auto_healthy();
+        g_tcs.body_temp = 30.0f; g_tcs.tc1_act = 25.0f;
+        tick();                                           /* HEAT，TEC1 开；两路读数从此都不动 */
+        CHECK(control_state() == CTRL_HEAT, "K24 precondition: HEAT with both readings frozen");
+        for (int i = 0; i < 301; i++) tick100();
+        CHECK(control_state() == CTRL_SAFE && (control_safety_latched() & SAFETY_BIT_STUCK) != 0,
+              "K24 both readings frozen -> STUCK");
+        CHECK(tcs_alarm_active(ALM_SENSOR_OPEN) == 1 && tcs_alarm_active(ALM_BODY_SENSOR) == 1,
+              "K24 the water channel is recorded too (ALM_SENSOR_OPEN), not only the body");
+        {
+            int on = 0;
+            for (int i = 0; i < 60; i++) {                 /* 6 秒：体温恢复变化、水温仍冻着 */
+                g_tcs.body_temp = (i & 1) ? 29.99f : 30.01f;
+                tick100();
+                if (control_tec_cmd(1) || control_tec_cmd(2)) on++;
+            }
+            CHECK(on == 0 && control_state() == CTRL_SAFE,
+                  "K24 the body recovering alone does not restart the TEC while the water reading is still frozen");
+        }
+        {
+            int n = 0;
+            while (control_state() == CTRL_SAFE && n < 40) {   /* 水温也动起来 → 2 秒自愈 */
+                g_tcs.body_temp = (n & 1) ? 29.99f : 30.01f;
+                g_tcs.tc1_act   = (n & 1) ? 24.99f : 25.01f;
+                tick100();
+                n++;
+            }
+            CHECK(control_state() == CTRL_HEAT,
+                  "K24 once the water reading moves too -> self-heals back to HEAT");
+        }
 
         /* K14 源不健康时不累计：未布防 + 模块离线 + TC1 开着 + 水温陈旧不变
          *     → 走既有失联路径，不报卡死（离线不是"读数冻结"）*/

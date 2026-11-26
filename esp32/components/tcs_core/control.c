@@ -153,6 +153,17 @@ static uint8_t stuck_water_is(const stuck_src_t *c, uint32_t now_ms)
     return (uint8_t)((uint32_t)(now_ms - c->last_change) >= CTRL_STUCK_WATER_WINDOW_MS);
 }
 
+/* r7f（独立复核 R7-04，2026-11-26）：TEC 开沿那一刻读数如果**已经**冻满一个窗口，直接算卡死，不再等 30 秒。
+ * 那 30 秒的本意是"刚开 TEC 时给被控对象留出响应时间"；读数在 TEC 开之前就冻住时并没有可等的响应，
+ * 等下去只是让 48°C 硬切断和卡死判据一起失明（真机场景：探头在 TEC 没开的时候就冻住了）。
+ * 写法上只用无符号差值：等价于"TEC 开沿时距读数最后一次变化已满 win"，又避开两个时间戳的排序问题。*/
+static uint8_t stuck_prefrozen(const stuck_src_t *c, uint32_t now_ms, uint32_t on_since, uint32_t win)
+{
+    if (!c->last_change || !on_since) return 0;
+    return (uint8_t)((uint32_t)(now_ms - c->last_change)
+                     >= (uint32_t)(win + (uint32_t)(now_ms - on_since)));
+}
+
 /* 涉事通道的读数是否都已重新开始变化（STUCK 自愈与 ack 的依据）*/
 static uint8_t stuck_recovered(uint32_t now_ms, uint8_t chn)
 {
@@ -728,20 +739,36 @@ void control_poll(uint32_t now_ms)
         uint8_t m207_src_ok = (uint8_t)(g_tcs.m207_online && !g_tcs.m207_sensor_open);
         uint8_t tc1_stuck, body_stuck, stuck_chn;
         uint8_t tc2_stuck;                     /* r7f R7-08：TC2 那一路的水温 */
+        uint8_t tc1_pre;                       /* r7f R7-04：水温"已经冻过一个短窗口"（长窗口判据的前半）*/
         stuck_feed(&s_stuck_body, g_tcs.body_temp, now_ms, g_tcs.body_sensor_ok);
         stuck_feed(&s_stuck_tc1, g_tcs.tc1_act, now_ms, m207_src_ok);
         stuck_feed(&s_stuck_tc2, g_tcs.tc2_act, now_ms, m207_src_ok);   /* r7f R7-08 */
+        tc1_pre    = (uint8_t)(s_tec_cmd_on[0] && stuck_is(&s_stuck_tc1, now_ms, s_tec_on_since[0]));   /* r7f R7-04 */
         tc1_stuck  = (uint8_t)(s_tec_cmd_on[0] && stuck_is(&s_stuck_tc1, now_ms, s_tec_on_since[0]));   /* X03-F-08：读命令意图，不读回显 */
         tc1_stuck  = (uint8_t)(tc1_stuck && stuck_water_is(&s_stuck_tc1, now_ms));   /* 水温窗口 10 分钟（2026-11-26）*/
         tc2_stuck  = (uint8_t)(s_tec_cmd_on[1] && stuck_is(&s_stuck_tc2, now_ms, s_tec_on_since[1]));   /* r7f R7-08：TC2 命令开着 */
         tc2_stuck  = (uint8_t)(tc2_stuck && stuck_water_is(&s_stuck_tc2, now_ms));                     /* 同一水温窗口 */
         body_stuck = (uint8_t)(g_tcs.mode != 0 && (s_state == CTRL_HEAT || s_state == CTRL_COOL)
                                && stuck_is(&s_stuck_body, now_ms, s_tec_on_since[0]));
+        /* r7f（独立复核 R7-04）：起步盲窗——TEC 开沿那一刻读数如果已经冻满自己的窗口，直接判卡死 */
+        tc1_stuck  = (uint8_t)(tc1_stuck
+                               || (s_tec_cmd_on[0]
+                                   && stuck_prefrozen(&s_stuck_tc1, now_ms, s_tec_on_since[0], CTRL_STUCK_WATER_WINDOW_MS)));
+        tc2_stuck  = (uint8_t)(tc2_stuck
+                               || (s_tec_cmd_on[1]
+                                   && stuck_prefrozen(&s_stuck_tc2, now_ms, s_tec_on_since[1], CTRL_STUCK_WATER_WINDOW_MS)));
+        body_stuck = (uint8_t)(body_stuck
+                               || (g_tcs.mode != 0 && (s_state == CTRL_HEAT || s_state == CTRL_COOL)
+                                   && stuck_prefrozen(&s_stuck_body, now_ms, s_tec_on_since[0], CTRL_STUCK_WINDOW_MS)));
         if (tc1_stuck || body_stuck || tc2_stuck) {
             if (body_stuck) tcs_alarm_raise(ALM_BODY_SENSOR);
             if (tc1_stuck || tc2_stuck)  tcs_alarm_raise(ALM_SENSOR_OPEN);   /* 两路水温共用借来的这一位 */
+            if (body_stuck && tc1_pre)   tcs_alarm_raise(ALM_SENSOR_OPEN);   /* r7f R7-04：见下面那一行 */
             SAFETY_LOCK();
             s_stuck_chn |= (uint8_t)((body_stuck ? 1u : 0u) | (tc1_stuck ? 2u : 0u) | (tc2_stuck ? 4u : 0u));
+            /* r7f（R7-04）：体温先判出来时，水温如果同拍也已经冻过一个短窗口，一并记进涉事通道——
+             * 否则体温读数一恢复，2 秒自愈就把 TEC 重开，对着一个仍冻着的水温读数。 */
+            if (body_stuck && tc1_pre) s_stuck_chn |= 2u;
             SAFETY_UNLOCK();
             safety_trip(SAFETY_BIT_STUCK);
         }

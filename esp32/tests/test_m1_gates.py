@@ -75,15 +75,16 @@ def main():
             fails.append("link_loss_check 触发时必须调一次 tcs_emergency_stop_src(PARAM_SRC_KERNEL)")
         if "SCREEN LINK LOST" not in chk:
             fails.append("link_loss_check 的日志必须写明原因（SCREEN LINK LOST）")
-    # 1b) r7f（R7-01）："已在安全态"的判据本体在 link_loss_guard.c（主机用例 tests/test_control_manual.c 的 L04、
-    #     变异 mutation_control_manual.py 的 B07–B10）；这里逐字钉住它只认急停 / 超温两位。
+    # 1b) r7f（R7-01）/ R8-04："已在安全态"的判据本体在 link_loss_guard.c（主机用例 tests/test_control_manual.c
+    #     的 L01b / L04 / L05，变异 mutation_control_manual.py 的 B07–B11）；这里逐字钉住它只认**急停**位。
+    #     R8-04 把超温从这一位里去掉：超温可以在网页上确认掉，确认后屏仍断着，设备必须留着急停锁存。
     lg = read(CORE, "link_loss_guard.c")
     als = body_of(lg, "uint8_t link_loss_already_safe(uint8_t safety_latched)\n{")
     if als is None:
         fails.append("link_loss_guard.c 找不到 link_loss_already_safe")
-    elif ("return (uint8_t)((safety_latched & (uint8_t)(SAFETY_BIT_ESTOP | SAFETY_BIT_OVERTEMP)) != 0u);"
+    elif ("return (uint8_t)((safety_latched & (uint8_t)SAFETY_BIT_ESTOP) != 0u);"
           not in als):
-        fails.append("link_loss_already_safe 必须只认 SAFETY_BIT_ESTOP | SAFETY_BIT_OVERTEMP（r7f / R7-01）")
+        fails.append("link_loss_already_safe 必须只认 SAFETY_BIT_ESTOP（r7f / R7-01 + R8-04）")
 
     # 2) "对端帧"的计时起点在方向闸门之后：comm.c 只在 comm_note_peer 里记，
     #    comm_rx_feed_byte 里闸门调用在前、comm_note_peer 在后。

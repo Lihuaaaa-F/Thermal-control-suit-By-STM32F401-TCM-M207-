@@ -1136,8 +1136,9 @@ int main(void)
               "K8 frozen water with TC1 off -> no trip, even after 10 min");
 
         /* K9 读数在 TEC 开之前**不久**冻住（10 秒）：从 TEC 开起再等满一个窗口才判（给被控对象留响应时间）。
-         *     r7f（R7-04）之后这句话的适用范围变窄了：读数如果早在 TEC 开之前就冻满了一个窗口，当拍就判，
-         *     见 K9b / K9c。*/
+         *     r8f（R8-03）之后体温这一路的预冻判据已撤掉：不管开沿前冻了多久，都从 TEC 开起再等满一个
+         *     窗口（见 K9b）。水温保留预冻判据（长窗口 10 分钟，见 K9c）：读数在 TEC 开之前就冻满
+         *     10 分钟时当拍就判。*/
         enter_auto_healthy();
         (void)param_set(PARAM_ID_MODE, 0.0f, 4);
         g_tcs.body_temp = 30.0f; tick();
@@ -1152,8 +1153,10 @@ int main(void)
         CHECK(control_state() == CTRL_SAFE && (control_safety_latched() & SAFETY_BIT_STUCK) != 0,
               "K9 trips one window after TEC turn-on");
 
-        /* K9b（r7f R7-04）读数在 TEC 开之前已经冻了 60 秒：一开 TEC 当拍就判卡死。
-         *     修前还要再等 30 秒——这 30 秒里 48°C 硬切断与卡死判据一起失明（真机场景：探头在 TEC 没开时就冻住了）。*/
+        /* K9b（R8-03，独立复核 r8f）体温读数在 TEC 开之前已经冻了 60 秒：**不**当拍判卡死，仍从 TEC
+         *     开沿起算满 30 秒才判。那 30 秒是唯一给“被控对象响应时间”的机会；r7f 的体温预冻判据已撤掉
+         *     （自动模式进 HEAT 的当拍就可能误进 SAFE，报警还写“水温探头断线”）。水温仍保留预冻
+         *     （长窗口 10 分钟远大于健康读数的连续不变段，见 K9c）。*/
         enter_auto_healthy();
         (void)param_set(PARAM_ID_MODE, 0.0f, 4);
         g_tcs.body_temp = 30.0f; tick();
@@ -1161,9 +1164,12 @@ int main(void)
         (void)param_set(PARAM_ID_MODE, 1.0f, 4);
         tick();                                           /* 这一拍进 HEAT、TEC1 开 */
         CHECK(control_state() == CTRL_HEAT, "K9b precondition: HEAT starts with a long-frozen reading");
-        for (int i = 0; i < 5 && control_state() == CTRL_HEAT; i++) tick100_tc1_live();
+        for (int i = 0; i < 299 && control_state() == CTRL_HEAT; i++) tick100_tc1_live();
+        CHECK(control_state() == CTRL_HEAT,
+              "K9b [R8-03] a long-frozen body reading still gets the 30 s grace from TEC turn-on");
+        tick100_tc1_live();
         CHECK(control_state() == CTRL_SAFE && (control_safety_latched() & SAFETY_BIT_STUCK) != 0,
-              "K9b a reading frozen long before TEC turn-on trips at once (no 30 s blind window)");
+              "K9b one window after TEC turn-on the body reading is judged stuck");
 
         /* K9c（r7f R7-04）水温在 TC1 没开的时候就冻了 11 分钟：TC1 一开就当拍判卡死。
          *     修前要等 TEC 开满 30 秒，而水温窗口是 10 分钟——这 11 分钟里读数一直是冻的，没有可等的响应。*/

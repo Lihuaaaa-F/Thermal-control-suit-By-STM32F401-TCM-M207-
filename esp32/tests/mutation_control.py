@@ -224,6 +224,12 @@ MUTATIONS = [
       ("            s_stuck_chn |= (uint8_t)((body_stuck ? 1u : 0u) | (tc1_stuck ? 2u : 0u) | (tc2_stuck ? 4u : 0u));",
        "            s_stuck_chn |= (uint8_t)((body_stuck ? 1u : 0u) | (tc1_stuck ? 2u : 0u) | (tc2_stuck ? 4u : 0u));\n"
        "            if (body_stuck && s_tec_cmd_on[0] && stuck_is(&s_stuck_tc1, now_ms, s_tec_on_since[0])) s_stuck_chn |= 2u;")], ""),
+    ("M79 TEC 开沿的体温预冻判据恢复（R8-03 回退：自动进 HEAT 的当拍就可能误进 SAFE）",
+     [("        body_stuck = (uint8_t)(g_tcs.mode != 0 && (s_state == CTRL_HEAT || s_state == CTRL_COOL)\n"
+       "                               && stuck_is(&s_stuck_body, now_ms, s_tec_on_since[0]));",
+       "        body_stuck = (uint8_t)(g_tcs.mode != 0 && (s_state == CTRL_HEAT || s_state == CTRL_COOL)\n"
+       "                               && (stuck_is(&s_stuck_body, now_ms, s_tec_on_since[0])\n"
+       "                                   || stuck_prefrozen(&s_stuck_body, now_ms, s_tec_on_since[0], CTRL_STUCK_WINDOW_MS)));")], ""),
     ("M62 ack 的超温判据只看 TC1",
      [("    safety_set_ok(SAFETY_BIT_OVERTEMP, (uint8_t)!water_overtemp());   /* r7f R7-08：两路水温 */",
        "    safety_set_ok(SAFETY_BIT_OVERTEMP, (uint8_t)(g_tcs.tc1_act <= ALM_OVERTEMP_HARD_C));")], ""),

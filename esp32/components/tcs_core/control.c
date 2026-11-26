@@ -90,6 +90,8 @@ static uint32_t s_comm_ok_since;
  *     模块闭环也一起失明，输出不再有界——这才是真正的"无边界加热"。
  * 判据：源自报健康（体温 ok / 模块在线且探头未开路），但读数**逐位**不变满一个窗口，
  *   且 TEC 已连续开满同一个窗口（两者取较晚者：刚开 TEC 时给被控对象留出响应时间）。
+ *   R8-03（独立复核 r8f，2026-11-26）：“两者取较晚者”对**体温**是硬口径——体温这一路的预冻判据已撤掉
+ *     （30 秒窗口与健康读数的稳态段同量级，自动进 HEAT 的当拍就可能误进 SAFE）；水温保留预冻（见下）。
  *   - 体温：只在自动模式的 HEAT / COOL 下判——那里是这个读数在驱动决策；手动模式下体温读数不驱动任何输出。
  *   - 水温：TC1 开着就判（自动、手动都算；手动模式下 48°C 硬切断同样依赖这个读数），
  *     但窗口是 10 分钟（CTRL_STUCK_WATER_WINDOW_MS），不是 30 秒。2026-11-26 真机实测（F2，TEC 未开）：
@@ -166,7 +168,9 @@ static uint8_t stuck_water_is(const stuck_src_t *c, uint32_t now_ms)
 /* r7f（独立复核 R7-04，2026-11-26）：TEC 开沿那一刻读数如果**已经**冻满一个窗口，直接算卡死，不再等 30 秒。
  * 那 30 秒的本意是"刚开 TEC 时给被控对象留出响应时间"；读数在 TEC 开之前就冻住时并没有可等的响应，
  * 等下去只是让 48°C 硬切断和卡死判据一起失明（真机场景：探头在 TEC 没开的时候就冻住了）。
- * 写法上只用无符号差值：等价于"TEC 开沿时距读数最后一次变化已满 win"，又避开两个时间戳的排序问题。*/
+ * 写法上只用无符号差值：等价于"TEC 开沿时距读数最后一次变化已满 win"，又避开两个时间戳的排序问题。
+ * R8-03（独立复核 r8f，2026-11-26）：只给**水温**两路用（win = CTRL_STUCK_WATER_WINDOW_MS）。体温不用：
+ * 它的窗口只有 30 秒，健康读数在稳态本来就可能冻满 30 秒，开沿当拍会误报（用例 K9b）。*/
 static uint8_t stuck_prefrozen(const stuck_src_t *c, uint32_t now_ms, uint32_t on_since, uint32_t win)
 {
     if (!c->last_change || !on_since) return 0;
@@ -802,16 +806,18 @@ void control_poll(uint32_t now_ms)
         tc2_stuck  = (uint8_t)(tc2_stuck && stuck_water_is(&s_stuck_tc2, now_ms));                     /* 同一水温窗口 */
         body_stuck = (uint8_t)(g_tcs.mode != 0 && (s_state == CTRL_HEAT || s_state == CTRL_COOL)
                                && stuck_is(&s_stuck_body, now_ms, s_tec_on_since[0]));
-        /* r7f（独立复核 R7-04）：起步盲窗——TEC 开沿那一刻读数如果已经冻满自己的窗口，直接判卡死 */
+        /* r7f（独立复核 R7-04）：起步盲窗——TEC 开沿那一刻读数如果已经冻满自己的窗口，直接判卡死。
+         * R8-03（独立复核 r8f，2026-11-26）：只保留给**水温**两路。体温这一路的预冻判据撤掉了：
+         * 体温窗口只有 30 秒，健康读数在稳态本来就可能冻满 30 秒（F2 实测 30–53 秒），自动模式进
+         * HEAT 的当拍就会误进 SAFE（报警还写“水温探头断线”）；而且它把 30 秒宽限——唯一给被控
+         * 对象留响应时间的机会——从“开 TEC 后 30 秒”提前到了“开 TEC 那一拍”。水温的长窗口
+         * （10 分钟）远大于健康读数的连续不变段，保留预冻不会误报，所以不动（K9c）。*/
         tc1_stuck  = (uint8_t)(tc1_stuck
                                || (s_tec_cmd_on[0]
                                    && stuck_prefrozen(&s_stuck_tc1, now_ms, s_tec_on_since[0], CTRL_STUCK_WATER_WINDOW_MS)));
         tc2_stuck  = (uint8_t)(tc2_stuck
                                || (s_tec_cmd_on[1]
                                    && stuck_prefrozen(&s_stuck_tc2, now_ms, s_tec_on_since[1], CTRL_STUCK_WATER_WINDOW_MS)));
-        body_stuck = (uint8_t)(body_stuck
-                               || (g_tcs.mode != 0 && (s_state == CTRL_HEAT || s_state == CTRL_COOL)
-                                   && stuck_prefrozen(&s_stuck_body, now_ms, s_tec_on_since[0], CTRL_STUCK_WINDOW_MS)));
         /* S 线 i3（M09-F-09 的注入档口径）：注入源在生效的那一路读数恒等于人给的值，不判卡死（排在预冻之后）。
          * 交付档装配方不接 stuck_exempt，行为不变。TC1 / TC2 同属"水温"注入源（现场档的 water 命令）。*/
         if (body_stuck && stuck_src_injected(1u)) body_stuck = 0;

@@ -109,6 +109,9 @@ uint8_t control_tec_known(void);
  * （回显晚到 / 模块离线期间的旧值），"复联判据""卡死判据"读 cmd，界面要显示"实际"读 act。*/
 uint8_t control_tec_cmd(uint8_t ch);
 uint8_t control_tec_act(uint8_t ch);
+/* M207 服务在收到 TCSW? 应答时写模块回显（i3）：control_tec_act() 只跟它走，不跟控制自己下的命令走。
+ * ch = 1 / 2；其它通道忽略。*/
+void    control_tec_echo_set(uint8_t ch, uint8_t on);
 /* N-01：设备服务层（M207 解析等）可直接置安全锁存——超温切断不得只依赖 control 任务存活。*/
 void    control_safety_trip(uint8_t bit);
 

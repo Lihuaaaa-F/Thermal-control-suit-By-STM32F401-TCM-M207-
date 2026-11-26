@@ -88,9 +88,11 @@ static void clk_estop(lv_event_t *e)
 
 /* ================= 就地绘制 ================= */
 
-static void paint_tec(int i, ui_src_t module, uint8_t on)
+/* S 线 i3（P1-09 收口）：known = 主控说这一路的开关状态可信。M207 离线时主控只有命令意图，
+ * 执行器实际在做什么无从得知——这时画"未知"，不把"已关"画出来。*/
+static void paint_tec(int i, ui_src_t module, uint8_t on, uint8_t known)
 {
-    if (module == UI_SRC_UNKNOWN)
+    if (module == UI_SRC_UNKNOWN || !known)
         ui_pill_set(&H.tec[i], "未知", TKS_CARD, TKS_TX2, UI_PILL_DOT_R, TKS_GRAY);
     else
         ui_pill_set(&H.tec[i], on ? "运行" : "停止", TKS_CARD,
@@ -152,8 +154,8 @@ static void paint_estop(uint8_t estop)
 static void paint_all_state(const ui_home_t *s)
 {
     uint8_t online = (uint8_t)(s->link == UI_LINK_UP);
-    paint_tec(0, s->module, s->tec1);
-    paint_tec(1, s->module, s->tec2);
+    paint_tec(0, s->module, s->tec1, (uint8_t)(s->tec_known & 1u));
+    paint_tec(1, s->module, s->tec2, (uint8_t)((s->tec_known >> 1) & 1u));
     paint_body(online ? s->body : UI_SRC_UNKNOWN);
     paint_mode(online, s->mode);
     paint_fan(online, s->fan);
@@ -282,8 +284,8 @@ int tui_p0_update(void)
         if (m & UI_H_LINK) {
             paint_all_state(&now);        /* 链路在/不在：所有执行器块的可信度都变了 */
         } else {
-            if (m & (UI_H_MODULE | UI_H_TEC1)) paint_tec(0, now.module, now.tec1);
-            if (m & (UI_H_MODULE | UI_H_TEC2)) paint_tec(1, now.module, now.tec2);
+            if (m & (UI_H_MODULE | UI_H_TEC1 | UI_H_TECK)) paint_tec(0, now.module, now.tec1, (uint8_t)(now.tec_known & 1u));
+            if (m & (UI_H_MODULE | UI_H_TEC2 | UI_H_TECK)) paint_tec(1, now.module, now.tec2, (uint8_t)((now.tec_known >> 1) & 1u));
             if (m & UI_H_BODY)  paint_body(now.body);
             if (m & UI_H_MODE)  paint_mode(1, now.mode);
             if (m & UI_H_FAN)   paint_fan(1, now.fan);

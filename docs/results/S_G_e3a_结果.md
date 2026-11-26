@@ -147,3 +147,17 @@ H743 侧（都不在本批次范围，原文与新写法）：
 - 没有量的（如实）：TEC 开着、模块闭环调节时的读数抖动；体温探头接着时的读数抖动。要由用户做 TEC 实测时量。
 - 用例与变异：K6 / K17 / K18 按新窗口重排；新增 K20 / K21；test_control_manual.c 新增 M13–M15；
   mutation_control.py M52–M54、mutation_control_manual.py C11–C12。
+
+## 十、更正（2026-11-26，S 线 i3：第七节与 P1-09 / X03-F-08 两行的对接项）
+
+- 第七节与第二节 P1-09 行里写的"e2 的 `m207_tec_force(ch, on)`"在 e2 里**并不存在**。e2（X03-F-07，`18d1320`）做的是
+  `m207_tec()` 内部的旁路单槽，只在模块**在线**时生效——`m207_tec()` 第一行就是"离线 → 回 -2"，离线期间的安全关断
+  连槽都进不了。集成分支 `bfd8725` 上 `esp32/main/main.c` 也没有接 `.tec_force`（只有一行"合入后再接"的注释），
+  SAFE 的关断实际退化为 `tec_sw`；复联补发只看与命令混用的 `g_tcs.tecN_on`，关断之后晚到的 TCSW=1 应答会让它漏发。
+- i3 批次补上了另一半（提交与主机证据见 `docs/results/S_G_i3_结果.md`）：`m207_tec_force(ch, on)` 现在存在，
+  `.tec_force` 已接到 `main.c`。语义与第七节写的有一点不同——**服务侧不自带 500ms 定时器**：重试的节拍由控制核的
+  锁存重申给出（`enter_safe` 每 500ms 调一次 `ops.tec_force`）；服务侧只负责"离线也记下意图、复联第一帧补发、
+  读回到关（或该通道来了更新的"开"）之后解除保持"。
+- 第七节对 e2 / l1 提的三件事，l1 没有做，由 i3 做完：`m207_go_online()` 的复联判据改读 `control_tec_cmd(ch)`
+  （保持位 ∨ 命令意图是关 ∨ 回显是关）；快照 0x20 末尾追加 `tec_cmd` / `tec_act` / `tec_known`（`TCS_PROTO_VER` 2 → 3）；
+  `control_tec_act()` 改读独立字段（`control_tec_echo_set()`，M207 服务回 TCSW? 时写），不再读 `g_tcs.tecN_on`。

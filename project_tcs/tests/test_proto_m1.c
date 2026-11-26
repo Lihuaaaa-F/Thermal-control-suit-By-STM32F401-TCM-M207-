@@ -25,33 +25,36 @@ int main(void)
     uint16_t emask = 0;
     size_t n, dn;
 
-    CHECK(TCS_PROTO_VER == 2, "proto ver 2");
-    CHECK(TCS_SNAP_PL_LEN == 49, "snap len 49");
+    CHECK(TCS_PROTO_VER == 3, "proto ver 3 (i3: 2 -> 3)");
+    CHECK(TCS_SNAP_PL_LEN == 52, "snap len 52 (i3: 49 -> 52)");
     CHECK(TCS_D_TEC_DIR == 0x0100 && TCS_D_ELEC == 0x0200, "delta mask bits in the high byte");
     CHECK(TCS_ELEC_V_UNKNOWN == (int16_t)0x8000 && TCS_ELEC_I_UNKNOWN == 0xFFFF, "unknown sentinels");
     CHECK(TCS_TEC_DIR_PAUSE == 0 && TCS_TEC_DIR_COOL == 1 && TCS_TEC_DIR_HEAT == 2 && TCS_TEC_DIR_EXT == 3,
           "output direction codes");
 
     memset(&s, 0, sizeof s);
-    s.ver = 2; s.seq = 0x11223344; s.ms = 0x00AABBCC;
+    s.ver = 3; s.seq = 0x11223344; s.ms = 0x00AABBCC;
     s.tc1_act = 22.5f; s.tc2_act = 23.5f; s.body = 36.8f; s.tc1_set = 25.0f; s.tc2_set = 30.0f;
     s.tec2 = 1; s.fan = 1; s.alarm = 0x0003; s.online = 0x03; s.fresh_ms = 1234; s.badge = 1;
     s.tec_dir = tcs_tec_dir_pack(TCS_TEC_DIR_COOL, TCS_TEC_DIR_HEAT);
     s.tec1_v = -823; s.tec1_i = 310;
     s.tec2_v = TCS_ELEC_V_UNKNOWN; s.tec2_i = TCS_ELEC_I_UNKNOWN;
+    s.tec_cmd = 0x02; s.tec_act = 0x01; s.tec_known = 0x02;   /* i3：命令 TC2 开；回显 TC1 开；只有 TC2 可信 */
     n = tcs_pl_snapshot(buf, sizeof buf, &s);
-    CHECK(n == 49, "snap len 49");
-    CHECK(buf[0] == 2 && buf[1] == 0x44 && buf[2] == 0x33 && buf[3] == 0x22 && buf[4] == 0x11, "snap ver / seq");
+    CHECK(n == 52, "snap len 52");
+    CHECK(buf[0] == 3 && buf[1] == 0x44 && buf[2] == 0x33 && buf[3] == 0x22 && buf[4] == 0x11, "snap ver / seq");
     CHECK(buf[38] == 1 && buf[39] == 0, "snap badge / rfu (offsets unchanged)");
     CHECK(buf[40] == 0x21, "snap tec_dir@40");
     CHECK(buf[41] == 0xC9 && buf[42] == 0xFC, "snap tec1_v@41 = -823");
     CHECK(buf[43] == 0x36 && buf[44] == 0x01, "snap tec1_i@43 = 310");
     CHECK(buf[45] == 0x00 && buf[46] == 0x80, "snap tec2_v@45 = unknown");
     CHECK(buf[47] == 0xFF && buf[48] == 0xFF, "snap tec2_i@47 = unknown");
+    CHECK(buf[49] == 0x02 && buf[50] == 0x01 && buf[51] == 0x02, "snap (i3) tec_cmd@49 tec_act@50 tec_known@51");
 
     memset(&d, 0xAA, sizeof d);
     CHECK(tcs_scan_snapshot(buf, n, &d) == 0, "snap decode ok");
-    CHECK(d.ver == 2 && d.seq == 0x11223344 && d.ms == 0x00AABBCC, "snap decode ver/seq/ms");
+    CHECK(d.ver == 3 && d.seq == 0x11223344 && d.ms == 0x00AABBCC, "snap decode ver/seq/ms");
+    CHECK(d.tec_cmd == 0x02 && d.tec_act == 0x01 && d.tec_known == 0x02, "snap (i3) decode tail");
     CHECK(d.tec_dir == 0x21 && d.tec1_v == -823 && d.tec1_i == 310
           && d.tec2_v == TCS_ELEC_V_UNKNOWN && d.tec2_i == TCS_ELEC_I_UNKNOWN, "snap decode tail");
     CHECK(d.tc1_act > 22.49f && d.tc1_act < 22.51f && d.badge == 1 && d.fresh_ms == 1234, "snap decode head");
@@ -59,6 +62,11 @@ int main(void)
           "output direction per channel");
     CHECK(tcs_scan_snapshot(buf, 40, &d) == -1, "40B (old-length) snapshot rejected under ver 2");
     CHECK(tcs_scan_snapshot(buf, 48, &d) == -1, "48B snapshot rejected");
+    CHECK(tcs_scan_snapshot(buf, 49, &d) == -1, "49B (ver-2 length) snapshot rejected under ver 3");
+    CHECK(tcs_scan_snapshot(buf, 51, &d) == -1, "51B snapshot rejected");
+    CHECK(tcs_tec_known_ch(0x02, 1) == 0 && tcs_tec_known_ch(0x02, 2) == 1
+          && tcs_tec_known_ch(0x03, 1) == 1 && tcs_tec_known_ch(0x00, 2) == 0,
+          "tec_known per channel (bit0 = TEC1, bit1 = TEC2)");
 
     /* 旧固件（ver 1）的快照：长度就不对，屏端 on_frame 在解帧这一步丢弃（main.c 还会再比 ver）*/
     buf[0] = 1;
@@ -114,6 +122,12 @@ int main(void)
         tcs_link_tec_set_dirs(&t, 0xF0);
         CHECK(t.dir1 == TCS_TEC_DIR_PAUSE && t.dir2 == 0x0Fu,
               "mirror: each nibble is 4 bits; codes above 3 pass through (UI treats them as 'not set by this page')");
+        /* i3：命令意图 / 模块回显 / 开关状态是否可信（0x20 末尾的 3 字节原样落镜像，界面据 known 位画"未知"）*/
+        memset(&t, 0x55, sizeof t);
+        tcs_link_tec_set_state(&t, 0x02, 0x01, 0x02);
+        CHECK(t.cmd == 0x02 && t.act == 0x01 && t.known == 0x02, "mirror: cmd / act / known from the snapshot tail");
+        CHECK(tcs_tec_known_ch(t.known, 1) == 0 && tcs_tec_known_ch(t.known, 2) == 1,
+              "mirror: TEC1 unknown, TEC2 known");
     }
 
     printf("test_proto_m1: PASS=%d FAIL=%d\n", g_pass, g_fail);

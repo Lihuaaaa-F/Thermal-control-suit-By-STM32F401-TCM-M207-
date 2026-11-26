@@ -522,6 +522,12 @@ else
     fi
 fi
 
+# S-G i3（集成收口，2026-11-26）：TEC 开关状态"未知"时界面画未知、不画已关（P1-09 收口）——0x20 快照的
+# tec_known 位进 ui_model；另把协议参考实现 proto_ref.py 的 selftest 接进入口（TCS_PROTO_VER 3、快照 52 字节，
+# 与两端 C 用例同一组字节）。
+run ui_known    tests/test_ui_known.c        App/lvgl_ui/ui_model.c
+if [ -n "$PYBIN" ] && "$PYBIN" tools/proto_ref.py selftest; then :; else echo "[proto_ref_selftest] FAIL"; FAIL=1; fi
+
 echo "==================="
 if [ "$FAIL" = 0 ]; then echo "run_all: ALL GREEN"; else echo "run_all: HAS FAILURES"; fi
 exit $FAIL

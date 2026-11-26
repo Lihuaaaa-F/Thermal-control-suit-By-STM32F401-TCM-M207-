@@ -286,10 +286,22 @@ uint8_t control_tec_known(void) { return tec_known_now(); }
 /* 命令意图与模块回显是两个量（X03-F-08）。此前只有 g_tcs.tecN_on 一个字段：控制写命令意图，
  * M207 服务在回 TCSW? 时写模块回显——"控制已判定关闭、执行器实际还开着"时它说哪个都不对。
  *   control_tec_cmd()：命令意图，只有 out_tec_sw() 写（锁存期间被压成 0 的"开"也算"关"）。
- *   control_tec_act()：模块回显 = g_tcs.tecN_on（M207 服务写；e2 把回显挪到独立字段之前两者共用）。
+ *   control_tec_act()：模块回显 = 独立字段 s_tec_act_on（i3 起只有 control_tec_echo_set 写，M207 服务在
+ *   回 TCSW? 时调它；此前读的是与命令混用的 g_tcs.tecN_on）。
  * 复联判据（m207_go_online 里"命令是关就补发 TCSW=0"）应当读 cmd；快照两个字段都带是 tcs_snap.c 的事。*/
 uint8_t control_tec_cmd(uint8_t ch) { return (ch == 2) ? s_tec_cmd_on[1] : s_tec_cmd_on[0]; }
-uint8_t control_tec_act(uint8_t ch) { return (ch == 2) ? (g_tcs.tec2_on ? 1u : 0u) : (g_tcs.tec1_on ? 1u : 0u); }
+
+/* 模块回显（i3，2026-11-26；P1-09 收口）：独立的字段，只有 M207 服务收到 TCSW? 应答时经
+ * control_tec_echo_set() 写。此前 control_tec_act() 读的是 g_tcs.tecN_on——控制每写一次命令就把它
+ * 改成命令值，"回显"名不副实：快照里的 tec_act 会在模块还没回话时就跟着命令变，屏分不清
+ * "要它关"和"它确实关了"。g_tcs.tecN_on 保持原样（命令与回显混用，旧消费者仍读它）。*/
+static uint8_t    s_tec_act_on[2];       /* TEC 模块回显（只有 control_tec_echo_set 写；取值 control_tec_act）*/
+uint8_t control_tec_act(uint8_t ch) { return (ch == 2) ? s_tec_act_on[1] : s_tec_act_on[0]; }
+void control_tec_echo_set(uint8_t ch, uint8_t on)
+{
+    if (ch == 1)      s_tec_act_on[0] = on ? 1u : 0u;
+    else if (ch == 2) s_tec_act_on[1] = on ? 1u : 0u;
+}
 
 static void out_tec_temp(uint8_t ch, float v)
 {
@@ -329,6 +341,7 @@ void control_init(const control_ops_t *ops)
     s_stuck_chn = 0;
     memset(s_tec_on_since, 0, sizeof(s_tec_on_since));
     memset(s_tec_cmd_on, 0, sizeof(s_tec_cmd_on));
+    memset(s_tec_act_on, 0, sizeof(s_tec_act_on));   /* i3：模块回显从头开始，上电还没有回读过 */
     s_poll_now_ms = 0;
     control_manual_init(&(control_manual_ops_t){ mo_tec_sw, mo_tec_temp, mo_fan_set });   /* m1 */
     s_manual_reset_req = 0;                                                              /* m1 */
@@ -865,6 +878,10 @@ uint8_t control_tec_dir(uint8_t ch)
     if (ch == 1u)      on = (uint8_t)(g_tcs.tec1_on ? 1u : 0u);
     else if (ch == 2u) on = (uint8_t)(g_tcs.tec2_on ? 1u : 0u);
     else               return TEC_DIR_PAUSE;
+    /* i3（P1-09 收口，2026-11-26）：该通道的开关状态不可信（模块离线）→ 暂停。这时 g_tcs.tecN_on
+     * 只是本端的命令意图，上一次的方向还在里面，但执行器实际在做什么无从得知。屏另据快照的
+     * tec_known 位把这一路画成"未知"。M16；变异 C13。*/
+    if (!(tec_known_now() & (uint8_t)(1u << (ch - 1u)))) return TEC_DIR_PAUSE;
     if (!on) return TEC_DIR_PAUSE;
     if (g_tcs.mode != 0u && ch == 1u) {
         if (s_state == CTRL_COOL) return TEC_DIR_COOL;

@@ -261,6 +261,9 @@ void ui_home_state(const ui_in_t *in, const ui_link_view_t *lv, ui_home_t *out)
     out->fan = in->fan ? 1u : 0u;
     out->tec1 = in->tec1 ? 1u : 0u;
     out->tec2 = in->tec2 ? 1u : 0u;
+    /* S 线 i3（P1-09 收口）：主控说这一路的开关状态不可信（M207 离线）时，胶囊画"未知"，
+     * 不拿命令意图冒充"已关"（tui_p0.c 的 paint_tec 同时看这两个量）*/
+    out->tec_known = (uint8_t)(in->tec_known & 0x03u);
 }
 
 uint32_t ui_home_diff(const ui_home_t *was, const ui_home_t *now)
@@ -274,6 +277,7 @@ uint32_t ui_home_diff(const ui_home_t *was, const ui_home_t *now)
     if (was->tec1 != now->tec1)   m |= UI_H_TEC1;
     if (was->tec2 != now->tec2)   m |= UI_H_TEC2;
     if (was->estop != now->estop) m |= UI_H_ESTOP;
+    if (was->tec_known != now->tec_known) m |= UI_H_TECK;
     return m;
 }
 
@@ -316,8 +320,10 @@ void ui_mode_state(const ui_in_t *in, const ui_link_view_t *lv, ui_mode_state_t 
     if (out->link != UI_LINK_UP) return;
     out->manual = (uint8_t)(in->mode == 0);
     out->safe = (uint8_t)((in->alarm & UI_SAFE_ALARMS) != 0);
-    out->dir[0] = ui_mode_dir_of(in->dir1);
-    out->dir[1] = ui_mode_dir_of(in->dir2);
+    /* S 线 i3（P1-09 收口）：主控说这一路的开关状态不可信（M207 离线）→ "未知"、转灰，
+     * 不拿上一次的方向冒充当前状态；版面不变 */
+    out->dir[0] = (in->tec_known & 1u) ? ui_mode_dir_of(in->dir1) : UI_TD_UNKNOWN;
+    out->dir[1] = ((in->tec_known >> 1) & 1u) ? ui_mode_dir_of(in->dir2) : UI_TD_UNKNOWN;
     out->elec_ok[0] = (uint8_t)(in->tec_valid & 1u);
     out->elec_ok[1] = (uint8_t)((in->tec_valid >> 1) & 1u);
     out->keys_on = (uint8_t)(out->manual && !out->safe);

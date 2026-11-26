@@ -55,6 +55,9 @@ typedef struct {
     uint8_t  tec_dir;       /* 半字节编码同 0x20.tec_dir */
     int16_t  tec1_v, tec2_v;
     uint16_t tec1_i, tec2_i;
+    /* i3（S 线，2026-11-26；P1-09 / X03-F-08 收口）：TEC 开关的命令意图 / 模块回显 / 是否可信，
+     * bit0=tec1 bit1=tec2。屏据 known 位把模块离线时的那一路画成"未知"，不是"已关" */
+    uint8_t  tec_cmd, tec_act, tec_known;
 } snap_cycle_t;
 
 /* m1（模式页）：该通道的电学量能不能用（取到过、不太旧）→ 定点；否则"未知" */
@@ -77,6 +80,11 @@ static void snap_sample(snap_cycle_t *c)
     c->tec_dir = tcs_tec_dir_pack(control_tec_dir(1), control_tec_dir(2));   /* m1 */
     snap_elec(1, &c->tec1_v, &c->tec1_i);                                    /* m1 */
     snap_elec(2, &c->tec2_v, &c->tec2_i);                                    /* m1 */
+    /* i3：命令意图、模块回显（独立字段）、开关状态是否可信——同一拍取样。
+     * tec_known 现取现算（g_tcs.tec_known 是控制节拍刷的缓存副本，最多晚一拍）*/
+    c->tec_cmd   = (uint8_t)((control_tec_cmd(1) ? 1u : 0u) | (control_tec_cmd(2) ? 2u : 0u));
+    c->tec_act   = (uint8_t)((control_tec_act(1) ? 1u : 0u) | (control_tec_act(2) ? 2u : 0u));
+    c->tec_known = (uint8_t)(control_tec_known() & 0x03u);
     taskEXIT_CRITICAL(&s_snap_mux);
 }
 
@@ -221,6 +229,8 @@ static void snap_task(void *arg)
             .tec_dir = cy.tec_dir,
             .tec1_v = cy.tec1_v, .tec1_i = cy.tec1_i,
             .tec2_v = cy.tec2_v, .tec2_i = cy.tec2_i,
+            /* i3：末尾追加的 3 字节（命令意图 / 模块回显 / 开关状态是否可信）*/
+            .tec_cmd = cy.tec_cmd, .tec_act = cy.tec_act, .tec_known = cy.tec_known,
         };
         uint8_t pl[TCS_SNAP_PL_LEN];
         size_t n = tcs_pl_snapshot(pl, sizeof(pl), &s);

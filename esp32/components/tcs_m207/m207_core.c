@@ -785,6 +785,8 @@ static void m207_handle_line(const char *line)
     } else if (r.kind == M207_KIND_REPLY && strcmp(r.param, "TCSW") == 0) {
         if (r.module == 1) g_tcs.tec1_on = (r.value != 0.0f);
         else               g_tcs.tec2_on = (r.value != 0.0f);
+        /* i3：同一条应答也写进独立的回显字段（快照 tec_act 取它；上面的 g_tcs.tecN_on 命令与回显混用）*/
+        control_tec_echo_set((uint8_t)r.module, (uint8_t)(r.value != 0.0f));
         /* i3（P1-09 的另一半）：读回是"关" = 旁路里保持的关断已经到了执行器，解除保持。
          * 读回仍是"开"则保持不动，下一次复联照样先补发。*/
         if (r.value == 0.0f) {

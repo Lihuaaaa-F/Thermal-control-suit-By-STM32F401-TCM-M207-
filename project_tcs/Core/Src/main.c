@@ -466,6 +466,7 @@ static void snap_apply(const tcs_snap_pl_t *s)
     param_link_sync(PARAM_ID_TC2_SET, s->tc2_set);
     tcs_link_tec_set_dirs(&s_tec, s->tec_dir);                       /* m1（模式页）：末尾追加的 9 字节 */
     tcs_link_tec_set_elec(&s_tec, s->tec1_v, s->tec1_i, s->tec2_v, s->tec2_i);
+    tcs_link_tec_set_state(&s_tec, s->tec_cmd, s->tec_act, s->tec_known);   /* S 线 i3：末尾追加的 3 字节 */
     s_last_snap = *s;
 }
 

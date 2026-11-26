@@ -470,6 +470,7 @@ static void input_refresh(void)
         s_in.tec_valid = t.valid;
         s_in.tec_v1 = t.v1; s_in.tec_i1 = t.i1;
         s_in.tec_v2 = t.v2; s_in.tec_i2 = t.i2;
+        s_in.tec_known = t.known;                   /* S 线 i3：哪一路的开关状态可信 */
     }
     s_lv = ui_link_view(&s_in);
 }

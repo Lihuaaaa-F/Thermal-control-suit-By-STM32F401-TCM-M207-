@@ -137,8 +137,50 @@ def main():
     ):
         if needle not in mainc:
             fails.append("H743 Core/Src/main.c 缺：%s" % needle)
-    if "(TCS_PROTO_VER == 2u)" not in read(H7, "App", "tcs", "post.c"):
-        fails.append("屏端 POST 的 VER 自检项必须与 TCS_PROTO_VER 同步（== 2u）")
+    if "(TCS_PROTO_VER == 3u)" not in read(H7, "App", "tcs", "post.c"):
+        fails.append("屏端 POST 的 VER 自检项必须与 TCS_PROTO_VER 同步（== 3u）")
+
+    # 7) S 线 i3（2026-11-26；P1-09 收口；协议 TCS_PROTO_VER 3）：0x20 末尾的 3 字节（命令意图 / 模块回显 /
+    #    开关状态是否可信）从控制内核取、落进快照；屏端把它落进镜像，界面据 known 位把 M207 离线的那一路
+    #    画成"未知"。这些文件依赖 RTOS / HAL，主机编译不了；判定与换算本身由 tests/test_m207_force.c、
+    #    tests/test_control_esp32.c（K19）、project_tcs/tests/test_ui_known.c 直接编。
+    for needle in (
+        "c->tec_cmd   = (uint8_t)((control_tec_cmd(1) ? 1u : 0u) | (control_tec_cmd(2) ? 2u : 0u));",
+        "c->tec_act   = (uint8_t)((control_tec_act(1) ? 1u : 0u) | (control_tec_act(2) ? 2u : 0u));",
+        "c->tec_known = (uint8_t)(control_tec_known() & 0x03u);",          # 现取现算，不用晚一拍的缓存副本
+        ".tec_cmd = cy.tec_cmd, .tec_act = cy.tec_act, .tec_known = cy.tec_known,",
+    ):
+        if needle not in snap:
+            fails.append("tcs_snap.c 缺（i3）：%s" % needle)
+    corec = read(CORE, "control.c")
+    for needle in (
+        "uint8_t control_tec_act(uint8_t ch) { return (ch == 2) ? s_tec_act_on[1] : s_tec_act_on[0]; }",  # 回显是独立字段
+        "void control_tec_echo_set(uint8_t ch, uint8_t on)",
+        "if (!(tec_known_now() & (uint8_t)(1u << (ch - 1u)))) return TEC_DIR_PAUSE;",                    # 状态未知 → 方向是暂停
+    ):
+        if needle not in corec:
+            fails.append("tcs_core/control.c 缺（i3）：%s" % needle)
+    m207c = read(ESP, "components", "tcs_m207", "m207_core.c")
+    for needle in (
+        "int m207_tec_force(uint8_t ch, uint8_t on)",                       # 安全关断通道：离线也受理
+        "if (s_lane[ch].hold || !cmd_on || !echo_on) {",                    # 复联先补发关断：保持位 / 命令意图 / 回显
+        "control_tec_echo_set((uint8_t)r.module, (uint8_t)(r.value != 0.0f));",  # M207 服务回 TCSW? 时写回显
+    ):
+        if needle not in m207c:
+            fails.append("tcs_m207/m207_core.c 缺（i3）：%s" % needle)
+    if ".tec_force = op_tec_force," not in read(ESP, "main", "main.c"):
+        fails.append("esp32/main/main.c 没有接 .tec_force（SAFE 的关断退回普通队列，模块离线时送不到执行器）")
+    for needle in ("tcs_link_tec_set_state(&s_tec, s->tec_cmd, s->tec_act, s->tec_known)",):
+        if needle not in mainc:
+            fails.append("H743 Core/Src/main.c 缺（i3）：%s" % needle)
+    tuic = read(H7, "App", "lvgl_ui", "tui.c")
+    p0c = read(H7, "App", "lvgl_ui", "tui_p0.c")
+    for needle in ("s_in.tec_known = t.known",):
+        if needle not in tuic:
+            fails.append("H743 App/lvgl_ui/tui.c 缺（i3）：%s" % needle)
+    for needle in ("if (module == UI_SRC_UNKNOWN || !known)", "UI_H_TECK"):
+        if needle not in p0c:
+            fails.append("H743 App/lvgl_ui/tui_p0.c 缺（i3）：首页 TEC 胶囊没有跟着开关状态是否可信走：%s" % needle)
 
     if fails:
         print("[m1gates] FAIL")
@@ -146,7 +188,7 @@ def main():
             print("  - " + f)
         return 1
     print("[m1gates] PASS (屏链路断开 3 秒 = 急停的接线：控制节拍 → 纯判定 → 急停路径；对端帧时刻在方向闸门之后；"
-          "协议 ver2：主控快照带输出方向与电学量、屏端 0x20 / 0x21 两个入口落镜像)")
+          "协议 ver3：主控快照带输出方向、电学量与 TEC 开关的命令 / 回显 / 是否可信，屏端落镜像并对未知的一路画未知)")
     return 0
 
 

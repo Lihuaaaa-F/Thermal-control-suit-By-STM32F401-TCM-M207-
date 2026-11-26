@@ -39,6 +39,10 @@ typedef struct {
     uint8_t  tec_valid;                 /* bit0 = TEC1 电压电流有效；bit1 = TEC2 */
     float    tec_v1, tec_i1;            /* V（制热为负）/ A */
     float    tec_v2, tec_i2;
+    /* S 线 i3（2026-11-26；P1-09 收口）：该路 TEC 开关状态是否可信（快照 0x20.tec_known）。
+     * bit0 = TEC1 bit1 = TEC2；0 = 主控的 M207 离线、无从得知——这一路显示"未知"，不显示"运行 / 停止"。
+     * 默认（没填）是 0 = 未知：宁可少显示，不可把"不知道"画成"已关"。只在主控在线时有意义。*/
+    uint8_t  tec_known;
 } ui_in_t;
 
 /* ====== 连接视图 ====== */
@@ -123,6 +127,7 @@ typedef struct {
     uint8_t   tec1;
     uint8_t   tec2;
     uint8_t   estop;             /* 急停已记下（主控断了也算）：急停键变灰 */
+    uint8_t   tec_known;         /* S 线 i3：bit0 = TEC1 bit1 = TEC2 的开关状态可信；主控不在时为 0 */
 } ui_home_t;
 
 #define UI_H_LINK   (1u << 0)   /* 顶栏状态条（主控 / 模块两枚胶囊一起重画）*/
@@ -133,6 +138,7 @@ typedef struct {
 #define UI_H_TEC1   (1u << 5)
 #define UI_H_TEC2   (1u << 6)
 #define UI_H_ESTOP  (1u << 7)
+#define UI_H_TECK   (1u << 8)   /* S 线 i3：某一路 TEC 的开关状态在"可信 / 未知"之间变了：TEC 胶囊重画 */
 
 void     ui_home_state(const ui_in_t *in, const ui_link_view_t *lv, ui_home_t *out);
 uint32_t ui_home_diff(const ui_home_t *was, const ui_home_t *now);   /* 位或：UI_H_* */

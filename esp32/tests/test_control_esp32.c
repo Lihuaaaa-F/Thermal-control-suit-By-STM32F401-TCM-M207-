@@ -1242,8 +1242,9 @@ int main(void)
         (void)param_set(PARAM_ID_MODE, 0.0f, 4);
         tick();
         control_manual_tec(1, 1);
+        control_tec_echo_set(1, 1);                   /* 模块回读：开着（i3 起回显是独立字段）*/
         CHECK(control_tec_cmd(1) == 1 && control_tec_act(1) == 1, "K18 precondition: command on, echo on");
-        g_tcs.tec1_on = 0;                            /* 晚到的回显：模块回的是"关" */
+        control_tec_echo_set(1, 0);                   /* 晚到的回显：模块回的是"关" */
         CHECK(control_tec_cmd(1) == 1 && control_tec_act(1) == 0,
               "K18 command intent and module echo are two different quantities");
         g_tcs.tc1_act = 30.0f; tick();                /* 喂进第一个水温样本 */
@@ -1258,6 +1259,31 @@ int main(void)
         /* 关断后两个量一致：都是"关" */
         control_manual_tec(2, 1);                     /* SAFE 期被拒 */
         CHECK(control_tec_cmd(2) == 0 && control_tec_act(2) == 0, "K18 in SAFE both channels read off");
+    }
+
+    /* ====== 2026-11-26 S 线 i3（P1-09 收口）：模块回显是独立的字段，不跟控制自己的命令走 =====
+     * control_tec_act() 原先读 g_tcs.tecN_on：控制每写一次命令就把它改成命令值，"回显"名不副实——
+     * 快照里的 tec_act 会在模块还没回话时就跟着命令变，屏分不清"要它关"和"它确实关了"。
+     * 现在只有 M207 服务收到 TCSW? 应答时经 control_tec_echo_set() 写它。变异 M56。*/
+    {
+        enter_auto_healthy();
+        (void)param_set(PARAM_ID_MODE, 0.0f, 4);
+        tick();
+        control_manual_tec(1, 1);                     /* 命令：开 */
+        CHECK(control_tec_cmd(1) == 1 && control_tec_act(1) == 0,
+              "K19 a command does not forge the echo: the module has not answered yet");
+        control_tec_echo_set(1, 1);                   /* 模块回读：开着 */
+        control_tec_echo_set(2, 0);
+        CHECK(control_tec_act(1) == 1 && control_tec_act(2) == 0, "K19 the echo follows the module's read-back");
+        control_manual_tec(1, 0);                     /* 命令：关；回显还没到 */
+        CHECK(control_tec_cmd(1) == 0 && control_tec_act(1) == 1,
+              "K19 'told to turn off' is not 'it is off': act still says on until the module answers");
+        control_tec_echo_set(1, 0);                   /* 模块回读：关了 */
+        CHECK(control_tec_act(1) == 0, "K19 echo off once the module confirms");
+        control_tec_echo_set(0, 1); control_tec_echo_set(3, 1);
+        CHECK(control_tec_act(1) == 0 && control_tec_act(2) == 0, "K19 a bad channel writes nothing");
+        g_tcs.tec1_on = 1;                            /* 旧字段被别处改写，不串到回显里 */
+        CHECK(control_tec_act(1) == 0, "K19 the echo field is independent of the shared g_tcs.tecN_on");
     }
 
     /* ====== 2026-11-26 S 线 e3a（X06-F-03）：5 条 P0 安全路径的判别性用例 ======

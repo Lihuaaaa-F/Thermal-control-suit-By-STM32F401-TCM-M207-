@@ -24,8 +24,9 @@ int main(void)
     };
     uint8_t buf[64];
     size_t n = tcs_pl_snapshot(buf, sizeof(buf), &s);
-    /* m1"模式"页（2026-11-26，TCS_PROTO_VER 2）：末尾追加 9 字节，40 → 49 */
-    CHECK(n == TCS_SNAP_PL_LEN && n == 49, "snap len 49");
+    /* m1"模式"页（2026-11-26，TCS_PROTO_VER 2）：末尾追加 9 字节，40 → 49；
+     * i3（2026-11-26，TCS_PROTO_VER 3）：再追加 3 字节，49 → 52 */
+    CHECK(n == TCS_SNAP_PL_LEN && n == 52, "snap len 52");
     CHECK(buf[0] == 1, "snap ver@0");
     CHECK(buf[1] == 0x44 && buf[2] == 0x33 && buf[3] == 0x22 && buf[4] == 0x11,
           "snap seq 小端@1-4");
@@ -49,25 +50,45 @@ int main(void)
 
     /* ---- m1"模式"页（2026-11-26，TCS_PROTO_VER 2）：末尾追加 9B。与 project_tcs/tools/proto_ref.py
      *     的 selftest、project_tcs/tests/test_proto_m1.c 用的是同一组字节 ---- */
-    CHECK(TCS_PROTO_VER == 2, "proto ver 2");
-    CHECK(TCS_SNAP_PL_LEN == 49, "snap len 49");
+    CHECK(TCS_PROTO_VER == 3, "proto ver 3");
+    CHECK(TCS_SNAP_PL_LEN == 52, "snap len 52");
     s.ver = TCS_PROTO_VER;
     s.tec_dir = tcs_tec_dir_pack(TCS_TEC_DIR_COOL, TCS_TEC_DIR_HEAT);
     s.tec1_v = -823; s.tec1_i = 310;                     /* -8.23 V / 3.10 A */
     s.tec2_v = TCS_ELEC_V_UNKNOWN; s.tec2_i = TCS_ELEC_I_UNKNOWN;
     n = tcs_pl_snapshot(buf, sizeof(buf), &s);
-    CHECK(n == 49, "snap (m1) len 49");
-    CHECK(buf[0] == 2, "snap (m1) ver@0 = 2");
+    CHECK(n == 52, "snap (i3) len 52");
+    CHECK(buf[0] == 3, "snap (i3) ver@0 = 3");
     CHECK(buf[40] == 0x21, "snap (m1) tec_dir@40 = cool | heat<<4");
     CHECK(buf[41] == 0xC9 && buf[42] == 0xFC, "snap (m1) tec1_v@41 = -823 (i16 LE)");
     CHECK(buf[43] == 0x36 && buf[44] == 0x01, "snap (m1) tec1_i@43 = 310 (u16 LE)");
     CHECK(buf[45] == 0x00 && buf[46] == 0x80, "snap (m1) tec2_v@45 = unknown 0x8000");
     CHECK(buf[47] == 0xFF && buf[48] == 0xFF, "snap (m1) tec2_i@47 = unknown 0xFFFF");
-    CHECK(tcs_scan_snapshot(buf, n, &d) == 0 && d.ver == 2 && d.tec_dir == 0x21 && d.tec1_v == -823
+    CHECK(tcs_scan_snapshot(buf, n, &d) == 0 && d.ver == 3 && d.tec_dir == 0x21 && d.tec1_v == -823
           && d.tec1_i == 310 && d.tec2_v == TCS_ELEC_V_UNKNOWN && d.tec2_i == TCS_ELEC_I_UNKNOWN,
           "snap (m1) decode tail");
     CHECK(d.seq == 0x11223344 && d.badge == 1 && d.rfu == 0, "snap (m1) head 40B untouched");
     CHECK(tcs_scan_snapshot(buf, 40, &d) == -1, "snap (m1) 40B old length rejected under ver 2");
+
+    /* ---- i3（2026-11-26，TCS_PROTO_VER 3；P1-09 / X03-F-08 收口）：末尾再追加 3B。
+     *     tec_cmd 命令意图 / tec_act 模块回显 / tec_known 开关状态是否可信，bit0=tec1 bit1=tec2。
+     *     与 project_tcs/tools/proto_ref.py 的 selftest、project_tcs/tests/test_proto_m1.c 同一组字节 ---- */
+    s.tec_cmd = 0x02; s.tec_act = 0x01; s.tec_known = 0x02;   /* 命令：TC2 开；回显：TC1 开；只有 TC2 的状态可信 */
+    n = tcs_pl_snapshot(buf, sizeof(buf), &s);
+    CHECK(n == 52 && buf[0] == 3, "snap (i3) ver 3, 52B");
+    CHECK(buf[40] == 0x21 && buf[48] == 0xFF, "snap (i3) the m1 tail (40..48) is unchanged");
+    CHECK(buf[49] == 0x02 && buf[50] == 0x01 && buf[51] == 0x02, "snap (i3) tec_cmd@49 tec_act@50 tec_known@51");
+    CHECK(tcs_scan_snapshot(buf, n, &d) == 0 && d.ver == 3 && d.tec_cmd == 0x02 && d.tec_act == 0x01
+          && d.tec_known == 0x02, "snap (i3) decode tail");
+    CHECK(d.tec_dir == 0x21 && d.tec1_v == -823 && d.tec1_i == 310 && d.badge == 1 && d.rfu == 0
+          && d.seq == 0x11223344, "snap (i3) head 49B untouched");
+    CHECK(tcs_scan_snapshot(buf, 49, &d) == -1, "snap (i3) 49B (ver-2 length) rejected under ver 3");
+    CHECK(tcs_scan_snapshot(buf, 51, &d) == -1, "snap (i3) 51B rejected");
+    CHECK(tcs_tec_known_ch(0x02, 1) == 0 && tcs_tec_known_ch(0x02, 2) == 1,
+          "tec_known per channel: bit0 = TEC1, bit1 = TEC2");
+    CHECK(tcs_tec_known_ch(0x03, 1) == 1 && tcs_tec_known_ch(0x03, 2) == 1
+          && tcs_tec_known_ch(0x00, 1) == 0 && tcs_tec_known_ch(0x00, 2) == 0,
+          "tec_known per channel: both known / both unknown");
     CHECK(tcs_tec_dir_get(0x21, 1) == TCS_TEC_DIR_COOL && tcs_tec_dir_get(0x21, 2) == TCS_TEC_DIR_HEAT
           && tcs_tec_dir_get(0x21, 3) == TCS_TEC_DIR_HEAT, "tec_dir nibbles (ch other than 1 = high)");
     CHECK(tcs_tec_dir_pack(0x11, 0x22) == 0x21, "tec_dir pack keeps 4 bits each");

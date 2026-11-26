@@ -281,9 +281,10 @@ void post_init(int eeprom_cfg_invalid)
     post_set_result(POST_ITEM_SCRTOUCH, (uint8_t)(lcd_ready() && touch_ready()));
 
     /* 6. 版本：协议版本合法 + 固件 BCD 非零 + 注册表非空
-     * m1"模式"页（2026-11-26）：协议版本递增到 2（0x20 快照追加输出方向与电压电流），随 protocol/tcs_proto.h 同改 */
+     * m1"模式"页（2026-11-26）：协议版本递增到 2（0x20 快照追加输出方向与电压电流），随 protocol/tcs_proto.h 同改。
+     * S 线 i3（2026-11-26）：递增到 3（0x20 快照末尾追加命令意图 / 模块回显 / 开关状态是否可信），同改。*/
     post_set_result(POST_ITEM_VER,
-                    (uint8_t)((TCS_PROTO_VER == 2u) && g_tcs.fw_ver != 0u && param_count() > 0));
+                    (uint8_t)((TCS_PROTO_VER == 3u) && g_tcs.fw_ver != 0u && param_count() > 0));
 }
 
 void post_poll(uint32_t now_ms)

@@ -27,6 +27,10 @@ typedef struct {
     float   v1, i1;         /* TEC1 实际输出电压 V（制热为负）/ 实际输出电流 A */
     float   v2, i2;         /* TEC2 */
     uint8_t valid;          /* bit0 = TEC1 的电压电流有效；bit1 = TEC2。无效的那一路显示"未知" */
+    /* ---- S 线 i3（2026-11-26；P1-09 / X03-F-08 收口）：0x20 快照末尾的 3 字节原样落镜像 ----
+     * cmd 命令意图 / act 模块回显（各 bit0=TEC1 bit1=TEC2）；known 该路开关状态是否可信（0 = 未知）。
+     * 界面规则：known 位是 0 的那一路显示"未知"，不得显示"运行 / 停止"；主控在但 M207 离线时就是这种情形。*/
+    uint8_t cmd, act, known;
 } tcs_link_tec_t;
 void tcs_link_tec_copy(tcs_link_tec_t *out);
 
@@ -51,6 +55,14 @@ static inline void tcs_link_tec_set_elec(tcs_link_tec_t *t, int16_t v1, uint16_t
     t->v2 = (float)v2 * 0.01f;  t->i2 = (float)i2 * 0.01f;
     t->valid = (uint8_t)((((v1 != TCS_ELEC_V_UNKNOWN) && (i1 != TCS_ELEC_I_UNKNOWN)) ? 1u : 0u)
                        | (((v2 != TCS_ELEC_V_UNKNOWN) && (i2 != TCS_ELEC_I_UNKNOWN)) ? 2u : 0u));
+}
+
+/* S 线 i3：TEC 开关的命令意图 / 模块回显 / 是否可信（0x20 末尾的 3 字节）。只镜像到低两位。*/
+static inline void tcs_link_tec_set_state(tcs_link_tec_t *t, uint8_t cmd, uint8_t act, uint8_t known)
+{
+    t->cmd   = (uint8_t)(cmd & 0x03u);
+    t->act   = (uint8_t)(act & 0x03u);
+    t->known = (uint8_t)(known & 0x03u);
 }
 
 #ifdef __cplusplus

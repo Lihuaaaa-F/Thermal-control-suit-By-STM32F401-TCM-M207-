@@ -204,6 +204,10 @@ MUTATIONS = [
     ("M55 模块离线时锁存不再重申关断（离线期不重试，复联后关断补不上）",
      [("        if (s_state != CTRL_SAFE || (uint32_t)(now_ms - s_safe_assert_ms) >= CTRL_SAFE_REASSERT_MS) {",
        "        if (s_state != CTRL_SAFE || (g_tcs.m207_online && (uint32_t)(now_ms - s_safe_assert_ms) >= CTRL_SAFE_REASSERT_MS)) {")], ""),
+    # ---- 2026-11-26 S 线 i3（P1-09 收口）：快照里的模块回显必须是独立的量。用例 K19 在 test_control_esp32.c ----
+    ("M56 模块回显回去读命令与回显混用的字段（控制一下命令，回显就跟着变）",
+     [("uint8_t control_tec_act(uint8_t ch) { return (ch == 2) ? s_tec_act_on[1] : s_tec_act_on[0]; }",
+       "uint8_t control_tec_act(uint8_t ch) { return (ch == 2) ? (g_tcs.tec2_on ? 1u : 0u) : (g_tcs.tec1_on ? 1u : 0u); }")], ""),
 ]
 
 
@@ -300,6 +304,11 @@ def main():
         old += ("\n/* mutation_control.py: 基线没有 control_tec_cmd / control_tec_act，为链接补上 */\n"
                 "uint8_t control_tec_cmd(uint8_t ch) { (void)ch; return g_tcs.tec1_on; }\n"
                 "uint8_t control_tec_act(uint8_t ch) { (void)ch; return g_tcs.tec1_on; }\n")
+    # S 线 i3（P1-09 收口）：模块回显改成独立字段后的写入口；桩回到修前的耦合（回显 = 那个混用字段）
+    if "control_tec_echo_set" not in old:
+        old += ("\n/* mutation_control.py: 基线没有 control_tec_echo_set，为链接补上（修前：回显就是混用字段）*/\n"
+                "void control_tec_echo_set(uint8_t ch, uint8_t on) {\n"
+                "    if (ch == 1) g_tcs.tec1_on = on ? 1u : 0u; else if (ch == 2) g_tcs.tec2_on = on ? 1u : 0u; }\n")
     ok, out, rc = compile_run(old)
     if ok:
         fl = fails_of(out)

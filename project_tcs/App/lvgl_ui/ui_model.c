@@ -186,7 +186,7 @@ void ui_banner_select(const ui_in_t *in, const ui_link_view_t *lv, ui_banner_t *
     }
     if (a & ALM_EEPROM) {
         set_banner(out, UI_BN_INFO, 0, UI_BN_TAP_ACK, "参数校验失败",
-                   "已恢复默认参数 · 请重新设定", 0);
+                   "已恢复默认参数 · 重新设定后恢复保护", 0);   /* S 线 i3 条目 5：写清后果（对照规格 §6 布防语义）*/
         return;
     }
     /* 没有报警位、但源确实不在（未布防时不上报警）：只提示，不说"已停止"——未布防时并不停机 */

@@ -299,6 +299,13 @@ def main():
     if "真机脚本的护栏" not in srd or "site_lib.sh" not in srd or "不改同一个工作树" not in srd:
         fails.append("project_tcs/tools/site/README.md 缺（i3）：真机脚本的规则没有写进现场工具页")
 
+    # 14) S 线 i3（条目 5，M09-F-06）：布防语义写进规格；屏上"参数校验失败"横幅写清后果
+    spec = read(H7, os.pardir, "docs", "现行规格说明书_v1.2.md")
+    if "自动布防的第三个条件" not in spec or "不会自动布防" not in spec or "参数存储故障期间没有传感器保护" not in spec:
+        fails.append("规格说明书缺（i3）：M09-F-06 的布防语义（镜像坏 / NVS 写失败 ⇒ 不自动布防、无传感器保护）")
+    if "重新设定后恢复保护" not in h7uim:
+        fails.append("H743 App/lvgl_ui/ui_model.c 缺（i3）：参数存储故障的横幅没有写清后果")
+
     if fails:
         print("[m1gates] FAIL")
         for f in fails:

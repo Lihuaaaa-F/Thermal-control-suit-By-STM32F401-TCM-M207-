@@ -39,7 +39,9 @@ int main(void)
     CHECK(perf_hist_pctl(&h, 50u) == 0 && perf_hist_pctl(&h, 99u) == 0, "空窗口的百分位是 0");
     CHECK(perf_hist_pctl(NULL, 50u) == 0 && perf_hist_pctl(&h, 101u) == 0, "空指针 / 百分位越界：0");
     perf_hist_add(NULL, 5u);                       /* 不崩 */
-    CHECK(1, "对空指针加样本不崩");
+    /* X06-F-06：原来 CHECK(1, ...)——只要进程还在就过。空指针路径真正该成立的是"什么都没写"：
+     * 同一个窗口的样本数仍是 0、预算没被改。*/
+    CHECK(h.n == 0 && h.over_thresh == 8000u, "对空指针加样本不崩，且不写任何窗口状态");
 
     /* ---- 3) 100 拍，99 拍 1000us、1 拍 9000us：P99 不动，尖峰进 max 与超预算计数 ---- */
     perf_hist_init(&h, 8000u);

@@ -532,6 +532,24 @@ run ui_svc      tests/test_ui_svc.c          App/lvgl_ui/ui_model.c
 run ui_mismatch tests/test_ui_mismatch.c     App/lvgl_ui/ui_model.c
 if [ -n "$PYBIN" ] && "$PYBIN" tools/proto_ref.py selftest; then :; else echo "[proto_ref_selftest] FAIL"; FAIL=1; fi
 
+
+# S-G x3（X06-F-06）：恒真断言静态扫描。抓 `|| 1`、`CHECK(1,`、对无符号/枚举值 `>= 0`、
+# 以及"循环条件就是 *p、体内还写 || *p == '\0'"这类死项。起因：审计在 4 处断言里找到永不红的写法，
+# 其中 `comm_txq_count(...) == 0 || 1` 是字面恒真（comm 丢帧时仍然绿）。
+# 先跑 --self-test（4 个构造样例必须全被抓到），再扫全仓测试源码。
+if [ -n "$PYBIN" ] && "$PYBIN" -X utf8 tests/check_tautology.py --self-test; then :; else
+    echo "[tautology_selftest] FAIL"; FAIL=1
+fi
+if [ -n "$PYBIN" ] && "$PYBIN" -X utf8 tests/check_tautology.py; then :; else
+    echo "[tautology] FAIL"; FAIL=1
+fi
+
+# S-G x3（X06-F-06）：断言数 / 用例数基线门禁。逐个运行主机单测，取它自己打印的 PASS=<n>
+# （或语料/模糊测试的 corpus=/fed=），与 tests/baseline/assert_counts.tsv 比较，低于基线即红。
+# 防的是"删断言 / 把循环次数改小 / 抽掉一半语料"这类静默减配——run_all 全绿但覆盖变少。
+if [ -n "$PYBIN" ] && "$PYBIN" -X utf8 tests/assert_count.py; then :; else
+    echo "[assert_count] FAIL"; FAIL=1
+fi
 echo "==================="
 if [ "$FAIL" = 0 ]; then echo "run_all: ALL GREEN"; else echo "run_all: HAS FAILURES"; fi
 exit $FAIL

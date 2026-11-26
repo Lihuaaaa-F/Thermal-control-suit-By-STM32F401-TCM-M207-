@@ -73,7 +73,9 @@ static void test_arm_fsm(void)
     CHECK(post_arm_step(&c, 0, 1, 1, 0) == POST_ARM_LOST_ALARM, "healthy 10 no-ack stays LOST");
     /* 重新计数（上一步未清）→ ack + 10 次健康 → ARMED（上线补入）*/
     for (int i = 0; i < POST_ARM_RECOVER_RUN; i++)
-        CHECK(post_arm_step(&c, 0, 1, 1, 1) >= 0, "counting");
+        /* X06-F-06：原来 >= 0（枚举恒真）。上一段循环已经把 healthy_run 记满 10（ack=0 不迁移），
+         * 所以这里第一次带 ack 就升到 ARMED，循环里 10 次都返回 ARMED_ONLINE。*/
+        CHECK(post_arm_step(&c, 0, 1, 1, 1) == POST_ARM_ARMED_ONLINE, "ack + 已满健康样本 -> ARMED");
     CHECK(c.state == POST_ARM_ARMED_ONLINE, "ack + 10 healthy -> ARMED");
 
     /* 强制布防（0x08=1）：无视 POST/健康直接 ARMED；掉线仍进 LOST（FMEA 恒开）*/

@@ -122,6 +122,14 @@ static void ota_copy_task(void *arg)
     if (err != ESP_OK) { ESP_LOGE(TAG, "ota end=%s", esp_err_to_name(err)); goto leave; }
     ESP_ERROR_CHECK(esp_ota_set_boot_partition(next));
     ESP_LOGI(TAG, "ota OK: boot -> %s, restart in 1s", next->label);
+    /* M08-F-13：重启前强制落盘。参数的常规落盘是 2 秒防抖 + 500ms 冲洗（persist_worker），
+     * 这 1 秒里改了参数、正好赶上重启，脏参就随 NVS 镜像一起丢了。落盘失败也照样重启
+     * （只记日志）：boot 分区已经切了，停在运行态只会让网页/屏以为 OTA 没生效。*/
+    {
+        int prv = param_persist_now();
+        if (prv < 0) ESP_LOGE(TAG, "ota: param persist before restart FAILED (rv=%d); restarting anyway", prv);
+        else         ESP_LOGI(TAG, "ota: params persisted before restart (rv=%d)", prv);
+    }
     vTaskDelay(pdMS_TO_TICKS(1000));
     esp_restart();
 leave:
@@ -154,6 +162,12 @@ esp_err_t app_ota_trigger(int rollback)
             return ESP_FAIL;
         }
         vTaskDelay(pdMS_TO_TICKS(1000));      /* 这 1s 里闸门保持占用（重启后清零）*/
+        /* M08-F-13：回滚也是重启，同样先落盘（见拷贝路径上的说明）*/
+        {
+            int prv = param_persist_now();
+            if (prv < 0) ESP_LOGE(TAG, "ota: param persist before restart FAILED (rv=%d); restarting anyway", prv);
+            else         ESP_LOGI(TAG, "ota: params persisted before restart (rv=%d)", prv);
+        }
         esp_restart();
     }
     if (xTaskCreate(ota_copy_task, "ota_copy", 6144, NULL, 4, NULL) != pdPASS) {

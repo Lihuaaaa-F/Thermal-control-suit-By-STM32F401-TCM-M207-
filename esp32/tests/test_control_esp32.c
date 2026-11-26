@@ -1182,6 +1182,88 @@ int main(void)
         param_registry_init(&(param_hooks_t){0});
         CHECK(control_safety_latched() == 0 && control_state() == CTRL_IDLE,
               "K16 a STUCK bit found in storage is dropped at boot");
+
+        /* ====== K22 / K23（r7f，独立复核 R7-08，P1）：TC2 那一路的水温参与超温硬切断与卡死判据 ======
+         * 仓库里 TC1 / TC2 写作"贴身水箱 / 环境水箱"，各有一路 TCACTTEMP 探头。用户确认水路拓扑之前按
+         * "两路独立水体"处理：TC1 的探头测不到 TC2 的热量。修前 tc2_act 不进任何保护判据——手动让
+         * TC2 制热时主控侧没有超温保护（I5）。判别性由 tests/mutation_control.py 的 M60–M65 给出。*/
+
+        /* K22 TC2 水温 90°C、两路都在输出 → 当拍锁存 OVERTEMP + 报警 + 两路命令为关；
+         *     TC2 降温之前 ack 不清，降温 + ack 才退出 */
+        control_init(&(control_ops_t){
+            .fan_set = stub_fan, .tec_sw = stub_tec, .tec_temp = stub_temp, .on_state = 0,
+            .tec_force = stub_force,
+        });
+        param_registry_init(&(param_hooks_t){0});
+        set_armed(0);
+        g_tcs.body_sensor_ok = 1; g_tcs.m207_online = 1; g_tcs.m207_sensor_open = 0;
+        g_tcs.body_temp = 37.0f; g_tcs.tc1_act = 30.0f; g_tcs.tc2_act = 30.0f;
+        s_now = 10000u; s_stub_now_ms = s_now; s_link_down = 0;
+        (void)param_set(PARAM_ID_MODE, 0.0f, 4);
+        poll100();
+        control_manual_tec(1, 1);
+        control_manual_tec(2, 1);
+        CHECK(g_tcs.tec1_on == 1 && g_tcs.tec2_on == 1 && control_state() == CTRL_IDLE
+              && control_safety_latched() == 0,
+              "K22 precondition: manual, both TEC on, TC2 water 30");
+        reset_stubs();
+        g_tcs.tc2_act = 90.0f;                     /* TC2 那一路的水温（独立水体）*/
+        poll100();
+        CHECK((control_safety_latched() & SAFETY_BIT_OVERTEMP) != 0,
+              "K22 TC2 water over 48 latches OVERTEMP");
+        CHECK(tcs_alarm_active(ALM_OVERTEMP) == 1, "K22 ALM_OVERTEMP raised");
+        CHECK(g_tcs.tec1_on == 0 && g_tcs.tec2_on == 0 && control_state() == CTRL_SAFE,
+              "K22 both TEC off and SAFE (the same shape as a TC1 overtemp)");
+        CHECK(force_calls == 2 && last_tec_on == 0, "K22 both 'off' went out through the safety channel");
+        g_tcs.tc1_act = 30.0f;                     /* TC1 早已正常 */
+        tcs_alarm_ack();
+        CHECK((control_safety_latched() & SAFETY_BIT_OVERTEMP) != 0,
+              "K22 ack cannot clear while the TC2 water is still over 48");
+        CHECK(control_state() == CTRL_SAFE, "K22 still SAFE while the TC2 water is over 48");
+        g_tcs.tc2_act = 30.0f;                     /* TC2 降温 */
+        tcs_alarm_ack();
+        poll100();
+        CHECK(control_safety_latched() == 0 && control_state() == CTRL_IDLE,
+              "K22 TC2 cooled down + ack -> released");
+
+        /* K23 TC2 命令开着 + tc2_act 逐位不变满水温窗口（10 分钟）→ STUCK + ALM_SENSOR_OPEN、两路关；
+         *     TC1 那一路读数一直活着（不干扰通道归属）；TC2 读数仍冻着时 ack 不清，重新变化后 2 秒自愈 */
+        control_init(&(control_ops_t){
+            .fan_set = stub_fan, .tec_sw = stub_tec, .tec_temp = stub_temp, .on_state = 0,
+        });
+        param_registry_init(&(param_hooks_t){0});
+        set_armed(0);
+        g_tcs.body_sensor_ok = 1; g_tcs.m207_online = 1; g_tcs.m207_sensor_open = 0;
+        g_tcs.body_temp = 37.0f; g_tcs.tc1_act = 25.0f; g_tcs.tc2_act = 25.0f;
+        s_now = 10000u;
+        (void)param_set(PARAM_ID_MODE, 0.0f, 4);
+        poll100();                                 /* 喂进第一个样本 */
+        control_manual_tec(2, 1);                  /* TC2 制热；tc2_act 从此不动 */
+        CHECK(g_tcs.tec2_on == 1 && control_state() == CTRL_IDLE && control_safety_latched() == 0,
+              "K23 precondition: manual, TC2 on, TC2 water frozen");
+        for (int i = 0; i < 5900; i++) { g_tcs.tc1_act = (i & 1) ? 24.99f : 25.01f; poll100(); }
+        CHECK(control_state() == CTRL_IDLE && (control_safety_latched() & SAFETY_BIT_STUCK) == 0,
+              "K23 frozen TC2 water: no trip before 600 s");
+        for (int i = 0; i < 200; i++) { g_tcs.tc1_act = (i & 1) ? 24.99f : 25.01f; poll100(); }
+        CHECK(control_state() == CTRL_SAFE && (control_safety_latched() & SAFETY_BIT_STUCK) != 0,
+              "K23 frozen TC2 water + TC2 on for 600 s -> SAFE");
+        CHECK(tcs_alarm_active(ALM_SENSOR_OPEN) == 1 && tcs_alarm_active(ALM_BODY_SENSOR) == 0,
+              "K23 the water channel is blamed (ALM_SENSOR_OPEN), not the body");
+        CHECK(g_tcs.tec2_on == 0 && g_tcs.tec1_on == 0, "K23 both TEC off");
+        tcs_alarm_ack();                           /* TC2 读数还冻着：ack 不能越过 */
+        CHECK((control_safety_latched() & SAFETY_BIT_STUCK) != 0,
+              "K23 ack cannot clear while the TC2 reading is still frozen");
+        {   /* TC2 读数重新开始变化 → 2 秒自愈退出 SAFE */
+            int n = 0;
+            while (control_state() == CTRL_SAFE && n < 40) {
+                g_tcs.tc2_act = (n & 1) ? 24.99f : 25.01f;
+                g_tcs.tc1_act = (n & 1) ? 24.99f : 25.01f;
+                poll100();
+                n++;
+            }
+            CHECK(control_state() == CTRL_IDLE && control_safety_latched() == 0,
+                  "K23 TC2 reading moves again -> self-heals out of SAFE");
+        }
     }
 
     /* ====== 2026-11-25 S 线 e3a（P1-09）：SAFE 必须到得了执行器 ======

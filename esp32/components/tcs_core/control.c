@@ -7,7 +7,7 @@
  *   COOL : body < body_hot−hyst → TCSW=0 + 风扇关 → IDLE
  *   HEAT : body > body_cold+hyst → TCSW=0 + 风扇关 → IDLE
  *   任意 : 传感器丢失 / M207 失联 → SAFE（TCSW=0 + 风扇开 + ALM）
- *   任意 : 过温（tc1_act > 48°C）→ SAFE，不受布防门控（P0-01）
+ *   任意 : 过温（tc1_act 或 tc2_act > 48°C）→ SAFE，不受布防门控（P0-01；TC2 见 r7f R7-08）
  *   任意 : 读数卡死（源自报健康，但读数逐位不变 ≥30s 且 TEC 已开 ≥30s）→ SAFE，不受布防门控
  *          （M09-F-09 / X04-F-06，见下方"卡死值活性判据"）
  *   SAFE : 通信类故障（体温/M207/探头/卡死）源健康 2s → 自动退出；急停/超温 → 人工确认后退出
@@ -111,7 +111,8 @@ typedef struct {
 } stuck_src_t;
 
 static stuck_src_t s_stuck_body, s_stuck_tc1;
-static volatile uint8_t s_stuck_chn;   /* 本轮 STUCK 锁存由谁引起：bit0=体温 bit1=水温（随锁存位一起清）*/
+static stuck_src_t s_stuck_tc2;        /* r7f（R7-08）：TC2 那一路的水温读数——独立水体时它没有任何别的保护在看 */
+static volatile uint8_t s_stuck_chn;   /* 本轮 STUCK 锁存由谁引起：bit0=体温 bit1=TC1 水温 bit2=TC2 水温（随锁存位一起清）*/
 static uint32_t   s_tec_on_since[2];   /* TCx 有效命令最近一次 0→1 的时间（out_tec_sw 里记）*/
 static uint8_t    s_tec_cmd_on[2];       /* TEC 命令意图（只有 out_tec_sw 写；取值 control_tec_cmd，X03-F-08）*/
 static uint32_t   s_poll_now_ms;       /* 最近一拍的时间戳：out_tec_sw 在拍外被调时用它给 TEC 开沿计时*/
@@ -157,7 +158,18 @@ static uint8_t stuck_recovered(uint32_t now_ms, uint8_t chn)
 {
     if ((chn & 1u) && !stuck_live(&s_stuck_body, now_ms)) return 0;
     if ((chn & 2u) && !stuck_live(&s_stuck_tc1,  now_ms)) return 0;
+    if ((chn & 4u) && !stuck_live(&s_stuck_tc2,  now_ms)) return 0;   /* r7f R7-08：TC2 那一路 */
     return 1;
+}
+
+/* r7f（独立复核 R7-08，2026-11-26）：两路水温都参与超温硬切断与"是否已经降温"的判据。
+ * 仓库里 TC1 / TC2 写作"贴身水箱 / 环境水箱"（WS_PROTOCOL.md），各有一路 TCACTTEMP 探头。原先所有
+ * 超温 / 退出 / 确认 / 自愈的判据只看 tc1_act——TC2 若是一路独立水体（用户确认接线之前按独立处理），
+ * 手动让 TC2 制热时主控侧没有任何超温保护，只剩模块自带保护（保护位的语义还没有逐位上机核实）。
+ * 与 TC1 完全同一口径（48°C，不受布防门控）。用例：tests/test_control_esp32.c 的 K22–K23。*/
+static uint8_t water_overtemp(void)
+{
+    return (uint8_t)(g_tcs.tc1_act > ALM_OVERTEMP_HARD_C || g_tcs.tc2_act > ALM_OVERTEMP_HARD_C);
 }
 
 /* 涉事通道：锁存里有 STUCK 才有意义。调用方持有 SAFETY_LOCK（lat 就是锁里读出的那份）*/
@@ -338,6 +350,7 @@ void control_init(const control_ops_t *ops)
     /* 卡死判据从头开始：上电没有"读数多久没变""TEC 开了多久"可言 */
     memset(&s_stuck_body, 0, sizeof(s_stuck_body));
     memset(&s_stuck_tc1, 0, sizeof(s_stuck_tc1));
+    memset(&s_stuck_tc2, 0, sizeof(s_stuck_tc2));   /* r7f R7-08：TC2 那一路 */
     s_stuck_chn = 0;
     memset(s_tec_on_since, 0, sizeof(s_tec_on_since));
     memset(s_tec_cmd_on, 0, sizeof(s_tec_cmd_on));
@@ -464,7 +477,7 @@ static uint8_t safe_sources_recovered(void)
     if (commissioned() && !g_tcs.body_sensor_ok) return 0;
     if (!g_tcs.m207_online) return 0;
     if (g_tcs.m207_sensor_open) return 0;   /* 复核 B4：探头开路不算"源恢复" */
-    if (g_tcs.tc1_act > ALM_OVERTEMP_HARD_C) return 0;
+    if (water_overtemp()) return 0;         /* r7f R7-08：两路水温都算（原来看 tc1_act）*/
     return 1;
 }
 
@@ -473,7 +486,7 @@ void tcs_alarm_ack(void)
     uint8_t lat;
     uint8_t stuck_chn;      /* STUCK 涉事通道：bit0=体温 bit1=水温；锁存里没有 STUCK 则为 0 */
     /* 先按"当前"源状态刷新（不依赖上一拍缓存）：操作员降温后立即 ack 也应生效。*/
-    safety_set_ok(SAFETY_BIT_OVERTEMP, (uint8_t)(g_tcs.tc1_act <= ALM_OVERTEMP_HARD_C));
+    safety_set_ok(SAFETY_BIT_OVERTEMP, (uint8_t)!water_overtemp());   /* r7f R7-08：两路水温 */
     safety_set_ok(SAFETY_BIT_BODY_LOST, g_tcs.body_sensor_ok);
     safety_set_ok(SAFETY_BIT_M207_LOST, (uint8_t)(g_tcs.m207_online && !g_tcs.m207_sensor_open));
     /* 卡死（STUCK）：按涉事通道"读数是否重新开始变化"刷新。活性是窗口概念，依赖 control_poll 的
@@ -501,7 +514,7 @@ void tcs_alarm_ack(void)
     /* 卡死借用的报警位：涉事通道读数还没恢复变化时不清——否则设备停在 SAFE 而屏上说不出原因 */
     if (!(lat & SAFETY_BIT_M207_LOST) && !g_tcs.m207_sensor_open && !(stuck_chn & 2u))
         g_tcs.alarm_bits &= (uint16_t)~ALM_SENSOR_OPEN;
-    if (!(lat & SAFETY_BIT_OVERTEMP) && g_tcs.tc1_act <= ALM_OVERTEMP_HARD_C)
+    if (!(lat & SAFETY_BIT_OVERTEMP) && !water_overtemp())   /* r7f R7-08：两路水温 */
         g_tcs.alarm_bits &= (uint16_t)~ALM_OVERTEMP;
     if (!(lat & SAFETY_BIT_ESTOP)) {
         g_tcs.alarm_bits &= (uint16_t)~ALM_ESTOP;
@@ -696,6 +709,10 @@ void control_poll(uint32_t now_ms)
         tcs_alarm_raise(ALM_OVERTEMP);
         safety_trip(SAFETY_BIT_OVERTEMP);
         safety_set_ok(SAFETY_BIT_OVERTEMP, 0);
+    } else if (g_tcs.tc2_act > ALM_OVERTEMP_HARD_C) {   /* r7f R7-08：TC2 那一路的水温同样硬切断 */
+        tcs_alarm_raise(ALM_OVERTEMP);
+        safety_trip(SAFETY_BIT_OVERTEMP);
+        safety_set_ok(SAFETY_BIT_OVERTEMP, 0);
     } else {
         safety_set_ok(SAFETY_BIT_OVERTEMP, 1);
     }
@@ -706,17 +723,21 @@ void control_poll(uint32_t now_ms)
     {
         uint8_t m207_src_ok = (uint8_t)(g_tcs.m207_online && !g_tcs.m207_sensor_open);
         uint8_t tc1_stuck, body_stuck, stuck_chn;
+        uint8_t tc2_stuck;                     /* r7f R7-08：TC2 那一路的水温 */
         stuck_feed(&s_stuck_body, g_tcs.body_temp, now_ms, g_tcs.body_sensor_ok);
         stuck_feed(&s_stuck_tc1, g_tcs.tc1_act, now_ms, m207_src_ok);
+        stuck_feed(&s_stuck_tc2, g_tcs.tc2_act, now_ms, m207_src_ok);   /* r7f R7-08 */
         tc1_stuck  = (uint8_t)(s_tec_cmd_on[0] && stuck_is(&s_stuck_tc1, now_ms, s_tec_on_since[0]));   /* X03-F-08：读命令意图，不读回显 */
         tc1_stuck  = (uint8_t)(tc1_stuck && stuck_water_is(&s_stuck_tc1, now_ms));   /* 水温窗口 10 分钟（2026-11-26）*/
+        tc2_stuck  = (uint8_t)(s_tec_cmd_on[1] && stuck_is(&s_stuck_tc2, now_ms, s_tec_on_since[1]));   /* r7f R7-08：TC2 命令开着 */
+        tc2_stuck  = (uint8_t)(tc2_stuck && stuck_water_is(&s_stuck_tc2, now_ms));                     /* 同一水温窗口 */
         body_stuck = (uint8_t)(g_tcs.mode != 0 && (s_state == CTRL_HEAT || s_state == CTRL_COOL)
                                && stuck_is(&s_stuck_body, now_ms, s_tec_on_since[0]));
-        if (tc1_stuck || body_stuck) {
+        if (tc1_stuck || body_stuck || tc2_stuck) {
             if (body_stuck) tcs_alarm_raise(ALM_BODY_SENSOR);
-            if (tc1_stuck)  tcs_alarm_raise(ALM_SENSOR_OPEN);
+            if (tc1_stuck || tc2_stuck)  tcs_alarm_raise(ALM_SENSOR_OPEN);   /* 两路水温共用借来的这一位 */
             SAFETY_LOCK();
-            s_stuck_chn |= (uint8_t)((body_stuck ? 1u : 0u) | (tc1_stuck ? 2u : 0u));
+            s_stuck_chn |= (uint8_t)((body_stuck ? 1u : 0u) | (tc1_stuck ? 2u : 0u) | (tc2_stuck ? 4u : 0u));
             SAFETY_UNLOCK();
             safety_trip(SAFETY_BIT_STUCK);
         }
@@ -740,7 +761,7 @@ void control_poll(uint32_t now_ms)
     if (s_safety_latch) {
         uint8_t comm_ok = (uint8_t)(g_tcs.body_sensor_ok && g_tcs.m207_online
                                     && !g_tcs.m207_sensor_open
-                                    && g_tcs.tc1_act <= ALM_OVERTEMP_HARD_C);
+                                    && !water_overtemp());   /* r7f R7-08：两路水温 */
         /* 通信类位各看各的源：失联类看 comm_ok，STUCK 只看涉事通道的读数是否重新开始变化。
          * 锁存里没有 STUCK 时与原先逐位等价（ready 恒为"全部失联类位"或 0）。*/
         uint8_t stuck_chn;

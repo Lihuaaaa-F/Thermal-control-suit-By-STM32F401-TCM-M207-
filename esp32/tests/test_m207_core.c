@@ -154,10 +154,34 @@ static void test_overtemp_trip(void)
     TB.m.act[1] = 33.0f; TB.m.ramp[1] = 8.0f;    /* 33 → 41 → 49：每步 8°C/s，过得了合理性滤波 */
     int n0 = TB.ntx, w = 120;
     while (!control_safety_latched() && w-- > 0) tb_tick();
+    tb_run(4);                                   /* 旁路槽每拍只放一帧：另一路在随后的拍上线路 */
     TB_CHECK((control_safety_latched() & SAFETY_BIT_OVERTEMP) != 0, "overtemp latches safety");
     TB_CHECK(tcs_alarm_active(ALM_OVERTEMP), "overtemp raises ALM_OVERTEMP");
     TB_CHECK(tb_tx_since(n0, "TC1:TCSW=0") >= 0, "overtemp sends TC1:TCSW=0");
+    /* r7f（R7-11）：锁存之后进 SAFE 会停两路；控制任务不在 / 卡死时也由这里把另一路停掉 */
+    TB_CHECK(tb_tx_since(n0, "TC2:TCSW=0") >= 0, "overtemp also bypasses TC2 off (both channels are stopped)");
     TB_CHECK(m207_online(), "link stays online after trip");
+}
+
+/* ---------- 5b. r7f（R7-08 ③）：TC2 那一路的水温超温同样立刻锁存 + 报警 + 旁路关断两路 ----------
+ * 用户确认水路拓扑之前按"两路独立水体"处理：TC1 的探头测不到 TC2 的热量。修前 tc2_act 只进缓存，
+ * 锁存与旁路关断都不动（TC2 继续加热）。*/
+static void test_overtemp_trip_tc2(void)
+{
+    tb_init();
+    TB_CHECK(tb_wait_online(120), "online");
+    tb_run(30);
+    TB_CHECK(control_safety_latched() == 0, "no latch before (TC2)");
+    TB.m.act[2] = 33.0f; TB.m.ramp[2] = 8.0f;    /* TC2 的水温 33 → 41 → 49 */
+    int n0 = TB.ntx, w = 120;
+    while (!control_safety_latched() && w-- > 0) tb_tick();
+    tb_run(4);                                   /* 旁路槽每拍只放一帧：另一路在随后的拍上线路 */
+    TB_CHECK((control_safety_latched() & SAFETY_BIT_OVERTEMP) != 0, "TC2 overtemp latches safety");
+    TB_CHECK(tcs_alarm_active(ALM_OVERTEMP), "TC2 overtemp raises ALM_OVERTEMP");
+    TB_CHECK(g_tcs.tc2_act > 48.0f, "TC2 reading did reach the module's overtemp zone");
+    TB_CHECK(tb_tx_since(n0, "TC2:TCSW=0") >= 0, "TC2 overtemp sends TC2:TCSW=0");
+    TB_CHECK(tb_tx_since(n0, "TC1:TCSW=0") >= 0, "TC2 overtemp also bypasses TC1 off (the other loop stops too)");
+    TB_CHECK(m207_online(), "link stays online after the TC2 trip");
 }
 
 /* ---------- 6. 写路径：协议拒绝不重发；应答丢失重发一次后 NAK ---------- */
@@ -393,6 +417,7 @@ int main(void)
     test_probe_alternates();
     test_sensor_open_debounce();
     test_overtemp_trip();
+    test_overtemp_trip_tc2();
     test_write_paths();
     test_offline_writes();
     test_golden_tx();

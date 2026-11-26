@@ -290,6 +290,15 @@ def main():
     if "现行版本 fw/网页 v" in rd:
         fails.append("README.md 还在声称某个现行固件版本号（改一处、全仓同步的机制会被它绕开）")
 
+    # 13) S 线 i3（条目 12）：真机脚本的护栏进了仓库（site_lib.sh 的 guard / FLASH）+ 现场工具 README 有规则
+    sl = read(H7, "tools", "site", "site_lib.sh")
+    for needle in ("guard() {", "FLASH() {", "REBUILT", "idf.py flash` **会先构建**"):
+        if needle not in sl:
+            fails.append("project_tcs/tools/site/site_lib.sh 缺（i3）：%s" % needle)
+    srd = read(H7, "tools", "site", "README.md")
+    if "真机脚本的护栏" not in srd or "site_lib.sh" not in srd or "不改同一个工作树" not in srd:
+        fails.append("project_tcs/tools/site/README.md 缺（i3）：真机脚本的规则没有写进现场工具页")
+
     if fails:
         print("[m1gates] FAIL")
         for f in fails:

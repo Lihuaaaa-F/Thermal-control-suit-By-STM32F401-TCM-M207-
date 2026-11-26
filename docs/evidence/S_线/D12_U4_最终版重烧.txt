@@ -1,0 +1,13 @@
+S 线 D12 — U1–U5 交付版（a4b0d03 / 协议 3）两端重烧快验（2026-11-27 02:32–02:35）— 证据
+固件：集成分支 fix/s-u-int2 的 U4 门禁头 a4b0d03（tag s-gate-20261127-0232；
+      = beb7f5c（z5）之上的用户现场五条 U1–U5：高亮分通道 / 模式页间距 / 曲线纵轴 50 /
+      字库 4bpp 重生成（24px 26×28/行高 28、32px 34×38/行高 38）/ 删顶栏重复切自动）。
+      屏：build=2026-11-26 18:24 UTC git=a4b0d0314；主控交付档 app sha256（前 16 位）25f40b77f57df320
+      （与 D10/D11 相同——U4 未改 ESP32 源码）。
+结论：两端重烧后版本/协议/诊断量正常，收尾干净；TEC 全程为 0。
+  - 屏 `ver`：`tcs v1.2.0 build=2026-11-26 18:24 UTC git=a4b0d0314 params=v1(8+0x100resv) proto=v3`。
+  - 屏 `stat`：`vr=0 vrlast=3 ackbad=0 wbad=0 wclamp=0 wbusy=0 fresh=800 bdg=0 stl=0`；
+    `lrx=12125 snap=156 gapmax=510 gaplast=163 drops=0 echo=0`。
+  - 主控 status：`m207=1 alarm=0x0000 armed=0 state=0 sim=0 latch=0x00`（烧录后一次 link_down 报警已 ack 清零）。
+  - 交付档首页帧转储：`U4_交付档首页.png`（无台架叠层；横幅/顶栏胶囊/按钮文字底缘完整）。
+原始输出：同目录 D12_运行输出.out.txt。

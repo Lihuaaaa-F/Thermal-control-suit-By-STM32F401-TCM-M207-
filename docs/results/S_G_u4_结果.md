@@ -1,6 +1,7 @@
 # S-G u4 结果（用户现场 UI 五条：U1–U5）— 2026-11-27
 
 分支 `fix/s-u-int2`，基座 `beb7f5c`（z5 收尾）。用户 2026-11-27 凌晨在现场提出五条界面问题，本批一次修完。
+提交 `a4b0d03`（tag `s-gate-20261127-0232`）；设备 D12 两端重烧该版。
 证据：`docs/evidence/S_线/U4_*.png`（台架档真机帧转储，4bpp 字体版）；主机门禁 `run_all` ALL GREEN。
 
 ## 一、逐条
@@ -42,7 +43,8 @@
 |---|---|
 | `project_tcs/tests/run_all.sh` | **ALL GREEN**（test_ui_model PASS=191 含 F7b；font_audit/metrics/card/tautology 全过） |
 | 真机逐页帧转储（台架档，只切页不点执行器） | 首页/模式页/曲线页/调参页 四张，见 `docs/evidence/S_线/U4_*.png` |
-| 全量构建矩阵 | 见提交后门禁记录（H743 四档 ×2 + ESP32 三档 + prod-clean） |
+| `build_matrix --twice --esp32 --diag --site` | **PASS**：H743 四档（PROD 两次从零 md5 `4cccc5ae…` 相同；FLASH 741844 B）；ESP32 三档 0 error/0 warning，默认档两次 sha256 相同；`[prod-clean]` PASS |
+| 设备 D12（两端重烧 a4b0d03） | 屏 `git=a4b0d0314 proto=v3 vr=0 vrlast=3 ackbad=0 fresh=800`；主控 sha 不变、TEC 0、ack 干净；交付档首页帧 `U4_交付档首页.png` |
 
 ## 三、遗留/说明
 

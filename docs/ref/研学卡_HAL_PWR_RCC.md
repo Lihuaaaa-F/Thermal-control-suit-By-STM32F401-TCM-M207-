@@ -42,6 +42,7 @@
 
 
 
+
 复现命令（仓库根 `/d/Espressif/ws/tcs`，Git Bash；raw 输出路径分隔符为 `\`，表内归一为 `/`）：
 
 ```bash
@@ -51,6 +52,7 @@ grep -rnE "HAL_RCC_|HAL_PWR_" project_tcs/App project_tcs/Core/Src --include=*.c
 
 vendor 域说明：`App/rtt/`（SEGGER RTT vendor 五文件）同一 pattern 单独跑=**0 命中**（无需列行）。
 补充（pattern 外，供审计）：`grep -rnE "HAL_PWREx_" project_tcs/App project_tcs/Core/Src --include=*.c` → **1 命中**：Core/Src/main.c:317 `HAL_PWREx_ConfigSupply(PWR_LDO_SUPPLY)`（前缀为 `HAL_PWREx_` 不匹配 `HAL_PWR_`，故不在 42 行内）。
+
 
 
 

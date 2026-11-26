@@ -14,3 +14,20 @@
 int  ota_gate_try_enter(void);   /* 1 = 拿到（此刻起只有这一例）；0 = 已有一例在进行 */
 void ota_gate_leave(void);       /* 放开。只由拿到过的那一例调用 */
 int  ota_gate_busy(void);        /* 1 = 有一例在进行 */
+
+/* ====== 运行镜像的长度（M08-F-12）======
+ * esp_app 镜像 = 24 字节镜像头 + N ×（8 字节段头 + 段数据），段与段首尾相接；最后一段之后是
+ * 校验字节所在的 16 字节块，再后面是 32 字节 SHA-256（镜像头第 23 字节 hash_appended 为 1 时才有）。
+ * 长度按 IDF 的算法算（bootloader_support/src/esp_image_format.c process_segments / process_checksum /
+ * process_appended_hash_and_sig），与 esp_image_get_metadata().image_len 同值。
+ *
+ * 段头一个接一个排在各自段数据的后面，所以不能只读开头一小块：要顺着读下去。每一步都先在
+ * 分区范围内校验偏移，再读；读函数不会收到越界的请求。 */
+typedef int (*ota_read_fn)(uint32_t off, uint8_t *dst, uint32_t len, void *ctx);
+#define OTA_IMG_OK         0    /* *len_out = 镜像全长 */
+#define OTA_IMG_EREAD     (-1)  /* 分区读失败 */
+#define OTA_IMG_EMAGIC    (-2)  /* 第 0 字节不是 0xE9：不是 esp_app 镜像 */
+#define OTA_IMG_ESEGS     (-3)  /* 段数为 0 */
+#define OTA_IMG_EBOUND    (-4)  /* 段头或段数据越过分区末尾（或 32 位回绕）*/
+#define OTA_IMG_ETOOLONG  (-5)  /* 校验块 / SHA-256 放不下 */
+int ota_image_len(uint32_t part_size, ota_read_fn rd, void *ctx, uint32_t *len_out);

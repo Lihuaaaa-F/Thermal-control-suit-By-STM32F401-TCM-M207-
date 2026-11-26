@@ -53,24 +53,11 @@ static void op_tec_temp(uint8_t ch, float v) { (void)m207_set_temp(ch, v); }
 static int op_m207_set_temp(uint8_t ch, float v) { return m207_set_temp(ch, v); }
 static int op_m207_map_set(uint16_t pid, float v) { return m207_map_set(pid, v); }
 
-/* ====== WP-F.4 OTA：镜像实际长度（解析 image header/segments，避免整槽 3MB 拷贝）====== */
-static uint32_t ota_image_size(const esp_partition_t *p)
+/* ====== WP-F.4 OTA：镜像实际长度（只拷贝镜像本身，不拷贝整槽 3MB）======
+ * 长度算法与边界检查在 ota_pure.c 的 ota_image_len（主机可测，M08-F-12）；这里只把"读分区"接上去。 */
+static int ota_part_rd(uint32_t off, uint8_t *dst, uint32_t len, void *ctx)
 {
-    uint8_t hdr[256];
-    ESP_ERROR_CHECK(esp_partition_read(p, 0, hdr, sizeof(hdr)));
-    if (hdr[0] != 0xE9) return p->size;          /* 非 app 镜像 → 整槽兜底 */
-    uint8_t segs = hdr[1];
-    uint32_t off = 24;                            /* image header 24B */
-    uint32_t end = off;
-    for (int i = 0; i < segs && i < 16; i++) {
-        uint32_t len = hdr[off + 4] | (hdr[off + 5] << 8)
-                     | (hdr[off + 6] << 16) | (hdr[off + 7] << 24);
-        off += 8 + len;
-        end = off;
-    }
-    end = (end + 15u) & ~15u;                     /* 对齐 + checksum 字节 */
-    end += 1 + 32;                                /* hash 尾 */
-    return (end <= p->size) ? end : p->size;
+    return (esp_partition_read((const esp_partition_t *)ctx, off, dst, len) == ESP_OK) ? 0 : -1;
 }
 
 #define OTA_COPY_CHUNK 8192u
@@ -83,7 +70,14 @@ static void ota_copy_task(void *arg)
     const esp_partition_t *run = esp_ota_get_running_partition();
     const esp_partition_t *next = esp_ota_get_next_update_partition(NULL);
     if (!next) { ESP_LOGE(TAG, "ota FAIL: no next slot"); goto leave; }
-    uint32_t len = ota_image_size(run);
+    uint32_t len = 0;
+    int img = ota_image_len(run->size, ota_part_rd, (void *)(uintptr_t)run, &len);
+    if (img != OTA_IMG_OK) {
+        /* M08-F-12：镜像头或段表不合法就不拷贝——不擦对槽、不重启。以前只读开头 256 字节、按偏移取段头，
+         * 而段头排在各自段数据的后面，读到的其实是栈上的任意值，"长度"是随机的。*/
+        ESP_LOGE(TAG, "ota FAIL: image header not usable (%d)", img);
+        goto leave;
+    }
     ESP_LOGI(TAG, "ota: copy %s@0x%08lx img=%luKB -> %s",
              run->label, (unsigned long)run->address,
              (unsigned long)(len / 1024), next->label);

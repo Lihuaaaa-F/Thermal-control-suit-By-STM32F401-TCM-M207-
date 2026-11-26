@@ -1,4 +1,4 @@
-idf_component_register(SRCS "main.c" "ota_pure.c" "tcs_console.c" "r1e_probe.c" "tcs_snap.c" "tcs_bootrec.c"
+idf_component_register(SRCS "main.c" "ota_pure.c" "tcs_console.c" "r1e_probe.c" "tcs_snap.c" "snap_time.c" "tcs_bootrec.c"
 
                        PRIV_REQUIRES nvs_flash esp_netif esp_event esp_wifi
                                      esp_timer app_update esp_partition console

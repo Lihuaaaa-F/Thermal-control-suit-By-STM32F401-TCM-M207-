@@ -160,6 +160,12 @@ python ../tools/version_bump.py --check || FAIL=1
 # 这里编主控这一份——两端的值都必须等于 protocol/tcs_proto.h 的 TCS_MAX_TXQ（_Static_assert
 # 在头文件里，值漂移连编译都过不去；用例再断言一次运行期看到的数）。
 run linkcontract ../project_tcs/tests/test_link_contract.c
+# M11-F-13 / M08-F-07：快照任务的纯时间算术——修复前的 int32 承接 2^31 微秒就跳变
+# （用例里逐字抄了旧写法做对照），修复后跨 2^31 / 2^32 / 50 天连续；节拍迟到跨 tick 回绕、
+# 极大差值钳位。main/snap_time.c 零 IDF 依赖。
+EXTRA_INC="/I..\..\main"
+run snaptime tests/test_snap_time.c main/snap_time.c
+EXTRA_INC=""
 
 [ $FAIL = 0 ] && echo "esp32-tests: ALL GREEN" || echo "esp32-tests: HAS FAILURES"
 exit $FAIL

@@ -1,0 +1,13 @@
+S 线 D11 — z5 收尾后最终门禁版（37e7202 / 协议 3）两端重烧快验（2026-11-27 00:56–00:58）— 证据
+固件：集成分支 fix/s-u-int2 的 z5 门禁头 37e7202（tag s-gate-20261127-0055；
+      = 5d8a23a（15 批全部合入的代码门禁头）之上的 M03-F-06 注释校正 + X06-F-09 文档收口 + z5 结果文档）。
+      屏：build=2026-11-26 16:47 UTC git=37e72029d；主控交付档 app sha256（前 16 位）25f40b77f57df320
+      （与 D10 相同——本批未改 ESP32 源码，二进制逐字节不变）。
+结论：两端重烧后版本/协议/诊断量全部正常，收尾干净；TEC 全程为 0。
+  - 屏 `ver`：`tcs v1.2.0 build=2026-11-26 16:47 UTC git=37e72029d params=v1(8+0x100resv) proto=v3`。
+  - 屏 `stat`：`vr=0 vrlast=3 ackbad=0 wbad=0 wclamp=0 wbusy=0 fresh=1200 bdg=0 stl=0`；
+    采样时 `lrx=11713 snap=153 gapmax=758 gaplast=346 drops=0 echo=0 wdir=0 arq=1 txfail=0`。
+  - 屏本地：`tc1=18.2 tc2=18.8 body=0.0 tec1=0 tec2=0 fan=0 mode=0 alarm=0 m207=1 esp=1 ctrl=0`。
+  - 主控 status：`m207=1 alarm=0x0000 armed=0 state=0 sim=0 latch=0x00`；`ack` 前后一致（无遗留锁存）。
+  - 两端成对（ESP32 二进制未变、版本 v1.2.0），无报警、TEC 关、模块在线。
+原始输出：同目录 D11_运行输出.out.txt。

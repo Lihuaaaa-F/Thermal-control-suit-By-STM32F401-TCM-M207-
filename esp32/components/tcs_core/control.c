@@ -118,6 +118,7 @@ static volatile uint8_t s_stuck_chn;   /* 本轮 STUCK 锁存由谁引起：bit0
 static uint8_t    s_stuck_watch;       /* R9-02：这次 STUCK 锁存时**正被驱动**的水温通道（bit1=TC1 bit2=TC2）*/
 static uint32_t   s_tec_on_since[2];   /* TCx 有效命令最近一次 0→1 的时间（out_tec_sw 里记）*/
 static uint8_t    s_tec_cmd_on[2];       /* TEC 命令意图（只有 out_tec_sw 写；取值 control_tec_cmd，X03-F-08）*/
+static uint32_t   s_water_pre_ms[2];   /* R9-03：水温预冻挂起的起始时刻（0 = 没挂起）；按通道 TC1/TC2 */
 static uint32_t   s_poll_now_ms;       /* 最近一拍的时间戳：out_tec_sw 在拍外被调时用它给 TEC 开沿计时*/
 #if CONFIG_TCS_DIAG || CONFIG_TCS_SIM
 /* S 线 i3（条目 8）：读数"逐位不变"的最长连续时长（[0] 体温、[1] 水温）。mstat 用它量 TEC 开着时的
@@ -177,6 +178,24 @@ static uint8_t stuck_prefrozen(const stuck_src_t *c, uint32_t now_ms, uint32_t o
     if (!c->last_change || !on_since) return 0;
     return (uint8_t)((uint32_t)(now_ms - c->last_change)
                      >= (uint32_t)(win + (uint32_t)(now_ms - on_since)));
+}
+
+/* R9-03（独立复核 R9，2026-11-26）：水温预冻不再"开 TEC 当拍"就下结论，改成 30 秒确认窗。
+ * 旧写法（stuck_prefrozen 直接成立就判卡死）在"TEC 关、热稳态"的台架上不会误报，但保温水箱 / 恒温室里
+ * 0.01°C 分辨率下连续 10 分钟逐位不变完全可能——命中时的表现是"按制热就报水温探头断线"，
+ * 用户会去拔插探头，是最坏的一类误导（R9-03）。
+ * 现在的口径：开沿时预冻成立 → 挂起（s_water_pre_ms），窗口内读数动过一次立刻撤销；
+ * 一次都没动（且冻结总时长仍满它自己的 10 分钟窗口）才判卡死。保留 R7-04 的本意
+ * （不把盲窗拖满 10 分钟），代价只是这 30 秒。i = 0/1 对应 TC1/TC2。*/
+static uint8_t stuck_water_prefrozen(uint8_t i, const stuck_src_t *c, uint32_t now_ms)
+{
+    if (!s_tec_cmd_on[i] || !c->last_change) { s_water_pre_ms[i] = 0; return 0; }
+    if (stuck_live(c, now_ms)) { s_water_pre_ms[i] = 0; return 0; }   /* 读数动过一次 → 撤销 */
+    if (!s_water_pre_ms[i]) {
+        if (!stuck_prefrozen(c, now_ms, s_tec_on_since[i], CTRL_STUCK_WATER_WINDOW_MS)) return 0;
+        s_water_pre_ms[i] = now_ms ? now_ms : 1u;
+    }
+    return (uint8_t)((uint32_t)(now_ms - s_water_pre_ms[i]) >= CTRL_STUCK_WINDOW_MS);
 }
 
 /* 涉事通道的读数是否都已重新开始变化（STUCK 自愈与 ack 的依据）*/
@@ -426,6 +445,7 @@ void control_init(const control_ops_t *ops)
     s_stuck_watch = 0;      /* R9-02 */
     memset(s_tec_on_since, 0, sizeof(s_tec_on_since));
     memset(s_tec_cmd_on, 0, sizeof(s_tec_cmd_on));
+    memset(s_water_pre_ms, 0, sizeof(s_water_pre_ms));   /* R9-03：预冻确认窗从头开始 */
     memset(s_tec_act_on, 0, sizeof(s_tec_act_on));   /* i3：模块回显从头开始，上电还没有回读过 */
     s_poll_now_ms = 0;
     control_manual_init(&(control_manual_ops_t){ mo_tec_sw, mo_tec_temp, mo_fan_set });   /* m1 */
@@ -819,13 +839,14 @@ void control_poll(uint32_t now_ms)
          * HEAT 的当拍就会误进 SAFE（报警还写“水温探头断线”）；而且它把 30 秒宽限——唯一给被控
          * 对象留响应时间的机会——从“开 TEC 后 30 秒”提前到了“开 TEC 那一拍”。水温的长窗口
          * （10 分钟）远大于健康读数的连续不变段，保留预冻不会误报，所以不动（K9c）。
-         */
+         * R9-03（独立复核 R9，2026-11-26）：预冻改成 30 秒确认窗（stuck_water_prefrozen）——
+         * 挂起后读数动过一次就撤销，一次都没动才判。*/
         tc1_stuck  = (uint8_t)(tc1_stuck
-                               || (s_tec_cmd_on[0]
-                                   && stuck_prefrozen(&s_stuck_tc1, now_ms, s_tec_on_since[0], CTRL_STUCK_WATER_WINDOW_MS)));
+                               || (stuck_water_prefrozen(0u, &s_stuck_tc1, now_ms)
+                                   && stuck_water_is(&s_stuck_tc1, now_ms)));
         tc2_stuck  = (uint8_t)(tc2_stuck
-                               || (s_tec_cmd_on[1]
-                                   && stuck_prefrozen(&s_stuck_tc2, now_ms, s_tec_on_since[1], CTRL_STUCK_WATER_WINDOW_MS)));
+                               || (stuck_water_prefrozen(1u, &s_stuck_tc2, now_ms)
+                                   && stuck_water_is(&s_stuck_tc2, now_ms)));
         /* R9-02（独立复核 R9，2026-11-26）：体温这一路先判出来时，水温如果**也已经冻满它自己的
          * 长窗口**（10 分钟，不是 R8-02 撤掉的 30 秒短窗口），同一拍一并记进涉事通道。
          * 别用短窗口：健康水温稳态本来就会冻 30–53 秒（F2 实测），那会让体温一次卡死之后

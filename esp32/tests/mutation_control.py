@@ -208,7 +208,10 @@ MUTATIONS = [
     # ---- 2026-11-26 r7f（独立复核 R7-04，P2）：卡死判据的 30 秒起步盲窗 + 体温遮住水温。
     #      用例 K9b / K9c / K24 在 test_control_esp32.c ----
     ("M66 TEC 开沿不预判「读数早就冻住」（回到 30 秒起步盲窗）",
-     [("    if (!c->last_change || !on_since) return 0;", "    if (1) return 0;")], ""),
+     [("    if (!c->last_change || !on_since) return 0;", "    if (1) return 0;")],
+     "等价：R9-03 起预冻判据的收益被 30 秒确认窗吸收——预冻成立时挂起 30 秒才判，撤掉预冻则"
+     "走 stuck_is 的 30 秒宽限，两条路径都在开沿 +30 秒判（K9c 的 29.9 s / 30.1 s 两条断言"
+     "在变异前后一模一样）。预冻路径本身由 M82 钉住。"),
     # ---- 2026-11-26 r8f（独立复核 R8-01 / R8-02，P2）。用例 K25 / K24（K24b 是对照）在
     #      test_control_esp32.c。R8-02 的修法撤掉了 r7f R7-04 的 tc1_pre 支路（它用 30 秒短窗口把
     #      稳态水温也拖进涉事通道），原来的 M67 / M68 没有锚点了；回归变异改成 M78（把短窗口拖拽加回去）。----
@@ -242,6 +245,11 @@ MUTATIONS = [
        "    if (changed) safety_persist_now();   /* 锁外取最新值落盘（N-04） */"),
       ("    if (drop && view_changed) safety_persist_now();      /* N-04：写当前值，不会用旧快照覆盖并发 trip */",
        "    if (drop) safety_persist_now();      /* N-04：写当前值，不会用旧快照覆盖并发 trip */")], ""),
+    ("M82 水温预冻回到'开沿当拍'判卡死（R9-03 回退：热稳态 10 分钟不动就报探头断线）",
+     [("                               || (stuck_water_prefrozen(0u, &s_stuck_tc1, now_ms)\n"
+       "                                   && stuck_water_is(&s_stuck_tc1, now_ms)));",
+       "                               || (s_tec_cmd_on[0]\n"
+       "                                   && stuck_prefrozen(&s_stuck_tc1, now_ms, s_tec_on_since[0], CTRL_STUCK_WATER_WINDOW_MS)));")], ""),
     ("M62 ack 的超温判据只看 TC1",
      [("    safety_set_ok(SAFETY_BIT_OVERTEMP, (uint8_t)!water_overtemp());   /* r7f R7-08：两路水温 */",
        "    safety_set_ok(SAFETY_BIT_OVERTEMP, (uint8_t)(g_tcs.tc1_act <= ALM_OVERTEMP_HARD_C));")], ""),

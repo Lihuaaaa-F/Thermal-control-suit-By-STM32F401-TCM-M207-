@@ -1172,8 +1172,10 @@ int main(void)
         CHECK(control_state() == CTRL_SAFE && (control_safety_latched() & SAFETY_BIT_STUCK) != 0,
               "K9b one window after TEC turn-on the body reading is judged stuck");
 
-        /* K9c（r7f R7-04）水温在 TC1 没开的时候就冻了 11 分钟：TC1 一开就当拍判卡死。
-         *     修前要等 TEC 开满 30 秒，而水温窗口是 10 分钟——这 11 分钟里读数一直是冻的，没有可等的响应。*/
+        /* K9c（r7f R7-04 / R9-03）水温在 TC1 没开的时候就冻了 11 分钟：TC1 一开不再"当拍"判卡死，
+         *     先挂起进 30 秒确认窗（R9-03：热稳态下 10 分钟逐位不变完全可能，"按制热就报探头断线"
+         *     会让人去拔插探头）；窗口内读数一次都没动才判。旧的"开沿当拍"断言在 R9-03 之后按设计
+         *     不再成立，判别力转移到下面两条（不是削弱：还多了"动一下就撤销"的反向用例 K27）。*/
         enter_auto_healthy();
         (void)param_set(PARAM_ID_MODE, 0.0f, 4);
         g_tcs.tc1_act = 30.0f; tick();                    /* 喂进第一个样本，之后不再变 */
@@ -1181,9 +1183,12 @@ int main(void)
         CHECK(control_state() == CTRL_IDLE && control_safety_latched() == 0,
               "K9c precondition: water frozen for 11 min with TC1 off, no trip");
         control_manual_tec(1, 1);                         /* TC1 开（开沿记在最近一拍的时间戳上）*/
-        for (int i = 0; i < 5 && control_state() == CTRL_IDLE; i++) tick100();
+        for (int i = 0; i < 299; i++) tick100();          /* 29.9 秒：确认窗还没满 */
+        CHECK(control_state() == CTRL_IDLE && control_safety_latched() == 0,
+              "K9c [R9-03] prefrozen water is not judged on the turn-on tick (30 s confirmation)");
+        tick100(); tick100();                             /* 30.1 秒，一次都没动 */
         CHECK(control_state() == CTRL_SAFE && (control_safety_latched() & SAFETY_BIT_STUCK) != 0,
-              "K9c water frozen long before TC1 turn-on trips at once");
+              "K9c prefrozen water trips once the 30 s confirmation window expires without movement");
 
         /* K24（R8-02，独立复核 r8f）体温先判出来时，水温如果只是**稳态不动**（30 秒级；健康读数的常态，
          *     F2 实测 30–53 秒）不得记进涉事通道。否则体温一恢复，2 秒自愈还要求“水温也活”，设备被按在
@@ -1284,6 +1289,19 @@ int main(void)
             }
             CHECK(control_state() == CTRL_HEAT, "K26 once the water reading moves too -> self-heals back to HEAT");
         }
+
+        /* K27（R9-03）预冻挂起后、确认窗内读数动过一次 → 撤销，不判卡死。
+         *     判别性：mutation_control.py 的 M82。*/
+        enter_auto_healthy();
+        (void)param_set(PARAM_ID_MODE, 0.0f, 4);          /* 手动：TC1 关着 */
+        g_tcs.tc1_act = 30.0f; tick();                    /* 喂进第一个样本 */
+        for (int i = 0; i < 6800; i++) tick100();         /* 水温冻 680 秒（TC1 关着，不判）*/
+        control_manual_tec(1, 1);                         /* 开 TC1 → 预冻挂起 */
+        for (int i = 0; i < 50; i++) tick100();           /* 5 秒 */
+        g_tcs.tc1_act = 30.5f;                            /* 读数动一下 → 撤销 */
+        for (int i = 0; i < 600; i++) tick100();          /* 再 60 秒；冻结从这次变化重新算 */
+        CHECK(control_safety_latched() == 0 && control_state() != CTRL_SAFE,
+              "K27 [R9-03] a reading that moves inside the confirmation window cancels the trip");
 
         /* K28（R9-04，独立复核 R9）只含 STUCK 的锁存不落盘（STUCK 不在 SAFETY_PERSIST_MASK 里）：
          *     trip 与 ack 都不该产生 NVS 写——写进去的值和原来逐位一样。操作员连点"解除"时的
@@ -1443,10 +1461,13 @@ int main(void)
         tick();
         for (int i = 0; i < 6100; i++) { g_tcs.tc1_act = (i & 1) ? 24.99f : 25.01f; tick100(); }
         CHECK(control_safety_latched() == 0, "K25 precondition: TC2 frozen 610 s with TC2 off -> no trip");
-        control_manual_tec(2, 1);                       /* 开 TC2：预冻判据当拍判卡死 */
-        poll100();
+        control_manual_tec(2, 1);                       /* 开 TC2：预冻挂起 → 30 秒确认窗后判卡死 */
+        for (int i = 0; i < 299; i++) tick100();          /* 29.9 秒：确认窗还没满 */
+        CHECK(control_safety_latched() == 0 && control_state() == CTRL_IDLE,
+              "K25 [R9-03] prefrozen TC2 water is not judged on the first poll after 'on'");
+        tick100(); tick100();                             /* 30.1 秒，一次都没动 */
         CHECK((control_safety_latched() & SAFETY_BIT_STUCK) != 0 && control_state() == CTRL_SAFE,
-              "K25 prefrozen TC2 water trips on the first poll after 'on'");
+              "K25 prefrozen TC2 water trips once the 30 s confirmation window expires");
         CHECK(tcs_alarm_active(ALM_SENSOR_OPEN) == 1 && tcs_alarm_active(ALM_BODY_SENSOR) == 0,
               "K25 ALM_SENSOR_OPEN visible before ack (TC2 is the only blamed channel)");
         tcs_alarm_ack();

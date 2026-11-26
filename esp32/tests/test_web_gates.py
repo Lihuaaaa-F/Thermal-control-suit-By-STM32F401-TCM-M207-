@@ -163,6 +163,19 @@ check('httpd_query_key_value(q, "m", val, sizeof(val))' in h_ota and "web_ota_mo
       "m is taken by key and judged by web_ota_mode_value")
 check("HTTPD_400" in h_ota and "bad_m" in h_ota, "missing or malformed m -> 400")
 
+# ---------------------------------------------------------------- r7f R7-07：OTA 触发前要求输出已停
+print("[gate] R7-07 OTA / rollback: both TEC commands must be off before the trigger")
+check("web_ota_outputs_stopped((int)control_tec_cmd(1), (int)control_tec_cmd(2))" in h_ota
+      and h_ota.index("web_ota_outputs_stopped(") < h_ota.index("app_ota_trigger(m)"),
+      "/api/ota checks web_ota_outputs_stopped(control_tec_cmd(1), control_tec_cmd(2)) before app_ota_trigger")
+check('"outputs_on"' in h_ota.replace('\\', '') and "409" in h_ota,
+      "/api/ota answers 409 with reason=outputs_on (not started, no restart)")
+_ws_ota = ws[ws.index('strcmp(ts, "ota") == 0'):]
+check("web_ota_outputs_stopped((int)control_tec_cmd(1), (int)control_tec_cmd(2))" in _ws_ota
+      and _ws_ota.index("web_ota_outputs_stopped(") < _ws_ota.index("app_ota_trigger(rb)"),
+      "the WS ota frame checks web_ota_outputs_stopped(...) before app_ota_trigger")
+check('"outputs_on"' in _ws_ota.replace('\\', ''), "the WS ota frame answers code=outputs_on")
+
 # ---------------------------------------------------------------- M14-F-11：WS 控制帧
 print("[gate] M14-F-11 WS control frames: httpd answers PING/CLOSE itself (route flag), app handler never sees them")
 _ws_uri = re.search(r"\{[^{}]*?\.uri\s*=\s*\"/ws\"[^{}]*?\}", httpd, re.S)

@@ -14,6 +14,7 @@
 #include "esp_log.h"
 #include "websocket.h"
 #include "web_status.h"     /* WEB_LOG_JSON_CAP（日志全量的缓冲上限）*/
+#include "control.h"        /* r7f（R7-07）：OTA 触发前查两路 TEC 的命令意图（control_tec_cmd）*/
 
 static const char *TAG = "tcs_web";
 
@@ -115,6 +116,13 @@ static esp_err_t h_api_ota(httpd_req_t *req)
         httpd_resp_set_status(req, HTTPD_400);
         httpd_resp_set_type(req, "application/json");
         return httpd_resp_sendstr(req, "{\"t\":\"ota\",\"started\":false,\"reason\":\"bad_m\"}");
+    }
+    /* r7f（独立复核 R7-07，2026-11-26）：拷贝 / 回滚都会重启设备；两路 TEC 的命令意图必须都是关，
+     * 否则如实回 outputs_on——不触发、不重启，也不"先自动急停"（那会在升级后留一个要人工确认的急停）。*/
+    if (!web_ota_outputs_stopped((int)control_tec_cmd(1), (int)control_tec_cmd(2))) {
+        httpd_resp_set_status(req, "409 Conflict");
+        httpd_resp_set_type(req, "application/json");
+        return httpd_resp_sendstr(req, "{\"t\":\"ota\",\"started\":false,\"reason\":\"outputs_on\"}");
     }
     esp_err_t rv = app_ota_trigger(m);
     httpd_resp_set_type(req, "application/json");

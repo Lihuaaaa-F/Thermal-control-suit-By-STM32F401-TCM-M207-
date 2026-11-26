@@ -723,7 +723,11 @@ esp_err_t ws_on_recv(httpd_req_t *req)
         const cJSON *m = cJSON_GetObjectItem(root, "m");
         int rb = (cJSON_IsNumber(m) && m->valueint == 1) ? 1 : 0;
         ESP_LOGI(TAG, "ws ota trigger rollback=%d", rb);
-        if (app_ota_trigger(rb) == ESP_ERR_INVALID_STATE)
+        /* r7f（独立复核 R7-07，2026-11-26）：拷贝 / 回滚都会重启设备；两路 TEC 的命令意图必须都是关，
+         * 否则如实回 outputs_on——不触发、不重启，也不"先自动急停"（升级后会留一个要人工确认的急停）。*/
+        if (!web_ota_outputs_stopped((int)control_tec_cmd(1), (int)control_tec_cmd(2)))
+            ws_send_str("{\"t\":\"err\",\"code\":\"outputs_on\",\"msg\":\"TEC 还在输出，先停机再升级\"}", fd);
+        else if (app_ota_trigger(rb) == ESP_ERR_INVALID_STATE)
             ws_send_str("{\"t\":\"err\",\"code\":\"server_busy\",\"msg\":\"OTA 进行中，请稍后再试\"}", fd);
     }
 #endif /* CONFIG_TCS_DIAG: ws ota */

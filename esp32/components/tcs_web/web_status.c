@@ -376,3 +376,12 @@ int web_ota_mode_value(const char *v)
     if (strcmp(v, "1") == 0) return 1;
     return -1;
 }
+
+/* r7f（独立复核 R7-07，2026-11-26）：OTA / 回滚触发前要求输出已停（两路 TEC 的命令意图都是关）。
+ * 拷贝与回滚都会重启设备：重启期间模块保持断电前的状态，重启后自动模式按体温自己恢复——
+ * 加热途中升级等于把 TEC 留在一个没人看的闭环里。两道入口（/api/ota、WS 的 ota 帧）都先问这一句，
+ * 不满足就如实回 outputs_on、不触发、不重启；也不"先自动急停"（那会在升级后留一个要人工确认的急停）。*/
+int web_ota_outputs_stopped(int tec1_cmd_on, int tec2_cmd_on)
+{
+    return (!tec1_cmd_on && !tec2_cmd_on) ? 1 : 0;
+}

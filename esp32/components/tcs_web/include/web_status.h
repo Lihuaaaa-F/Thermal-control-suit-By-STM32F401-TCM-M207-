@@ -118,6 +118,12 @@ size_t web_registry_json(const param_desc_t *const *ps, int n, char *buf, size_t
  * 子串 "m=1"（?m=10、?m=1x 也当回滚），取不到 m 时静默按 0 拷贝 + 重启。*/
 int web_ota_mode_value(const char *v);
 
+/* ====== OTA / 回滚触发前的"输出已停"判据（r7f，独立复核 R7-07）======
+ * 入参是两路 TEC 的命令意图（control_tec_cmd(1) / (2)）。1 = 都已停，可以升级；0 = 还有一路在输出。
+ * 拷贝与回滚都会重启设备，重启期间模块保持断电前的状态——加热途中升级等于把 TEC 留在没人看的闭环里。
+ * 纯逻辑，主机用例 tests/test_web_hardening.c。*/
+int web_ota_outputs_stopped(int tec1_cmd_on, int tec2_cmd_on);
+
 #ifdef __cplusplus
 }
 #endif

@@ -35,9 +35,21 @@ static void test_ota_mode_value(void)
     CHECK(web_ota_mode_value("m=1") == -1, "a whole \"m=1\" pair as the value -> rejected");
 }
 
+/* r7f（独立复核 R7-07，2026-11-26）：OTA / 回滚触发前要求输出已停（两路 TEC 命令意图都是关）。
+ * 拷贝 / 回滚都会重启设备；重启期间模块保持断电前的状态，重启后自动模式按体温自己恢复——
+ * 所以两道入口（/api/ota 与 WS 的 ota 帧）都必须先问这一句。 */
+static void test_ota_outputs_stopped(void)
+{
+    CHECK(web_ota_outputs_stopped(0, 0) == 1, "both TEC commands off -> OTA allowed");
+    CHECK(web_ota_outputs_stopped(1, 0) == 0, "TC1 still commanded on -> refused");
+    CHECK(web_ota_outputs_stopped(0, 1) == 0, "TC2 still commanded on -> refused");
+    CHECK(web_ota_outputs_stopped(1, 1) == 0, "both commanded on -> refused");
+}
+
 int main(void)
 {
     test_ota_mode_value();
+    test_ota_outputs_stopped();
     printf("test_web_hardening: PASS=%d FAIL=%d\n", g_pass, g_fail);
     return g_fail ? 1 : 0;
 }

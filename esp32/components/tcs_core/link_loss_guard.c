@@ -2,6 +2,14 @@
  * link_loss_guard.c — 屏链路断开 3 秒 = 急停 的判定（m1，用户 2026-11-26 裁决）。口径见头文件。
  */
 #include "link_loss_guard.h"
+#include "control.h"      /* SAFETY_BIT_ESTOP / SAFETY_BIT_OVERTEMP：只给 link_loss_already_safe 用 */
+
+/* r7f（独立复核 R7-01，2026-11-26）：already_safe 只认"急停 / 超温锁存着"的安全态。理由见头文件。
+ * 主机用例：tests/test_control_manual.c 的 L04（断链 × 安全态原因 矩阵）；变异：B07–B10。*/
+uint8_t link_loss_already_safe(uint8_t safety_latched)
+{
+    return (uint8_t)((safety_latched & (uint8_t)(SAFETY_BIT_ESTOP | SAFETY_BIT_OVERTEMP)) != 0u);
+}
 
 link_loss_verdict_t link_loss_guard_step(link_loss_guard_t *g, int ever_connected,
                                          uint32_t peer_age_ms, int already_safe)

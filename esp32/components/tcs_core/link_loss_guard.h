@@ -11,7 +11,8 @@
  *   - "断开" = 自上一帧**对端方向**的合法帧起满 TCS_LINK_LOST_ESTOP_MS（方向闸门之后计数，
  *     本端回送帧不算）；
  *   - 只对"上电后连上过、然后断开"生效；上电后屏从没连上过不触发；
- *   - 已经在安全态时不重复触发；一次断开只触发一次（链路恢复后才重新武装）；
+ *   - 已在急停 / 超温锁存的安全态时不重复触发（调用方用 link_loss_already_safe 判，r7f / R7-01）；
+ *     一次断开只触发一次（链路恢复后才重新武装）；
  *   - 链路恢复后保持安全态，直到屏上确认（急停锁存本来就只有确认能清）。
  */
 #ifndef TCS_LINK_LOSS_GUARD_H
@@ -37,9 +38,16 @@ typedef enum {
 /* 每个控制节拍调用一次。
  *   ever_connected = 上电后收到过对端合法帧；
  *   peer_age_ms    = 距最近一帧对端合法帧的毫秒数（ever_connected = 0 时无意义）；
- *   already_safe   = 控制状态机已在安全态。*/
+ *   already_safe   = 已在"不用再触发"的安全态（急停 / 超温锁存着；用 link_loss_already_safe 算）。*/
 link_loss_verdict_t link_loss_guard_step(link_loss_guard_t *g, int ever_connected,
                                          uint32_t peer_age_ms, int already_safe);
+
+/* r7f（独立复核 R7-01，2026-11-26）：link_loss_guard_step 的 already_safe 该怎么算——只认"急停 / 超温
+ * 锁存着"的安全态。safety_latched 传 control_safety_latched()。
+ * 为什么不再按"状态机在安全态"算：这两种锁存只有人工确认能解除，输出已经停了，断链不必再触发一次；
+ * 而模块失联 / 体温失联 / 读数卡死的安全态会在源恢复 2 秒后**自愈**——原先把它们也算成"这次断开
+ * 处理过了"，屏断链期间故障一自愈，设备就在没有人确认的情况下自己把 TEC 开了回来。*/
+uint8_t link_loss_already_safe(uint8_t safety_latched);
 
 #ifdef __cplusplus
 }

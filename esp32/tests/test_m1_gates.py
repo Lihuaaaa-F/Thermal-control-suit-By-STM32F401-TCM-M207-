@@ -283,6 +283,13 @@ def main():
     if "主控固件与屏不匹配" not in h7uim or "in->ver_mismatch" not in h7uim:
         fails.append("H743 App/lvgl_ui/ui_model.c 缺（i3）：版本不配对的横幅文案没有接上")
 
+    # 12) S 线 i3（条目 7，X06-F-09 的余项）：README 不再声称某个固件版本号，指向唯一源
+    rd = read(ESP, os.pardir, "README.md")
+    if "protocol/tcs_version.h" not in rd:
+        fails.append("README.md 缺（i3）：固件版本应以 protocol/tcs_version.h 为唯一源")
+    if "现行版本 fw/网页 v" in rd:
+        fails.append("README.md 还在声称某个现行固件版本号（改一处、全仓同步的机制会被它绕开）")
+
     if fails:
         print("[m1gates] FAIL")
         for f in fails:

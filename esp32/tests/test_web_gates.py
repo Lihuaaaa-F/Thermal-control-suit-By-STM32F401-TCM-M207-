@@ -163,6 +163,21 @@ check('httpd_query_key_value(q, "m", val, sizeof(val))' in h_ota and "web_ota_mo
       "m is taken by key and judged by web_ota_mode_value")
 check("HTTPD_400" in h_ota and "bad_m" in h_ota, "missing or malformed m -> 400")
 
+# ---------------------------------------------------------------- M14-F-11：WS 控制帧
+print("[gate] M14-F-11 WS control frames: httpd answers PING/CLOSE itself (route flag), app handler never sees them")
+_ws_uri = re.search(r"\{[^{}]*?\.uri\s*=\s*\"/ws\"[^{}]*?\}", httpd, re.S)
+ws_uri = _ws_uri.group(0) if _ws_uri else ""
+check(ws_uri != "" and ".is_websocket = true" in ws_uri, "the /ws route is a websocket route")
+check(".handle_ws_control_frames = false" in ws_uri,
+      "/ws leaves control frames to httpd (PING -> PONG, CLOSE -> CLOSE); "
+      "if set back to true nothing answers PING (the app does not implement it)")
+check(".ws_post_handshake_cb = ws_on_open" in ws_uri,
+      "/ws registers clients in ws_post_handshake_cb (without it: 101 but no data, 2026-11-24)")
+check(not re.search(r"\.type\s*=\s*HTTPD_WS_TYPE_(PONG|CLOSE)", ws),
+      "the app handler does not build its own PONG/CLOSE frames (would duplicate httpd's answer)")
+check('ws_send_masked(fd, OP_PING, "hb")' in selftest and "op == OP_PONG" in selftest,
+      "on-device selftest checks PING -> PONG with the same payload (webtest)")
+
 print("===================")
 if FAIL == 0:
     print("test_web_gates: PASS")

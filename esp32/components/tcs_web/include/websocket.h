@@ -9,6 +9,9 @@
 
 #define WS_MAX_CLIENTS   4          /* 同时在线的 WS 客户端上限（超出：回 server_busy 并关连接）*/
 #define WS_REG_BUF       16384u     /* 注册表 JSON 的缓冲上限（现约 7KB）*/
+/* httpd 的客户端连接名额（httpd_config_t.max_open_sockets）。等于 IDF 的默认值 7，web_start() 显式写入；
+ * websocket.c 里的两条容量断言以它为准（M14-F-12）。*/
+#define WS_HTTPD_MAX_SOCKETS 7
 
 void      ws_init(httpd_handle_t hd);
 esp_err_t ws_on_open(httpd_req_t *req);     /* GET /ws 握手完成 → 校验并入册 + 首推 reg/log/st */

@@ -174,6 +174,8 @@ void web_start(void)
     httpd_config_t cfg = HTTPD_DEFAULT_CONFIG();
     cfg.max_uri_handlers = sizeof(s_uris) / sizeof(s_uris[0]) + 2;
     cfg.stack_size = 8192;
+    /* 客户端连接名额显式写出（等于 IDF 的默认值 7，行为不变）：websocket.c 里的容量断言以它为准（M14-F-12）*/
+    cfg.max_open_sockets = WS_HTTPD_MAX_SOCKETS;
     /* 连接数吃紧时挤掉最久没活动的连接。WS 会话每收到一帧推送都会刷新自己的计数
      * （websocket.c），所以先被挤的是半死的普通 HTTP 连接，不是正在看页面的手机。*/
     cfg.lru_purge_enable = true;

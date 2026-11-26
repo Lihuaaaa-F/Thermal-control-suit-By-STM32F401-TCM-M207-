@@ -178,6 +178,32 @@ check(not re.search(r"\.type\s*=\s*HTTPD_WS_TYPE_(PONG|CLOSE)", ws),
 check('ws_send_masked(fd, OP_PING, "hb")' in selftest and "op == OP_PONG" in selftest,
       "on-device selftest checks PING -> PONG with the same payload (webtest)")
 
+# ---------------------------------------------------------------- M14-F-12：客户端表与 socket 名额
+print("[gate] M14-F-12 WS client table: table full -> server_busy + close; capacities agree with httpd and lwip")
+ws_register = function_body(ws, "static int ws_register(")
+check(ws_register != "" and "server_busy" in ws_register and "ws_drop(fd)" in ws_register,
+      "ws_register answers server_busy and closes the session when the table is full")
+ws_max = define_int(ws_h, "WS_MAX_CLIENTS")
+httpd_max = define_int(ws_h, "WS_HTTPD_MAX_SOCKETS")
+lwip = None
+for _rel in (("sdkconfig.defaults",), ("sdkconfig.site",)):      # 现场档的 sdkconfig.site 不入库；都没有就用 IDF 默认值
+    _m = re.search(r"^CONFIG_LWIP_MAX_SOCKETS=(\d+)", read(ESP, *_rel), re.M)
+    if _m:
+        lwip = int(_m.group(1))
+        break
+if lwip is None:
+    lwip = 10                                                   # components/lwip/Kconfig: LWIP_MAX_SOCKETS default 10
+check(ws_max is not None and httpd_max is not None, "WS_MAX_CLIENTS and WS_HTTPD_MAX_SOCKETS are declared in websocket.h")
+check(ws_max is not None and httpd_max is not None and ws_max + 2 <= httpd_max,
+      "WS_MAX_CLIENTS (%s) + 2 slots for plain HTTP <= WS_HTTPD_MAX_SOCKETS (%s)" % (ws_max, httpd_max))
+check(httpd_max is not None and httpd_max + 3 <= lwip,
+      "WS_HTTPD_MAX_SOCKETS (%s) + 3 httpd-internal sockets <= CONFIG_LWIP_MAX_SOCKETS (%s)" % (httpd_max, lwip))
+check("_Static_assert(WS_MAX_CLIENTS + 2 <= WS_HTTPD_MAX_SOCKETS" in ws
+      and "_Static_assert(WS_HTTPD_MAX_SOCKETS + 3 <= CONFIG_LWIP_MAX_SOCKETS" in ws,
+      "both capacity rules are compile-time assertions in websocket.c")
+check("cfg.max_open_sockets = WS_HTTPD_MAX_SOCKETS;" in httpd,
+      "web_start sets max_open_sockets explicitly to the asserted value")
+
 print("===================")
 if FAIL == 0:
     print("test_web_gates: PASS")

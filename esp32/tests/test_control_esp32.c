@@ -1832,6 +1832,12 @@ int main(void)
             poll100();
         }
         CHECK(control_stuck_max_ms(2u, s_now) < 1000u, "S1 water keeps moving: its longest frozen run stays small");
+        /* R8-06：同一段里 TC2 那一路一直是同一个值（冻着 10 秒），TC1 一直动。修前 which=3 不是
+         * 合法通道、TC1/TC2 又共用 [1]，这一路看不出来；修后 TC2 单独统计。*/
+        CHECK(control_stuck_max_ms(3u, s_now) >= 9900u && control_stuck_max_ms(3u, s_now) <= 10100u,
+              "R8-06 TC2 water: its own frozen run is counted (>= 9.9 s) while TC1 keeps moving");
+        CHECK(control_stuck_max_ms(2u, s_now) < control_stuck_max_ms(3u, s_now),
+              "R8-06 TC1 and TC2 are counted separately (TC1 moving stays below TC2 frozen)");
         CHECK(control_stuck_max_ms(1u, s_now) >= 9900u && control_stuck_max_ms(1u, s_now) <= 10100u,
               "S1 body: the ongoing frozen run is counted (>= 9.9 s)");
         uint32_t mx = control_stuck_max_ms(1u, s_now);
@@ -1840,7 +1846,7 @@ int main(void)
         for (int i = 0; i < 150; i++) poll100(); /* 再冻 15 秒：当前这一段比最大值长 */
         CHECK(control_stuck_max_ms(1u, s_now) > mx,
               "S1 the current run takes over once it is longer than the closed one");
-        CHECK(control_stuck_max_ms(3u, s_now) == 0, "S1 bad channel -> 0");
+        CHECK(control_stuck_max_ms(4u, s_now) == 0, "S1 bad channel -> 0");
     }
 #endif
     /* ====== r7f（独立复核 R7-02，2026-11-26，P1）：急停后 2.5 秒内掉电重启带回"自动 + 急停锁存" =====

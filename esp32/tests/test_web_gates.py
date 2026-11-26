@@ -2,8 +2,9 @@
 # -*- coding: utf-8 -*-
 """test_web_gates.py — 网页控制台 / OTA 加固的源码门禁（S 线 S-G e3b）
 
-门禁内容：X03-F-12（OTA 单实例）、M08-F-12（镜像长度）、M14-F-13（/api/ota 的 m）、
-M14-F-11（WS 控制帧）、M14-F-12（WS 客户端表与 socket 名额）、M10-F-06（口令不进日志 + 正典声明）。
+门禁内容：X03-F-12（OTA 单实例）、M08-F-12（镜像长度）、M08-F-13（重启前落盘）、
+M14-F-13（/api/ota 的 m）、M14-F-11（WS 控制帧）、M14-F-12（WS 客户端表与 socket 名额）、
+M10-F-06（口令不进日志 + 正典声明）。
 
 这些修复落在与 IDF 绑定的代码里（httpd 的路由标志、客户端表、拷贝任务、日志格式串），主机单测够不着；
 用"读源码、逐字核对"来把关，和单测一起进 run_m207_tests.sh。只依赖标准库。
@@ -155,6 +156,30 @@ check(img_len != "" and "part_size - off < OTA_SEG_HDR_LEN" in img_len
       "segment header and segment data are bounds-checked before every read")
 check("OTA_IMG_ETOOLONG" in img_len and "hdr[23]" in img_len,
       "checksum block / SHA-256 fit is checked; hash presence taken from header byte 23")
+
+# ---------------------------------------------------------------- M08-F-13：重启前落盘
+# 参数常规落盘是 2 秒防抖 + 500ms 冲洗；reset / OTA 重启前不强制写一次，窗口内改的参数就丢了。
+# 三条重启路径都核对：落盘调用恰好一次、在 esp_restart() 之前、失败也不拦着重启。
+print("[gate] M08-F-13 every restart path (reset / OTA copy / OTA rollback) persists params first")
+console_c = strip_comments(read(ESP, "main", "tcs_console.c"))
+
+
+def _persist_before_restart(body, name):
+    p = body.find("param_persist_now()")
+    r = body.find("esp_restart()")
+    ok = p >= 0 and r >= 0 and p < r and body.count("param_persist_now()") == 1
+    if ok:
+        seg = body[p:r]
+        ok = not re.search(r"\b(return|goto|break)\b", seg)   # 落盘失败也要重启
+    check(ok, name)
+
+
+_persist_before_restart(function_body(console_c, "static int cmd_reset("),
+                        "cmd_reset persists params (once) before esp_restart, and restarts even if it fails")
+_persist_before_restart(copy_task,
+                        "ota_copy_task persists params (once) before esp_restart, and restarts even if it fails")
+_persist_before_restart(trigger,
+                        "app_ota_trigger rollback persists params (once) before esp_restart, and restarts even if it fails")
 
 # ---------------------------------------------------------------- M14-F-13：/api/ota 的 m
 print("[gate] M14-F-13 POST /api/ota: m taken with httpd_query_key_value and matched exactly; otherwise 400")

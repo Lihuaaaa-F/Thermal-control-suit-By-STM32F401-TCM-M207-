@@ -249,6 +249,25 @@ static int cmd_perf(int argc, char **argv)
     printf("Task            Abs Time     CPU%%\n%s", lst);
     vTaskList(lst);
     printf("Task            State Prio  Stack  Num\n%s", lst);
+#if CONFIG_TCS_DIAG || CONFIG_TCS_SIM
+    /* X03-F-11：各任务栈余量（uxTaskGetStackHighWaterMark）。ESP-IDF 这一版的返回值是**字节**，
+     * 不是标准 FreeRTOS 文档里的"字"（task.h 原文 in bytes；xTaskCreate 的栈参也是字节，同单位）。
+     * 取的是任务跑起来之后的最小剩余量——"栈最小"的 tcs_snap 与链路 / 控制 / M207 / 网页几个
+     * 常驻任务一眼可比。任务没起来（启动失败 / 本档没编）打 "-"。只读，不改优先级与栈大小。
+     * vTaskList 的 Stack 列也是这个数，但和状态 / 优先级挤在一张表里，现场读不方便、也不好 grep。*/
+    {
+        static const char *const names[] = {
+            "tcs_snap", "tcs_link", "ctrl_svc", "m207_svc", "tcs_ws", "tmp117_svc", "p_persist"
+        };
+        printf("[perf] hwm(bytes):");
+        for (size_t i = 0; i < sizeof(names) / sizeof(names[0]); i++) {
+            TaskHandle_t h = xTaskGetHandle(names[i]);
+            if (h) printf(" %s=%u", names[i], (unsigned)uxTaskGetStackHighWaterMark(h));
+            else   printf(" %s=-", names[i]);
+        }
+        printf("\n");
+    }
+#endif /* CONFIG_TCS_DIAG || CONFIG_TCS_SIM：X03-F-11 栈水位 */
     return 0;
 }
 
@@ -442,11 +461,14 @@ static int cmd_mstat(int argc, char **argv)
                (unsigned)st.fault_mask, bits, age, (unsigned)st.valid);
     }
     {
-        /* 卡死判据的两个输入：最长连续"逐位不变"时长（含正在进行的这一段）*/
+        /* 卡死判据的三个输入：最长连续"逐位不变"时长（含正在进行的这一段）。
+         * R8-06：两路水温分开报（TC1 / TC2）。原先只有一路 water max、TC1/TC2 共用统计，
+         * 读的人分不清是哪一路冻着（F2 第四节第 3 点要的是"TEC 开着的那一路读数动不动"）。*/
         uint32_t now = (uint32_t)(esp_timer_get_time() / 1000);
-        printf("stuck: body max=%lums water max=%lums (longest bit-identical run, current one included)\n",
+        printf("stuck: body max=%lums water TC1 max=%lums water TC2 max=%lums (longest bit-identical run, current one included)\n",
                (unsigned long)control_stuck_max_ms(1u, now),
-               (unsigned long)control_stuck_max_ms(2u, now));
+               (unsigned long)control_stuck_max_ms(2u, now),
+               (unsigned long)control_stuck_max_ms(3u, now));
     }
     printf("note: TCERRORSTATUS 含上电锁存位（模块断电才清）——fault!=0 不等于此刻有故障；本命令只读\n");
     return 0;
@@ -522,7 +544,7 @@ int tcs_console_start(void)
           .func=cmd_webtest, .argtable=NULL },
         { .command="linkmute", .help="linkmute <秒>：链路静默（不收不发，快照也停发），用来诱导断链再恢复；0=恢复；静默>=3s 触发断链急停", .hint="<0-3600>",
           .func=cmd_linkmute, .argtable=NULL },
-        { .command="mstat", .help="模块保护状态与读数抖动（只读）：TCERRORSTATUS / TCOTPSTATUS 原值、故障位掩码与位名、数据龄；体温 / 水温读数逐位不变的最长连续时长", .hint=NULL,
+        { .command="mstat", .help="模块保护状态与读数抖动（只读）：TCERRORSTATUS / TCOTPSTATUS 原值、故障位掩码与位名、数据龄；体温 / 水温（TC1、TC2 各一路）读数逐位不变的最长连续时长", .hint=NULL,
           .func=cmd_mstat, .argtable=NULL },
 #endif
 #if CONFIG_TCS_DIAG
@@ -535,7 +557,7 @@ int tcs_console_start(void)
           .func=cmd_ledblink, .argtable=NULL },
         { .command="ledtest", .help="ledtest <gpio>（红闪→黑，可视自证）", .hint="<gpio>",
           .func=cmd_ledtest, .argtable=NULL },
-        { .command="perf", .help="服务统计+vTaskList", .hint=NULL,
+        { .command="perf", .help="服务统计+vTaskList（诊断/仿真档另打各任务栈水位 hwm）", .hint=NULL,
           .func=cmd_perf, .argtable=NULL },
         { .command="linkstat", .help="链路 RX 字节/帧计数（真机方向判定）", .hint=NULL,
       .func=cmd_linkstat, .argtable=NULL },

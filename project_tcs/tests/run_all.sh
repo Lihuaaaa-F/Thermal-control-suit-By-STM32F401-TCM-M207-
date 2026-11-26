@@ -662,6 +662,11 @@ run snapfresh   tests/test_snap_fresh.c
 # 以及协议 badge 没有被接到本地 POST 角标上（修复前的"同名异义"坑）。
 if [ -n "$PYBIN" ] && "$PYBIN" -I tests/check_snap_fresh.py; then :; else echo "[snapfresh_src] FAIL"; FAIL=1; fi
 
+# ---- S-G z4（2026-11-26）------------------------------------------------------------------------
+# M02-F-07：PD5 只能归 USART2_TX。矩阵键盘驱动已删（2026-11-25），本门禁钉住"删掉的结果"：
+# 没有 keypad 文件 / 调用，USART2 初始化里 PD5 显式 AF7，且 App/ 里没人把 PD5 改配成普通 GPIO。
+if [ -n "$PYBIN" ] && "$PYBIN" -I tests/check_keypad_pd5.py; then :; else echo "[keypad_pd5] FAIL"; FAIL=1; fi
+
 echo "==================="
 if [ "$FAIL" = 0 ]; then echo "run_all: ALL GREEN"; else echo "run_all: HAS FAILURES"; fi
 exit $FAIL

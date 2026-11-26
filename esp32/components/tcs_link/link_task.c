@@ -49,6 +49,8 @@ static link_status_t s_status;
 static volatile uint32_t s_rx_bytes;   /* UART1 收到的字节总数（真机取证）*/
 static volatile uint32_t s_rx_frames;  /* 解出的完整帧数 */
 static uint32_t s_proto_mismatch;      /* M11-F-09：STATUS 协议版本不符帧数 */
+static volatile uint8_t s_proto_alarm; /* M11-F-09：版本不符提示位（对端版本对上后清回 0）*/
+static volatile uint8_t s_peer_ver;    /* M11-F-09：实际收到的对端协议版本（0 = 还没收到过）*/
 static link_cmd_cb_t s_cmd_cb;         /* v2：屏幕 0x15 命令回调 */
 static link_reg_t s_reg[LINK_REGISTRY_MAX];
 /* R1 P1-01：注册表接收进度（替代"种子 used 恒真"导致永不重发 0x13 的短路）*/
@@ -370,17 +372,27 @@ static void on_frame(const uint8_t *payload, size_t len)
     case MT_TCS_STATUS: {
         tcs_status_pl_t s;
         if (tcs_scan_status(body, blen, &s) != 0) break;
-        /* M11-F-09：版本不符不能静默吞掉——留痕 + 计数，网页用真实 ver 显示黄条
-         * （原 ws_status_json 硬编码 ver=1，双方版本漂移永远看不见）。
-         * 不新增 ALM_PROTO 报警位：ALM 是发给屏的线格式契约，屏侧文案/字模未同步前
-         * 加位只会得到"未知位"；版本差的既定 UX 就是网页顶部黄条。*/
+        /* M11-F-09：版本不符不能静默吞掉——留痕 + 计数 + 提示位 ALM_PROTO。
+         * 修复前只看长度、不比对 ver，网页又把 ver 硬编码成常量，双方版本漂移永远看不见；
+         * 错位的字段会被当成正常温度显示。提示位在版本对上以后清回 0（它是"当前状态"，
+         * 不是锁存）；计数只增，给现场对账用。
+         * 版本不符的帧**不 publish**：ver 变了就可能布局变了，按当前布局解出来的字段写进
+         * s_status 就是拿错位数据当真值（网页/屏都会照它显示）。只把它当作"链路上还有东西
+         * 在说话"来维持判活计时，屏/网页仍显示上一帧好数据或"离线"。*/
+        s_peer_ver = s.ver;
         if (s.ver != TCS_PROTO_VER) {
             s_proto_mismatch++;
+            s_proto_alarm = 1;
             if (s_proto_mismatch <= 3 || (s_proto_mismatch % 100u) == 0)
-                ESP_LOGW(TAG, "STATUS ver=%u != local %u (count=%lu)",
+                ESP_LOGW(TAG, "STATUS ver=%u != local %u (count=%lu, fields not published)",
                          (unsigned)s.ver, (unsigned)TCS_PROTO_VER,
                          (unsigned long)s_proto_mismatch);
+            taskENTER_CRITICAL(&s_mux);
+            s_real_status_ms = (uint32_t)(esp_timer_get_time() / 1000LL);
+            taskEXIT_CRITICAL(&s_mux);
+            break;
         }
+        s_proto_alarm = 0;
         taskENTER_CRITICAL(&s_mux);
         s_status.valid = 1;
         s_status.ver = s.ver;
@@ -609,6 +621,18 @@ void link_stats_get(link_stats_t *out)
     out->echo_getreg = s_link.echo_by_mt[MT_TCS_GET_REGISTRY];
     out->pending_evict = s_link.pending_evict;
     out->proto_mismatch = s_proto_mismatch;
+    out->peer_ver = s_peer_ver;   /* M11-F-09：实际收到的对端版本（版本不符时也是真实值）*/
+}
+
+/* M11-F-09：版本不符提示位（组 0x20/0x21 时按位或进 alarm 字段）与累计计数。*/
+uint16_t link_alarm_hint(void)
+{
+    return s_proto_alarm ? (uint16_t)ALM_PROTO : 0u;
+}
+
+uint32_t link_proto_mismatch(void)
+{
+    return s_proto_mismatch;
 }
 void link_last_param_copy(link_param_change_t *out)
 {

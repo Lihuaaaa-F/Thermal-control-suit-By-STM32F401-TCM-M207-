@@ -69,8 +69,18 @@ typedef struct {
     uint32_t echo_ack;           /* 回声里的 0x90（本端应答）*/
     uint32_t echo_getreg;        /* 回声里的 0x13（请求注册表）*/
     uint32_t proto_mismatch;         /* STATUS 版本不符帧数（M11-F-09）*/
+    uint8_t  peer_ver;               /* 最近一帧 STATUS 里对端报的协议版本（0 = 还没收到过）——M11-F-09：
+                                        网页黄条要用"实际收到的 ver"，不能再用本地常量 */
 } link_stats_t;
 void link_stats_get(link_stats_t *out);
+
+/* M11-F-09：协议版本不符的提示位。对端 0x10 STATUS 的 ver != TCS_PROTO_VER 时返回 ALM_PROTO，
+ * 版本对上以后清回 0；计数在 link_stats_t.proto_mismatch（只增）。
+ * 由 tcs_snap.c 在组 0x20/0x21 时按位或进 alarm 字段——快照的 alarm 是"发送那一刻"的值，
+ * 不受控制任务每拍重建 g_tcs.alarm_bits 的影响。g_tcs 的消费者（网页 / 屏）要显示这一位，
+ * 需要在各自那一路登记（见 docs/results/S_G_e1_结果.md）。*/
+uint16_t link_alarm_hint(void);
+uint32_t link_proto_mismatch(void);
 
 int  link_send_cmd(uint8_t cmd);                    /* → 0x15，异步等 ACK */
 int  link_send_param(uint16_t id, float v);         /* → 0x11（仅 ESP32→H743：权威镜像 → 屏显示跟随；方向表见 protocol/tcs_proto.h）*/

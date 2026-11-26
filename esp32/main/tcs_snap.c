@@ -86,6 +86,9 @@ static void snap_sample(snap_cycle_t *c)
     c->tec_cmd   = (uint8_t)((control_tec_cmd(1) ? 1u : 0u) | (control_tec_cmd(2) ? 2u : 0u));
     c->tec_act   = (uint8_t)((control_tec_act(1) ? 1u : 0u) | (control_tec_act(2) ? 2u : 0u));
     c->tec_known = (uint8_t)(control_tec_known() & 0x03u);
+    /* M11-F-09：协议版本不一致的提示位只在这一帧的 alarm 里按位或（不改 g_tcs——控制任务每拍
+     * 重建 alarm_bits，外部写进去最多活一拍，会闪）。0x20/0x21 同源（build_delta_src 取同一份）。*/
+    c->st.alarm_bits |= link_alarm_hint();
     taskEXIT_CRITICAL(&s_snap_mux);
 }
 

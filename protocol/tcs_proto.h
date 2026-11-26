@@ -242,6 +242,9 @@ static inline int tcs_rx_verdict(uint8_t mt_wire, uint8_t self,
 #define ALM_EEPROM             0x0010
 #define ALM_SENSOR_OPEN        0x0020  /* 通道探头开路（M207 在线但该通道温度不可用；与 ALM_M207 通信失联分离）*/
 #define ALM_SERVICE            0x0040  /* 有后台服务没能启动（P1-12，S 线 e3a）：相应功能不可用，重启前不清。屏端与网页还没有这一位的文案 */
+#define ALM_PROTO              0x0080  /* 对端协议版本与本地不一致（M11-F-09，S 线 e1）：0x10 STATUS 的 ver != TCS_PROTO_VER。
+                                        * ESP32 在组 0x20/0x21 时按位或进 alarm；计数见 link_stats_t.proto_mismatch。
+                                        * 屏端与网页还没有这一位的文案，位本身不参与任何安全判定。*/
 
 /* ====== 0x10 TCS_STATUS（19B 小端）====== */
 typedef struct {

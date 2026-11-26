@@ -1,0 +1,633 @@
+S 线 D7 — 串口桥日志原文摘录（2026-11-26 13:14–14:03）
+来源：%TEMP%\tcs_site\esp_out.log，自 13:14 之后的部分；去掉了周期统计行与注册表下发行。行首的 I (…)/W (…) 是主控开机后的毫秒数。
+注意：桥只在打开期间才收得到日志。烧屏期间桥是停着的，所以那一段主控打了什么不在这里。
+
+ 66630  [bridge] opened COM3 @ 13:15:36 (ESP32 resets on open)
+ 66664  tc1=18.05 tc2=18.59 body=0.00(ok=0) fan=100% mode=0 m207=1 alarm=0x0004 armed=0 state=3 sim=0 latch=0x08 heap=8494672 up=82s rst=11 prst=11 pup=2671s palm=0x0006 plat=0x08 pseq=12 nvalm=0x0000 cd=0
+ 66874  [bridge] opened COM3 @ 13:17:42 (ESP32 resets on open)
+ 66907  tc1=17.99 tc2=18.54 body=0.00(ok=0) fan=100% mode=0 m207=1 alarm=0x0004 armed=0 state=3 sim=0 latch=0x08 heap=8494996 up=75s rst=11 prst=11 pup=131s palm=0x0004 plat=0x08 pseq=13 nvalm=0x0000 cd=0
+ 67137  tc1=17.99 tc2=18.51 body=0.00(ok=0) fan=100% mode=0 m207=1 alarm=0x0004 armed=0 state=3 sim=0 latch=0x08 heap=8494336 up=129s rst=11 prst=11 pup=131s palm=0x0004 plat=0x08 pseq=13 nvalm=0x0000 cd=0
+ 67357  tc1=17.98 tc2=18.49 body=0.00(ok=0) fan=100% mode=0 m207=1 alarm=0x0004 armed=0 state=3 sim=0 latch=0x08 heap=8494336 up=181s rst=11 prst=11 pup=131s palm=0x0004 plat=0x08 pseq=13 nvalm=0x0000 cd=0
+ 68021  I (340429) TCS: H743 SET id=0x06 v=1.00 rv=-2 -> ack st=3 val=0.00
+ 68032  tc1=18.00 tc2=18.59 body=0.00(ok=0) fan=100% mode=0 m207=1 alarm=0x0004 armed=0 state=3 sim=0 latch=0x08 heap=8494336 up=341s rst=11 prst=11 pup=131s palm=0x0004 plat=0x08 pseq=13 nvalm=0x0000 cd=0
+ 68257  tc1=17.98 tc2=18.58 body=0.00(ok=0) fan=100% mode=0 m207=1 alarm=0x0004 armed=0 state=3 sim=0 latch=0x08 heap=8494112 up=394s rst=11 prst=11 pup=131s palm=0x0004 plat=0x08 pseq=13 nvalm=0x0000 cd=0
+ 68485  tc1=17.98 tc2=18.56 body=0.00(ok=0) fan=100% mode=0 m207=1 alarm=0x0004 armed=0 state=3 sim=0 latch=0x08 heap=8494112 up=448s rst=11 prst=11 pup=131s palm=0x0004 plat=0x08 pseq=13 nvalm=0x0000 cd=0
+ 68492  tc1=17.98 tc2=18.56 body=0.00(ok=0) fan=100% mode=0 m207=1 alarm=0x0004 armed=0 state=3 sim=0 latch=0x08 heap=8494112 up=448s rst=11 prst=11 pup=131s palm=0x0004 plat=0x08 pseq=13 nvalm=0x0000 cd=0
+ 68496  >>> ack
+ 68497  ack
+ 68498  ack: alarm=0x0000 armed=0 state=3
+ 68504  tc1=17.99 tc2=18.58 body=0.00(ok=0) fan=0% mode=0 m207=1 alarm=0x0000 armed=0 state=0 sim=0 latch=0x00 heap=8492104 up=450s rst=11 prst=11 pup=131s palm=0x0004 plat=0x08 pseq=13 nvalm=0x0000 cd=0
+ 68506  [bridge] opened COM3 @ 13:24:28 (ESP32 resets on open)
+ 68507  I (199) esp_image: segment 4: paddr=00126b94 vaddr=4037aae0 sizeI (669) esp_psram: SPI SRAM memory test OK
+ 68508  I (677) cpu_start: Pro cpu start user code
+ 68509  I (677) cpu_start: cpu freq: 160000000 Hz
+ 68510  I (678) app_init: Application information:
+ 68511  I (678) app_init: Project name:     tcs_wireless
+ 68512  I (678) app_init: App version:      1.3.0-rc1
+ 68513  I (678) app_init: ELF file SHA256:  22f8caf13...
+ 68514  I (678) app_init: ESP-IDF:          v5.5.5-dirty
+ 68515  I (678) efuse_init: Min chip rev:     v0.0
+ 68516  I (679) efuse_init: Max chip rev:     v0.99 
+ 68517  I (679) efuse_init: Chip rev:         v0.2
+ 68518  I (679) heap_init: Initializing. RAM available for dynamic allocation:
+ 68519  I (679) heap_init: At 3FCB8218 len 000314F8 (197 KiB): RAM
+ 68520  I (679) heap_init: At 3FCE9710 len 00005724 (21 KiB): RAM
+ 68521  I (680) heap_init: At 3FCF0000 len 00008000 (32 KiB): DRAM
+ 68522  I (680) heap_init: At 600FE000 len 00001FE8 (7 KiB): RTCRAM
+ 68523  I (680) esp_psram: Adding pool of 8192K of PSRAM memory to heap allocator
+ 68524  I (681) spi_flash: detected chip: boya
+ 68525  I (681) spi_flash: flash io: qio
+ 68526  I (682) sleep_gpio: Configure to isolate all GPIO pins in sleep state
+ 68527  I (682) sleep_gpio: Enable automatic switching of GPIO sleep configuration
+ 68528  I (682) esp_core_dump_flash: Init core dump to flash
+ 68529  I (683) esp_core_dump_flash: Found partition 'coredump' @ 620000 262144 bytes
+ 68530  I (684) main_task: Started on CPU0
+ 68531  I (684) esp_psram: Reserving pool of 32K of internal memory for DMA/internal allocations
+ 68532  I (684) main_task: Calling app_main()
+ 68533  I (684) TCS: [SYSTEM] boot #16 reset reason=11 (USB)
+ 68534  I (684) TCS: [SYSTEM] last run: started by 11 (USB), ran 11s, last refresh alarm=0x0000 latch=0x00 state=0
+ 68535  W (684) TCS: [SYSTEM] core dump: check failed (ESP_ERR_INVALID_SIZE)
+ 68536  I (704) TCS: === 调温服 ESP32-S3 bridge boot ===
+ 68537  I (704) TCS: R1a registry: 53 params restored from NVS (0 record(s) skipped)
+ 68538  I (704) TCS: boot part=ota_0 proj=tcs_wireless ver=1.3.0-rc1
+ 68539  I (704) pp: pp rom version: e7ae62f
+ 68540  I (704) net80211: net80211 rom version: e7ae62f
+ 68541  I (714) wifi:wifi driver task: 3fcc5794, prio:23, stack:6656, core=0
+ 68542  I (714) wifi:wifi firmware version: b9f67df
+ 68543  I (714) wifi:wifi certification version: v7.0
+ 68544  I (714) wifi:config NVS flash: enabled
+ 68545  I (714) wifi:config nano formatting: disabled
+ 68546  I (714) wifi:Init data frame dynamic rx buffer num: 32
+ 68547  I (714) wifi:Init static rx mgmt buffer num: 5
+ 68548  I (714) wifi:Init management short buffer num: 32
+ 68549  I (724) wifi:Init dynamic tx buffer num: 32
+ 68550  I (724) wifi:Init static tx FG buffer num: 2
+ 68551  I (724) wifi:Init static rx buffer size: 1600
+ 68552  I (724) wifi:Init static rx buffer num: 10
+ 68553  I (724) wifi:Init dynamic rx buffer num: 32
+ 68554  I (724) wifi_init: rx ba win: 6
+ 68555  I (724) wifi_init: accept mbox: 6
+ 68556  I (724) wifi_init: tcpip mbox: 32
+ 68557  I (724) wifi_init: udp mbox: 6
+ 68558  I (724) wifi_init: tcp mbox: 6
+ 68559  I (724) wifi_init: tcp tx win: 5760
+ 68560  I (724) wifi_init: tcp rx win: 5760
+ 68561  I (724) wifi_init: tcp mss: 1440
+ 68562  I (724) wifi_init: WiFi IRAM OP enabled
+ 68563  I (724) wifi_init: WiFi RX IRAM OP enabled
+ 68564  I (724) phy_init: phy_version 712,87e8c20e,Apr 13 2026,18:51:10
+ 68565  I (764) wifi:mode : softAP (3c:0f:02:d6:a8:a1)
+ 68566  I (774) wifi:Total power save buffer number: 16
+ 68567  I (774) wifi:Init max length of beacon: 752/752
+ 68568  I (774) wifi:Init max length of beacon: 752/752
+ 68569  I (774) esp_netif_lwip: DHCP server started on interface WIFI_AP_DEF with IP: 192.168.4.1
+ 68570  I (774) tcs_wifi: AP "TCS-A8A1" up, IP 192.168.4.1 pass=***
+ 68571  I (774) uart: queue free spaces: 20
+ 68572  I (844) tcs_link: [LPBK] frame loopback PASS (controller decoded 1 frame, screen dropped own echo)
+ 68573  I (894) tcs_link: [LPBK] dup dedup PASS (dup=1)
+ 68574  I (944) tcs_link: [LPBK] bad-crc drop PASS
+ 68575  I (3144) tcs_link: [LPBK] ARQ retransmit PASS (4 copies rx by screen: 1 delivered + 3 dedup'd)
+ 68576  I (3144) tcs_link: [LPBK] RESULT pass=4 fail=0 PASS
+ 68577  I (3144) tcs_link: registry seeded: 10 entries (H743 0x14 will override)
+ 68578  I (3144) uart: queue free spaces: 20
+ 68579  I (3144) tcs_link: link task up
+ 68580  I (3144) tcs_link: started uart1 230400 baud tx=17 rx=18
+ 68581  I (3144) tcs_web: httpd up on :80 (10 uris)
+ 68582  I (3144) uart: queue free spaces: 8
+ 68601  I (3374) uart: queue free spaces: 20
+ 68602  I (3374) M207: service started uart2 57600 baud tx=21 rx=47 core=1
+ 68603  I (3374) TMP117: [TB117] === boottest start ===
+ 68604  I (3374) TMP117: [TB117] raw 0 PASS
+ 68605  I (3374) TMP117: [TB117] raw 400 -> 3.125 PASS
+ 68606  I (3374) TMP117: [TB117] raw -400 -> -3.125 PASS
+ 68607  I (3374) TMP117: [TB117] avg 1..8 = 4.5 PASS
+ 68608  I (3374) TMP117: [TB117] avg wrap = (100,2..8)/8 = 16.875 PASS
+ 68609  I (3374) TMP117: [TB117] 9 errs still ok PASS
+ 68610  I (3374) TMP117: [TB117] 10th err trips PASS
+ 68611  I (3374) TMP117: [TB117] 2 oks still down PASS
+ 68612  I (3374) TMP117: [TB117] 3rd ok recovers PASS
+ 68613  I (3374) TMP117: [TB117] RESULT fail=0 PASS
+ 68614  I (3374) TMP117: service started i2c0 sda=8 scl=9 100k core=1
+ 68615  I (3374) FAN: [FANLB] === boottest start ===
+ 68616  I (3374) FAN: ws2812 clear g48 (r=0 g=0 b=0)
+ 68617  I (3374) FAN: ws2812 clear g38 (r=0 g=0 b=0)
+ 68618  I (3374) FAN: service started gpio=42 ledc 25kHz/10bit low=on duty=0(off)
+ 68619  I (3384) FAN: [FANLB] duty 0 -> pin high (OFF) PASS
+ 68620  I (3394) FAN: [FANLB] duty 100 -> pin low (ON) PASS
+ 68621  I (3404) FAN: [FANLB] back to 0 -> high PASS
+ 68622  I (3404) FAN: [FANLB] g_tcs.fan_on mirrors OFF PASS
+ 68623  I (3404) FAN: [FANLB] RESULT fail=0 PASS
+ 68624  I (3404) CTRL: service started core=1 100ms tick (poll+arm-step), wdt 3s
+ 68625  W (3404) TCS: safety record: alarm snapshot at last save = 0x0004 (evidence only, not re-raised)
+ 68626  [5nI (3424) M207: unexpected CMD:REPLY=6 (no poll wait)
+ 68627  I (3474) M207: unexpected CMD:REPLY=1 (no poll wait)
+ 68628  I (3574) M207: unexpected CMD:REPLY=1 (no poll wait)
+ 68629  I (3674) M207: online (first)
+ 68632  I (4174) M207: module TCADJTEMP ch=1 = 32.50 (cache mirror at R5)
+ 68633  I (4274) M207: module TCADJTEMP ch=2 = 26.00 (cache mirror at R5)
+ 68634  I (4374) M207: module ch1 TCERRORSTATUS=255
+ 68635  W (4374) TMP117: LOST (unarmed, log only)
+ 68636  W (4374) TMP117: LOST (data flow stopped; alarm raised by control)
+ 68639  Type 'help' to get the list of commands.
+ 68641  Use UP/DOWN arrows to navigate through command history.
+ 68643  Press TAB when typing command name to auto-complete.
+ 68647  Your terminal application does not support escape sequences.
+ 68649  Line editing and history features are disabled.
+ 68651  On Windows, try using Windows Terminal or Putty instead.
+ 68654  I (4384) SNAP: snapshot sender up: 0x20@200ms + 0x21 delta, core=0
+ 68655  I (4384) TCS: services up: softap m207 tmp117 ctrl console snap bootrec
+ 68656  W (4384) TCS: service start result not verifiable (void API): link
+ 68657  W (4384) TCS: service start result not verifiable (void API): web
+ 68658  I (4394) main_task: Returned from app_main()
+ 68659  I (4474) M207: module ch2 TCERRORSTATUS=255
+ 68660  I (4574) M207: module ch1 TCOTPSTATUS=1
+ 68661  I (4674) M207: module ch2 TCOTPSTATUS=1
+ 68777  I (7364) tcs_link: registry complete 53/53
+ 68803  tc1=17.96 tc2=18.55 body=0.00(ok=0) fan=0% mode=0 m207=1 alarm=0x0000 armed=0 state=0 sim=0 latch=0x00 heap=8477712 up=6s rst=11 prst=11 pup=11s palm=0x0000 plat=0x00 pseq=15 nvalm=0x0004 cd=0
+ 68863  >>> webtest
+ 68864  webtest
+ 68865  webtest base=http://192.168.4.1
+ 68869    /              HTTP 200  2750 bytes  OK
+ 68873    /index.html    HTTP 200  2750 bytes  OK
+ 68877    /style.css     HTTP 200  3588 bytes  OK
+ 68883    /app.js        HTTP 200  15445 bytes  OK
+ 68887    /chart.js      HTTP 200  4101 bytes  OK
+ 68892    /api/status    HTTP 200  281 bytes  OK
+ 68894    /api/registry  HTTP 200  6818 bytes  OK
+ 68896    /api/log       HTTP 200  234 bytes  OK
+ 68898    /api/linkstats HTTP 200  247 bytes  OK
+ 68900  webtest: 9/9 PASS (HTTP)
+ 68902    ws loopback 192.168.4.1:80
+ 68904  I (9004) tcs_ws: ws client fd=58
+ 68905      handshake: 101 Switching Protocols             OK
+ 68907      reg numbers carry no float32 tail              OK
+ 68909      first frames in order: reg, log, st            OK
+ 68911      current hyst / body_cold read back from reg    OK
+ 68913      ping -> pong carries ref                       OK
+ 68915      WS PING frame -> PONG frame with the same payload OK
+ 68917  I (9494) tcs_ws: ws set id=0x05 v=0.200 rv=0 -> 0.200
+ 68918      set (same value) -> pv ok=1 with my ref        OK
+ 68920  I (9744) tcs_ws: ws set id=0x03 v=36.500 rv=-2 -> 37.500
+ 68921      set (rejected by constraint) -> pv ok=0 err=-2 OK
+ 68923      set id=65537 -> err bad_set (not truncated)    OK
+ 68925      cmd 11 (screen-only) -> err bad_cmd            OK
+ 68927  I (10494) tcs_ws: ws cmd=9 rv=0 -> state=0 alarm=0x0000
+ 68928      cmd 9 (ack, nothing latched) -> ack with ref   OK
+ 68930      CLOSE -> server answers CLOSE                  OK
+ 68932      client table empty after CLOSE                 OK
+ 68934  W (10804) httpd_uri: httpd_uri: uri handler execution failed
+ 68935      plain GET /ws -> 400 (not registered as a WS client) OK
+ 68937  I (10824) tcs_ws: ws client fd=58
+ 68938  I (10834) tcs_ws: ws client fd=60
+ 68939  I (10854) tcs_ws: ws client fd=62
+ 68940      clients 1..3 handshakes accepted               OK
+ 68942      client table lists all three                   OK
+ 68944  W (10874) httpd_txrx: httpd_sock_err: error in recv : 104
+ 68945  W (10874) httpd_ws: httpd_ws_get_frame_type: Failed to read header byte (socket FD invalid), closing socket now
+ 68946  W (10874) httpd_txrx: httpd_sock_err: error in recv : 104
+ 68947  W (10874) httpd_ws: httpd_ws_get_frame_type: Failed to read header byte (socket FD invalid), closing socket now
+ 68948  W (10884) httpd_txrx: httpd_sock_err: error in recv : 104
+ 68949  W (10884) httpd_ws: httpd_ws_get_frame_type: Failed to read header byte (socket FD invalid), closing socket now
+ 68950      client table empty after abrupt disconnects    OK
+ 68952    ws loopback: 17/17 PASS
+ 68954  webtest: HTTP 9/9, WS 17/17 -> ALL PASS
+ 68957  [bridge] opened COM3 @ 13:27:07 (ESP32 resets on open)
+ 68961  tc1=17.99 tc2=18.56 body=0.00(ok=0) fan=0% mode=0 m207=1 alarm=0x0000 armed=0 state=0 sim=0 latch=0x00 heap=8477912 up=147s rst=11 prst=11 pup=10s palm=0x0000 plat=0x00 pseq=16 nvalm=0x0004 cd=0
+ 68964  I (162637) TCS: H743 CMD 8 -> state=3 alarm=0x0004
+ 68965  I (162637) TCS: H743 CMD 8 -> state=3 alarm=0x0004
+ 68967  I (162857) TCS: H743 CMD 8 -> state=3 alarm=0x0004
+ 69209  I (219687) TCS: H743 CMD 9 -> state=3 alarm=0x0000
+ 69224  I (286647) TCS: H743 SET id=0x0a v=1.00 rv=0 -> ack st=0 val=1.00
+ 69226  I (286767) M207: module TCADJTEMP ch=2 = 15.00 (cache mirror at R5)
+ 69229  I (294507) TCS: H743 CMD 8 -> state=3 alarm=0x0004
+ 69231  I (294517) TCS: H743 CMD 8 -> state=3 alarm=0x0004
+ 69232  I (294567) M207: safe-off ch=1: superseded 0 queued + 1 unconfirmed TCSW write(s)
+ 69235  I (294877) TCS: H743 CMD 8 -> state=3 alarm=0x0004
+ 69236  I (295067) M207: safe-off ch=1: superseded 0 queued + 1 unconfirmed TCSW write(s)
+ 69237  I (295117) M207: safe-off ch=2: superseded 0 queued + 1 unconfirmed TCSW write(s)
+ 69238  I (295227) TCS: H743 CMD 8 -> state=3 alarm=0x0004
+ 69240  I (295367) M207: safe-off ch=2: superseded 0 queued + 1 unconfirmed TCSW write(s)
+ 69270  I (301857) TCS: H743 CMD 9 -> state=3 alarm=0x0000
+ 69274  I (315637) TCS: H743 CMD 8 -> state=3 alarm=0x0004
+ 69275  I (315637) TCS: H743 CMD 8 -> state=3 alarm=0x0004
+ 69277  I (315837) TCS: H743 CMD 8 -> state=3 alarm=0x0004
+ 69317  I (324627) TCS: H743 CMD 9 -> state=3 alarm=0x0000
+ 69318  I (330047) TCS: H743 CMD 8 -> state=3 alarm=0x0004
+ 69319  I (330047) TCS: H743 CMD 8 -> state=3 alarm=0x0004
+ 69321  I (330297) TCS: H743 CMD 8 -> state=3 alarm=0x0004
+ 69351  I (336717) TCS: H743 CMD 9 -> state=3 alarm=0x0000
+ 69355  I (345407) TCS: H743 CMD 8 -> state=3 alarm=0x0004
+ 69356  I (345407) TCS: H743 CMD 8 -> state=3 alarm=0x0004
+ 69357  I (345517) M207: safe-off ch=1: superseded 0 queued + 1 unconfirmed TCSW write(s)
+ 69358  I (345617) TCS: H743 CMD 8 -> state=3 alarm=0x0004
+ 69359  I (345617) M207: safe-off ch=1: superseded 0 queued + 1 unconfirmed TCSW write(s)
+ 69361  I (345817) TCS: H743 CMD 8 -> state=3 alarm=0x0004
+ 69364  I (346017) M207: safe-off ch=2: superseded 0 queued + 1 unconfirmed TCSW write(s)
+ 69400  I (354467) TCS: H743 CMD 9 -> state=3 alarm=0x0000
+ 69405  I (360367) TCS: H743 CMD 8 -> state=3 alarm=0x0004
+ 69406  I (360437) TCS: H743 CMD 8 -> state=3 alarm=0x0004
+ 69407  I (360517) M207: safe-off ch=1: superseded 0 queued + 1 unconfirmed TCSW write(s)
+ 69408  I (360627) TCS: H743 CMD 8 -> state=3 alarm=0x0004
+ 69409  I (360667) M207: safe-off ch=1: superseded 0 queued + 1 unconfirmed TCSW write(s)
+ 69410  I (360717) M207: safe-off ch=2: superseded 0 queued + 1 unconfirmed TCSW write(s)
+ 69412  I (360827) TCS: H743 CMD 8 -> state=3 alarm=0x0004
+ 69414  I (360967) M207: safe-off ch=1: superseded 0 queued + 1 unconfirmed TCSW write(s)
+ 69438  I (366477) TCS: H743 CMD 9 -> state=3 alarm=0x0000
+ 69446  tc1=17.98 tc2=18.53 body=0.00(ok=0) fan=0% mode=0 m207=1 alarm=0x0000 armed=0 state=0 sim=0 latch=0x00 heap=8443680 up=377s rst=11 prst=11 pup=10s palm=0x0000 plat=0x00 pseq=16 nvalm=0x0004 cd=0
+ 69448  [bridge] opened COM3 @ 13:32:36 (ESP32 resets on open)
+ 69457  tc1=17.99 tc2=18.56 body=0.00(ok=0) fan=0% mode=0 m207=1 alarm=0x0000 armed=0 state=0 sim=0 latch=0x00 heap=8496480 up=104s rst=11 prst=11 pup=11s palm=0x0000 plat=0x00 pseq=18 nvalm=0x0004 cd=0
+ 69460  [bridge] opened COM3 @ 13:39:08 (ESP32 resets on open)
+ 69464  tc1=18.29 tc2=18.86 body=0.00(ok=0) fan=0% mode=0 m207=0 alarm=0x0002 armed=0 state=0 sim=0 latch=0x00 heap=8496600 up=82s rst=11 prst=11 pup=274s palm=0x0000 plat=0x00 pseq=20 nvalm=0x0004 cd=0
+ 69466  >>> ack
+ 69467  ack
+ 69468  ack: alarm=0x0002 armed=0 state=0
+ 69473  tc1=18.29 tc2=18.86 body=0.00(ok=0) fan=0% mode=0 m207=0 alarm=0x0002 armed=0 state=0 sim=0 latch=0x00 heap=8496600 up=85s rst=11 prst=11 pup=274s palm=0x0000 plat=0x00 pseq=20 nvalm=0x0004 cd=0
+ 69487  [bridge] opened COM3 @ 13:41:47 (ESP32 resets on open)
+ 69492  tc1=0.00 tc2=0.00 body=0.00(ok=0) fan=0% mode=0 m207=0 alarm=0x0002 armed=0 state=0 sim=0 latch=0x00 heap=8496620 up=85s rst=11 prst=11 pup=154s palm=0x0002 plat=0x00 pseq=21 nvalm=0x0004 cd=0
+ 69494  >>> ack
+ 69495  ack
+ 69496  ack: alarm=0x0002 armed=0 state=0
+ 69500  tc1=0.00 tc2=0.00 body=0.00(ok=0) fan=0% mode=0 m207=0 alarm=0x0002 armed=0 state=0 sim=0 latch=0x00 heap=8496620 up=87s rst=11 prst=11 pup=154s palm=0x0002 plat=0x00 pseq=21 nvalm=0x0004 cd=0
+ 69504  tc1=0.00 tc2=0.00 body=0.00(ok=0) fan=0% mode=0 m207=0 alarm=0x0002 armed=0 state=0 sim=0 latch=0x00 heap=8496620 up=89s rst=11 prst=11 pup=154s palm=0x0002 plat=0x00 pseq=21 nvalm=0x0004 cd=0
+ 69518  tc1=0.00 tc2=0.00 body=0.00(ok=0) fan=0% mode=0 m207=0 alarm=0x0002 armed=0 state=0 sim=0 latch=0x00 heap=8496620 up=142s rst=11 prst=11 pup=154s palm=0x0002 plat=0x00 pseq=21 nvalm=0x0004 cd=0
+ 69532  tc1=0.00 tc2=0.00 body=0.00(ok=0) fan=0% mode=0 m207=0 alarm=0x0002 armed=0 state=0 sim=0 latch=0x00 heap=8496620 up=194s rst=11 prst=11 pup=154s palm=0x0002 plat=0x00 pseq=21 nvalm=0x0004 cd=0
+ 69560  I (355639) TCS: H743 SET id=0x06 v=1.00 rv=0 -> ack st=0 val=1.00
+ 69564  tc1=0.00 tc2=0.00 body=0.00(ok=0) fan=0% mode=1 m207=0 alarm=0x0002 armed=0 state=0 sim=0 latch=0x00 heap=8496620 up=356s rst=11 prst=11 pup=154s palm=0x0002 plat=0x00 pseq=21 nvalm=0x0004 cd=0
+ 69574  I (408069) TCS: H743 SET id=0x06 v=0.00 rv=0 -> ack st=0 val=0.00
+ 69578  tc1=0.00 tc2=0.00 body=0.00(ok=0) fan=0% mode=0 m207=0 alarm=0x0002 armed=0 state=0 sim=0 latch=0x00 heap=8494604 up=409s rst=11 prst=11 pup=154s palm=0x0002 plat=0x00 pseq=21 nvalm=0x0004 cd=0
+ 69583  [bridge] opened COM3 @ 13:54:25 (ESP32 resets on open)
+ 69588  tc1=0.00 tc2=0.00 body=0.00(ok=0) fan=0% mode=0 m207=0 alarm=0x0002 armed=0 state=0 sim=0 latch=0x00 heap=8496620 up=417s rst=11 prst=11 pup=424s palm=0x0002 plat=0x00 pseq=22 nvalm=0x0004 cd=0
+ 69592  tc1=0.00 tc2=0.00 body=0.00(ok=0) fan=0% mode=0 m207=0 alarm=0x0002 armed=0 state=0 sim=0 latch=0x00 heap=8496620 up=421s rst=11 prst=11 pup=424s palm=0x0002 plat=0x00 pseq=22 nvalm=0x0004 cd=0
+ 69597  tc1=0.00 tc2=0.00 body=0.00(ok=0) fan=0% mode=0 m207=0 alarm=0x0002 armed=0 state=0 sim=0 latch=0x00 heap=8496620 up=424s rst=11 prst=11 pup=424s palm=0x0002 plat=0x00 pseq=22 nvalm=0x0004 cd=0
+ 69600  [bridge] opened COM3 @ 13:59:05 (ESP32 resets on open)
+ 69601  I (172) esp_image: segment 3: paddr=000fff0c vaddr=3fca0ec8 sizeI (651) esp_psram: SPI SRAM memory test OK
+ 69602  I (659) cpu_start: Pro cpu start user code
+ 69603  I (659) cpu_start: cpu freq: 160000000 Hz
+ 69604  I (660) app_init: Application information:
+ 69605  I (660) app_init: Project name:     tcs_wireless
+ 69606  I (660) app_init: App version:      1.3.0-rc1
+ 69607  I (660) app_init: ELF file SHA256:  f3cd59597...
+ 69608  I (660) app_init: ESP-IDF:          v5.5.5-dirty
+ 69609  I (660) efuse_init: Min chip rev:     v0.0
+ 69610  I (661) efuse_init: Max chip rev:     v0.99 
+ 69611  I (661) efuse_init: Chip rev:         v0.2
+ 69612  I (661) heap_init: Initializing. RAM available for dynamic allocation:
+ 69613  I (661) heap_init: At 3FCB3C10 len 00035B00 (214 KiB): RAM
+ 69614  I (661) heap_init: At 3FCE9710 len 00005724 (21 KiB): RAM
+ 69615  I (662) heap_init: At 3FCF0000 len 00008000 (32 KiB): DRAM
+ 69616  I (662) heap_init: At 600FE000 len 00001FE8 (7 KiB): RTCRAM
+ 69617  I (662) esp_psram: Adding pool of 8192K of PSRAM memory to heap allocator
+ 69618  I (663) spi_flash: detected chip: boya
+ 69619  I (663) spi_flash: flash io: qio
+ 69620  I (664) sleep_gpio: Configure to isolate all GPIO pins in sleep state
+ 69621  I (664) sleep_gpio: Enable automatic switching of GPIO sleep configuration
+ 69622  I (664) esp_core_dump_flash: Init core dump to flash
+ 69623  I (665) esp_core_dump_flash: Found partition 'coredump' @ 620000 262144 bytes
+ 69624  I (666) main_task: Started on CPU0
+ 69625  I (666) esp_psram: Reserving pool of 32K of internal memory for DMA/internal allocations
+ 69626  I (666) main_task: Calling app_main()
+ 69627  I (666) TCS: [SYSTEM] boot #25 reset reason=11 (USB)
+ 69628  I (666) TCS: [SYSTEM] last run: started by 11 (USB), ran 251s, last refresh alarm=0x0002 latch=0x00 state=0
+ 69629  W (666) TCS: [SYSTEM] core dump: check failed (ESP_ERR_INVALID_SIZE)
+ 69630  I (686) TCS: === 调温服 ESP32-S3 bridge boot ===
+ 69631  I (686) TCS: R1a registry: 53 params restored from NVS (0 record(s) skipped)
+ 69632  I (686) TCS: boot part=ota_0 proj=tcs_wireless ver=1.3.0-rc1
+ 69633  I (686) pp: pp rom version: e7ae62f
+ 69634  I (686) net80211: net80211 rom version: e7ae62f
+ 69635  I (696) wifi:wifi driver task: 3fcc112c, prio:23, stack:6656, core=0
+ 69636  I (696) wifi:wifi firmware version: b9f67df
+ 69637  I (696) wifi:wifi certification version: v7.0
+ 69638  I (696) wifi:config NVS flash: enabled
+ 69639  I (696) wifi:config nano formatting: disabled
+ 69640  I (696) wifi:Init data frame dynamic rx buffer num: 32
+ 69641  I (696) wifi:Init static rx mgmt buffer num: 5
+ 69642  I (696) wifi:Init management short buffer num: 32
+ 69643  I (696) wifi:Init dynamic tx buffer num: 32
+ 69644  I (706) wifi:Init static tx FG buffer num: 2
+ 69645  I (706) wifi:Init static rx buffer size: 1600
+ 69646  I (706) wifi:Init static rx buffer num: 10
+ 69647  I (706) wifi:Init dynamic rx buffer num: 32
+ 69648  I (706) wifi_init: rx ba win: 6
+ 69649  I (706) wifi_init: accept mbox: 6
+ 69650  I (706) wifi_init: tcpip mbox: 32
+ 69651  I (706) wifi_init: udp mbox: 6
+ 69652  I (706) wifi_init: tcp mbox: 6
+ 69653  I (706) wifi_init: tcp tx win: 5760
+ 69654  I (706) wifi_init: tcp rx win: 5760
+ 69655  I (706) wifi_init: tcp mss: 1440
+ 69656  I (706) wifi_init: WiFi IRAM OP enabled
+ 69657  I (706) wifi_init: WiFi RX IRAM OP enabled
+ 69658  I (706) phy_init: phy_version 712,87e8c20e,Apr 13 2026,18:51:10
+ 69659  I (746) wifi:mode : softAP (3c:0f:02:d6:a8:a1)
+ 69660  I (746) wifi:Total power save buffer number: 16
+ 69661  I (746) wifi:Init max length of beacon: 752/752
+ 69662  I (756) wifi:Init max length of beacon: 752/752
+ 69663  I (756) esp_netif_lwip: DHCP server started on interface WIFI_AP_DEF with IP: 192.168.4.1
+ 69664  I (756) tcs_wifi: AP "TCS-A8A1" up, IP 192.168.4.1 pass=***
+ 69665  I (756) uart: queue free spaces: 20
+ 69666  I (826) tcs_link: [LPBK] frame loopback PASS (controller decoded 1 frame, screen dropped own echo)
+ 69667  I (876) tcs_link: [LPBK] dup dedup PASS (dup=1)
+ 69668  I (926) tcs_link: [LPBK] bad-crc drop PASS
+ 69669  I (3126) tcs_link: [LPBK] ARQ retransmit PASS (4 copies rx by screen: 1 delivered + 3 dedup'd)
+ 69670  I (3126) tcs_link: [LPBK] RESULT pass=4 fail=0 PASS
+ 69671  I (3126) tcs_link: registry seeded: 10 entries (H743 0x14 will override)
+ 69672  I (3126) uart: queue free spaces: 20
+ 69673  I (3126) tcs_link: link task up
+ 69674  I (3126) tcs_link: started uart1 230400 baud tx=17 rx=18
+ 69675  I (3126) tcs_web: httpd up on :80 (10 uris)
+ 69676  I (3126) uart: queue free spaces: 8
+ 69695  I (3356) uart: queue free spaces: 20
+ 69696  I (3356) M207: service started uart2 57600 baud tx=21 rx=47 core=1
+ 69697  I (3356) TMP117: [TB117] === boottest start ===
+ 69698  I (3356) TMP117: [TB117] raw 0 PASS
+ 69699  I (3356) TMP117: [TB117] raw 400 -> 3.125 PASS
+ 69700  I (3356) TMP117: [TB117] raw -400 -> -3.125 PASS
+ 69701  I (3356) TMP117: [TB117] avg 1..8 = 4.5 PASS
+ 69702  I (3356) TMP117: [TB117] avg wrap = (100,2..8)/8 = 16.875 PASS
+ 69703  I (3356) TMP117: [TB117] 9 errs still ok PASS
+ 69704  I (3356) TMP117: [TB117] 10th err trips PASS
+ 69705  I (3356) TMP117: [TB117] 2 oks still down PASS
+ 69706  I (3356) TMP117: [TB117] 3rd ok recovers PASS
+ 69707  I (3356) TMP117: [TB117] RESULT fail=0 PASS
+ 69708  I (3356) TMP117: service started i2c0 sda=8 scl=9 100k core=1
+ 69709  I (3356) FAN: [FANLB] === boottest start ===
+ 69710  I (3356) FAN: ws2812 clear g48 (r=0 g=0 b=0)
+ 69711  I (3356) FAN: ws2812 clear g38 (r=0 g=0 b=0)
+ 69712  I (3356) FAN: service started gpio=42 ledc 25kHz/10bit low=on duty=0(off)
+ 69713  I (3366) FAN: [FANLB] duty 0 -> pin high (OFF) PASS
+ 69714  I (3376) FAN: [FANLB] duty 100 -> pin low (ON) PASS
+ 69715  I (3386) FAN: [FANLB] back to 0 -> high PASS
+ 69716  I (3386) FAN: [FANLB] g_tcs.fan_on mirrors OFF PASS
+ 69717  I (3386) FAN: [FANLB] RESULT fail=0 PASS
+ 69718  I (3386) CTRL: service started core=1 100ms tick (poll+arm-step), wdt 3s
+ 69719  W (3386) TCS: safety record: alarm snapshot at last save = 0x0004 (evidence only, not re-raised)
+ 69720  [5nW (4356) TMP117: LOST (unarmed, log only)
+ 69721  W (4356) TMP117: LOST (data flow stopped; alarm raised by control)
+ 69724  Type 'help' to get the list of commands.
+ 69726  Use UP/DOWN arrows to navigate through command history.
+ 69728  Press TAB when typing command name to auto-complete.
+ 69732  Your terminal application does not support escape sequences.
+ 69734  Line editing and history features are disabled.
+ 69736  On Windows, try using Windows Terminal or Putty instead.
+ 69739  I (4366) SNAP: snapshot sender up: 0x20@200ms + 0x21 delta, core=0
+ 69740  I (4366) TCS: services up: softap m207 tmp117 ctrl console snap bootrec
+ 69741  W (4366) TCS: service start result not verifiable (void API): link
+ 69742  W (4366) TCS: service start result not verifiable (void API): web
+ 69743  I (4376) main_task: Returned from app_main()
+ 69886  W (7356) M207: OFFLINE (5 fails) → ALM_M207, writes halted, SAFE by control
+ 69984  tc1=0.00 tc2=0.00 body=0.00(ok=0) fan=0% mode=0 m207=0 alarm=0x0002 armed=0 state=0 sim=0 latch=0x00 heap=8496620 up=7s rst=11 prst=11 pup=251s palm=0x0002 plat=0x00 pseq=24 nvalm=0x0004 cd=0
+ 70005  [bridge] opened COM3 @ 14:00:35 (ESP32 resets on open)
+ 70010  tc1=0.00 tc2=0.00 body=0.00(ok=0) fan=100% mode=0 m207=0 alarm=0x0006 armed=0 state=3 sim=0 latch=0x08 heap=8494432 up=87s rst=11 prst=11 pup=7s palm=0x0002 plat=0x00 pseq=25 nvalm=0x0004 cd=0
+ 70017  >>> ack
+ 70018  ack
+ 70019  ack: alarm=0x0006 armed=0 state=3
+ 70024  tc1=0.00 tc2=0.00 body=0.00(ok=0) fan=100% mode=0 m207=0 alarm=0x0006 armed=0 state=3 sim=0 latch=0x08 heap=8494252 up=116s rst=11 prst=11 pup=7s palm=0x0002 plat=0x00 pseq=25 nvalm=0x0004 cd=0
+ 70027  [bridge] opened COM3 @ 14:02:23 (ESP32 resets on open)
+ 70028  I (200) esp_image: segment 4: paddr=00128e6c vaddr=40379b60 sizeI (671) esp_psram: SPI SRAM memory test OK
+ 70029  I (679) cpu_start: Pro cpu start user code
+ 70030  I (679) cpu_start: cpu freq: 160000000 Hz
+ 70031  I (679) app_init: Application information:
+ 70032  I (680) app_init: Project name:     tcs_wireless
+ 70033  I (680) app_init: App version:      1.3.0-rc1
+ 70034  I (680) app_init: ELF file SHA256:  06cfab4a6...
+ 70035  I (680) app_init: ESP-IDF:          v5.5.5-dirty
+ 70036  I (680) efuse_init: Min chip rev:     v0.0
+ 70037  I (681) efuse_init: Max chip rev:     v0.99 
+ 70038  I (681) efuse_init: Chip rev:         v0.2
+ 70039  I (681) heap_init: Initializing. RAM available for dynamic allocation:
+ 70040  I (681) heap_init: At 3FCB8328 len 000313E8 (196 KiB): RAM
+ 70041  I (681) heap_init: At 3FCE9710 len 00005724 (21 KiB): RAM
+ 70042  I (681) heap_init: At 3FCF0000 len 00008000 (32 KiB): DRAM
+ 70043  I (682) heap_init: At 600FE000 len 00001FE8 (7 KiB): RTCRAM
+ 70044  I (682) esp_psram: Adding pool of 8192K of PSRAM memory to heap allocator
+ 70045  I (683) spi_flash: detected chip: boya
+ 70046  I (683) spi_flash: flash io: qio
+ 70047  I (684) sleep_gpio: Configure to isolate all GPIO pins in sleep state
+ 70048  I (684) sleep_gpio: Enable automatic switching of GPIO sleep configuration
+ 70049  I (684) esp_core_dump_flash: Init core dump to flash
+ 70050  I (685) esp_core_dump_flash: Found partition 'coredump' @ 620000 262144 bytes
+ 70051  I (686) main_task: Started on CPU0
+ 70052  I (686) esp_psram: Reserving pool of 32K of internal memory for DMA/internal allocations
+ 70053  I (686) main_task: Calling app_main()
+ 70054  I (686) TCS: [SYSTEM] boot #28 reset reason=11 (USB)
+ 70055  I (686) TCS: [SYSTEM] last run: started by 11 (USB), ran 47s, last refresh alarm=0x0006 latch=0x08 state=3
+ 70056  W (686) TCS: [SYSTEM] core dump: check failed (ESP_ERR_INVALID_SIZE)
+ 70057  I (706) TCS: === 调温服 ESP32-S3 bridge boot ===
+ 70058  I (706) TCS: R1a registry: 53 params restored from NVS (0 record(s) skipped)
+ 70059  I (706) TCS: boot part=ota_0 proj=tcs_wireless ver=1.3.0-rc1
+ 70060  I (706) pp: pp rom version: e7ae62f
+ 70061  I (706) net80211: net80211 rom version: e7ae62f
+ 70062  I (716) wifi:wifi driver task: 3fcc58a4, prio:23, stack:6656, core=0
+ 70063  I (716) wifi:wifi firmware version: b9f67df
+ 70064  I (716) wifi:wifi certification version: v7.0
+ 70065  I (716) wifi:config NVS flash: enabled
+ 70066  I (716) wifi:config nano formatting: disabled
+ 70067  I (716) wifi:Init data frame dynamic rx buffer num: 32
+ 70068  I (716) wifi:Init static rx mgmt buffer num: 5
+ 70069  I (716) wifi:Init management short buffer num: 32
+ 70070  I (716) wifi:Init dynamic tx buffer num: 32
+ 70071  I (726) wifi:Init static tx FG buffer num: 2
+ 70072  I (726) wifi:Init static rx buffer size: 1600
+ 70073  I (726) wifi:Init static rx buffer num: 10
+ 70074  I (726) wifi:Init dynamic rx buffer num: 32
+ 70075  I (726) wifi_init: rx ba win: 6
+ 70076  I (726) wifi_init: accept mbox: 6
+ 70077  I (726) wifi_init: tcpip mbox: 32
+ 70078  I (726) wifi_init: udp mbox: 6
+ 70079  I (726) wifi_init: tcp mbox: 6
+ 70080  I (726) wifi_init: tcp tx win: 5760
+ 70081  I (726) wifi_init: tcp rx win: 5760
+ 70082  I (726) wifi_init: tcp mss: 1440
+ 70083  I (726) wifi_init: WiFi IRAM OP enabled
+ 70084  I (726) wifi_init: WiFi RX IRAM OP enabled
+ 70085  I (726) phy_init: phy_version 712,87e8c20e,Apr 13 2026,18:51:10
+ 70086  I (766) wifi:mode : softAP (3c:0f:02:d6:a8:a1)
+ 70087  I (776) wifi:Total power save buffer number: 16
+ 70088  I (776) wifi:Init max length of beacon: 752/752
+ 70089  I (776) wifi:Init max length of beacon: 752/752
+ 70090  I (776) esp_netif_lwip: DHCP server started on interface WIFI_AP_DEF with IP: 192.168.4.1
+ 70091  I (776) tcs_wifi: AP "TCS-A8A1" up, IP 192.168.4.1 pass=***
+ 70092  I (776) uart: queue free spaces: 20
+ 70093  I (846) tcs_link: [LPBK] frame loopback PASS (controller decoded 1 frame, screen dropped own echo)
+ 70094  I (896) tcs_link: [LPBK] dup dedup PASS (dup=1)
+ 70095  I (946) tcs_link: [LPBK] bad-crc drop PASS
+ 70096  I (3146) tcs_link: [LPBK] ARQ retransmit PASS (4 copies rx by screen: 1 delivered + 3 dedup'd)
+ 70097  I (3146) tcs_link: [LPBK] RESULT pass=4 fail=0 PASS
+ 70098  I (3146) tcs_link: registry seeded: 10 entries (H743 0x14 will override)
+ 70099  I (3146) uart: queue free spaces: 20
+ 70100  I (3146) tcs_link: link task up
+ 70101  I (3146) tcs_link: started uart1 230400 baud tx=17 rx=18
+ 70102  I (3146) tcs_web: httpd up on :80 (11 uris)
+ 70103  I (3146) uart: queue free spaces: 8
+ 70122  I (3376) uart: queue free spaces: 20
+ 70123  I (3376) M207: service started uart2 57600 baud tx=21 rx=47 core=1
+ 70124  I (3376) TMP117: [TB117] === boottest start ===
+ 70125  I (3376) TMP117: [TB117] raw 0 PASS
+ 70126  I (3376) TMP117: [TB117] raw 400 -> 3.125 PASS
+ 70127  I (3376) TMP117: [TB117] raw -400 -> -3.125 PASS
+ 70128  I (3376) TMP117: [TB117] avg 1..8 = 4.5 PASS
+ 70129  I (3376) TMP117: [TB117] avg wrap = (100,2..8)/8 = 16.875 PASS
+ 70130  I (3376) TMP117: [TB117] 9 errs still ok PASS
+ 70131  I (3376) TMP117: [TB117] 10th err trips PASS
+ 70132  I (3376) TMP117: [TB117] 2 oks still down PASS
+ 70133  I (3376) TMP117: [TB117] 3rd ok recovers PASS
+ 70134  I (3376) TMP117: [TB117] RESULT fail=0 PASS
+ 70135  I (3376) TMP117: service started i2c0 sda=8 scl=9 100k core=1
+ 70136  I (3376) FAN: [FANLB] === boottest start ===
+ 70137  I (3376) FAN: ws2812 clear g48 (r=0 g=0 b=0)
+ 70138  I (3376) FAN: ws2812 clear g38 (r=0 g=0 b=0)
+ 70139  I (3376) FAN: service started gpio=42 ledc 25kHz/10bit low=on duty=0(off)
+ 70140  I (3386) FAN: [FANLB] duty 0 -> pin high (OFF) PASS
+ 70141  I (3396) FAN: [FANLB] duty 100 -> pin low (ON) PASS
+ 70142  I (3406) FAN: [FANLB] back to 0 -> high PASS
+ 70143  I (3406) FAN: [FANLB] g_tcs.fan_on mirrors OFF PASS
+ 70144  I (3406) FAN: [FANLB] RESULT fail=0 PASS
+ 70145  W (3406) tcs_nvs: safety latch restored=0x08 (prev reset)
+ 70146  I (3406) CTRL: service started core=1 100ms tick (poll+arm-step), wdt 3s
+ 70147  W (3406) TCS: safety record: alarm snapshot at last save = 0x0002 (evidence only, not re-raised)
+ 70148  [5nW (4376) TMP117: LOST (unarmed, log only)
+ 70149  W (4376) TMP117: LOST (data flow stopped; alarm raised by control)
+ 70152  Type 'help' to get the list of commands.
+ 70154  Use UP/DOWN arrows to navigate through command history.
+ 70156  Press TAB when typing command name to auto-complete.
+ 70160  Your terminal application does not support escape sequences.
+ 70162  Line editing and history features are disabled.
+ 70164  On Windows, try using Windows Terminal or Putty instead.
+ 70167  I (4386) SNAP: snapshot sender up: 0x20@200ms + 0x21 delta, core=0
+ 70168  I (4386) TCS: services up: softap m207 tmp117 ctrl console snap bootrec
+ 70169  W (4386) TCS: service start result not verifiable (void API): link
+ 70170  W (4386) TCS: service start result not verifiable (void API): web
+ 70171  I (4396) main_task: Returned from app_main()
+ 70279  W (6876) M207: OFFLINE (5 fails) → ALM_M207, writes halted, SAFE by control
+ 70454  I (8926) tcs_link: registry complete 53/53
+ 70459  tc1=0.00 tc2=0.00 body=0.00(ok=0) fan=100% mode=0 m207=0 alarm=0x0006 armed=0 state=3 sim=0 latch=0x08 heap=8476724 up=9s rst=11 prst=11 pup=47s palm=0x0006 plat=0x08 pseq=27 nvalm=0x0002 cd=0
+ 70461  >>> m207 raw TC1:TCMODE?
+ 70462  m207 raw TC1:TCMODE?
+ 70463  m207 raw 'TC1:TCMODE?' -> rc=-2 (0=已入队；应答行见下方 reply/CMD:REPLY 日志)
+ 70465  >>> m207 raw TC1:TCACTTEMP?
+ 70466  m207 raw TC1:TCACTTEMP?
+ 70467  m207 raw 'TC1:TCACTTEMP?' -> rc=-2 (0=已入队；应答行见下方 reply/CMD:REPLY 日志)
+ 70469  >>> linkstat
+ 70470  linkstat
+ 70471  link rx_b=16727 rx_f=300 crc=0 len=0 gap=10 dup=0 retry=11 txqdrop=7 uartdrop=0 echo=0 evict=0 verg=0 arq=1 wdir=0 txwdir=0 txfail=0
+ 70472  link echo_by: 11=0 13=0 20+21=0 22=0 90=0
+ 70476  tc1=0.00 tc2=0.00 body=0.00(ok=0) fan=100% mode=0 m207=0 alarm=0x0006 armed=0 state=3 sim=0 latch=0x08 heap=8476724 up=11s rst=11 prst=11 pup=47s palm=0x0006 plat=0x08 pseq=27 nvalm=0x0002 cd=0
+ 70478  [bridge] opened COM3 @ 14:02:51 (ESP32 resets on open)
+ 70479  I (172) esp_image: segment 3: paddr=000fff0c vaddr=3fca0ec8 sizeI (651) esp_psram: SPI SRAM memory test OK
+ 70480  I (659) cpu_start: Pro cpu start user code
+ 70481  I (659) cpu_start: cpu freq: 160000000 Hz
+ 70482  I (660) app_init: Application information:
+ 70483  I (660) app_init: Project name:     tcs_wireless
+ 70484  I (660) app_init: App version:      1.3.0-rc1
+ 70485  I (660) app_init: ELF file SHA256:  f3cd59597...
+ 70486  I (660) app_init: ESP-IDF:          v5.5.5-dirty
+ 70487  I (660) efuse_init: Min chip rev:     v0.0
+ 70488  I (661) efuse_init: Max chip rev:     v0.99 
+ 70489  I (661) efuse_init: Chip rev:         v0.2
+ 70490  I (661) heap_init: Initializing. RAM available for dynamic allocation:
+ 70491  I (661) heap_init: At 3FCB3C10 len 00035B00 (214 KiB): RAM
+ 70492  I (661) heap_init: At 3FCE9710 len 00005724 (21 KiB): RAM
+ 70493  I (662) heap_init: At 3FCF0000 len 00008000 (32 KiB): DRAM
+ 70494  I (662) heap_init: At 600FE000 len 00001FE8 (7 KiB): RTCRAM
+ 70495  I (662) esp_psram: Adding pool of 8192K of PSRAM memory to heap allocator
+ 70496  I (663) spi_flash: detected chip: boya
+ 70497  I (663) spi_flash: flash io: qio
+ 70498  I (664) sleep_gpio: Configure to isolate all GPIO pins in sleep state
+ 70499  I (664) sleep_gpio: Enable automatic switching of GPIO sleep configuration
+ 70500  I (665) esp_core_dump_flash: Init core dump to flash
+ 70501  I (665) esp_core_dump_flash: Found partition 'coredump' @ 620000 262144 bytes
+ 70502  I (666) main_task: Started on CPU0
+ 70503  I (666) esp_psram: Reserving pool of 32K of internal memory for DMA/internal allocations
+ 70504  I (666) main_task: Calling app_main()
+ 70505  I (666) TCS: [SYSTEM] boot #30 reset reason=11 (USB)
+ 70506  I (666) TCS: [SYSTEM] last run: started by 11 (USB), ran 3s, last refresh alarm=0x0004 latch=0x08 state=3
+ 70507  W (666) TCS: [SYSTEM] core dump: check failed (ESP_ERR_INVALID_SIZE)
+ 70508  I (686) TCS: === 调温服 ESP32-S3 bridge boot ===
+ 70509  I (686) TCS: R1a registry: 53 params restored from NVS (0 record(s) skipped)
+ 70510  I (686) TCS: boot part=ota_0 proj=tcs_wireless ver=1.3.0-rc1
+ 70511  I (686) pp: pp rom version: e7ae62f
+ 70512  I (686) net80211: net80211 rom version: e7ae62f
+ 70513  I (696) wifi:wifi driver task: 3fcc112c, prio:23, stack:6656, core=0
+ 70514  I (696) wifi:wifi firmware version: b9f67df
+ 70515  I (696) wifi:wifi certification version: v7.0
+ 70516  I (696) wifi:config NVS flash: enabled
+ 70517  I (696) wifi:config nano formatting: disabled
+ 70518  I (696) wifi:Init data frame dynamic rx buffer num: 32
+ 70519  I (696) wifi:Init static rx mgmt buffer num: 5
+ 70520  I (696) wifi:Init management short buffer num: 32
+ 70521  I (696) wifi:Init dynamic tx buffer num: 32
+ 70522  I (706) wifi:Init static tx FG buffer num: 2
+ 70523  I (706) wifi:Init static rx buffer size: 1600
+ 70524  I (706) wifi:Init static rx buffer num: 10
+ 70525  I (706) wifi:Init dynamic rx buffer num: 32
+ 70526  I (706) wifi_init: rx ba win: 6
+ 70527  I (706) wifi_init: accept mbox: 6
+ 70528  I (706) wifi_init: tcpip mbox: 32
+ 70529  I (706) wifi_init: udp mbox: 6
+ 70530  I (706) wifi_init: tcp mbox: 6
+ 70531  I (706) wifi_init: tcp tx win: 5760
+ 70532  I (706) wifi_init: tcp rx win: 5760
+ 70533  I (706) wifi_init: tcp mss: 1440
+ 70534  I (706) wifi_init: WiFi IRAM OP enabled
+ 70535  I (706) wifi_init: WiFi RX IRAM OP enabled
+ 70536  I (706) phy_init: phy_version 712,87e8c20e,Apr 13 2026,18:51:10
+ 70537  I (746) wifi:mode : softAP (3c:0f:02:d6:a8:a1)
+ 70538  I (746) wifi:Total power save buffer number: 16
+ 70539  I (746) wifi:Init max length of beacon: 752/752
+ 70540  I (746) wifi:Init max length of beacon: 752/752
+ 70541  I (746) esp_netif_lwip: DHCP server started on interface WIFI_AP_DEF with IP: 192.168.4.1
+ 70542  I (756) tcs_wifi: AP "TCS-A8A1" up, IP 192.168.4.1 pass=***
+ 70543  I (756) uart: queue free spaces: 20
+ 70544  I (826) tcs_link: [LPBK] frame loopback PASS (controller decoded 1 frame, screen dropped own echo)
+ 70545  I (876) tcs_link: [LPBK] dup dedup PASS (dup=1)
+ 70546  I (926) tcs_link: [LPBK] bad-crc drop PASS
+ 70547  I (3126) tcs_link: [LPBK] ARQ retransmit PASS (4 copies rx by screen: 1 delivered + 3 dedup'd)
+ 70548  I (3126) tcs_link: [LPBK] RESULT pass=4 fail=0 PASS
+ 70549  I (3126) tcs_link: registry seeded: 10 entries (H743 0x14 will override)
+ 70550  I (3126) uart: queue free spaces: 20
+ 70551  I (3126) tcs_link: link task up
+ 70552  I (3126) tcs_link: started uart1 230400 baud tx=17 rx=18
+ 70553  I (3126) tcs_web: httpd up on :80 (10 uris)
+ 70554  I (3126) uart: queue free spaces: 8
+ 70573  I (3356) uart: queue free spaces: 20
+ 70574  I (3356) M207: service started uart2 57600 baud tx=21 rx=47 core=1
+ 70575  I (3356) TMP117: [TB117] === boottest start ===
+ 70576  I (3356) TMP117: [TB117] raw 0 PASS
+ 70577  I (3356) TMP117: [TB117] raw 400 -> 3.125 PASS
+ 70578  I (3356) TMP117: [TB117] raw -400 -> -3.125 PASS
+ 70579  I (3356) TMP117: [TB117] avg 1..8 = 4.5 PASS
+ 70580  I (3356) TMP117: [TB117] avg wrap = (100,2..8)/8 = 16.875 PASS
+ 70581  I (3356) TMP117: [TB117] 9 errs still ok PASS
+ 70582  I (3356) TMP117: [TB117] 10th err trips PASS
+ 70583  I (3356) TMP117: [TB117] 2 oks still down PASS
+ 70584  I (3356) TMP117: [TB117] 3rd ok recovers PASS
+ 70585  I (3356) TMP117: [TB117] RESULT fail=0 PASS
+ 70586  I (3356) TMP117: service started i2c0 sda=8 scl=9 100k core=1
+ 70587  I (3356) FAN: [FANLB] === boottest start ===
+ 70588  I (3356) FAN: ws2812 clear g48 (r=0 g=0 b=0)
+ 70589  I (3356) FAN: ws2812 clear g38 (r=0 g=0 b=0)
+ 70590  I (3356) FAN: service started gpio=42 ledc 25kHz/10bit low=on duty=0(off)
+ 70591  I (3366) FAN: [FANLB] duty 0 -> pin high (OFF) PASS
+ 70592  I (3376) FAN: [FANLB] duty 100 -> pin low (ON) PASS
+ 70593  I (3386) FAN: [FANLB] back to 0 -> high PASS
+ 70594  I (3386) FAN: [FANLB] g_tcs.fan_on mirrors OFF PASS
+ 70595  I (3386) FAN: [FANLB] RESULT fail=0 PASS
+ 70596  W (3386) tcs_nvs: safety latch restored=0x08 (prev reset)
+ 70597  I (3386) CTRL: service started core=1 100ms tick (poll+arm-step), wdt 3s
+ 70598  W (3386) TCS: safety record: alarm snapshot at last save = 0x0002 (evidence only, not re-raised)
+ 70599  [5nW (4356) TMP117: LOST (unarmed, log only)
+ 70600  W (4356) TMP117: LOST (data flow stopped; alarm raised by control)
+ 70603  Type 'help' to get the list of commands.
+ 70605  Use UP/DOWN arrows to navigate through command history.
+ 70607  Press TAB when typing command name to auto-complete.
+ 70611  Your terminal application does not support escape sequences.
+ 70613  Line editing and history features are disabled.
+ 70615  On Windows, try using Windows Terminal or Putty instead.
+ 70618  I (4386) SNAP: snapshot sender up: 0x20@200ms + 0x21 delta, core=0
+ 70619  I (4386) TCS: services up: softap m207 tmp117 ctrl console snap bootrec
+ 70620  W (4386) TCS: service start result not verifiable (void API): link
+ 70621  W (4386) TCS: service start result not verifiable (void API): web
+ 70622  I (4396) main_task: Returned from app_main()
+ 70751  W (7206) M207: OFFLINE (5 fails) → ALM_M207, writes halted, SAFE by control
+ 70911  I (8916) tcs_link: registry complete 53/53
+ 70916  tc1=0.00 tc2=0.00 body=0.00(ok=0) fan=100% mode=0 m207=0 alarm=0x0006 armed=0 state=3 sim=0 latch=0x08 heap=8496572 up=8s rst=11 prst=11 pup=3s palm=0x0004 plat=0x08 pseq=29 nvalm=0x0002 cd=0

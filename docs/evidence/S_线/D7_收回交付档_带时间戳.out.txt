@@ -1,0 +1,26 @@
+=== restore 13:58:42 HEAD=fcfda8625
+[13:58:42] >>> 主控交付档
+flash default rc=0 sha256=88988a8907bb0b57
+[13:59:09] >>> 主控 status（主控刚重启；屏还在运行）
+I (8366) tcs_link: REG[6/53] 0x06 mode
+status
+tc1=0.00 tc2=0.00 body=0.00(ok=0) fan=0% mode=0 m207=0 alarm=0x0002 armed=0 state=0 sim=0 latch=0x00 heap=8496620 up=7s rst=11 prst=11 pup=251s palm=0x0002 plat=0x00 pseq=24 nvalm=0x0004 cd=0
+[13:59:14] >>> 屏交付档（烧录期间屏不在：主控已连上过 → 按裁决应进急停并保持）
+tcs v1.2.0 build=2026-11-26 05:26 UTC git=08862c9cc params=v1(8+0x100resv) proto=v2
+tc1=0.0 tc2=0.0 body=0.0 tec1=0 tec2=0 fan=1 mode=0 alarm=0x0006 m207=0 sensor=0 esp=1 ctrl=0 arm=0(0x08=0) loop=1107 drops=0
+[flash] PASS
+[14:00:35] >>> 屏烧完
+[14:00:41] >>> 主控 status（烧屏之后，确认之前）
+tc1=0.00 tc2=0.00 body=0.00(ok=0) fan=100% mode=0 m207=0 alarm=0x0006 armed=0 state=3 sim=0 latch=0x08 heap=8494432 up=87s rst=11 prst=11 pup=7s palm=0x0002 plat=0x00 pseq=25 nvalm=0x0004 cd=0
+[14:00:42] >>> 屏 ver / stat
+tcs v1.2.0 build=2026-11-26 05:26 UTC git=08862c9cc params=v1(8+0x100resv) proto=v2
+tc1=0.0 tc2=0.0 body=0.0 tec1=0 tec2=0 fan=1 mode=0 alarm=0x0006 m207=0 sensor=0 esp=1 ctrl=0 arm=0(0x08=0) loop=3674 drops=0
+lrx=12758 snap=179 gapmax=926 gaplast=350 echo=0 wdir=0 arq=1 txfail=0
+[14:01:07] >>> ack（人工确认）
+ack: alarm=0x0006 armed=0 state=3
+[14:01:10] >>> 主控 status（确认之后）
+tc1=0.00 tc2=0.00 body=0.00(ok=0) fan=100% mode=0 m207=0 alarm=0x0006 armed=0 state=3 sim=0 latch=0x08 heap=8494252 up=116s rst=11 prst=11 pup=7s palm=0x0002 plat=0x00 pseq=25 nvalm=0x0004 cd=0
+[14:01:11] >>> 屏 stat
+tc1=0.0 tc2=0.0 body=0.0 tec1=0 tec2=0 fan=1 mode=0 alarm=0x0006 m207=0 sensor=0 esp=1 ctrl=0 arm=0(0x08=0) loop=4994 drops=0
+lrx=16989 snap=239 gapmax=926 gaplast=243 echo=0 wdir=0 arq=1 txfail=0
+=== restore end 14:01:25

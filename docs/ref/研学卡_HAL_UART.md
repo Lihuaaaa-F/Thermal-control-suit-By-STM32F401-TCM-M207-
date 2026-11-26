@@ -43,6 +43,7 @@
 
 
 
+
 复现命令（仓库根 `/d/Espressif/ws/tcs`，Git Bash；raw 输出路径分隔符为 `\`，表内归一为 `/`）：
 
 ```bash
@@ -72,19 +73,20 @@ vendor 域说明：`App/rtt/`（SEGGER RTT vendor 五文件）同一 pattern 单
 
 
 
+
 | # | 文件:行 | API | 语义一句话 |
 |---|---|---|---|
 | 1 | project_tcs/App/comm/comm.c:6 | HAL_UART_Transmit（注释提及） | 头注：comm 链路唯一消费点串行 Transmit；ISR 内 comm_tick 只判超时+重传入队（非调用点） |
 | 2 | project_tcs/App/comm/comm.c:130 | （注释提及）（注释提及） | 重锚新增（注释提及）：代码摘录见左列 |
 | 3 | project_tcs/App/tcs/console.c:5 | HAL_UART_Transmit（注释提及） | 头注：控制台日志唯一 Transmit 消费点（铁律：ISR 不发送），日志同时进 RTT（非调用点） |
-| 4 | project_tcs/App/tcs/console.c:77 | HAL_UART_Transmit(s_uart, &s_tx_ring[tail], n, 10u) | TX 环形缓冲出队阻塞发送，超时 10ms（n≤32B@115200≈2.8ms，W10 #4） |
-| 5 | project_tcs/App/tcs/console.c:184 | HAL_UART_Receive_IT(s_uart, &s_rx_byte, 1) | RxCplt 回调内单字节连环重挂续收（W10 #1） |
-| 6 | project_tcs/App/tcs/console.c:189 | __HAL_UART_GET_FLAG(s_uart, UART_FLAG_ORE) | 错误恢复入口查 ORE 标志（金标准函数 console_uart_error_recover L111-116，W10 #2） |
-| 7 | project_tcs/App/tcs/console.c:190 | __HAL_UART_CLEAR_OREFLAG(s_uart) | 清 ORE 溢出标志 |
-| 8 | project_tcs/App/tcs/console.c:191 | HAL_UART_AbortReceive(s_uart) | 错误态 BUSY_RX 防重挂 HAL_BUSY（"防 BUSY 导致重挂失败"注释在本行；附录 C 三路配对 1/1/1 之一） |
-| 9 | project_tcs/App/tcs/console.c:192 | HAL_UART_Receive_IT(s_uart, &s_rx_byte, 1) | Abort 后重启接收（恢复完成） |
-| 10 | project_tcs/App/tcs/console.c:847 | __HAL_UART_GET_FLAG(s_uart, UART_FLAG_ORE) | 主循环 RX 自愈巡检：ORE 置位或 RXNEIE 被 HAL 错误路径关掉 → 调恢复函数（启动期线路扰动→控制台失聪的兜底） |
-| 11 | project_tcs/App/tcs/console.c:889 | HAL_UART_Receive_IT(s_uart, &s_rx_byte, 1) | console_init 启动期首挂（W10 #3） |
+| 4 | project_tcs/App/tcs/console.c:78 | HAL_UART_Transmit(s_uart, &s_tx_ring[tail], n, 10u) | TX 环形缓冲出队阻塞发送，超时 10ms（n≤32B@115200≈2.8ms，W10 #4） |
+| 5 | project_tcs/App/tcs/console.c:185 | HAL_UART_Receive_IT(s_uart, &s_rx_byte, 1) | RxCplt 回调内单字节连环重挂续收（W10 #1） |
+| 6 | project_tcs/App/tcs/console.c:190 | __HAL_UART_GET_FLAG(s_uart, UART_FLAG_ORE) | 错误恢复入口查 ORE 标志（金标准函数 console_uart_error_recover L111-116，W10 #2） |
+| 7 | project_tcs/App/tcs/console.c:191 | __HAL_UART_CLEAR_OREFLAG(s_uart) | 清 ORE 溢出标志 |
+| 8 | project_tcs/App/tcs/console.c:192 | HAL_UART_AbortReceive(s_uart) | 错误态 BUSY_RX 防重挂 HAL_BUSY（"防 BUSY 导致重挂失败"注释在本行；附录 C 三路配对 1/1/1 之一） |
+| 9 | project_tcs/App/tcs/console.c:193 | HAL_UART_Receive_IT(s_uart, &s_rx_byte, 1) | Abort 后重启接收（恢复完成） |
+| 10 | project_tcs/App/tcs/console.c:851 | __HAL_UART_GET_FLAG(s_uart, UART_FLAG_ORE) | 主循环 RX 自愈巡检：ORE 置位或 RXNEIE 被 HAL 错误路径关掉 → 调恢复函数（启动期线路扰动→控制台失聪的兜底） |
+| 11 | project_tcs/App/tcs/console.c:893 | HAL_UART_Receive_IT(s_uart, &s_rx_byte, 1) | console_init 启动期首挂（W10 #3） |
 | 12 | project_tcs/App/tcs/m207.c:6 | HAL_UART_ErrorCallback（注释提及） | 头注：ORE 溢出=ErrorCallback 先清标志再重置接收（F401 踩坑防御保留）（非调用点） |
 | 13 | project_tcs/App/tcs/m207.c:7 | HAL_UART_Transmit（注释提及） | 头注：TX 主循环阻塞 Transmit，禁止 ISR 内发送（非调用点） |
 | 14 | project_tcs/App/tcs/m207.c:208 | HAL_UART_Receive_IT（注释提及） | s_rx_byte 变量注释=Receive_IT 单字节落点（非调用点） |
@@ -107,8 +109,8 @@ vendor 域说明：`App/rtt/`（SEGGER RTT vendor 五文件）同一 pattern 单
 | 31 | project_tcs/Core/Src/main.c:274 | __HAL_UART_GET_FLAG（ORE 巡检） | R2 链路 RX 自愈巡检条件（ORE 置位→错误恢复入口） |
 | 32 | project_tcs/Core/Src/main.c:353 | — | 重锚新增：代码摘录见左列 |
 | 33 | project_tcs/Core/Src/main.c:357 | HAL_UART_Transmit（注释提及） | 主循环注释：链路 TX 串行消费 comm_poll_tx（非调用点） |
-| 34 | project_tcs/Core/Src/main.c:813 | HAL_UART_Init(h) | uart_common_init 各实例（USART1/2/3）统一初始化+返查 HAL_OK |
-| 35 | project_tcs/Core/Src/main.c:1079 | HAL_UART_Transmit（注释提及） | 主循环注释：链路 TX 串行消费 comm_poll_tx（非调用点） |
+| 34 | project_tcs/Core/Src/main.c:821 | HAL_UART_Init(h) | uart_common_init 各实例（USART1/2/3）统一初始化+返查 HAL_OK |
+| 35 | project_tcs/Core/Src/main.c:1087 | HAL_UART_Transmit（注释提及） | 主循环注释：链路 TX 串行消费 comm_poll_tx（非调用点） |
 | 36 | project_tcs/Core/Src/stm32h7xx_hal_msp.c:4 | HAL_UART_MspInit（注释提及） | 头注：§0F MspInit 死代码清理记载（实际用 USART1，PROTO_UART_SEL=1）（非调用点） |
 | 37 | project_tcs/Core/Src/stm32h7xx_hal_msp.c:22 | HAL_UART_MspInit（用户实现） | 三路 UART 引脚/时钟 Msp 配置（含 §0F 清理后的现存实例域） |
 | 38 | project_tcs/Core/Src/stm32h7xx_it.c:3 | HAL_UART_Transmit（注释提及） | 铁律注释：ISR 只做 RX 单字节入环形缓冲/置标志，禁止 Transmit（非调用点） |

@@ -324,6 +324,16 @@ static void link_on_up(void)
     ESP_LOGW(TAG, "link up (peer frame received after ARQ failure)");
 }
 
+/* X01-F-03：应答结果（0x13 请求注册表 / 0x15 命令的 ACK）。status != OK 时至少留一条日志；
+ * 计数在 comm 层（ack_nonok_cnt，linkstat 的 ackbad=）。成功应答静默（每 5s 一次注册表请求，
+ * 每次都打日志会淹掉现场）。*/
+static void link_on_ack_result(uint8_t acked_seq, uint8_t acked_mt, uint8_t status, float ret)
+{
+    if (status == TCS_ACK_OK) return;
+    ESP_LOGW(TAG, "ACK rej mt=0x%02x seq=%u status=%u ret=%.2f",
+             (unsigned)acked_mt, (unsigned)acked_seq, (unsigned)status, (double)ret);
+}
+
 /* —— 组帧（MT+Seq+body → 整帧）—— */
 static size_t mt_frame(uint8_t mt, uint8_t seq, const uint8_t *body, size_t blen,
                        uint8_t *out, size_t cap)
@@ -621,6 +631,7 @@ void link_stats_get(link_stats_t *out)
     out->echo_getreg = s_link.echo_by_mt[MT_TCS_GET_REGISTRY];
     out->pending_evict = s_link.pending_evict;
     out->proto_mismatch = s_proto_mismatch;
+    out->ack_bad = s_link.ack_nonok_cnt;   /* X01-F-03：非 OK 应答（status/ret 不再被丢弃）*/
     out->peer_ver = s_peer_ver;   /* M11-F-09：实际收到的对端版本（版本不符时也是真实值）*/
 }
 
@@ -759,7 +770,10 @@ esp_err_t link_start(void)
      * 现在断链即作废注册表收齐状态，重连后由 5s 请求/心跳自动补齐。*/
     comm_init(&s_link, link_uart_send, link_now_ms, link_on_down,
               link_crit_enter, link_crit_exit, TCS_SIDE_ESP32);
-    comm_set_on_link_up(&s_link, link_on_up);   /* M04-F-06：与 link_on_down 成对的"恢复"日志 */
+    comm_set_on_link_up(&s_link, link_on_up);   /* M04-F-06：与 on_link_down 成对的"恢复"日志 */
+    /* X01-F-03（2026-11-26）：0x90 的 status/ret 交给这里。本端发出时登记过 pending 的是
+     * 0x13（请求注册表）与 0x15（命令）；非 OK 的应答至少要在日志与 linkstat 里看得见。*/
+    comm_set_on_ack_result(&s_link, link_on_ack_result);
 
     uart_config_t cfg = {
         .baud_rate = LINK_BAUD,

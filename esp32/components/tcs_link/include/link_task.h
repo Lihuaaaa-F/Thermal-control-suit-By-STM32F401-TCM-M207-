@@ -69,6 +69,7 @@ typedef struct {
     uint32_t echo_ack;           /* 回声里的 0x90（本端应答）*/
     uint32_t echo_getreg;        /* 回声里的 0x13（请求注册表）*/
     uint32_t proto_mismatch;         /* STATUS 版本不符帧数（M11-F-09）*/
+    uint32_t ack_bad;                /* X01-F-03：0x90 应答里 status != OK 的条数（含未匹配 pending）*/
     uint8_t  peer_ver;               /* 最近一帧 STATUS 里对端报的协议版本（0 = 还没收到过）——M11-F-09：
                                         网页黄条要用"实际收到的 ver"，不能再用本地常量 */
 } link_stats_t;

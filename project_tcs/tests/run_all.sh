@@ -538,6 +538,10 @@ if [ -n "$PYBIN" ] && "$PYBIN" tools/proto_ref.py selftest; then :; else echo "[
 # run_m207_tests.sh 用同一个源文件编译主控那一份），源码门禁核对两份 comm.h 与注释。
 run linkcontract tests/test_link_contract.c
 if [ -n "$PYBIN" ] && "$PYBIN" -I tests/test_link_contract.py; then :; else echo "[linkcontract_src] FAIL"; FAIL=1; fi
+# X01-F-03：0x90 应答的 status/ret 交给上层（comm 层的完成回调 + pending 结果字段；link_send 层
+# 按 (seq,mt) 找回参数 id 并上报 CLAMP/BAD_ID/BUSY）。esp32 的 run_m207_tests.sh 用同一份用例
+# 编主控那一份 comm.c（只跑 comm 层那几节）。
+run linkack     tests/test_link_ack.c        App/comm/comm.c App/proto/proto.c App/comm/link_send.c
 
 echo "==================="
 if [ "$FAIL" = 0 ]; then echo "run_all: ALL GREEN"; else echo "run_all: HAS FAILURES"; fi

@@ -492,6 +492,25 @@ static void snap_reassert(void)
     if (tcs_alarm_active(ALM_EEPROM)) g_tcs.alarm_bits |= ALM_EEPROM;
 }
 
+/* X01-F-03（2026-11-26）：参数写入的应答结果（0x90 的 status/ret 不再被 comm 层丢掉）。
+ *  - OK：不做事——快照（0x20）与镜像泵（0x11）本来就会把权威值带回来。
+ *  - CLAMP：主控限幅，ret 是实际写入值 → 本地立刻采用它，屏上显示的就是真值。
+ *  - BAD_ID / BUSY / 其它：提示（RTT 与控制台的 WARN 行）+ 把设定值回退到最近一帧快照里的
+ *    权威值；其它参数的回退由 0x11 镜像泵（每 800ms 一条、约 41s 一轮）完成。
+ * 本函数不驱动任何执行器，交付档也有意义。*/
+static void on_param_write_result(uint16_t id, uint8_t status, float ret, float requested)
+{
+    if (status == TCS_ACK_OK) return;
+    tcs_log("[WARN]", "param write rejected id=0x%02x v=%.2f st=%u ret=%.2f",
+            (unsigned)id, (double)requested, (unsigned)status, (double)ret);
+    if (status == TCS_ACK_CLAMP) {
+        param_link_sync(id, ret);                       /* 主控回的实际写入值 */
+        return;
+    }
+    if (s_snap_have && id == PARAM_ID_TC1_SET)      param_link_sync(id, s_last_snap.tc1_set);
+    else if (s_snap_have && id == PARAM_ID_TC2_SET) param_link_sync(id, s_last_snap.tc2_set);
+}
+
 /* R2：屏侧写 M207 温度参数 → 链路 0x12 发 ESP32（权威→M207 verify）；
  * 链路未判活时退回本地旧路径（v2 接线后不可达，仅作降级痕迹）。*/
 static uint8_t m207_redirect_send(uint16_t id, float v)
@@ -1050,6 +1069,10 @@ int main(void)
     comm_init(&g_link, link_uart_send, now_ms_fn, on_link_down, crit_enter, crit_exit,
               TCS_SIDE_H743);
     comm_set_on_link_up(&g_link, on_link_up);   /* M04-F-06：与 on_link_down 成对的"恢复"日志 */
+    /* X01-F-03（2026-11-26）：0x90 的 status/ret 交给上层。参数写入的结果由 link_send.c
+     * 按 (seq, mt) 找回参数 id，再回调 on_param_write_result 提示 / 回退。*/
+    comm_set_on_ack_result(&g_link, link_send_on_ack_result);
+    link_send_on_result(on_param_write_result);
 
 #ifdef ENABLE_LCD
     tcs_lvgl_init();     /* LVGL 单栈（2026-11-15：旧 tcs_ui 已删除） */

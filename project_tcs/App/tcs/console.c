@@ -15,6 +15,7 @@
 #include "control.h"
 #include "m207.h"
 #include "link_snap.h"   /* S 线 i3（条目 11）：stat 的 vr=（版本拒收计数）*/
+#include "link_send.h"   /* S 线 e1（X01-F-03）：stat 的参数写入应答结果计数（wbad/wclamp/wbusy）*/
 #include "m207_txq.h"   /* M207_CMD_MAX：m207 send 的长度上限（M07-F-10）*/
 #include "audit_ring.h" /* M07-F-08：关键命令的审计留痕环 */
 #include "perf_hist.h"  /* M01-F-09：perf 读最近一个 1 秒窗口 */
@@ -322,14 +323,22 @@ static void cmd_exec(char *line)
         /* arq / txfail（M04-F-06 / X03-F-09）：comm 层 link_ok；没能上线的发送次数（应与 uartdrop 同源、恒 0）*/
         /* vr（S 线 i3，条目 11）：被版本校验拒掉的快照数——>0 且屏上一直"连接中断"时，
          * 多半是两端协议版本不配对（主控 OTA 升过、屏还没烧）。*/
-        printf("lrx=%lu snap=%lu gapmax=%lu gaplast=%lu echo=%lu wdir=%lu arq=%u txfail=%lu vr=%lu\n",
+        /* ackbad / wbad / wclamp / wbusy（S 线 e1，X01-F-03）：0x90 应答里 status != OK 的计数；
+         * 其中按参数写入分类的三种（BAD_ID / CLAMP / BUSY）单独列出——非 0 说明屏写参数
+         * 被主控拒绝或限幅，`[WARN] param write rejected ...` 那条日志里有 id 与值。*/
+        uint32_t wbad = 0, wclamp = 0, wbusy = 0;
+        link_send_ack_stats(&wbad, &wclamp, &wbusy);
+        printf("lrx=%lu snap=%lu gapmax=%lu gaplast=%lu echo=%lu wdir=%lu arq=%u txfail=%lu vr=%lu "
+               "ackbad=%lu wbad=%lu wclamp=%lu wbusy=%lu\n",
                (unsigned long)g_dbg_lrx_total,
                (unsigned long)g_dbg_snap,
                (unsigned long)g_dbg_snap_gap_max,
                (unsigned long)g_dbg_snap_gap_last,
                (unsigned long)g_link.echo_cnt, (unsigned long)g_link.wrongdir_cnt,
                (unsigned)g_link.link_ok, (unsigned long)g_link.tx_fail_cnt,
-               (unsigned long)tcs_link_snap_ver_rejects());
+               (unsigned long)tcs_link_snap_ver_rejects(),
+               (unsigned long)g_link.ack_nonok_cnt,
+               (unsigned long)wbad, (unsigned long)wclamp, (unsigned long)wbusy);
         return;
     }
 #if TCS_PROFILE >= 1

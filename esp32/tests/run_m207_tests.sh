@@ -166,6 +166,9 @@ run linkcontract ../project_tcs/tests/test_link_contract.c
 EXTRA_INC="/I..\..\main"
 run snaptime tests/test_snap_time.c main/snap_time.c
 EXTRA_INC=""
+# X01-F-03：0x90 应答的 status/ret 交给上层——主控这一份 comm.c 跑同一组 comm 层断言
+# （用例本体在 project_tcs/tests/test_link_ack.c，这里用 LINK_ACK_COMM_ONLY 跳过 link_send 那几节）。
+run linkack tests/test_link_ack_comm.c components/tcs_link/comm.c components/tcs_link/proto.c
 
 [ $FAIL = 0 ] && echo "esp32-tests: ALL GREEN" || echo "esp32-tests: HAS FAILURES"
 exit $FAIL

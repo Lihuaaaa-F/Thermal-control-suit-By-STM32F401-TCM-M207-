@@ -53,7 +53,9 @@ OTHER = {"H743": "ESP32", "ESP32": "H743"}
 RX_PAT = re.compile(r"\bcase\s+(MT_TCS_\w+)\s*:")
 TX_PAT = re.compile(r"\b(?:mt_frame|proto_encode_frame_with_mt|frame_with_mt|snap_send)\(\s*(MT_TCS_\w+)")
 GATE_CALL = "    if (comm_rx_gate(L, payload, plen)) return 0;\n"
-ACK_LINE = "        comm_on_ack(L, payload[2], tcs_frame_mt(payload[3]));\n"
+# X01-F-03（2026-11-26）：0x90 的应答处理从"只取 seq/mt"改成"解出 status/ret 交给上层"。
+# "闸门在 ACK 处理之前"这一条盯的仍然是 0x90 分支里的那次调用（两端逐字相同）。
+ACK_LINE = "        comm_on_ack_ex(L, a.acked_seq, tcs_frame_mt(a.acked_mt), a.status, a.ret);\n"
 MARK_LINE = "            L->tx_queue[t][3] = mt_wire;\n"
 CRC_LINE = "            L->tx_queue[t][len - 1] = proto_crc8(&L->tx_queue[t][2], len - 3);\n"
 LEGACY = ("s_echo_plen", "s_echo_until_ms", "TCS_ECHO_MARGIN_MS", "s_echo_drop")

@@ -228,6 +228,11 @@ static inline int tcs_rx_verdict(uint8_t mt_wire, uint8_t self,
 #define TCS_ACK_CLAMP          1
 #define TCS_ACK_BAD_ID         2
 #define TCS_ACK_BUSY           3
+/* X01-F-03（S 线 e1，2026-11-26）：status 的有效位。l1 把"这帧是谁发的"放在**消息号字节**
+ * 的 bit6（见上面的方向一节），status 字节本身没有方向位；这里仍只认低 4 位——
+ * 将来若有人往 status 的高位塞标志（曾经的计划是在最高位放方向位），解析方不会把它当成
+ * 一个未知状态码。comm 层收到 0x90 后按本掩码取 status 再交给上层。*/
+#define TCS_ACK_STATUS_MASK    0x0Fu
 
 /* 0x10 online 位定义 */
 #define TCS_ONLINE_M207        0x01

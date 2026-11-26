@@ -32,4 +32,28 @@ int link_send_set_param(comm_link_t *L, uint16_t id, uint8_t type, float value);
  */
 int link_send_on_broadcast(comm_link_t *L, uint16_t id, uint8_t type, uint8_t flags, float value);
 
+/* ====== X01-F-03（2026-11-26）：参数写入的应答结果 ======
+ * 0x90 的 status/ret 原来两端都不解析，BAD_ID / CLAMP / BUSY 一律当成功——被拒绝的写入在屏上
+ * 显示成功，等下一帧 0x20 才悄悄改回旧值。现在 comm 层把结果交给这里：本模块记住"这一帧 0x12
+ * 写的是哪个参数、写的是多少"，应答回来时按 (seq, mt) 找回那条记录。*/
+
+/* 一次参数写入的最终结果。
+ *   id        = 参数 id
+ *   status    = TCS_ACK_OK / CLAMP / BAD_ID / BUSY（已按 TCS_ACK_STATUS_MASK 掩过）
+ *   ret       = 应答里的 ret（CLAMP 时是主控实际写入的值；其余情况一般为 0）
+ *   requested = 屏当时要写的值
+ * 上层（main.c）据此提示使用者、并在 CLAMP 时采用 ret / 在拒绝时回退到权威快照值。 */
+typedef void (*link_send_result_cb_t)(uint16_t id, uint8_t status, float ret, float requested);
+void link_send_on_result(link_send_result_cb_t cb);
+
+/* 注册到 comm 层的应答回调（comm_set_on_ack_result）。main.c 在 comm_init 之后调一次。
+ * 不是参数写入的应答（0x13 请求注册表 / 0x15 命令）在这里不处理。 */
+void link_send_on_ack_result(uint8_t acked_seq, uint8_t acked_mt, uint8_t status, float ret);
+
+/* 结果计数（非 OK 的写入按 status 分桶）：`stat` 打印用。任一指针可为 NULL。 */
+void link_send_ack_stats(uint32_t *out_bad, uint32_t *out_clamp, uint32_t *out_busy);
+
+/* 当前还在等应答的参数写入条数（主机用例用来确认表项不会泄漏）。 */
+int link_send_inflight(void);
+
 #endif /* TCS_LINK_SEND_H */

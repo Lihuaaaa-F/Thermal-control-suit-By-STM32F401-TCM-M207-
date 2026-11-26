@@ -1215,6 +1215,11 @@ int main(void)
                   "P9-6 'off' reaches the actuator channel within 3 s even with the link down");
         }
         for (int i = 0; i < 10; i++) poll100();
+        /* i3（P1-09 的另一半）：离线期没有一帧能发出去，但关断必须每 500ms 照样敲安全关断通道——
+         * 服务侧靠它保持"有关断还没送到"（m207_tec_force 的保持位），复联第一帧才补得上。
+         * 1 s 内：急停当拍 2 次 + 两次重申各 2 次。变异 M55。*/
+        CHECK(force_calls == 6,
+              "P9-6 the shutdown keeps going through the force channel every 500ms while the link is down");
         CHECK(control_tec_known() == 0,
               "P9-6 while the module is offline the TEC state is UNKNOWN, not 'off'");
         CHECK(g_tcs.tec_known == 0, "P9-6 snapshot copy of tec_known is 0 while offline");

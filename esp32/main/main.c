@@ -49,6 +49,9 @@ static const char *TAG = "TCS";
 /* control ops 适配（m207 API 返回 int，ops 签名 void；错误由服务内 NAK/重发计数承载）*/
 static void op_tec_sw(uint8_t ch, uint8_t on) { (void)m207_tec(ch, on); }
 static void op_tec_temp(uint8_t ch, float v) { (void)m207_set_temp(ch, v); }
+/* P1-09 的另一半（i3）：安全关断通道——SAFE 的关断 / 500ms 重申 / cmd 11 停机都走它。
+ * 模块离线时 m207_tec 回 -2、连旁路槽都进不了；m207_tec_force 离线也记下意图，复联第一帧补发。*/
+static void op_tec_force(uint8_t ch, uint8_t on) { (void)m207_tec_force(ch, on); }
 /* X02-F-05 / M12-F-08：参数钩子要把模块服务的结果带回来（离线 -2 / 队列满或忙 -1）。
  * 原先接的是 tcs_m207 里的 void 包装（m207_hook_*），返回值在那里就被丢了。*/
 static int op_m207_set_temp(uint8_t ch, float v) { return m207_set_temp(ch, v); }
@@ -316,9 +319,8 @@ void app_main(void)
         .fan_set = fan_set_on,
         .tec_sw = op_tec_sw,
         .tec_temp = op_tec_temp,
-        /* P1-09：这里还要接 .tec_force = op_tec_force（转调 m207_tec_force(ch, on)）。
-         * m207_tec_force 由 e2 批次在 tcs_m207 里实现，合入前不能引用（链接不过）；
-         * 合入前 SAFE 的关断退化为 tec_sw（普通队列）。接口约定见 docs/results/S_G_e3a_结果.md。*/
+        /* P1-09：接上安全关断通道（i3；此前退化成 tec_sw，模块离线时关断送不到执行器）。*/
+        .tec_force = op_tec_force,
         .on_state = NULL,             /* 迁移沿由 post 步进日志承载 */
         .safety_persist = safety_persist_cb,   /* P0-08：锁存跨复位存活 */
         .safety_load    = safety_state_load,

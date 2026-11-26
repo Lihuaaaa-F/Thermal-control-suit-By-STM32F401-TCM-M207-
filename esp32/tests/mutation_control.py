@@ -198,6 +198,12 @@ MUTATIONS = [
     ("M54 水温的长窗口不生效（30 秒一成立就判）",
      [("        tc1_stuck  = (uint8_t)(tc1_stuck && stuck_water_is(&s_stuck_tc1, now_ms));",
        "        ;")], ""),
+    # ---- 2026-11-26 S 线 i3（P1-09 的另一半）：模块离线时关断也要一直敲安全关断通道。
+    #      服务侧的 m207_tec_force 靠这每 500ms 的一次保持"有关断还没送到"，复联第一帧才补得上。
+    #      执行器那一侧的用例与变异在 tests/test_m207_force.c / tests/mutation_m207_force.py。
+    ("M55 模块离线时锁存不再重申关断（离线期不重试，复联后关断补不上）",
+     [("        if (s_state != CTRL_SAFE || (uint32_t)(now_ms - s_safe_assert_ms) >= CTRL_SAFE_REASSERT_MS) {",
+       "        if (s_state != CTRL_SAFE || (g_tcs.m207_online && (uint32_t)(now_ms - s_safe_assert_ms) >= CTRL_SAFE_REASSERT_MS)) {")], ""),
 ]
 
 

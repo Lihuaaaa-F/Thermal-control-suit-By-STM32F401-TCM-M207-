@@ -30,6 +30,7 @@
 #include "comm.h"
 #include "link_info.h"
 #include "link_send.h"
+#include "link_snap.h"   /* m1（模式页）：tcs_link_tec_copy 在本文件实现（与 tcs_link_snap_info 同一处）*/
 #include "tcs_proto.h"   /* R5-01：链路帧带方向位，两端固件必须成对更新（见该文件"方向"一节）*/
 #include "ltdc.h"
 #include "ft5446.h"
@@ -413,6 +414,23 @@ static uint32_t s_snap_seq;     /* 最近快照 seq（去重键）*/
 static uint8_t  s_snap_have;
 static tcs_snap_pl_t s_last_snap;   /* v2：屏为纯显示终端，链路存活期内以它为准 */
 
+/* ====== m1（模式页，2026-11-26 用户定的新功能）：两路输出方向与电学量的镜像 ======
+ * 数据来自 0x20 快照末尾 / 0x21 增量的两个新 mask 位（protocol/tcs_proto.h，TCS_PROTO_VER 2）。
+ * 换算（半字节 → 方向、定点 → V / A、valid 位）是 link_snap.h 里的纯逻辑，主机用例直接编。
+ * 界面只读（tcs_link_tec_copy）；链路断了由界面按"快照陈旧"整体转灰，这里不另作失效处理。*/
+static tcs_link_tec_t s_tec;
+
+void tcs_link_tec_copy(tcs_link_tec_t *out)
+{
+    if (out) *out = s_tec;
+}
+
+/* m1（模式页）：屏写参数的补发入口（说明见 link_snap.h）；与 hook_broadcast 同一条 0x12 路径 */
+int tcs_link_write_param(uint16_t id, uint8_t type, float value)
+{
+    return link_send_set_param(&g_link, id, type, value);
+}
+
 /* 界面只读的快照接收状态（U 线 S2：页面靠它区分"实时数据"与"陈旧数据"）*/
 void tcs_link_snap_info(uint32_t *age_ms, uint32_t *seq, uint8_t *have)
 {
@@ -446,6 +464,8 @@ static void snap_apply(const tcs_snap_pl_t *s)
     g_tcs.body_sensor_ok = (s->online & TCS_ONLINE_BODY_SENSOR) ? 1u : 0u;
     param_link_sync(PARAM_ID_TC1_SET, s->tc1_set);
     param_link_sync(PARAM_ID_TC2_SET, s->tc2_set);
+    tcs_link_tec_set_dirs(&s_tec, s->tec_dir);                       /* m1（模式页）：末尾追加的 9 字节 */
+    tcs_link_tec_set_elec(&s_tec, s->tec1_v, s->tec1_i, s->tec2_v, s->tec2_i);
     s_last_snap = *s;
 }
 
@@ -574,7 +594,8 @@ void on_frame(const uint8_t *payload, size_t len)
          * 只看首帧之后的（首帧不算"变化"）。*/
         if (s_snap_have && (s_last_snap.mode != s.mode || s_last_snap.fan != s.fan ||
                             s_last_snap.tec1 != s.tec1 || s_last_snap.tec2 != s.tec2 ||
-                            s_last_snap.alarm != s.alarm || s_last_snap.online != s.online))
+                            s_last_snap.alarm != s.alarm || s_last_snap.online != s.online ||
+                            s_last_snap.tec_dir != s.tec_dir))   /* m1（模式页）：输出方向变了也是看得见的状态变化 */
             tcs_lvgl_note_state_change();
 #endif
         s_snap_have = 1;
@@ -600,6 +621,8 @@ void on_frame(const uint8_t *payload, size_t len)
         if (mask & TCS_D_ALARM)   /* X01-F-02：与 0x20 同规——本机独占位不被覆盖 */
             g_tcs.alarm_bits = alarm_merge_peer(d.alarm, ALM_SRC_LOCAL_H743, g_tcs.alarm_bits);
         if (mask & TCS_D_BODY)    g_tcs.body_temp = d.body;
+        if (mask & TCS_D_TEC_DIR) tcs_link_tec_set_dirs(&s_tec, d.tec_dir);                              /* m1（模式页）*/
+        if (mask & TCS_D_ELEC)    tcs_link_tec_set_elec(&s_tec, d.tec1_v, d.tec1_i, d.tec2_v, d.tec2_i); /* m1（模式页）*/
         break;
     }
     case MT_TCS_CMD: {

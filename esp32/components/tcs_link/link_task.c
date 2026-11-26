@@ -561,6 +561,15 @@ bool link_alive(void)
     return last != 0 && (uint32_t)(now - last) < 3000u;
 }
 
+/* m1（模式页）：最近一帧对端合法帧距今多久（说明见 link_task.h）。时基与 control 任务同为 esp_timer。*/
+int link_peer_age_ms(uint32_t *age_ms)
+{
+    uint32_t last = 0u;
+    if (!comm_peer_last_ms(&s_link, &last)) return 0;
+    if (age_ms) *age_ms = (uint32_t)(link_now_ms() - last);
+    return 1;
+}
+
 /* M11-F-12：整块拷贝返回，杜绝调用方拿着内部指针逐字段读（与 0x10 写入交错
  * 会拼出"新温度 + 旧报警"的混合状态）。*out 恒有定义，valid=0 表示尚无 0x10。*/
 void link_status_copy(link_status_t *out)

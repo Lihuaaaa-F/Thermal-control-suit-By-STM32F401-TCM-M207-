@@ -254,6 +254,10 @@ static void comm_note_peer(comm_link_t *L)
 {
     void (*up)(void) = NULL;
     comm_lock(L);
+    /* m1（模式页）：记下这一帧对端合法帧的时刻——"屏链路断开 3 秒 = 急停"从这里起算。
+     * 能到这里说明已过方向闸门：本端回送帧与方向不符的帧不计。*/
+    L->peer_ms = L->now_ms_fn ? L->now_ms_fn() : 0u;
+    L->peer_seen = 1;
     if (L->link_ok == COMM_LINK_OK_FALSE) {
         L->link_ok = COMM_LINK_OK_TRUE;
         up = L->on_link_up;
@@ -363,5 +367,16 @@ int comm_last_dup_info(comm_link_t *L, uint8_t *out_seq, uint8_t *out_mt)
     if (out_mt) *out_mt = s_dup_mt;
     s_dup_valid = 0;  /* 取一次清一次 */
     return 1;
+}
+
+/* m1（模式页）：最近一帧对端合法帧的时刻（整组读进锁里，见 comm.h）*/
+int comm_peer_last_ms(comm_link_t *L, uint32_t *out_ms)
+{
+    int seen;
+    comm_lock(L);
+    seen = L->peer_seen ? 1 : 0;
+    if (out_ms) *out_ms = L->peer_ms;
+    comm_unlock(L);
+    return seen;
 }
 

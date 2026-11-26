@@ -20,6 +20,7 @@
 #include "param_registry.h"
 #include "post.h"
 #include <string.h>       /* 卡死判据按位比较读数（memcpy）*/
+#include "control_manual.h"   /* m1（模式页）：手动两路 TEC 输出映射 */
 
 /* 安全锁存并发：ESP32 上是跨任务（control/link/httpd/console）读改写，需临界区；
  * PC 单测是单线程，锁退化为空——保持 control.c 零 HAL/零 FreeRTOS 依赖（既有测试架构）。*/
@@ -48,6 +49,9 @@ static uint32_t      s_last_eval;
 static uint8_t       s_boot_ms_base_set;
 static uint32_t      s_boot_ms;
 static volatile uint8_t s_estop_latch;   /* 仅作急停显示/语义；硬门控见 s_safety_latch（N-05：跨任务写，加 volatile）*/
+/* m1（模式页，2026-11-26）：别的任务（链路 / 网页 / 控制台）提出"两路手动输出回暂停"——急停、
+ * 切到自动。只登记请求，由 control_poll 在控制任务里执行：手动输出的状态只在一个任务里改。*/
+static volatile uint8_t s_manual_reset_req;
 
 /* SAFE 期间记忆故障前输出（语义见下方"安全态进入/退出"注释）*/
 #define CTRL_SAFE_REASSERT_MS   500u   /* 锁存期间重申 TCSW=0 / 风扇全开的间隔（不随节拍变密）*/
@@ -277,6 +281,12 @@ static void out_tec_temp(uint8_t ch, float v)
     if (s_ops.tec_temp) s_ops.tec_temp(ch, v);
 }
 
+/* m1（模式页）：control_manual 的输出经这三条回到上面的封装——安全门控（out_tec_sw 把锁存期间的
+ * "开"压成 0）与 g_tcs 同步仍只有这一个收敛点。*/
+static void mo_tec_sw(uint8_t ch, uint8_t on) { out_tec_sw(ch, on); }
+static void mo_tec_temp(uint8_t ch, float v)  { out_tec_temp(ch, v); }
+static void mo_fan_set(uint8_t on)             { out_fan(on); }
+
 static void goto_state(ctrl_state_t st)
 {
     if (s_state == st) return;
@@ -305,6 +315,8 @@ void control_init(const control_ops_t *ops)
     memset(s_tec_on_since, 0, sizeof(s_tec_on_since));
     memset(s_tec_cmd_on, 0, sizeof(s_tec_cmd_on));
     s_poll_now_ms = 0;
+    control_manual_init(&(control_manual_ops_t){ mo_tec_sw, mo_tec_temp, mo_fan_set });   /* m1 */
+    s_manual_reset_req = 0;                                                              /* m1 */
     g_tcs.alarm_bits = 0;
     g_tcs.tec_known = tec_known_now();  /* P1-09：模块还没上线就是"未知"，不是"已关" */
     /* N-04：落盘串行化用 mutex（只在首次 init 时创建；失败则退化为不加锁）*/
@@ -375,8 +387,11 @@ static void safe_outputs(void)
 /* 只在进入沿记忆：SAFE 期间再次 enter_safe 时输出已被关掉，不能当成"故障前状态" */
 static void safe_remember_outputs(void)
 {
-    s_fan_before_safe  = g_tcs.fan_on;
+    s_fan_before_safe  = control_manual_fan_pref();   /* m1：风扇被联动开着时，记的是用户原来的选择 */
     s_tec2_before_safe = g_tcs.tec2_on;
+    /* m1（模式页）：TEC2 是模式页设的方向开着的 → 进安全态时参数已清回暂停，自愈退出时也不复原
+     *（用户裁决：安全优先，确认解除后不得自己恢复输出）。下面 B3 的复原只留给网页 / 台架的旧命令。*/
+    if (control_manual_dir(2) != TEC_DIR_PAUSE) s_tec2_before_safe = 0;
     s_auto_before_safe = (uint8_t)(g_tcs.mode != 0);
     s_restore_tec2_ok  = (uint8_t)((s_safety_latch & (uint8_t)~SAFETY_BIT_BODY_LOST) == 0);
     s_exit_by_recover  = 0;
@@ -386,6 +401,10 @@ static void enter_safe(void)
 {
     if (s_state != CTRL_SAFE) safe_remember_outputs();
     safe_outputs();
+    /* m1（模式页，用户 2026-11-26）：进安全态 = 两路手动输出回暂停、风扇联动解除——确认解除后
+     * 不得自己恢复输出。幂等：锁存期间每 500ms 重申会再进来，参数已是 0 就什么都不做。
+     * 不碰风扇：安全态风扇全开，解除时 leave_safe 复原上面记下的用户选择。*/
+    control_manual_reset(0);
 }
 
 static void auto_evaluate(uint32_t now_ms);
@@ -476,6 +495,9 @@ void tcs_emergency_stop_src(uint8_t src)
      * 分清是网页、屏幕还是控制台按的急停（原先一律记成"控制台：控制模式 改为 0"）。*/
     (void)param_set(PARAM_ID_MODE, 0.0f, src);
     safe_outputs();
+    /* m1（模式页）：两路手动输出回暂停（输出上面已全停）。急停可能来自别的任务：只登记请求，
+     * 由 control_poll 在控制任务里执行，见 s_manual_reset_req。*/
+    s_manual_reset_req = 1;
 }
 
 void tcs_emergency_stop(void) { tcs_emergency_stop_src(PARAM_SRC_CONSOLE); }
@@ -489,6 +511,10 @@ int control_param_check(uint16_t id, float v)
 {
     if (id == PARAM_ID_MODE && v != 0.0f
         && (s_safety_latch & (uint8_t)(SAFETY_BIT_ESTOP | SAFETY_BIT_OVERTEMP))) return -2;
+    /* m1（模式页）：两路 TEC 手动输出参数——只在手动模式、且不在安全态时可写；拒绝带可区分的原因码
+     *（屏端据此提示）。判据在 control_manual.c（纯逻辑，主机可测）。*/
+    if (id == PARAM_ID_TEC1_MANUAL || id == PARAM_ID_TEC2_MANUAL)
+        return control_manual_check(g_tcs.mode == 0, s_state == CTRL_SAFE, s_safety_latch != 0);
     return 0;
 }
 
@@ -547,6 +573,9 @@ int control_apply_cmd(uint8_t cmd) { return control_apply_cmd_src(cmd, PARAM_SRC
 void control_on_mode_change(uint8_t m)
 {
     (void)m;   /* 手动进出不强制改输出；自动评估在下一拍 control_poll 接管 */
+    /* m1（模式页）：切到自动 = 两路手动输出回暂停（第二路关，第一路交给自动状态机）。
+     * 模式变更来自链路 / 网页 / 控制台任务：只登记，由 control_poll 在控制任务里执行。*/
+    if (m != 0u) s_manual_reset_req = 1;
 }
 
 /* H6 动态布防：FMEA 判据由 post 三态机裁决（0x08=0 auto/1 强制布防/2 强制不布防；
@@ -615,6 +644,13 @@ void control_poll(uint32_t now_ms)
         s_boot_ms = now_ms;
         s_boot_ms_base_set = 1;
         s_safe_assert_ms = now_ms - CTRL_SAFE_REASSERT_MS;   /* 见下方"锁存期间"注释 */
+    }
+
+    /* m1（模式页）：执行别的任务登记的"两路手动输出回暂停"（急停、切到自动）。
+     * 安全态里不碰风扇——安全态风扇全开，解除时 leave_safe 另行复原。*/
+    if (s_manual_reset_req) {
+        s_manual_reset_req = 0;
+        control_manual_reset(!(s_safety_latch || s_state == CTRL_SAFE));
     }
 
     /* R1 P1-04：参数落盘连续失败 → 可见报警（提示性，ack 可清）*/
@@ -769,6 +805,8 @@ void control_poll(uint32_t now_ms)
     /* 手动模式：状态机旁路（输出保持人工值）*/
     if (g_tcs.mode == 0) {
         goto_state(CTRL_IDLE);
+        /* m1（模式页）：两路 TEC 按手动参数驱动（只在变化时下发）+ 风扇联动，见 control_manual.c */
+        control_manual_poll();
         return;
     }
 
@@ -802,6 +840,24 @@ uint32_t control_ms_from_us(int64_t us)
 /* ====== 安全锁存/急停投递读侧（console/网页/诊断）====== */
 uint8_t control_safety_latched(void) { return s_safety_latch; }
 void    control_safety_trip(uint8_t bit) { safety_trip(bit); }
+
+/* m1（模式页）：快照用的"输出方向"（低半字节第一路、高半字节第二路）。
+ *   通道关 → 暂停；自动模式第一路 → 状态机（COOL 制冷 / HEAT 制热）；
+ *   手动模式 → 实际已下发的手动方向；通道开着但不是模式页设的（网页 / 台架的旧命令）→ TEC_DIR_EXT。*/
+uint8_t control_tec_dir(uint8_t ch)
+{
+    uint8_t on, d;
+    if (ch == 1u)      on = (uint8_t)(g_tcs.tec1_on ? 1u : 0u);
+    else if (ch == 2u) on = (uint8_t)(g_tcs.tec2_on ? 1u : 0u);
+    else               return TEC_DIR_PAUSE;
+    if (!on) return TEC_DIR_PAUSE;
+    if (g_tcs.mode != 0u && ch == 1u) {
+        if (s_state == CTRL_COOL) return TEC_DIR_COOL;
+        if (s_state == CTRL_HEAT) return TEC_DIR_HEAT;
+    }
+    d = control_manual_dir(ch);
+    return (uint8_t)(d ? d : TEC_DIR_EXT);
+}
 
 #ifdef TCS_UNIT_TEST
 void control_test_trip(uint8_t bit) { safety_trip(bit); }

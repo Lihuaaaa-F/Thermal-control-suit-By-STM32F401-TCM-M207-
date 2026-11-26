@@ -47,6 +47,10 @@ typedef enum {
 #define PARAM_ID_MODE           0x06
 #define PARAM_ID_SET_CONFIRM    0x07   /* 高温二次确认阈值 */
 #define PARAM_ID_COMMISSIONED   0x08   /* 布防（WP-A.5）：0=未布防传感器报警只记日志，1=完整 FMEA */
+/* ===== m1（模式页，2026-11-26 用户定的新功能）：两路 TEC 的手动输出（真值在 ESP32，这里是镜像）=====
+ * 0 = 暂停、1 = 制冷、2 = 制热；不持久化（上电一律暂停）、不带 PF_WEB。"模式"页写它 → 0x12 → 主控。*/
+#define PARAM_ID_TEC1_MANUAL    0x09
+#define PARAM_ID_TEC2_MANUAL    0x0A
 #define PARAM_ID_M207_BASE      0x100  /* M207 底层参数段（文档到后启用，WP9）*/
 
 #define PARAM_CAPACITY      64    /* 注册表数组容量（条数不再手写：见 param_registry.c 的 PARAM_N_REGISTERED 与 _Static_assert）*/

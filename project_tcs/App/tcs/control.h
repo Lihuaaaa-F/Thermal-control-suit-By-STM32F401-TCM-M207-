@@ -73,6 +73,9 @@ void  tcs_alarm_ack(void);
 void tcs_hist_tick(uint32_t now_ms);
 void tcs_hist_snapshot(float out1[60], float out2[60], uint32_t * n);
 uint32_t tcs_hist_count(void);
+/* m1（模式页，2026-11-26）：曲线页的体温线。与上面同一套格子、同一个线性序；
+ * 链路不在，或体温探头没接 / 失联的那一格是 NaN（曲线在此断开）。*/
+void tcs_hist_snapshot_body(float out[60], uint32_t * n);
 #endif
 
 /* 急停（屏弹窗确认 / 0x15 cmd=8 / 板载 KEY0 / console estop 同一入口）：

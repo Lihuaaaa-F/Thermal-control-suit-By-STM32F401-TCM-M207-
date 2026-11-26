@@ -41,6 +41,7 @@
 
 
 
+
 复现命令（仓库根 `/d/Espressif/ws/tcs`，Git Bash；raw 输出路径分隔符为 `\`，表内归一为 `/`）：
 
 ```bash
@@ -49,6 +50,7 @@ grep -rnE "HAL_UART_" project_tcs/App project_tcs/Core/Src --include=*.c
 ```
 
 vendor 域说明：`App/rtt/`（SEGGER RTT vendor 五文件）同一 pattern 单独跑=**0 命中**（RTT 不触 HAL，无需列行）。
+
 
 
 
@@ -92,19 +94,19 @@ vendor 域说明：`App/rtt/`（SEGGER RTT vendor 五文件）同一 pattern 单
 | 20 | project_tcs/App/tcs/m207.c:625 | HAL_UART_Receive_IT(s_huart, &s_rx_byte, 1) | Abort 后重启接收 |
 | 21 | project_tcs/App/tcs/m207.c:628 | HAL_UART_RxCpltCallback（注释提及） | 注释：RX 完成回调转发入口（main.c 回调按实例分发）（非调用点） |
 | 22 | project_tcs/App/tcs/m207.c:632 | HAL_UART_Receive_IT(s_huart, &s_rx_byte, 1) | RxCplt 回调内重挂续收（W10 #8） |
-| 23 | project_tcs/Core/Src/main.c:124 | HAL_UART_Receive_IT（注释提及） | s_link_it_byte 变量注释=链路 Receive_IT 落点（非调用点） |
-| 24 | project_tcs/Core/Src/main.c:140 | HAL_UART_Receive_IT(&huart_link, &s_link_it_byte, 1) | 链路 RX 单字节挂（W10 #9） |
-| 25 | project_tcs/Core/Src/main.c:203 | （注释提及）（注释提及） | 重锚新增（注释提及）：代码摘录见左列 |
-| 26 | project_tcs/Core/Src/main.c:216 | __HAL_UART_GET_FLAG(&huart_link, UART_FLAG_ORE) | 链路错误恢复查 ORE（W10 #10） |
-| 27 | project_tcs/Core/Src/main.c:217 | __HAL_UART_CLEAR_OREFLAG(&huart_link) | 清 ORE |
-| 28 | project_tcs/Core/Src/main.c:218 | HAL_UART_AbortReceive(&huart_link) | 链路 Abort（附录 C 三路配对 1/1/1 之三） |
-| 29 | project_tcs/Core/Src/main.c:232 | HAL_UART_Transmit(&huart_link, data, len, 20u) | 链路发帧阻塞 20ms（最大帧 254B@230400≈11.0ms=1.8× 裕度，W10 #11 注记） |
-| 30 | project_tcs/Core/Src/main.c:242 | HAL_UART_STATE_READY（gState 轮询） | 发帧完成后等 gState 回 READY 的完成保护（guard 限次防死等） |
-| 31 | project_tcs/Core/Src/main.c:273 | __HAL_UART_GET_FLAG（ORE 巡检） | R2 链路 RX 自愈巡检条件（ORE 置位→错误恢复入口） |
-| 32 | project_tcs/Core/Src/main.c:352 | — | 重锚新增：代码摘录见左列 |
-| 33 | project_tcs/Core/Src/main.c:356 | HAL_UART_Transmit（注释提及） | 主循环注释：链路 TX 串行消费 comm_poll_tx（非调用点） |
-| 34 | project_tcs/Core/Src/main.c:790 | HAL_UART_Init(h) | uart_common_init 各实例（USART1/2/3）统一初始化+返查 HAL_OK |
-| 35 | project_tcs/Core/Src/main.c:1056 | HAL_UART_Transmit（注释提及） | 主循环注释：链路 TX 串行消费 comm_poll_tx（非调用点） |
+| 23 | project_tcs/Core/Src/main.c:125 | HAL_UART_Receive_IT（注释提及） | s_link_it_byte 变量注释=链路 Receive_IT 落点（非调用点） |
+| 24 | project_tcs/Core/Src/main.c:141 | HAL_UART_Receive_IT(&huart_link, &s_link_it_byte, 1) | 链路 RX 单字节挂（W10 #9） |
+| 25 | project_tcs/Core/Src/main.c:204 | （注释提及）（注释提及） | 重锚新增（注释提及）：代码摘录见左列 |
+| 26 | project_tcs/Core/Src/main.c:217 | __HAL_UART_GET_FLAG(&huart_link, UART_FLAG_ORE) | 链路错误恢复查 ORE（W10 #10） |
+| 27 | project_tcs/Core/Src/main.c:218 | __HAL_UART_CLEAR_OREFLAG(&huart_link) | 清 ORE |
+| 28 | project_tcs/Core/Src/main.c:219 | HAL_UART_AbortReceive(&huart_link) | 链路 Abort（附录 C 三路配对 1/1/1 之三） |
+| 29 | project_tcs/Core/Src/main.c:233 | HAL_UART_Transmit(&huart_link, data, len, 20u) | 链路发帧阻塞 20ms（最大帧 254B@230400≈11.0ms=1.8× 裕度，W10 #11 注记） |
+| 30 | project_tcs/Core/Src/main.c:243 | HAL_UART_STATE_READY（gState 轮询） | 发帧完成后等 gState 回 READY 的完成保护（guard 限次防死等） |
+| 31 | project_tcs/Core/Src/main.c:274 | __HAL_UART_GET_FLAG（ORE 巡检） | R2 链路 RX 自愈巡检条件（ORE 置位→错误恢复入口） |
+| 32 | project_tcs/Core/Src/main.c:353 | — | 重锚新增：代码摘录见左列 |
+| 33 | project_tcs/Core/Src/main.c:357 | HAL_UART_Transmit（注释提及） | 主循环注释：链路 TX 串行消费 comm_poll_tx（非调用点） |
+| 34 | project_tcs/Core/Src/main.c:813 | HAL_UART_Init(h) | uart_common_init 各实例（USART1/2/3）统一初始化+返查 HAL_OK |
+| 35 | project_tcs/Core/Src/main.c:1079 | HAL_UART_Transmit（注释提及） | 主循环注释：链路 TX 串行消费 comm_poll_tx（非调用点） |
 | 36 | project_tcs/Core/Src/stm32h7xx_hal_msp.c:4 | HAL_UART_MspInit（注释提及） | 头注：§0F MspInit 死代码清理记载（实际用 USART1，PROTO_UART_SEL=1）（非调用点） |
 | 37 | project_tcs/Core/Src/stm32h7xx_hal_msp.c:22 | HAL_UART_MspInit（用户实现） | 三路 UART 引脚/时钟 Msp 配置（含 §0F 清理后的现存实例域） |
 | 38 | project_tcs/Core/Src/stm32h7xx_it.c:3 | HAL_UART_Transmit（注释提及） | 铁律注释：ISR 只做 RX 单字节入环形缓冲/置标志，禁止 Transmit（非调用点） |

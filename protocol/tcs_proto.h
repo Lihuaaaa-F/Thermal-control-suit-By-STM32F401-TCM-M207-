@@ -34,8 +34,11 @@
 /* ====== 协议版本（STATUS.ver / SNAPSHOT.ver；不匹配→网页黄条、屏丢弃快照）======
  * 2026-11-25（R5-01）没有递增：屏端 POST 的 VER 自检项写死 TCS_PROTO_VER == 1
  * （project_tcs/App/tcs/post.c），递增会让交付档自检失败；方向位的不兼容是整帧级的
- * （见下），靠"必须成对更新"约束，不靠版本号。要递增须连同 POST 那一项一起改。*/
-#define TCS_PROTO_VER       1U
+ * （见下），靠"必须成对更新"约束，不靠版本号。要递增须连同 POST 那一项一起改。
+ * 2026-11-26（m1"模式"页，用户定的新功能）递增到 2：0x20 快照末尾追加 9 字节（两路输出方向 +
+ * 两路电压电流），0x21 增量多了两个 mask 位。两端必须成对更新；屏端 POST 的 VER 自检项
+ * （project_tcs/App/tcs/post.c）已随本处一起改成 == 2。*/
+#define TCS_PROTO_VER       2U
 
 /* ====== 方向：这一帧是谁发的（R5-01，2026-11-25）======
  *
@@ -74,8 +77,8 @@
  *   0x14    REGISTRY_ENTRY  H743         变长   免 ARQ        ESP32：注册表条目
  *   0x15    CMD             双向           1B   等 ACK        对端执行命令。ESP32→H743 方向
  *                                                      当前没有调用者（link_send_cmd 零调用）
- *   0x20    SNAPSHOT        ESP32         40B   免 ARQ        H743：全量快照（屏唯一读源）
- *   0x21    DELTA           ESP32        变长   免 ARQ        H743：位图增量
+ *   0x20    SNAPSHOT        ESP32         49B   免 ARQ        H743：全量快照（屏唯一读源；末尾 9B = 两路输出方向 + 电压电流）
+ *   0x21    DELTA           ESP32        变长   免 ARQ        H743：位图增量（mask 高 8 位里 0x0100 输出方向、0x0200 电压电流）
  *   0x22    INFO            ESP32        变长   免 ARQ        H743：热点名/密码/网址/固件版本
  *   0x90    ACK             双向           7B   免 ARQ        comm 层消费（清 pending、判活）
  *
@@ -465,9 +468,49 @@ typedef struct {
     uint16_t fresh_ms;   /* M207 温度缓存龄 ms（0xFFFF=未知/离线）*/
     uint8_t  badge;      /* 布防角标 0/1/2（post_arm_t）*/
     uint8_t  rfu;
+    /* ---- m1"模式"页（2026-11-26）：末尾追加 9B。TCS_PROTO_VER 2 ---- */
+    uint8_t  tec_dir;    /* 输出方向：低半字节第一路、高半字节第二路，取值 TCS_TEC_DIR_* */
+    int16_t  tec1_v;     /* TEC1 实际输出电压，0.01 V（制热为负）；TCS_ELEC_V_UNKNOWN = 未知 */
+    uint16_t tec1_i;     /* TEC1 实际输出电流，0.01 A；TCS_ELEC_I_UNKNOWN = 未知 */
+    int16_t  tec2_v;
+    uint16_t tec2_i;
 } tcs_snap_pl_t;
 
-#define TCS_SNAP_PL_LEN   40   /* 1+4+4+20+4+2+1+2+1+1 */
+#define TCS_SNAP_PL_LEN   49   /* 1+4+4+20+4+2+1+2+1+1 + 1+2+2+2+2 */
+
+/* 输出方向（0x20.tec_dir 的每个半字节）。屏端"模式"页据此高亮"制冷 / 暂停 / 制热" */
+#define TCS_TEC_DIR_PAUSE   0u  /* 通道关 */
+#define TCS_TEC_DIR_COOL    1u  /* 制冷 */
+#define TCS_TEC_DIR_HEAT    2u  /* 制热 */
+#define TCS_TEC_DIR_EXT     3u  /* 通道开着，但不是"模式"页设的方向（网页 / 台架的旧命令）*/
+
+/* 电压 / 电流的"未知"值（没取到、太旧、模块不支持这两个参数）*/
+#define TCS_ELEC_V_UNKNOWN  ((int16_t)0x8000)
+#define TCS_ELEC_I_UNKNOWN  ((uint16_t)0xFFFF)
+
+/* 取 / 合半字节：ch = 1 取低半字节，ch = 2 取高半字节 */
+static inline uint8_t tcs_tec_dir_get(uint8_t tec_dir, int ch)
+{
+    return (uint8_t)((ch == 1) ? (tec_dir & 0x0Fu) : ((tec_dir >> 4) & 0x0Fu));
+}
+static inline uint8_t tcs_tec_dir_pack(uint8_t dir1, uint8_t dir2)
+{
+    return (uint8_t)((dir1 & 0x0Fu) | (uint8_t)((dir2 & 0x0Fu) << 4));
+}
+
+/* 电压（V）/ 电流（A）→ 定点。非有限值或超出定点范围 → "未知" */
+static inline int16_t tcs_elec_pack_v(float volt)
+{
+    float c;
+    if (!(volt == volt) || volt > 320.0f || volt < -320.0f) return TCS_ELEC_V_UNKNOWN;
+    c = volt * 100.0f;
+    return (int16_t)(c < 0.0f ? (c - 0.5f) : (c + 0.5f));
+}
+static inline uint16_t tcs_elec_pack_i(float amp)
+{
+    if (!(amp == amp) || amp < 0.0f || amp > 600.0f) return TCS_ELEC_I_UNKNOWN;
+    return (uint16_t)(amp * 100.0f + 0.5f);
+}
 
 #define TCS_D_TC1_SET  (1u << 0)
 #define TCS_D_TC2_SET  (1u << 1)
@@ -477,12 +520,19 @@ typedef struct {
 #define TCS_D_ALARM    (1u << 5)
 #define TCS_D_BODY     (1u << 6)
 #define TCS_D_BADGE    (1u << 7)
+/* m1"模式"页（2026-11-26）：mask 的高 8 位 */
+#define TCS_D_TEC_DIR  (1u << 8)   /* 1B：两路输出方向（半字节编码同 0x20.tec_dir）*/
+#define TCS_D_ELEC     (1u << 9)   /* 8B：tec1_v(i16) tec1_i(u16) tec2_v(i16) tec2_i(u16) */
 
 typedef struct {             /* 全量源值；编码按 mask 摘取，解码只填 mask 内字段 */
     float    tc1_set, tc2_set, body;
     uint8_t  tec;        /* bit0=tec1 bit1=tec2 */
     uint8_t  fan, mode, badge;
     uint16_t alarm;
+    /* m1"模式"页 */
+    uint8_t  tec_dir;
+    int16_t  tec1_v, tec2_v;
+    uint16_t tec1_i, tec2_i;
 } tcs_delta_src_t;
 
 static inline size_t tcs_pl_snapshot(uint8_t *out, size_t cap, const tcs_snap_pl_t *s)
@@ -503,6 +553,12 @@ static inline size_t tcs_pl_snapshot(uint8_t *out, size_t cap, const tcs_snap_pl
     tcs_put_u16(&out[o], s->fresh_ms); o += 2;
     out[o++] = s->badge;
     out[o++] = s->rfu;
+    /* m1"模式"页（末尾追加）*/
+    out[o++] = s->tec_dir;
+    tcs_put_i16(&out[o], s->tec1_v); o += 2;
+    tcs_put_u16(&out[o], s->tec1_i); o += 2;
+    tcs_put_i16(&out[o], s->tec2_v); o += 2;
+    tcs_put_u16(&out[o], s->tec2_i); o += 2;
     return o;                              /* == TCS_SNAP_PL_LEN */
 }
 
@@ -524,6 +580,12 @@ static inline int tcs_scan_snapshot(const uint8_t *pl, size_t len, tcs_snap_pl_t
     s->fresh_ms = tcs_get_u16(&pl[o]); o += 2;
     s->badge = pl[o++];
     s->rfu = pl[o++];
+    /* m1"模式"页（末尾追加；长度不够在函数开头就已拒绝）*/
+    s->tec_dir = pl[o++];
+    s->tec1_v = tcs_get_i16(&pl[o]); o += 2;
+    s->tec1_i = tcs_get_u16(&pl[o]); o += 2;
+    s->tec2_v = tcs_get_i16(&pl[o]); o += 2;
+    s->tec2_i = tcs_get_u16(&pl[o]); o += 2;
     return 0;
 }
 
@@ -539,6 +601,8 @@ static inline size_t tcs_pl_delta(uint8_t *out, size_t cap, uint16_t mask,
     if (mask & TCS_D_ALARM)   need += 2;
     if (mask & TCS_D_BODY)    need += 4;
     if (mask & TCS_D_BADGE)   need += 1;
+    if (mask & TCS_D_TEC_DIR) need += 1;
+    if (mask & TCS_D_ELEC)    need += 8;
     if (cap < need) return 0;
     size_t o = 0;
     tcs_put_u16(&out[o], mask); o += 2;
@@ -550,6 +614,14 @@ static inline size_t tcs_pl_delta(uint8_t *out, size_t cap, uint16_t mask,
     if (mask & TCS_D_ALARM)   { tcs_put_u16(&out[o], d->alarm); o += 2; }
     if (mask & TCS_D_BODY)    { tcs_put_u32(&out[o], tcs_f2b(d->body)); o += 4; }
     if (mask & TCS_D_BADGE)   { out[o++] = d->badge; }
+    /* m1"模式"页：mask 位序在低 8 位之后，字段也排在低 8 位的字段之后 */
+    if (mask & TCS_D_TEC_DIR) { out[o++] = d->tec_dir; }
+    if (mask & TCS_D_ELEC) {
+        tcs_put_i16(&out[o], d->tec1_v); o += 2;
+        tcs_put_u16(&out[o], d->tec1_i); o += 2;
+        tcs_put_i16(&out[o], d->tec2_v); o += 2;
+        tcs_put_u16(&out[o], d->tec2_i); o += 2;
+    }
     return o;
 }
 
@@ -567,6 +639,14 @@ static inline int tcs_scan_delta(const uint8_t *pl, size_t len, tcs_delta_src_t 
     if (mask & TCS_D_ALARM)   { if (len < o+2) return -1; d->alarm = tcs_get_u16(&pl[o]); o += 2; }
     if (mask & TCS_D_BODY)    { if (len < o+4) return -1; d->body = tcs_b2f(tcs_get_u32(&pl[o])); o += 4; }
     if (mask & TCS_D_BADGE)   { if (len < o+1) return -1; d->badge = pl[o++]; }
+    if (mask & TCS_D_TEC_DIR) { if (len < o+1) return -1; d->tec_dir = pl[o++]; }
+    if (mask & TCS_D_ELEC) {
+        if (len < o+8) return -1;
+        d->tec1_v = tcs_get_i16(&pl[o]); o += 2;
+        d->tec1_i = tcs_get_u16(&pl[o]); o += 2;
+        d->tec2_v = tcs_get_i16(&pl[o]); o += 2;
+        d->tec2_i = tcs_get_u16(&pl[o]); o += 2;
+    }
     *mask_out = mask;
     return 0;
 }

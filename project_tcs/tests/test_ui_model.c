@@ -442,6 +442,194 @@ int main(void)
         CHECK(h1.estop == 0, "E 主控断开且没记下急停：急停键是红的（急停必须一直可点）");
     }
 
+    /* ====== F. m1"模式"页（用户 2026-11-26 定的新功能）====== */
+    {
+        ui_in_t in;
+        ui_link_view_t v;
+        ui_mode_state_t m0, m1;
+        ui_mode_cmd_t c, c2;
+        char ptext[32], pw[32], vi[48];
+        uint8_t enabled;
+
+        /* F1 首页模式键：文字恒为当前模式（不再写"切自动 / 切手动"），点击进模式页 */
+        ui_mode_key(1, 0, ptext, sizeof ptext, &enabled);
+        STREQ(ptext, "手动", "F1 在线 + 手动：键上写'手动'");
+        CHECK(enabled == 1, "F1 在线：可点");
+        ui_mode_key(1, 1, ptext, sizeof ptext, &enabled);
+        STREQ(ptext, "自动", "F1 在线 + 自动：键上写'自动'");
+        ui_mode_key(0, 1, ptext, sizeof ptext, &enabled);
+        CHECK(enabled == 0, "F1 主控断开：不可点");
+
+        /* F2 协议里的方向值 → 枚举 */
+        CHECK(ui_mode_dir_of(0) == UI_TD_PAUSE && ui_mode_dir_of(1) == UI_TD_COOL
+              && ui_mode_dir_of(2) == UI_TD_HEAT && ui_mode_dir_of(3) == UI_TD_EXT
+              && ui_mode_dir_of(7) == UI_TD_EXT && ui_mode_dir_of(15) == UI_TD_EXT,
+              "F2 方向值：0/1/2，其余都算'开着但不是模式页设的'");
+
+        /* F3 手动、在线、无报警：两路方向与电学量来自快照 */
+        in = in_up(10000u, 100u);
+        in.mode = 0; in.fan = 1;                      /* 联动：TEC1 在制冷，风扇被开着 */
+        in.dir1 = TCS_TEC_DIR_COOL; in.dir2 = TCS_TEC_DIR_PAUSE;
+        in.tec_valid = 3u; in.tec_v1 = -8.234f; in.tec_i1 = 3.104f; in.tec_v2 = 0.02f; in.tec_i2 = 0.0f;
+        v = ui_link_view(&in);
+        ui_mode_state(&in, &v, &m0);
+        CHECK(m0.link == UI_LINK_UP && m0.manual == 1 && m0.safe == 0 && m0.keys_on == 1, "F3 手动可操作");
+        CHECK(m0.dir[0] == UI_TD_COOL && m0.dir[1] == UI_TD_PAUSE, "F3 两路方向");
+        CHECK(m0.elec_ok[0] == 1 && m0.elec_ok[1] == 1, "F3 两路电学量有效");
+        CHECK(m0.fan == 1 && m0.fan_locked == 1, "F3 有 TEC 在制冷 → 风扇被联动");
+        CHECK(ui_mode_tap_block(&m0) == NULL, "F3 方向键可点");
+        STREQ(ui_mode_fan_block(&m0), "TEC 工作时风扇保持开启", "F3 联动期间风扇键不可关");
+        in.fan = 0;                                   /* 联动期间风扇竟是被关着的：这时点它是想开，不拦 */
+        ui_mode_state(&in, &v, &m1);
+        CHECK(m1.fan_locked == 1 && ui_mode_fan_block(&m1) == NULL, "F3 联动期间风扇没开：点它=开，放行");
+        /* 差分位 */
+        m1 = m0; m1.dir[1] = UI_TD_HEAT;
+        CHECK(ui_mode_diff(&m0, &m1) == UI_M_DIR2, "F3 方向位");
+        m1 = m0; m1.elec_ok[0] = 0;
+        CHECK(ui_mode_diff(&m0, &m1) == UI_M_ELEC1, "F3 电学量位");
+        m1 = m0; m1.fan = 0;
+        CHECK(ui_mode_diff(&m0, &m1) == UI_M_FAN, "F3 风扇位");
+        m1 = m0; m1.safe = 1;
+        CHECK(ui_mode_diff(&m0, &m1) == UI_M_SAFE, "F3 安全态位");
+        m1 = m0; m1.manual = 0;
+        CHECK(ui_mode_diff(&m0, &m1) == UI_M_MODE, "F3 模式位");
+        m1 = m0; m1.estop = 1;
+        CHECK(ui_mode_diff(&m0, &m1) == UI_M_ESTOP, "F3 急停位");
+        CHECK(ui_mode_diff(&m0, &m0) == 0, "F3 没变不出位");
+
+        /* F4 主控断开：方向未知、数值不可用、键不可点（陈旧值不上屏当实时）*/
+        in.snap_age_ms = 4000u;
+        v = ui_link_view(&in);
+        ui_mode_state(&in, &v, &m1);
+        CHECK(m1.link == UI_LINK_DOWN && m1.dir[0] == UI_TD_UNKNOWN && m1.elec_ok[0] == 0
+              && m1.keys_on == 0 && m1.manual == 0 && m1.fan_locked == 0, "F4 主控断开：全部转灰");
+        m1 = m0; m1.link = UI_LINK_DOWN;
+        CHECK(ui_mode_diff(&m0, &m1) == UI_M_LINK, "F4 链路位");
+        STREQ(ui_mode_tap_block(&m1), "主控连接中断，现在不能操作", "F4 主控断开：点了只提示");
+
+        /* F5 自动模式：没有方向键；方向照显（状态机给的）；风扇不锁 */
+        in = in_up(10000u, 100u);
+        in.mode = 1; in.dir1 = TCS_TEC_DIR_HEAT; in.fan = 1;
+        v = ui_link_view(&in);
+        ui_mode_state(&in, &v, &m1);
+        CHECK(m1.manual == 0 && m1.keys_on == 0 && m1.dir[0] == UI_TD_HEAT, "F5 自动：只看不操作");
+        CHECK(m1.fan_locked == 0 && ui_mode_fan_block(&m1) == NULL, "F5 自动：风扇键不锁");
+        STREQ(ui_mode_tap_block(&m1), "只能在手动模式下调节", "F5 自动：方向键点不了");
+
+        /* F6 安全态（急停 / 超温 / 模块 / 探头 / 体温报警未解除）：键不可点，提示先解除报警 */
+        {
+            const uint16_t bits[] = { ALM_ESTOP, ALM_OVERTEMP, ALM_M207, ALM_SENSOR_OPEN, ALM_BODY_SENSOR };
+            for (size_t k = 0; k < sizeof bits / sizeof bits[0]; k++) {
+                in = in_up(10000u, 100u);
+                in.mode = 0; in.alarm = bits[k];
+                v = ui_link_view(&in);
+                ui_mode_state(&in, &v, &m1);
+                CHECK(m1.safe == 1 && m1.keys_on == 0, "F6 安全态下方向键不可点");
+                STREQ(ui_mode_tap_block(&m1), "安全态下不可操作，请先解除报警", "F6 提示先解除报警");
+            }
+            in = in_up(10000u, 100u);          /* 只是没有体温探头（未布防时不上报警）：不算安全态 */
+            in.mode = 0; in.body_ok = 0; in.alarm = 0;
+            v = ui_link_view(&in);
+            ui_mode_state(&in, &v, &m1);
+            CHECK(m1.safe == 0 && m1.keys_on == 1, "F6 没接体温探头：手动照常可操作");
+            in.alarm = ALM_EEPROM;
+            ui_mode_state(&in, &v, &m1);
+            CHECK(m1.safe == 0, "F6 EEPROM 报警只是提示：不算安全态");
+        }
+
+        /* F7 按钮高亮：以主控回读的实际输出为准；断链全部置灰 */
+        in = in_up(10000u, 100u);
+        in.mode = 0; in.dir1 = TCS_TEC_DIR_COOL; in.dir2 = TCS_TEC_DIR_EXT; in.tec_valid = 0;
+        v = ui_link_view(&in);
+        ui_mode_state(&in, &v, &m1);
+        CHECK(ui_mode_btn_style(&m1, UI_TD_COOL) == UI_MD_BTN_ON
+              && ui_mode_btn_style(&m1, UI_TD_PAUSE) == UI_MD_BTN_NORMAL
+              && ui_mode_btn_style(&m1, UI_TD_HEAT) == UI_MD_BTN_NORMAL, "F7 制冷中：只有'制冷'高亮");
+        in.dir1 = TCS_TEC_DIR_EXT;                 /* 通道开着，但不是模式页设的：三个键都不高亮 */
+        ui_mode_state(&in, &v, &m1);
+        CHECK(ui_mode_btn_style(&m1, UI_TD_PAUSE) == UI_MD_BTN_NORMAL
+              && ui_mode_btn_style(&m1, UI_TD_COOL) == UI_MD_BTN_NORMAL
+              && ui_mode_btn_style(&m1, UI_TD_HEAT) == UI_MD_BTN_NORMAL, "F7 网页直控开着：三个键都不高亮");
+        in.snap_age_ms = 9000u;
+        v = ui_link_view(&in);
+        ui_mode_state(&in, &v, &m1);
+        CHECK(ui_mode_btn_style(&m1, UI_TD_COOL) == UI_MD_BTN_OFF
+              && ui_mode_btn_style(&m1, UI_TD_PAUSE) == UI_MD_BTN_OFF
+              && ui_mode_btn_style(&m1, UI_TD_HEAT) == UI_MD_BTN_OFF, "F7 主控断开：三个键都置灰");
+
+        /* F8 状态文字 */
+        STREQ(ui_mode_dir_text(UI_TD_PAUSE), "暂停", "F8 暂停");
+        STREQ(ui_mode_dir_text(UI_TD_COOL), "制冷中", "F8 制冷中");
+        STREQ(ui_mode_dir_text(UI_TD_HEAT), "制热中", "F8 制热中");
+        STREQ(ui_mode_dir_text(UI_TD_EXT), "输出中", "F8 网页直控：输出中");
+        STREQ(ui_mode_dir_text(UI_TD_UNKNOWN), "未知", "F8 未知");
+
+        /* F9 功率 = |电压| × 电流；一位小数；电压电流各两位；未知 */
+        in = in_up(10000u, 100u);
+        in.mode = 0; in.tec_valid = 1u; in.tec_v1 = -8.234f; in.tec_i1 = 3.104f;
+        v = ui_link_view(&in);
+        ui_mode_state(&in, &v, &m1);
+        CHECK(ui_mode_power(&in, &m1, 0, pw, sizeof pw, vi, sizeof vi) == 1, "F9 TEC1 有数");
+        STREQ(pw, "25.6 W", "F9 功率一位小数（8.234 × 3.104 = 25.56）");
+        STREQ(vi, "-8.23 V · 3.10 A", "F9 电压电流各两位（制热电压为负）");
+        CHECK(ui_mode_power(&in, &m1, 1, pw, sizeof pw, vi, sizeof vi) == 0, "F9 TEC2 没取到");
+        STREQ(pw, "未知", "F9 功率未知");
+        STREQ(vi, "未知", "F9 电压电流未知");
+        in.tec_v1 = -0.004f; in.tec_i1 = 0.0f;     /* 关着时的毛刺：不能显示 -0.00 */
+        ui_mode_state(&in, &v, &m1);
+        (void)ui_mode_power(&in, &m1, 0, pw, sizeof pw, vi, sizeof vi);
+        STREQ(pw, "0.0 W", "F9 关着时是 0.0 W，不是'未知'");
+        STREQ(vi, "0.00 V · 0.00 A", "F9 不出现 -0.00");
+        in.snap_age_ms = 9000u;
+        v = ui_link_view(&in);
+        ui_mode_state(&in, &v, &m1);
+        CHECK(ui_mode_power(&in, &m1, 0, pw, sizeof pw, vi, sizeof vi) == 0, "F9 主控断开：数据缺失");
+
+        /* F10 点了之后：以主控回读为准，不抢先高亮 */
+        in = in_up(1000u, 5u);                 /* 点击那一刻现读：seq=5，方向 = 暂停 */
+        in.mode = 0; in.dir1 = TCS_TEC_DIR_PAUSE;
+        ui_mode_cmd_start(&c, &in, TCS_TEC_DIR_COOL);
+        CHECK(c.waiting == 1 && c.seq_at_send == 5u && c.dir == TCS_TEC_DIR_COOL, "F10 开始等");
+        c2 = c;                                /* 点击前那一帧（同序号）就算方向对上也不算 */
+        CHECK(ui_mode_cmd_poll(&c2, &in, UI_TD_COOL) == UI_MC_WAIT && c2.waiting == 1, "F10 旧快照不算回话");
+        in.now_ms = 1100u;
+        CHECK(ui_mode_cmd_poll(&c, &in, UI_TD_PAUSE) == UI_MC_WAIT, "F10 100ms：继续等");
+        in.now_ms = 1300u; in.snap_seq = 6u; in.dir1 = TCS_TEC_DIR_COOL;   /* 新快照、方向已经是制冷 */
+        CHECK(ui_mode_cmd_poll(&c, &in, UI_TD_COOL) == UI_MC_DONE && c.waiting == 0, "F10 主控回读对了 → 成了");
+        in = in_up(2000u, 6u); in.mode = 0; in.dir1 = TCS_TEC_DIR_PAUSE;
+        ui_mode_cmd_start(&c, &in, TCS_TEC_DIR_HEAT);
+        in.now_ms = 2300u; in.snap_seq = 7u;
+        CHECK(ui_mode_cmd_poll(&c, &in, UI_TD_PAUSE) == UI_MC_WAIT, "F10 300ms：静置之前不下结论");
+        in.now_ms = 2500u;
+        CHECK(ui_mode_cmd_poll(&c, &in, UI_TD_PAUSE) == UI_MC_REJECTED && c.waiting == 0, "F10 静置后仍未变 → 没接受");
+        /* 被拒的原因按主控当前状态说 */
+        in = in_up(2000u, 6u); in.mode = 0; in.alarm = ALM_ESTOP; in.dir1 = TCS_TEC_DIR_PAUSE;
+        ui_mode_cmd_start(&c, &in, TCS_TEC_DIR_HEAT);
+        in.now_ms = 2500u; in.snap_seq = 7u;
+        CHECK(ui_mode_cmd_poll(&c, &in, UI_TD_PAUSE) == UI_MC_SAFE, "F10 安全态下被拒");
+        in.alarm = 0; in.mode = 1;
+        ui_mode_cmd_start(&c, &in, TCS_TEC_DIR_HEAT);
+        in.now_ms = 3000u; in.snap_seq = 8u;
+        CHECK(ui_mode_cmd_poll(&c, &in, UI_TD_PAUSE) == UI_MC_NOT_MANUAL, "F10 不在手动模式");
+        /* 链路断了 / 一直没来新快照：主控没回话 */
+        in = in_up(2000u, 6u); in.mode = 0; in.dir1 = TCS_TEC_DIR_PAUSE;
+        ui_mode_cmd_start(&c, &in, TCS_TEC_DIR_COOL);
+        in.now_ms = 2600u;                      /* 没有新快照 */
+        CHECK(ui_mode_cmd_poll(&c, &in, UI_TD_PAUSE) == UI_MC_WAIT, "F10 600ms 没新快照：再等等");
+        in.now_ms = 2801u;
+        CHECK(ui_mode_cmd_poll(&c, &in, UI_TD_PAUSE) == UI_MC_NO_REPLY && c.waiting == 0,
+              "F10 超过 800ms 没新快照 → 没回话");
+        in = in_up(2000u, 6u); in.mode = 0;
+        ui_mode_cmd_start(&c, &in, TCS_TEC_DIR_COOL);
+        in.now_ms = 2600u; in.snap_age_ms = 9000u;
+        CHECK(ui_mode_cmd_poll(&c, &in, UI_TD_PAUSE) == UI_MC_NO_REPLY, "F10 等待中链路断了 → 没回话");
+        CHECK(ui_mode_cmd_poll(&c, &in, UI_TD_PAUSE) == UI_MC_DONE, "F10 不在等待时：无事");
+        STREQ(ui_mode_cmd_hint(UI_MC_NO_REPLY), "主控没有响应，请检查连接", "F10 提示");
+        STREQ(ui_mode_cmd_hint(UI_MC_SAFE), "安全态下不可操作，请先解除报警", "F10 提示");
+        STREQ(ui_mode_cmd_hint(UI_MC_NOT_MANUAL), "只能在手动模式下调节", "F10 提示");
+        CHECK(ui_mode_cmd_hint(UI_MC_DONE) == NULL, "F10 成了不出提示（高亮自己会动）");
+    }
+
     printf("test_ui_model: PASS=%d FAIL=%d\n", g_pass, g_fail);
     return g_fail ? 1 : 0;
 }

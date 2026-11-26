@@ -485,6 +485,43 @@ else
     echo "[mut-perf] FAIL"; grep -a "活下来\|编译失败\|锚点\|FAIL" build/mut_perf.log | head -12; FAIL=1
 fi
 
+# S-G m1（模式页，2026-11-26）：链路协议 TCS_PROTO_VER 1 → 2——0x20 快照末尾 9 字节（两路输出方向 + 电压电流）、
+# 0x21 增量的 0x0100 / 0x0200 两个 mask 位。字节向量与 esp32/tests/test_tcs_proto.c、tools/proto_ref.py 的
+# selftest 是同一组（三处互为对照）。屏端镜像的落点（Core/Src/main.c 的 snap_apply）依赖 HAL，主机编译不了。
+run proto_m1    tests/test_proto_m1.c
+
+# S-G m1（模式页，2026-11-26）：曲线页历史环多一条体温（体温卡点进去也要有曲线）。历史环只在
+# TCS_USE_LVGL 下编译（目标构建由 CMake 定义），所以既有各行走不到；这里按交付档语义
+# （TCS_PROFILE=0：链路不在的格子记 NaN）单独编一次。源文件与 run control 同一组。
+if [ "$MODE" = gcc ]; then
+    if $GCC -Wall -Wextra -std=c11 -O1 -DTCS_UNIT_TEST -DTCS_PROFILE=0 -DTCS_USE_LVGL=1 $IFLAGS \
+         tests/test_hist_body.c App/tcs/control.c App/tcs/param_registry.c App/tcs/post.c App/proto/proto.c \
+         -o build/tests_histbody.exe 2> build/tests_histbody.err \
+       && ./build/tests_histbody.exe; then :; else
+        echo "[histbody] FAIL"; cat build/tests_histbody.err 2>/dev/null | head -20; FAIL=1
+    fi
+else
+    mkdir -p build
+    HB_CMD='cl /nologo /W4 /std:c11 /utf-8 /D_CRT_SECURE_NO_WARNINGS /DTCS_UNIT_TEST /DTCS_PROFILE=0 /DTCS_USE_LVGL=1 /I..\App\tcs /I..\App\proto /I..\App\comm /I..\App\lvgl_ui /I..\Core\Inc'
+    for s in tests/test_hist_body.c App/tcs/control.c App/tcs/param_registry.c App/tcs/post.c App/proto/proto.c; do
+        HB_CMD="$HB_CMD \"$(cygpath -w "$PWD/$s")\""
+    done
+    HB_CMD="$HB_CMD /Fe:tests_histbody.exe"
+    {
+        echo '@echo off'
+        echo 'call "C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Auxiliary\Build\vcvars64.bat" >nul 2>&1'
+        echo "cd /d \"$(cygpath -w "$PWD/build")\""
+        echo "$HB_CMD || exit /b 1"
+        echo 'tests_histbody.exe'
+        echo 'exit /b %ERRORLEVEL%'
+    } > build/histbody_compile.bat
+    if cmd //c "build\\histbody_compile.bat" > build/histbody.log 2>&1; then
+        echo "[histbody] PASS（$(tail -1 build/histbody.log)）"
+    else
+        echo "[histbody] FAIL"; grep -a "FAIL" build/histbody.log | head -20; FAIL=1
+    fi
+fi
+
 echo "==================="
 if [ "$FAIL" = 0 ]; then echo "run_all: ALL GREEN"; else echo "run_all: HAS FAILURES"; fi
 exit $FAIL

@@ -28,6 +28,7 @@
 #include <string.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <math.h>          /* m1（模式页）：isfinite（电学量应答纯化）*/
 
 #ifdef ESP_PLATFORM
 #include "freertos/FreeRTOS.h"
@@ -148,6 +149,34 @@ typedef struct {
 } m207_modst_t;
 static m207_modst_t s_modst[3];           /* [1]=TC1 [2]=TC2 */
 static uint32_t s_next_status_tick;       /* 下一次状态轮询的拍号；0=一上线就轮询 */
+
+/* ====== 电学量轮询（m1"模式"页，用户 2026-11-26 定的新功能）======
+ * 每秒把 TC1/TC2 的 TCACTVOL?（实际输出电压，V，制热为负）与 TCACTCUR?（实际输出电流，A）
+ * 各问一遍，供"模式"页显示功率（= |电压| × 电流）。厂商参数字典里的只读状态；真机 2026-11-26
+ * 实测模块认这两条（TC1:TCACTVOL=0.023 / TC1:TCACTCUR=0.000 / TC2:TCACTVOL=0.020 /
+ * TC2:TCACTCUR=-0.000——电流会回负零，入缓存前吃掉）。
+ * 只借温度轮询的空档：温度查询的应答到了之后、下一次温度轮询之前才问，而且应答窗必须在下一次
+ * 温度轮询之前结束——温度轮询（500ms 交替）与应答截止不被拖慢，回码也不会被误归给温度查询
+ * （errcode=2 同时是"传感器开路"的码）。电学查询的超时 / 被拒不计链路失败（轴分离：
+ * comm fail 只由温度轮询的应答窗超时判定）。连续 3 次没拿到就判"模块不支持"、停止轮询，
+ * 只留一条日志；复联后清零重试。取值经 m207_elec_get()，带数据龄（太旧按未知，见 M207_ELEC_STALE_MS）。*/
+#define M207_ELEC_FAIL_LIMIT   3     /* 连续无应答 / 被拒这么多次 → 模块不支持，停发 */
+typedef struct {
+    float    volt, cur;                /* 最近值；V（制热为负）/ A（非负）*/
+    uint32_t vms, cms;                 /* 各自最近一次取到的真实毫秒 */
+    uint8_t  vhave, chave;             /* 1 = 取到过 */
+} m207_elec_st_t;
+static m207_elec_st_t s_elec[3];       /* [1]=TC1 [2]=TC2 */
+static uint8_t  s_elec_idx;            /* 刚问过的序号（0..3，见 s_elec_q）*/
+static uint8_t  s_elec_wait;           /* 1 = 电学查询在等应答 */
+static uint32_t s_elec_deadline;       /* 应答截止拍号 */
+static uint32_t s_elec_next_tick;      /* 最早可发下一条的拍号 */
+static uint32_t s_elec_issued_tick;    /* 在途那一条发出的拍号 */
+static uint8_t  s_elec_fail;           /* 连续失败次数 */
+static uint8_t  s_elec_unsupported;    /* 1 = 模块不认这两条，已停发（复联后清零重试）*/
+static const char s_elec_q[4][18] = {
+    "TC1:TCACTVOL?\r", "TC1:TCACTCUR?\r", "TC2:TCACTVOL?\r", "TC2:TCACTCUR?\r",
+};
 
 /* ====== 安全关断旁路（X03-F-07）======
  * TCSW=0 不进普通队列：每通道一个单槽，最新值覆盖，下一拍优先上线路（排在重发与队列帧之前），
@@ -380,6 +409,7 @@ static void m207_go_online(const char *why)
     g_tcs.m207_online = 1;
     M207_LOGI("online (%s)", why);
     s_next_status_tick = 0;                /* X04-F-05：复联后马上读一次模块保护状态 */
+    s_elec_unsupported = 0;                /* m1（模式页）：复联后重新试电学量查询 */
     /* 复联重同步（E-08 预研）：目标温度只读回；TEC 该关的通道经安全关断旁路补发 TCSW=0
      * （X03-F-07：先于只读查询上线路，且自带一次回读确认），该开的通道只读回 TCSW?。
      * 不在这里开环恢复 TEC：模块侧是什么就镜像什么，要不要重开由 control 裁决。*/
@@ -402,6 +432,7 @@ static void m207_go_offline(void)
     s_probing = 1;                       /* 转入 1s 探测（一次性沿；报警粘滞）*/
     s_stat.offline++;
     s_waiting = 0;
+    s_elec_wait = 0;                     /* m1（模式页）：在途的电学查询随离线作废（不计失败）*/
     tcs_alarm_raise(ALM_M207);           /* F5：粘滞至人工 ack（tcs_alarm_ack）*/
     M207_LOGW("OFFLINE (%u fails) → ALM_M207, writes halted, SAFE by control",
               (unsigned)s_fail);
@@ -465,6 +496,97 @@ int m207_module_status(uint8_t ch, m207_mod_status_t *out)
     return 0;
 }
 
+/* ====== 电学量：入缓存的纯化、轮询子状态机与取值（m1"模式"页"）====== */
+/* 应答数值入缓存前的纯化：负零吃掉（真机电流回 -0.000）；电流恒为正，负值按坏值处理；
+ * 非有限值、明显超出量程的值按坏值处理（电压制热为负；量程上限远高于模块的 TCMAXV，
+ * 只用来挡住垃圾值——同时也保证 0.01V / 0.01A 的定点打包永远不会溢出）。
+ * 返回 1 = 可用（*out 填出），0 = 坏值。*/
+#define M207_ELEC_V_MAX   100.0f
+#define M207_ELEC_I_MAX    50.0f
+static int m207_elec_sanitize(float v, int is_cur, float *out)
+{
+    if (!isfinite(v)) return 0;
+    if (v == 0.0f) v = 0.0f;              /* -0.0 → +0.0 */
+    if (is_cur && v < 0.0f) return 0;
+    if (v < -M207_ELEC_V_MAX || v > (is_cur ? M207_ELEC_I_MAX : M207_ELEC_V_MAX)) return 0;
+    *out = v;
+    return 1;
+}
+
+/* 模块不认这两条：只留一条日志，停止轮询（复联后重试）*/
+static void m207_elec_give_up(const char *why)
+{
+    s_elec_unsupported = 1;
+    M207_LOGW("TCACTVOL/TCACTCUR not supported by this module (%s x%u): "
+              "electrical polling stopped, power reads unknown until reconnect",
+              why, (unsigned)M207_ELEC_FAIL_LIMIT);
+}
+
+static void m207_elec_result(int ok, const char *why)
+{
+    s_elec_wait = 0;
+    if (ok) {
+        s_elec_fail = 0;
+        return;
+    }
+    if (s_elec_fail < 255u) s_elec_fail++;
+    if (s_elec_fail >= M207_ELEC_FAIL_LIMIT) m207_elec_give_up(why);
+}
+
+/* 本拍的发送名额给了别的帧：在途的电学等待作废——那一帧的回码不能被当成电学查询的应答。
+ * 电学应答本身按参数名匹配，迟到了照样入缓存。*/
+static void m207_elec_yield(void)
+{
+    s_elec_wait = 0;
+    s_elec_next_tick = s_tick + M207_REPLY_TICKS + 1u;
+}
+
+static void m207_elec_tx_note(int sent)
+{
+    if (sent && s_elec_wait && s_elec_issued_tick != s_tick) m207_elec_yield();
+}
+
+/* 温度轮询的空档里问一条电学量。返回本拍要发的帧，或 NULL（不发）。
+ * 只在在线、非探测、没有温度查询在等应答、且还没到下一次温度轮询时被调用（见 m207_fsm_poll）。*/
+static const char *m207_elec_poll(void)
+{
+    uint8_t q;
+    if (s_elec_unsupported || !s_online) return NULL;
+    if (s_elec_wait) {
+        if ((int32_t)(s_tick - s_elec_deadline) >= 0) m207_elec_result(0, "no reply");
+        return NULL;                      /* 等应答（或刚超时）：本拍不发 */
+    }
+    if ((int32_t)(s_tick - s_elec_next_tick) < 0) return NULL;
+    /* 空档要放得下一个应答窗：截止拍必须早于下一次温度轮询（温度轮询永不被它挤后，
+     * 它的回码也永远不会落进温度查询的等待窗）*/
+    if (s_tick + M207_REPLY_TICKS >= s_next_poll) return NULL;
+    q = (uint8_t)((s_elec_idx + 1u) % 4u);
+    s_elec_idx = q;
+    s_elec_wait = 1;
+    s_elec_issued_tick = s_tick;
+    s_elec_deadline = s_tick + M207_REPLY_TICKS;
+    return s_elec_q[q];
+}
+
+int m207_elec_get(uint8_t ch, m207_elec_t *out)
+{
+    const m207_elec_st_t *e;
+    uint32_t av, ac;
+    if (!out || ch < 1 || ch > 2) return -1;
+    e = &s_elec[ch];
+    out->volt = e->volt;
+    out->cur  = e->cur;
+    out->fresh = (uint8_t)(e->vhave && e->chave);
+    /* 数据龄取电压、电流里较旧的那个（真实毫秒；掉线后继续增长）*/
+    av = e->vhave ? (s_now_ms - e->vms) : 0xFFFFFFFFu;
+    ac = e->chave ? (s_now_ms - e->cms) : 0xFFFFFFFFu;
+    out->age_ms = av > ac ? av : ac;
+    out->valid = (uint8_t)(out->fresh && out->age_ms <= M207_ELEC_STALE_MS);
+    return 0;
+}
+
+uint8_t m207_elec_supported(void) { return (uint8_t)(s_elec_unsupported ? 0u : 1u); }
+
 /* ====== 应答行处理 ====== */
 static void m207_handle_line(const char *line)
 {
@@ -495,6 +617,13 @@ static void m207_handle_line(const char *line)
             uint8_t qch = 0;                 /* 被应答的查询通道；0=没有查询在途 */
             if (s_waiting) { qch = s_wait_ch; s_waiting = 0; }
             else if (s_probing) qch = s_wait_ch;   /* 探测期：最近一条探测问的通道 */
+            else if (s_elec_wait) {
+                /* m1（模式页）：这条回码应答的是电学量查询——模块不认 TCACTVOL / TCACTCUR。
+                 * 轴分离：是链路双向活的证据，不算链路失败；也不归到温度查询，
+                 * 所以 =2 不会被当成传感器开路。*/
+                m207_elec_result(0, "rejected");
+                return;
+            }
 
             if (!qch && (s_save_active || s_save_summary_due)) {
                 /* 保存序列进行中（或末帧应答窗内）。保存期间不发轮询，无事务的回码只会是
@@ -659,6 +788,22 @@ static void m207_handle_line(const char *line)
                 }
             }
         }
+    } else if (r.kind == M207_KIND_REPLY &&
+               (strcmp(r.param, "TCACTVOL") == 0 || strcmp(r.param, "TCACTCUR") == 0)) {
+        /* m1（模式页）：电学量应答（只读状态）。数值入缓存；真机电流可回 -0.000（负零吃掉）。
+         * 不报警、不进 SAFE、不计链路失败。*/
+        m207_elec_st_t *e = &s_elec[r.module];
+        int is_cur = (strcmp(r.param, "TCACTCUR") == 0);
+        float v;
+        if (!m207_elec_sanitize(r.value, is_cur, &v)) {
+            s_stat.parse_err++;
+            M207_LOGW("module ch%u %s out of range (%.3f) — ignored",
+                      (unsigned)r.module, r.param, (double)r.value);
+        } else {
+            if (is_cur) { e->cur = v;   e->cms = s_now_ms; e->chave = 1; }
+            else        { e->volt = v;  e->vms = s_now_ms; e->vhave = 1; }
+            m207_elec_result(1, "ok");
+        }
     } else if (r.kind == M207_KIND_REPLY && strcmp(r.param, "TCADJTEMP") == 0) {
         M207_LOGI("module TCADJTEMP ch=%u = %.2f (cache mirror at R5)",
                   (unsigned)r.module, (double)r.value);
@@ -734,6 +879,8 @@ static const char *m207_fsm_poll(void)
             s_waiting = 1;
             return cmd;
         }
+        /* m1（模式页）：温度轮询的空档借给电学量查询——不占温度轮询的位置、不拖后它的应答截止 */
+        return m207_elec_poll();
     } else {
         /* 离线/恢复：1s 探测，TC1/TC2 交替（M12-F-03）。
          * 原来只问 TC1：TC1 传感器开路时模块回 ERRCODE=2，链路永远回不到 online，
@@ -911,7 +1058,11 @@ void m207_core_tick_end(int64_t t0_us)
     }
 
     /* 2) 发送名额：安全关断旁路优先；否则 重发 > 队列帧 > 保存帧 > 轮询帧。每拍至多 1 帧 */
-    if (!m207_lane_step()) m207_arbitrate();
+    {
+        uint32_t sent0 = s_stat.tx + s_txdrop;
+        if (!m207_lane_step()) m207_arbitrate();
+        m207_elec_tx_note(sent0 != s_stat.tx + s_txdrop);   /* m1（模式页）：见函数注释 */
+    }
 
     /* 3) 保存序列结账（M12-F-08）：末帧的应答窗结束后汇总一次，没回码的记作被拒 */
     if (s_save_summary_due &&
@@ -995,6 +1146,14 @@ void m207_core_init(const m207_core_io_t *io)
     s_perf_due = 0;
     memset(s_modst, 0, sizeof(s_modst));
     s_next_status_tick = 0;
+    memset(s_elec, 0, sizeof(s_elec));    /* m1（模式页）：电学量缓存与轮询子状态机清零 */
+    s_elec_idx = 0;
+    s_elec_wait = 0;
+    s_elec_deadline = 0;
+    s_elec_next_tick = 0;
+    s_elec_issued_tick = 0;
+    s_elec_fail = 0;
+    s_elec_unsupported = 0;
     g_tcs.m207_online = 0;               /* 上电默认值 */
     g_tcs.m207_sensor_open = 0;
     s_started = 1;

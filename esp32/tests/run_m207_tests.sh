@@ -58,28 +58,35 @@ run tmp117pure tests/test_tmp117_pure.c    components/tcs_tmp117/tmp117_pure.c
 # S-G e2（X04-F-05 ② / M13-F-06）：风扇服务的纯逻辑（头文件 inline）——命令-回读判定、弱校验
 run fanpure   tests/test_fan_pure.c
 # S-G e2：TMP117 采样内核（tmp117_core.c）逐拍主机用例——假器件记录每一次寄存器读写
-run tmp117core tests/test_tmp117_core.c components/tcs_tmp117/tmp117_core.c components/tcs_tmp117/tmp117_pure.c components/tcs_core/control.c components/tcs_core/param_registry.c components/tcs_core/post_pure.c components/tcs_link/proto.c
+run tmp117core tests/test_tmp117_core.c components/tcs_tmp117/tmp117_core.c components/tcs_tmp117/tmp117_pure.c components/tcs_core/control.c components/tcs_core/control_manual.c components/tcs_core/param_registry.c components/tcs_core/post_pure.c components/tcs_link/proto.c
 # 同一套用例按注入构建（CONFIG_TCS_SIM=y）再编一遍：注入实现体在交付档不编入，
 # 但它在的那一档必须编得过、跑得对
 EXTRA_DEF="/DCONFIG_TCS_SIM=1"
-run tmp117sim  tests/test_tmp117_core.c components/tcs_tmp117/tmp117_core.c components/tcs_tmp117/tmp117_pure.c components/tcs_core/control.c components/tcs_core/param_registry.c components/tcs_core/post_pure.c components/tcs_link/proto.c
+run tmp117sim  tests/test_tmp117_core.c components/tcs_tmp117/tmp117_core.c components/tcs_tmp117/tmp117_pure.c components/tcs_core/control.c components/tcs_core/control_manual.c components/tcs_core/param_registry.c components/tcs_core/post_pure.c components/tcs_link/proto.c
 EXTRA_DEF=""
 run tcsproto  tests/test_tcs_proto.c
-run control   tests/test_control_esp32.c   components/tcs_core/control.c components/tcs_core/param_registry.c components/tcs_core/post_pure.c components/tcs_link/proto.c
+run control   tests/test_control_esp32.c   components/tcs_core/control.c components/tcs_core/control_manual.c components/tcs_core/param_registry.c components/tcs_core/post_pure.c components/tcs_link/proto.c
+# m1（模式页，2026-11-26）：手动两路 TEC 输出映射 / 只在变化时下发 / 写前校验（非手动·安全态·越界）/
+# 进安全态与切自动清零 / 风扇联动与恢复 / 屏链路断开 3 秒 = 急停（纯判定 + 急停路径 + 恢复后保持到确认）
+run ctlmanual tests/test_control_manual.c components/tcs_core/control.c components/tcs_core/control_manual.c components/tcs_core/param_registry.c components/tcs_core/link_loss_guard.c components/tcs_core/post_pure.c components/tcs_link/proto.c
+
 # S-G e2（X06-F-05 / M12-F-12）：M207 服务内核（m207_core.c）逐拍主机用例——首联、selfloop 九步移植、
 # 探测、传感器开路、超温、写路径、离线停写、下行帧黄金样本
-run m207core  tests/test_m207_core.c components/tcs_m207/m207_core.c components/tcs_m207/m207_proto.c components/tcs_core/control.c components/tcs_core/param_registry.c components/tcs_core/post_pure.c components/tcs_link/proto.c
+run m207core  tests/test_m207_core.c components/tcs_m207/m207_core.c components/tcs_m207/m207_proto.c components/tcs_core/control.c components/tcs_core/control_manual.c components/tcs_core/param_registry.c components/tcs_core/post_pure.c components/tcs_link/proto.c
 # S-G e2（X03-F-07 / M12-F-08）：安全关断旁路（队列满也下一拍上线路、作废过期的开）、
 # 队列满计数、"保存到模块"32 条不丢
-run m207queue tests/test_m207_queue.c components/tcs_m207/m207_core.c components/tcs_m207/m207_proto.c components/tcs_core/control.c components/tcs_core/param_registry.c components/tcs_core/post_pure.c components/tcs_link/proto.c
+run m207queue tests/test_m207_queue.c components/tcs_m207/m207_core.c components/tcs_m207/m207_proto.c components/tcs_core/control.c components/tcs_core/control_manual.c components/tcs_core/param_registry.c components/tcs_core/post_pure.c components/tcs_link/proto.c
 # S-G e2（M12-F-03 后半）：探测期 / 开机首联的等待窗里，任意合法 CMD:REPLY 都是链路活证据——
 # 两路传感器同时开路时链路仍回到 online，ALM_M207 可确认
-run m207link  tests/test_m207_link.c components/tcs_m207/m207_core.c components/tcs_m207/m207_proto.c components/tcs_core/control.c components/tcs_core/param_registry.c components/tcs_core/post_pure.c components/tcs_link/proto.c
+run m207link  tests/test_m207_link.c components/tcs_m207/m207_core.c components/tcs_m207/m207_proto.c components/tcs_core/control.c components/tcs_core/control_manual.c components/tcs_core/param_registry.c components/tcs_core/post_pure.c components/tcs_link/proto.c
 # S-G e2（M12-F-13 / M12-F-15）：上电回环自检的帧表与判定（主机可测）——过线帧只能是查询，
 # 不许带写命令；去抖时延由常量推算并钉住
-run m207lb tests/test_m207_lb.c components/tcs_m207/m207_core.c components/tcs_m207/m207_proto.c components/tcs_core/control.c components/tcs_core/param_registry.c components/tcs_core/post_pure.c components/tcs_link/proto.c
+run m207lb tests/test_m207_lb.c components/tcs_m207/m207_core.c components/tcs_m207/m207_proto.c components/tcs_core/control.c components/tcs_core/control_manual.c components/tcs_core/param_registry.c components/tcs_core/post_pure.c components/tcs_link/proto.c
 # S-G e2（X04-F-05 ①）：模块自带保护状态的生产路径轮询与取值——如实可取、不报警不进 SAFE
-run m207status tests/test_m207_status.c components/tcs_m207/m207_core.c components/tcs_m207/m207_proto.c components/tcs_core/control.c components/tcs_core/param_registry.c components/tcs_core/post_pure.c components/tcs_link/proto.c
+run m207status tests/test_m207_status.c components/tcs_m207/m207_core.c components/tcs_m207/m207_proto.c components/tcs_core/control.c components/tcs_core/control_manual.c components/tcs_core/param_registry.c components/tcs_core/post_pure.c components/tcs_link/proto.c
+# S-G m1（模式页，2026-11-26）：TCx:TCACTVOL? / TCx:TCACTCUR? 电学量轮询——正常值 / 负电压 / 负零、
+# 温度轮询节奏一步不让、模块不认（回码）或不应答三次即停、数据龄、复联重试、与别的帧交错不误归属
+run m207elec tests/test_m207_elec.c components/tcs_m207/m207_core.c components/tcs_m207/m207_proto.c components/tcs_core/control.c components/tcs_core/control_manual.c components/tcs_core/param_registry.c components/tcs_core/post_pure.c components/tcs_link/proto.c
 
 # S-G l1（2026-11-25）：R5-01 / R5-10 的 ESP32 侧用例——components/tcs_link/link_task.c 原样编译
 # （IDF / FreeRTOS 用 tests/host_stubs 里的桩，按诊断档），在虚拟时钟上跑一条时间线：
@@ -87,6 +94,8 @@ run m207status tests/test_m207_status.c components/tcs_m207/m207_core.c componen
 EXTRA_INC="/I..\..\tests\host_stubs"
 run linkdir tests/test_link_dir.c components/tcs_link/link_task.c components/tcs_link/comm.c components/tcs_link/proto.c
 EXTRA_INC=""
+# m1（模式页）：对端帧时刻只在方向闸门之后刷新——"屏链路断开 3 秒 = 急停"的计时起点（comm.c 原样编译）
+run linkpeer tests/test_link_peer.c components/tcs_link/comm.c components/tcs_link/proto.c
 
 # S-G e3a：tcs_core 里 control.c 之外的纯逻辑（上次运行记录、安全记录 v2，以及后面本批次补的参数用例）
 run tcscore   tests/test_tcs_core.c       components/tcs_core/boot_record.c components/tcs_core/nvs_store.c components/tcs_core/svc_status.c components/tcs_core/param_registry.c components/tcs_link/proto.c
@@ -107,10 +116,13 @@ PYGATE="${TCS_PYBIN:-python}"
 command -v "$PYGATE" >/dev/null 2>&1 || PYGATE=python3
 if command -v "$PYGATE" >/dev/null 2>&1 && "$PYGATE" -I tests/test_m207_gates.py; then :;
 else echo "[m207gates] FAIL"; FAIL=1; fi
+# m1（模式页）：屏链路断开 3 秒 = 急停在 control_service.c 里的接线（RTOS 文件，主机编译不了）
+if command -v "$PYGATE" >/dev/null 2>&1 && "$PYGATE" -I tests/test_m1_gates.py; then :;
+else echo "[m1gates] FAIL"; FAIL=1; fi
 
 # S-G e2（X06-F-05）：对端模型直驱固件内核。主机桥 = 交付固件用的同一份 m207_core.c；
 # 对端 = project_tcs/tools/m207_sim.py 的 M207Core。五行注入矩阵 + 黄金语料三方一致 + 50ms 铁律。
-run m207host tests/m207_core_host.c components/tcs_m207/m207_core.c components/tcs_m207/m207_proto.c components/tcs_core/control.c components/tcs_core/param_registry.c components/tcs_core/post_pure.c components/tcs_link/proto.c
+run m207host tests/m207_core_host.c components/tcs_m207/m207_core.c components/tcs_m207/m207_proto.c components/tcs_core/control.c components/tcs_core/control_manual.c components/tcs_core/param_registry.c components/tcs_core/post_pure.c components/tcs_link/proto.c
 if [ -x build/tests_m207/tests_m207host.exe ] && "$PYGATE" -I tests/test_m207_fw_adv.py \
         build/tests_m207/tests_m207host.exe; then :; else echo "[m207fwadv] FAIL"; FAIL=1; fi
 

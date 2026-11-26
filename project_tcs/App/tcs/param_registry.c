@@ -41,6 +41,12 @@ static param_desc_t s_params[] = {
       PF_RW|PF_WEB|PF_PERSIST,                                38.0f, 45.0f, 0.5f, 40.0f, 0 },
     { 0x08, "commissioned", "布防模式",     "",   PARAM_TYPE_U8,
       PF_RW|PF_SCREEN|PF_WEB|PF_PERSIST|PF_DANGER,            0.0f,  2.0f,  1.0f, 0.0f, 0 },
+    /* ====== m1（模式页，2026-11-26）：两路 TEC 的手动输出。真值在 ESP32（param_registry.c 同位置两行）；
+     * 屏端注册表只是镜像——"模式"页经 param_set → 0x12 写主控。0=暂停 1=制冷 2=制热，不持久化、不带 PF_WEB。====== */
+    { 0x09, "tec1_manual",  "TEC1 手动输出",   "",   PARAM_TYPE_U8,
+      PF_RW|PF_SCREEN,                                        0.0f,  2.0f,  1.0f, 0.0f, 0 },
+    { 0x0A, "tec2_manual",  "TEC2 手动输出",   "",   PARAM_TYPE_U8,
+      PF_RW|PF_SCREEN,                                        0.0f,  2.0f,  1.0f, 0.0f, 0 },
     /* ====== H10 映射全表（v1.2 §2.5；所有权矩阵=模块 EEPROM 唯一真值，本地不持久）======
      * flags：PF_RW|PF_WEB|PF_M207（无 PF_SCREEN=屏不显红线；无 PF_PERSIST=不落本地 EEPROM）。
      * 值域/默认按《现行M207协议_v1.md》字典；危险参数加 PF_DANGER（网页二次确认）。
@@ -150,6 +156,7 @@ _Static_assert(sizeof(s_params) / sizeof(s_params[0]) <= PARAM_CAPACITY,
 /* 默认初值（与表 value 列同序；param_load_defaults 用）*/
 static const float s_defaults[PARAM_N_REGISTERED] = {
     25.0f, 25.0f, 37.5f, 36.5f, 0.2f, 0.0f, 40.0f, 0.0f,
+    0.0f, 0.0f,                        /* m1：0x09 / 0x0A 手动输出，上电一律暂停 */
     0.4f, 40.0f, 0.1f, 30.0f, 15.0f, 1.0f, 0.0f, 5.0f, 9.0f, 100.0f, -20.0f,
     -10.0f, 120.0f, 8.0f, 1.0f, 0.01f,
     0.4f, 40.0f, 0.1f, 30.0f, 15.0f, 1.0f, 0.0f, 5.0f, 9.0f, 100.0f, -20.0f,

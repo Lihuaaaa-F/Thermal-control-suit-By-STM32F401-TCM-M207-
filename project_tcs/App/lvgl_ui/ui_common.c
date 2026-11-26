@@ -178,12 +178,16 @@ static btn_look_t btn_look(int style)
         case UI_BTN_LATCHED:  k.bg = TKS_GRAY;   k.bd = TKS_GRAY;  k.tx = TKS_WHITE; k.bg_press = TKS_GRAY; break;
         case UI_BTN_CARD:     k.bd = TKS_BORDER; k.tx = TKS_TX;    break;
         case UI_BTN_CARD_SEL: k.bg = TKS_PRESS;  k.bd = TKS_BLUE;  k.tx = TKS_TX;    break;
+        /* m1"模式"页：方向键高亮。按下态用同一个底色（token 里没有更深的蓝 / 琥珀，不另造颜色）*/
+        case UI_BTN_ON_COOL:  k.bg = TKS_BLUE;   k.bd = TKS_BLUE;  k.tx = TKS_WHITE; k.bg_press = TKS_BLUE;   break;
+        case UI_BTN_ON_HEAT:  k.bg = TKS_YELLOW; k.bd = TKS_YELLOW; k.tx = TKS_WHITE; k.bg_press = TKS_YELLOW; break;
+        case UI_BTN_ON_PAUSE: k.bg = TKS_GRAY;   k.bd = TKS_GRAY;  k.tx = TKS_WHITE; k.bg_press = TKS_GRAY;   break;
         default: break;
     }
     return k;
 }
 
-#define UI_BTN_STYLE_MAX  UI_BTN_CARD_SEL
+#define UI_BTN_STYLE_MAX  UI_BTN_ON_PAUSE
 
 void ui_button_set_style(ui_button_t *b, int style)
 {

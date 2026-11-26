@@ -5,9 +5,13 @@ esp32/components/tcs_core/boot_record.c
 esp32/components/tcs_core/boot_record.h
 esp32/components/tcs_core/control.c
 esp32/components/tcs_core/control.h
+esp32/components/tcs_core/control_manual.c
+esp32/components/tcs_core/control_manual.h
 esp32/components/tcs_core/control_service.c
 esp32/components/tcs_core/control_service.h
 esp32/components/tcs_core/include/nvs_store.h
+esp32/components/tcs_core/link_loss_guard.c
+esp32/components/tcs_core/link_loss_guard.h
 esp32/components/tcs_core/nvs_store.c
 esp32/components/tcs_core/param_registry.c
 esp32/components/tcs_core/param_registry.h
@@ -67,13 +71,18 @@ esp32/tests/host_stubs/freertos/task.h
 esp32/tests/m207_core_host.c
 esp32/tests/m207_tb.h
 esp32/tests/mutation_control.py
+esp32/tests/mutation_control_manual.py
 esp32/tests/mutation_core.py
 esp32/tests/mutation_web.py
 esp32/tests/shim_h7/m207.h
 esp32/tests/test_control_esp32.c
+esp32/tests/test_control_manual.c
 esp32/tests/test_fan_pure.c
 esp32/tests/test_link_dir.c
+esp32/tests/test_link_peer.c
+esp32/tests/test_m1_gates.py
 esp32/tests/test_m207_core.c
+esp32/tests/test_m207_elec.c
 esp32/tests/test_m207_fw_adv.py
 esp32/tests/test_m207_gates.py
 esp32/tests/test_m207_golden.c
@@ -134,6 +143,7 @@ project_tcs/App/lvgl_ui/tui_p0.c
 project_tcs/App/lvgl_ui/tui_p1.c
 project_tcs/App/lvgl_ui/tui_p2.c
 project_tcs/App/lvgl_ui/tui_p3.c
+project_tcs/App/lvgl_ui/tui_p4_mode.c
 project_tcs/App/lvgl_ui/ui_common.c
 project_tcs/App/lvgl_ui/ui_common.h
 project_tcs/App/lvgl_ui/ui_model.c
@@ -199,6 +209,7 @@ project_tcs/tests/mutkit.py
 project_tcs/tests/test_audit_ring.c
 project_tcs/tests/test_control.c
 project_tcs/tests/test_drv_pure.c
+project_tcs/tests/test_hist_body.c
 project_tcs/tests/test_link_dir.c
 project_tcs/tests/test_link_follow_prod.c
 project_tcs/tests/test_link_info.c
@@ -211,6 +222,7 @@ project_tcs/tests/test_param_registry.c
 project_tcs/tests/test_perf_hist.c
 project_tcs/tests/test_post.c
 project_tcs/tests/test_prod_link_only.c
+project_tcs/tests/test_proto_m1.c
 project_tcs/tests/test_proto_tcs.c
 project_tcs/tests/test_qr.c
 project_tcs/tests/test_site_logic.c

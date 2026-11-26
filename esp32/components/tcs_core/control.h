@@ -125,6 +125,10 @@ int control_apply_cmd(uint8_t cmd);
  * 现有规则：急停/超温锁存期间不得切到自动模式（急停复位后不得自动重启）。*/
 int  control_param_check(uint16_t id, float v);
 
+/* m1（模式页，2026-11-26）：快照用的"输出方向"，取值 TEC_DIR_*（control_manual.h）：
+ * 0 暂停 / 1 制冷 / 2 制热 / 3 通道开着但不是模式页设的（网页 / 台架的旧命令）。ch = 1 / 2。*/
+uint8_t control_tec_dir(uint8_t ch);
+
 #ifdef TCS_UNIT_TEST
 /* 测试专用：不经过 poll 直接置锁存，用于验证"锁存门控"独立于状态机（R1 复核 R-14）。
  * 只在单测构建可见，生产固件不编入。*/

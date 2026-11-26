@@ -79,6 +79,20 @@ const char *m207_fault_bit_name(uint8_t bit);            /* bit0 external / 1 ov
                                                          * 3 over-temp / 4 sensor-open / 5 load-short / 6 load-open
                                                          * （位义取自厂商帮助文件 tc_hlp.xml，未逐位上机核实）*/
 
+/* ====== 电学量：TCx:TCACTVOL / TCx:TCACTCUR 轮询缓存（m1"模式"页，用户 2026-11-26 定的新功能）======
+ * 在线时每秒把两路的实际输出电压（V，制热为负）与实际输出电流（A）各问一遍，只借温度轮询的
+ * 空档（不拖慢温度轮询）。来源：厂商参数字典与用户手册的只读状态；真机 2026-11-26 实测模块认这两条。
+ * 模块不认（回错误码或不应答）→ 连续 3 次后停止轮询，m207_elec_supported() 回 0。*/
+#define M207_ELEC_STALE_MS   3000u   /* 数据龄超过它按"未知"处理（正常每秒刷新一遍）*/
+typedef struct {
+    float    volt, cur;       /* V（制热为负）/ A（非负；应答里的负零已吃掉）*/
+    uint32_t age_ms;          /* 电压、电流里较旧那个的数据龄（真实毫秒，掉线后继续增长）；从未取到 = 0xFFFFFFFF */
+    uint8_t  valid;           /* 1 = 取到过且不太旧（可以拿来算功率）*/
+    uint8_t  fresh;           /* 1 = 取到过（不看龄）*/
+} m207_elec_t;
+int     m207_elec_get(uint8_t ch, m207_elec_t *out);   /* 0=ok；-1=通道非法或 out 为空 */
+uint8_t  m207_elec_supported(void);                    /* 0=模块不认这两条（已停发）；1=支持或尚未判定 */
+
 /* ====== 报警（F5：置位在服务内；清除走 tcs_alarm_ack 人工确认）====== */
 uint8_t m207_alarm_active(void);                     /* ALM_M207 位 */
 

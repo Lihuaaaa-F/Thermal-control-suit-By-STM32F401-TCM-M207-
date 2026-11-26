@@ -33,6 +33,12 @@ typedef struct {
     float    tc1_act, tc2_act, body;    /* 两路水温与体温读数 */
     uint8_t  estop_local;               /* 屏端已记下急停（本地锁存，或报警位里有——含主控回传的）*/
     uint8_t  estop_peer;                /* 最近一帧主控快照里有急停位 = 主控已执行 */
+    /* m1"模式"页（2026-11-26）：两路 TEC 的输出方向与电学量，取自主控快照（0x20 / 0x21）。
+     * 方向是协议值 TCS_TEC_DIR_*（0 暂停 1 制冷 2 制热 3 开着但不是模式页设的）；只在主控在线时有意义。*/
+    uint8_t  dir1, dir2;
+    uint8_t  tec_valid;                 /* bit0 = TEC1 电压电流有效；bit1 = TEC2 */
+    float    tec_v1, tec_i1;            /* V（制热为负）/ A */
+    float    tec_v2, tec_i2;
 } ui_in_t;
 
 /* ====== 连接视图 ====== */
@@ -130,6 +136,85 @@ typedef struct {
 
 void     ui_home_state(const ui_in_t *in, const ui_link_view_t *lv, ui_home_t *out);
 uint32_t ui_home_diff(const ui_home_t *was, const ui_home_t *now);   /* 位或：UI_H_* */
+
+/* ====== m1"模式"页（用户 2026-11-26 定的新功能）======
+ * 首页的模式键改成"显示当前模式、点击进模式页"；模式页上手动模式两路 TEC 各点"制冷 / 暂停 / 制热"，
+ * 手动 / 自动两页都显示功率。这里只做判定与文案，画在 tui_p4_mode.c。 */
+
+/* 首页模式键：文字恒为当前模式（"手动" / "自动"）；主控断开时不可点（文字由页面保持上一次的）*/
+void ui_mode_key(uint8_t online, uint8_t mode, char *text, size_t cap, uint8_t *enabled);
+
+typedef enum {
+    UI_TD_UNKNOWN = 0,   /* 主控断开 / 没数据 */
+    UI_TD_PAUSE,
+    UI_TD_COOL,
+    UI_TD_HEAT,
+    UI_TD_EXT,           /* 通道开着，但不是"模式"页设的方向（网页 / 台架的旧命令）*/
+} ui_tec_dir_t;
+
+typedef struct {
+    ui_link_t    link;
+    uint8_t      manual;            /* 1 = 手动模式（主控在线时才有意义）*/
+    uint8_t      safe;              /* 1 = 主控在安全态 / 急停 / 超温 / 模块或探头报警未解除 */
+    uint8_t      estop;             /* 急停已记下：急停键变灰（主控断了也按屏端自己的记号画）*/
+    ui_tec_dir_t dir[2];            /* 下标 0 = TEC1，1 = TEC2；主控断开 = UI_TD_UNKNOWN */
+    uint8_t      elec_ok[2];        /* 1 = 该路电压电流有效（可以显示功率）*/
+    uint8_t      keys_on;           /* 1 = 三个方向键可点（手动 + 主控在线 + 不在安全态）*/
+    uint8_t      fan, fan_locked;   /* fan_locked：有 TEC 在制冷 / 制热，风扇被联动、不可关 */
+} ui_mode_state_t;
+
+#define UI_M_LINK   (1u << 0)   /* 链路在/不在：整页重画 */
+#define UI_M_MODE   (1u << 1)   /* 手动 / 自动：版面不同 → 整页重建 */
+#define UI_M_SAFE   (1u << 2)   /* 安全态变了：方向键能不能点跟着变 */
+#define UI_M_ESTOP  (1u << 3)
+#define UI_M_DIR1   (1u << 4)
+#define UI_M_DIR2   (1u << 5)
+#define UI_M_ELEC1  (1u << 6)
+#define UI_M_ELEC2  (1u << 7)
+#define UI_M_FAN    (1u << 8)
+
+/* 协议里的方向值 → 枚举（大于 3 的都算"开着但不是模式页设的"）*/
+ui_tec_dir_t ui_mode_dir_of(uint8_t d);
+void         ui_mode_state(const ui_in_t *in, const ui_link_view_t *lv, ui_mode_state_t *out);
+uint32_t     ui_mode_diff(const ui_mode_state_t *was, const ui_mode_state_t *now);   /* 位或：UI_M_* */
+
+/* 方向键的样式 */
+#define UI_MD_BTN_NORMAL  0     /* 普通样式 */
+#define UI_MD_BTN_ON      1     /* 当前生效的方向：高亮 */
+#define UI_MD_BTN_OFF     2     /* 主控断开：置灰不可点 */
+int ui_mode_btn_style(const ui_mode_state_t *s, ui_tec_dir_t btn);
+
+/* 一行的状态文字："暂停" / "制冷中" / "制热中" / "输出中" / "未知" */
+const char *ui_mode_dir_text(ui_tec_dir_t d);
+
+/* 功率主数字（W，一位小数）与电压电流小字（各两位）。数据缺失或主控断开 → "未知"，返回 0 */
+int ui_mode_power(const ui_in_t *in, const ui_mode_state_t *s, int ch,
+                  char *power, size_t pcap, char *vi, size_t vcap);
+
+/* 点方向键 / 风扇键之前先问：返回 NULL = 可以发；否则返回该提示的话（不发帧）*/
+const char *ui_mode_tap_block(const ui_mode_state_t *s);
+const char *ui_mode_fan_block(const ui_mode_state_t *s);
+
+/* 点"制冷 / 制热 / 暂停"之后：以主控回读的实际输出为准，不抢先高亮 */
+typedef struct {
+    uint8_t  waiting;
+    uint32_t sent_ms;
+    uint32_t seq_at_send;        /* 点击那一刻的快照序号：变了才说明来过新帧 */
+    uint8_t  dir;                /* 要的方向（协议值 0 / 1 / 2）*/
+} ui_mode_cmd_t;
+
+typedef enum {
+    UI_MC_WAIT = 0,
+    UI_MC_DONE,                  /* 主控回读已经是这个方向 */
+    UI_MC_NO_REPLY,              /* 主控没回话（链路断 / 没来新快照）*/
+    UI_MC_SAFE,                  /* 安全态下不可操作 */
+    UI_MC_NOT_MANUAL,            /* 不在手动模式 */
+    UI_MC_REJECTED,              /* 其它原因没接受 */
+} ui_mode_cmd_result_t;
+
+void                  ui_mode_cmd_start(ui_mode_cmd_t *c, const ui_in_t *in, uint8_t dir);
+ui_mode_cmd_result_t  ui_mode_cmd_poll(ui_mode_cmd_t *c, const ui_in_t *in, ui_tec_dir_t now);
+const char           *ui_mode_cmd_hint(ui_mode_cmd_result_t r);
 
 #ifdef __cplusplus
 }

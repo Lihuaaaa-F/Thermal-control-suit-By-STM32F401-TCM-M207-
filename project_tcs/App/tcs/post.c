@@ -280,9 +280,10 @@ void post_init(int eeprom_cfg_invalid)
     /* 5. 屏+触（真实结果：触离线即 FAIL，不粉饰）*/
     post_set_result(POST_ITEM_SCRTOUCH, (uint8_t)(lcd_ready() && touch_ready()));
 
-    /* 6. 版本：协议版本合法 + 固件 BCD 非零 + 注册表非空 */
+    /* 6. 版本：协议版本合法 + 固件 BCD 非零 + 注册表非空
+     * m1"模式"页（2026-11-26）：协议版本递增到 2（0x20 快照追加输出方向与电压电流），随 protocol/tcs_proto.h 同改 */
     post_set_result(POST_ITEM_VER,
-                    (uint8_t)((TCS_PROTO_VER == 1u) && g_tcs.fw_ver != 0u && param_count() > 0));
+                    (uint8_t)((TCS_PROTO_VER == 2u) && g_tcs.fw_ver != 0u && param_count() > 0));
 }
 
 void post_poll(uint32_t now_ms)

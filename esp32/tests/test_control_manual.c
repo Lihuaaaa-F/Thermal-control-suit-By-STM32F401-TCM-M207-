@@ -456,17 +456,32 @@ int main(void)
         CHECK(link_loss_guard_step(&g, 1, 2900u, 0) == TCS_LINK_LOSS_NONE, "L01 2.9 s -> no estop");
         CHECK(link_loss_guard_step(&g, 1, 2999u, 0) == TCS_LINK_LOSS_NONE, "L01 2.999 s -> no estop");
         CHECK(link_loss_guard_step(&g, 1, 3000u, 0) == TCS_LINK_LOSS_ESTOP, "L01 3.0 s -> estop");
-        CHECK(link_loss_guard_step(&g, 1, 3100u, 0) == TCS_LINK_LOSS_NONE, "L01 no repeat while still lost");
-        CHECK(link_loss_guard_step(&g, 1, 60000u, 0) == TCS_LINK_LOSS_NONE, "L01 still no repeat after a minute");
+        CHECK(link_loss_guard_step(&g, 1, 3100u, 1) == TCS_LINK_LOSS_NONE, "L01 estop already latched -> no repeat");
+        CHECK(link_loss_guard_step(&g, 1, 60000u, 1) == TCS_LINK_LOSS_NONE, "L01 estop still latched after a minute -> quiet");
         CHECK(link_loss_guard_step(&g, 1, 100u, 0) == TCS_LINK_LOSS_NONE, "L01 link back -> none, re-armed");
         CHECK(link_loss_guard_step(&g, 1, 3000u, 0) == TCS_LINK_LOSS_ESTOP, "L01 next loss triggers again");
         CHECK(link_loss_guard_step(&g, 1, 100u, 1) == TCS_LINK_LOSS_NONE, "L01 recovered (safe) -> none");
         CHECK(link_loss_guard_step(&g, 1, 3000u, 1) == TCS_LINK_LOSS_NONE, "L01 already safe -> no repeat trigger");
-        CHECK(link_loss_guard_step(&g, 1, 4000u, 0) == TCS_LINK_LOSS_NONE,
-              "L01 stays quiet until the link is back (no estop/ack loop)");
+        CHECK(link_loss_guard_step(&g, 1, 4000u, 0) == TCS_LINK_LOSS_ESTOP,
+              "L01 [R8-04] the latch was cleared while the link is still lost -> trigger again");
         CHECK(link_loss_guard_step(&g, 1, 100u, 0) == TCS_LINK_LOSS_NONE, "L01 link back again");
         CHECK(link_loss_guard_step(&g, 1, 3000u, 0) == TCS_LINK_LOSS_ESTOP, "L01 re-armed after recovery");
         CHECK(link_loss_guard_step(&g, 0, 100000u, 0) == TCS_LINK_LOSS_NONE, "L01 never-connected wins over a long age");
+    }
+
+    /* ====== L01b（R8-04，独立复核 r8f）：already_safe 只认锁存里的**急停**位 ======
+     * 超温 / 模块失联 / 体温失联 / 读数卡死这几种安全态都可能被人在网页上解除（或自己自愈）。
+     * 把它们算成“这次断开已经处理过”，解除之后屏仍断着、设备就再也不会判急停（R8 实测 D）。*/
+    {
+        CHECK(link_loss_already_safe(0) == 0, "L01b nothing latched -> not already safe");
+        CHECK(link_loss_already_safe(SAFETY_BIT_OVERTEMP) == 0,
+              "L01b [R8-04] overtemp alone is not already safe (it can be acknowledged)");
+        CHECK(link_loss_already_safe(SAFETY_BIT_M207_LOST) == 0, "L01b m207 lost alone -> not already safe");
+        CHECK(link_loss_already_safe(SAFETY_BIT_BODY_LOST) == 0, "L01b body lost alone -> not already safe");
+        CHECK(link_loss_already_safe(SAFETY_BIT_STUCK) == 0, "L01b stuck alone -> not already safe");
+        CHECK(link_loss_already_safe(SAFETY_BIT_ESTOP) == 1, "L01b estop latched -> already safe (no repeat)");
+        CHECK(link_loss_already_safe((uint8_t)(SAFETY_BIT_ESTOP | SAFETY_BIT_OVERTEMP)) == 1,
+              "L01b estop + overtemp -> already safe");
     }
 
     /* ====== L02 2.9 秒不触发：输出原样 ====== */
@@ -557,7 +572,9 @@ int main(void)
         CHECK(control_state() == CTRL_IDLE && control_safety_latched() == 0 && count_sw_on() == 0 && g_tcs.mode == 0,
               "L04 estop row: acknowledged -> IDLE in manual mode, nothing restarted");
 
-        /* ② 超温：同上——断链不叠加急停位；降了温、链路也恢复了，仍要确认才出去 */
+        /* ② 超温（r7f 的“不叠加急停位”口径已按 R8-04 改）：超温**可以被人在网页上解除**，所以断链时
+         *     不能把它当成“这次断开处理过了”——要把急停位补上。降温后网页 ack 只清得掉超温；屏仍
+         *     断着 → 锁存空的那一拍下一拍立刻重新锁急停，TEC 不得开。屏回来 + ack 才恢复。*/
         enter_manual();
         g_tcs.tc1_act = 49.0f; tick();
         CHECK(control_state() == CTRL_SAFE && control_safety_latched() == SAFETY_BIT_OVERTEMP,
@@ -565,18 +582,28 @@ int main(void)
         ll_begin(&g);
         link_lost_run(&g, 5000u, 1500u, heal_water);
         ll_print("超温", &g);
-        CHECK(g_ll_estops == 0 && g.tripped == 1, "L04 overtemp row: link loss in an overtemp SAFE does not trigger again");
-        CHECK(control_safety_latched() == SAFETY_BIT_OVERTEMP, "L04 overtemp row: no estop bit added");
+        CHECK(g_ll_estops == 1, "L04 overtemp row: link lost 3 s -> the estop bit is added (R8-04)");
+        CHECK((control_safety_latched() & (SAFETY_BIT_OVERTEMP | SAFETY_BIT_ESTOP))
+              == (SAFETY_BIT_OVERTEMP | SAFETY_BIT_ESTOP),
+              "L04 overtemp row: both bits latched (overtemp + estop)");
         CHECK(control_state() == CTRL_SAFE && control_tec_cmd(1) == 0 && control_tec_cmd(2) == 0,
               "L04 overtemp row: still SAFE, both TEC off");
+        /* 屏仍断着、水温已降、操作员在网页上按“解除” */
+        tcs_alarm_ack();
+        tick100(); link_check(&g, 1, 5100u);
+        CHECK((control_safety_latched() & SAFETY_BIT_ESTOP) != 0,
+              "L04 overtemp row: [R8-04] the estop is re-latched on the tick after the ack");
+        tick100(); link_check(&g, 1, 5200u);
+        CHECK(control_state() == CTRL_SAFE && count_sw_on() == 0,
+              "L04 overtemp row: [R8-04] ack while the screen is still lost never brings the TEC back");
         log_reset();
         link_alive_run(&g, 10000u, heal_water);
-        CHECK(control_state() == CTRL_SAFE && control_safety_latched() == SAFETY_BIT_OVERTEMP,
+        CHECK(control_state() == CTRL_SAFE && (control_safety_latched() & SAFETY_BIT_ESTOP) != 0,
               "L04 overtemp row: cooled down + link back -> still SAFE until acknowledged");
         CHECK(count_sw_on() == 0, "L04 overtemp row: no TEC on while waiting");
         tcs_alarm_ack(); tick100();
         CHECK(control_state() == CTRL_IDLE && control_safety_latched() == 0 && count_sw_on() == 0,
-              "L04 overtemp row: acknowledged -> IDLE, nothing restarted");
+              "L04 overtemp row: acknowledged (link back) -> IDLE, nothing restarted");
 
         /* ③ 模块失联（会自愈的安全态）：屏断链 3 秒 → 急停；模块回来也不自己恢复输出 */
         enter_auto_heat();
@@ -642,6 +669,43 @@ int main(void)
         tcs_alarm_ack(); tick100();
         CHECK(control_state() == CTRL_IDLE && control_safety_latched() == 0 && count_sw_on() == 0 && g_tcs.mode == 0,
               "L04 stuck row: acknowledged -> IDLE in manual mode, nothing restarted");
+    }
+
+    /* ====== L05（R8-04，独立复核 r8f）：超温 SAFE 里断链只记“已处理” → 网页 ack 后就没人看屏了 ======
+     * 复现 R8 的 D：自动制热中超温 → SAFE；屏断链 5 秒；水温降下来后操作员在**网页**上按解除。
+     * 修前：断链被记成“已处理”（tripped=1），ack 清掉超温后状态机按体温重新开 TEC，而屏一直断着，
+     *       再也不会判急停（R8 主机实测 peer_age=8.2 s、tec1_cmd=1、estops=0）。
+     * 修后：断链时把急停位补上；ack 之后锁存一空，下一拍链路仍断 → 立刻重新锁急停。
+     * 判别性：mutation_control_manual.py 的 B11（把“这次断开已处理”的提前返回加回去）。*/
+    {
+        link_loss_guard_t g;
+        enter_auto_heat();
+        CHECK(control_state() == CTRL_HEAT && g_tcs.tec1_on == 1, "L05 precondition: auto HEAT");
+        g_tcs.tc1_act = 60.0f; tick();                    /* 超温 → SAFE（只锁 OVERTEMP）*/
+        CHECK(control_safety_latched() == SAFETY_BIT_OVERTEMP && control_state() == CTRL_SAFE,
+              "L05 precondition: SAFE with OVERTEMP only (no estop yet)");
+        ll_begin(&g);
+        link_lost_run(&g, 5000u, 1500u, heal_water);      /* 屏断链 5 秒；水温 1.5 秒起恢复 */
+        CHECK(g_ll_estops == 1 && (control_safety_latched() & SAFETY_BIT_ESTOP) != 0,
+              "L05 [R8-04] link loss in an overtemp SAFE adds the estop bit");
+        CHECK(control_tec_cmd(1) == 0 && control_tec_cmd(2) == 0, "L05 outputs are off");
+        /* 操作员在网页上按“解除”（屏仍然断着） */
+        tcs_alarm_ack();
+        tick100(); link_check(&g, 1, 5100u);
+        CHECK((control_safety_latched() & SAFETY_BIT_ESTOP) != 0,
+              "L05 [R8-04] the estop is re-latched on the tick after the ack");
+        CHECK(control_tec_cmd(1) == 0 && control_tec_cmd(2) == 0,
+              "L05 [R8-04] the web ack does not restart the TEC while the screen is still lost");
+        tick100(); link_check(&g, 1, 5200u);
+        CHECK(control_state() == CTRL_SAFE && control_tec_cmd(1) == 0 && control_tec_cmd(2) == 0,
+              "L05 [R8-04] still SAFE with both TEC off while the screen is lost");
+        /* 屏回来 + ack → 恢复（手动模式，不自动重启）*/
+        link_alive_run(&g, 10000u, heal_water);
+        CHECK(control_state() == CTRL_SAFE && (control_safety_latched() & SAFETY_BIT_ESTOP) != 0,
+              "L05 link back -> still SAFE until acknowledged");
+        tcs_alarm_ack(); tick100();
+        CHECK(control_state() == CTRL_IDLE && control_safety_latched() == 0 && g_tcs.mode == 0,
+              "L05 acknowledged after the link is back -> IDLE in manual mode, nothing restarted");
     }
 
     /* ====== M13–M15 水温卡死在手动模式下的口径（2026-11-26，合并 e3a 之后加的）======

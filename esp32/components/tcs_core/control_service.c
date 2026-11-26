@@ -128,10 +128,12 @@ static void link_loss_check(uint32_t now_ms)
 {
     uint32_t age = 0u;
     int seen = link_peer_age_ms(&age);
-    /* r7f（独立复核 R7-01，2026-11-26）：传给判定的"已在安全态"只认急停 / 超温锁存着的安全态（那两种只有
-     * 人工确认能解除，输出已经停了，不重复触发）。原先传的是 control_state() == CTRL_SAFE——模块失联 /
-     * 体温失联 / 读数卡死的安全态也算进去，而它们会 2 秒自愈：屏断链期间故障一自愈，设备就在没有人确认的
-     * 情况下自己恢复输出。现在这几种安全态里断链照常触发急停（tcs_emergency_stop_src 对已停的输出幂等）。*/
+    /* r7f（独立复核 R7-01，2026-11-26）：传给判定的"已在安全态"不再按状态机算。原先传的是
+     * control_state() == CTRL_SAFE——模块失联 / 体温失联 / 读数卡死的安全态也算进去，而它们会 2 秒自愈：
+     * 屏断链期间故障一自愈，设备就在没有人确认的情况下自己恢复输出。现在这几种安全态里断链照常触发急停
+     * （tcs_emergency_stop_src 对已停的输出幂等）。
+     * R8-04（独立复核 r8f，2026-11-26）：判据再收窄到**急停位本身**（link_loss_already_safe）。超温也能
+     * 被人在网页上确认掉，而确认之后屏还是断的——那种情况下断链必须把急停位补上，不能只记"已处理"。*/
     if (link_loss_guard_step(&s_link_loss, seen, age, link_loss_already_safe(control_safety_latched()))
         != TCS_LINK_LOSS_ESTOP) return;
     ESP_LOGE(TAG, "SCREEN LINK LOST: no frame from the display for %lums (connected before) "

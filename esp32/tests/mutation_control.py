@@ -209,11 +209,27 @@ MUTATIONS = [
     #      用例 K9b / K9c / K24 在 test_control_esp32.c ----
     ("M66 TEC 开沿不预判「读数早就冻住」（回到 30 秒起步盲窗）",
      [("    if (!c->last_change || !on_since) return 0;", "    if (1) return 0;")], ""),
-    ("M67 体温先触发时不把同拍也冻着的水温记进涉事通道（体温遮住水温）",
-     [("            if (body_stuck && tc1_pre) s_stuck_chn |= 2u;", "            ;")], ""),
-    ("M68 体温先触发时不报水温的报警位",
-     [("            if (body_stuck && tc1_pre)   tcs_alarm_raise(ALM_SENSOR_OPEN);   /* r7f R7-04：见下面那一行 */",
-       "            ;")], ""),
+    # ---- 2026-11-26 r8f（独立复核 R8-01 / R8-02，P2）。用例 K25 / K24（K24b 是对照）在
+    #      test_control_esp32.c。R8-02 的修法撤掉了 r7f R7-04 的 tc1_pre 支路（它用 30 秒短窗口把
+    #      稳态水温也拖进涉事通道），原来的 M67 / M68 没有锚点了；回归变异改成 M78（把短窗口拖拽加回去）。----
+    ("M77 ack 清借来的报警位只认 TC1（TC2-only 卡死时屏上“没有原因”）",
+     [("!(stuck_chn & (2u | 4u))", "!(stuck_chn & 2u)")], ""),
+    ("M78 体温先判出来时按 30 秒短窗口把也“没动”的水温记进涉事通道（R8-02 回退：稳态水温把设备按在 SAFE）",
+     [("            if (tc1_stuck || tc2_stuck)  tcs_alarm_raise(ALM_SENSOR_OPEN);   /* 两路水温共用借来的这一位 */\n"
+       "            SAFETY_LOCK();",
+       "            if (tc1_stuck || tc2_stuck)  tcs_alarm_raise(ALM_SENSOR_OPEN);   /* 两路水温共用借来的这一位 */\n"
+       "            if (body_stuck && s_tec_cmd_on[0] && stuck_is(&s_stuck_tc1, now_ms, s_tec_on_since[0]))\n"
+       "                tcs_alarm_raise(ALM_SENSOR_OPEN);\n"
+       "            SAFETY_LOCK();"),
+      ("            s_stuck_chn |= (uint8_t)((body_stuck ? 1u : 0u) | (tc1_stuck ? 2u : 0u) | (tc2_stuck ? 4u : 0u));",
+       "            s_stuck_chn |= (uint8_t)((body_stuck ? 1u : 0u) | (tc1_stuck ? 2u : 0u) | (tc2_stuck ? 4u : 0u));\n"
+       "            if (body_stuck && s_tec_cmd_on[0] && stuck_is(&s_stuck_tc1, now_ms, s_tec_on_since[0])) s_stuck_chn |= 2u;")], ""),
+    ("M79 TEC 开沿的体温预冻判据恢复（R8-03 回退：自动进 HEAT 的当拍就可能误进 SAFE）",
+     [("        body_stuck = (uint8_t)(g_tcs.mode != 0 && (s_state == CTRL_HEAT || s_state == CTRL_COOL)\n"
+       "                               && stuck_is(&s_stuck_body, now_ms, s_tec_on_since[0]));",
+       "        body_stuck = (uint8_t)(g_tcs.mode != 0 && (s_state == CTRL_HEAT || s_state == CTRL_COOL)\n"
+       "                               && (stuck_is(&s_stuck_body, now_ms, s_tec_on_since[0])\n"
+       "                                   || stuck_prefrozen(&s_stuck_body, now_ms, s_tec_on_since[0], CTRL_STUCK_WINDOW_MS)));")], ""),
     ("M62 ack 的超温判据只看 TC1",
      [("    safety_set_ok(SAFETY_BIT_OVERTEMP, (uint8_t)!water_overtemp());   /* r7f R7-08：两路水温 */",
        "    safety_set_ok(SAFETY_BIT_OVERTEMP, (uint8_t)(g_tcs.tc1_act <= ALM_OVERTEMP_HARD_C));")], ""),

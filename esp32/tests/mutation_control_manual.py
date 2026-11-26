@@ -70,29 +70,38 @@ MUTATIONS = [
     (LL, "B01 满不多不少 3 秒不触发（差一拍）", "    if (peer_age_ms < TCS_LINK_LOST_ESTOP_MS) {",
      "    if (peer_age_ms <= TCS_LINK_LOST_ESTOP_MS) {", ""),
     (LL, "B02 从未连上过也触发", "    if (!ever_connected) {", "    if (0) {", ""),
-    (LL, "B03 断开期间每拍重复触发", "    if (g->tripped) return TCS_LINK_LOSS_NONE;",
-     "    if (0) return TCS_LINK_LOSS_NONE;", ""),
+    # R8-04 之后 tripped 不再参与任何判定（“这次断开处理过了”不能挡住重新锁急停）：原来的 B03
+    # （按 tripped 提前返回）就是 R8-04 的缺陷本体，反向由 B11 钉住，所以 B03 删除；B05 / B06 只剩
+    # 诊断字段的读写，行为等价（理由写在备注里）。
     (LL, "B04 已在安全态照样触发", "    if (already_safe) {\n        g->tripped = 1;\n        return TCS_LINK_LOSS_NONE;\n    }",
      "    if (already_safe) {\n    }", ""),
-    (LL, "B05 触发后不记已触发", "    g->tripped = 1;\n    return TCS_LINK_LOSS_ESTOP;",
-     "    return TCS_LINK_LOSS_ESTOP;", ""),
+    (LL, "B05 触发后不记已触发",
+     "    g->tripped = 1;\n    return TCS_LINK_LOSS_ESTOP;",
+     "    return TCS_LINK_LOSS_ESTOP;",
+     "等价：tripped 只作诊断（R8-04 之后不参与判定）；少这一次赋值不改变任何返回/门控，下一拍 already_safe 分支也会把它置 1"),
     (LL, "B06 链路恢复后不重新武装",
      "    if (peer_age_ms < TCS_LINK_LOST_ESTOP_MS) {\n        g->tripped = 0;",
-     "    if (peer_age_ms < TCS_LINK_LOST_ESTOP_MS) {\n        ;", ""),
-    # ---- link_loss_guard.c：already_safe 只认急停 / 超温锁存（r7f，独立复核 R7-01）。
-    #      用例 L04（断链 × 安全态原因 矩阵）在 test_control_manual.c ----
+     "    if (peer_age_ms < TCS_LINK_LOST_ESTOP_MS) {\n        ;",
+     "等价：tripped 不参与判定；链路恢复后的重新武装由 already_safe=0 决定（L01 / B09 / B11 覆盖）"),
+    # ---- link_loss_guard.c：already_safe 只认**急停**位（r7f R7-01 + r8f R8-04）。
+    #      用例 L01b / L04 / L05 在 test_control_manual.c。R8-04 之后超温不再算“已在安全态”
+    #      （它可以在网页上确认掉），所以 B09 改成“恒为 1”，B10 改成“只认超温”，并新增 B11
+    #      钉住“锁存一空、链路仍断 → 必须重新锁急停”。----
     (LL, "B07 already_safe 认任何安全态（回到修前：会自愈的安全态里断链不锁急停）",
-     "    return (uint8_t)((safety_latched & (uint8_t)(SAFETY_BIT_ESTOP | SAFETY_BIT_OVERTEMP)) != 0u);",
+     "    return (uint8_t)((safety_latched & (uint8_t)SAFETY_BIT_ESTOP) != 0u);",
      "    return (uint8_t)(safety_latched != 0u);", ""),
-    (LL, "B08 already_safe 恒为 0（急停 / 超温的安全态里断链照样重复触发）",
-     "    return (uint8_t)((safety_latched & (uint8_t)(SAFETY_BIT_ESTOP | SAFETY_BIT_OVERTEMP)) != 0u);",
+    (LL, "B08 already_safe 恒为 0（急停锁着时断链照样重复触发）",
+     "    return (uint8_t)((safety_latched & (uint8_t)SAFETY_BIT_ESTOP) != 0u);",
      "    return 0;", ""),
-    (LL, "B09 already_safe 不认超温（超温的安全态里断链会叠加急停位）",
-     "    return (uint8_t)((safety_latched & (uint8_t)(SAFETY_BIT_ESTOP | SAFETY_BIT_OVERTEMP)) != 0u);",
-     "    return (uint8_t)((safety_latched & (uint8_t)SAFETY_BIT_ESTOP) != 0u);", ""),
-    (LL, "B10 already_safe 不认急停（急停的安全态里断链会再触发一次）",
-     "    return (uint8_t)((safety_latched & (uint8_t)(SAFETY_BIT_ESTOP | SAFETY_BIT_OVERTEMP)) != 0u);",
+    (LL, "B09 already_safe 恒为 1（断链永远不触发急停）",
+     "    return (uint8_t)((safety_latched & (uint8_t)SAFETY_BIT_ESTOP) != 0u);",
+     "    return 1;", ""),
+    (LL, "B10 already_safe 只认超温（急停锁着时断链会再触发一次）",
+     "    return (uint8_t)((safety_latched & (uint8_t)SAFETY_BIT_ESTOP) != 0u);",
      "    return (uint8_t)((safety_latched & (uint8_t)SAFETY_BIT_OVERTEMP) != 0u);", ""),
+    (LL, "B11 记了“这次断开处理过”就永不重新武装（R8-04 回退：锁存被确认掉后屏仍断着，再也不锁急停）",
+     "    /* 急停位已经在锁存里",
+     "    if (g->tripped) return TCS_LINK_LOSS_NONE;\n    /* 急停位已经在锁存里", ""),
     # ---- control.c ----
     (CT, "C01 手动分支不驱动两路输出", "        control_manual_poll();\n", "", ""),
     (CT, "C02 进安全态不清零", "    control_manual_reset(0);\n}", "}", ""),

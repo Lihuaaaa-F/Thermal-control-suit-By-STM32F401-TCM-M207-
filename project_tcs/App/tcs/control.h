@@ -45,6 +45,37 @@ typedef struct {
 void  control_init(const control_ops_t *ops);
 void  control_poll(uint32_t now_ms);            /* 主循环 500ms 节拍调用 */
 ctrl_state_t control_state(void);
+
+/* ====== 状态迁移环（S 线 i3，条目 9；e3a 第五节方案第 1 条）======
+ * 最近 8 条状态迁移，落 .noinit（软复位后还在；掉电丢——H743 没有不掉电的存储）。magic + 累计条数 +
+ * CRC32 判整环有效：随机内容一律判无效。写入点：goto_state()（状态机迁移，ev=0）与
+ * tcs_emergency_stop()（急停登记，ev=1，from 是当时状态、to = CTRL_SAFE）。
+ * 下面五个是纯逻辑（tests/test_control.c 直接编）；目标机那一份见 control_trace()。*/
+#define TCS_TRACE_N      8
+#define TCS_TRACE_MAGIC  0x54435452u   /* 'TRCT' */
+typedef struct {
+    uint32_t ms;        /* 写入时刻（control_poll 的 now_ms；急停落在两拍之间时是上一拍）*/
+    uint16_t alarm;     /* 当时的报警位 */
+    uint8_t  from, to;  /* ctrl_state_t */
+    uint8_t  ev;        /* 0 = 状态机迁移；1 = 急停登记 */
+} tcs_trace_ent_t;
+typedef struct {
+    uint32_t magic;
+    uint32_t seq;       /* 累计写入条数（环容量 TCS_TRACE_N）*/
+    uint16_t head;      /* 下一条写入位置 */
+    uint8_t  cnt;       /* 有效条数（≤ TCS_TRACE_N）*/
+    uint8_t  pad;
+    tcs_trace_ent_t e[TCS_TRACE_N];
+    uint32_t crc;       /* 覆盖本结构 crc 之前的全部字节 */
+} tcs_trace_t;
+
+void     tcs_trace_reset(tcs_trace_t *t);
+void     tcs_trace_push(tcs_trace_t *t, const tcs_trace_ent_t *en);
+uint8_t  tcs_trace_valid(const tcs_trace_t *t);
+uint16_t tcs_trace_count(const tcs_trace_t *t);                 /* 无效环 → 0 */
+const tcs_trace_ent_t *tcs_trace_at(const tcs_trace_t *t, uint16_t i);  /* i = 0 最旧；越界 NULL */
+/* 目标机上的那一份（.noinit）；console 的 fault 命令与启动打印都读它 */
+const tcs_trace_t *control_trace(void);
 #if TCS_H743_LINK_ONLY
 void  control_link_follow(void);            /* PROD：本地诊断态跟随对端退出 SAFE（主循环每拍）*/
 #endif

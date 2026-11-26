@@ -14,6 +14,8 @@
 #include "control.h"
 #include "param_registry.h"
 #include "post.h"
+#include <string.h>
+#include <stddef.h>
 
 static control_ops_t s_ops;
 static ctrl_state_t  s_state = CTRL_IDLE;
@@ -110,10 +112,87 @@ static void out_tec_temp(uint8_t ch, float v)
     if (s_ops.tec_temp) s_ops.tec_temp(ch, v);
 }
 
+/* ====== 状态迁移环（S 线 i3，条目 9；e3a 第五节方案第 1 条）======
+ * 最近 8 条迁移，落 .noinit。纯逻辑五个函数（control.h），目标机那一份是 g_trace_ring。
+ * 判有效：magic + head/cnt 范围 + CRC32（覆盖 crc 之前的全部字节）——随机内容一律判无效。
+ * 不做"上电清零"：环的意义正是让软复位之后还能看见复位前走过哪些状态。*/
+static uint32_t trace_crc32(const void *p, size_t n)
+{
+    const uint8_t *b = (const uint8_t *)p;
+    uint32_t c = 0xFFFFFFFFu;
+    for (size_t i = 0; i < n; i++) {
+        c ^= b[i];
+        for (int k = 0; k < 8; k++) c = (c >> 1) ^ (0xEDB88320u & (uint32_t)(-(int32_t)(c & 1u)));
+    }
+    return ~c;
+}
+
+void tcs_trace_reset(tcs_trace_t *t)
+{
+    if (!t) return;
+    memset(t, 0, sizeof *t);
+    t->magic = TCS_TRACE_MAGIC;
+    t->crc = trace_crc32(t, offsetof(tcs_trace_t, crc));
+}
+
+uint8_t tcs_trace_valid(const tcs_trace_t *t)
+{
+    if (!t || t->magic != TCS_TRACE_MAGIC) return 0;
+    if (t->head >= TCS_TRACE_N || t->cnt > TCS_TRACE_N) return 0;
+    return (uint8_t)(trace_crc32(t, offsetof(tcs_trace_t, crc)) == t->crc);
+}
+
+void tcs_trace_push(tcs_trace_t *t, const tcs_trace_ent_t *en)
+{
+    if (!t || !en) return;
+    if (!tcs_trace_valid(t)) tcs_trace_reset(t);   /* 上次上电的垃圾 / 半截写 → 从头开始 */
+    t->e[t->head] = *en;
+    t->head = (uint16_t)((t->head + 1u) % TCS_TRACE_N);
+    if (t->cnt < TCS_TRACE_N) t->cnt++;
+    t->seq++;
+    t->crc = trace_crc32(t, offsetof(tcs_trace_t, crc));
+}
+
+uint16_t tcs_trace_count(const tcs_trace_t *t)
+{
+    return tcs_trace_valid(t) ? t->cnt : 0u;
+}
+
+const tcs_trace_ent_t *tcs_trace_at(const tcs_trace_t *t, uint16_t i)
+{
+    if (!tcs_trace_valid(t) || i >= t->cnt) return NULL;
+    return &t->e[(t->head + TCS_TRACE_N - t->cnt + i) % TCS_TRACE_N];   /* 0 = 最旧 */
+}
+
+/* 目标机那一份：.noinit（软复位后还在）。MSVC 主机单测没有 .noinit 段，用普通静态。*/
+#if defined(__GNUC__)
+tcs_trace_t g_trace_ring __attribute__((section(".noinit")));
+#else
+tcs_trace_t g_trace_ring;
+#endif
+const tcs_trace_t *control_trace(void) { return &g_trace_ring; }
+
+static uint32_t s_trace_now;     /* 最近一拍的 now_ms（control_poll 里刷；急停落在两拍之间时用它）*/
+
+static void trace_note(uint8_t from, uint8_t to, uint8_t ev)
+{
+    tcs_trace_ent_t en;
+    en.ms = s_trace_now;
+    en.alarm = g_tcs.alarm_bits;
+    en.from = from;
+    en.to = to;
+    en.ev = ev;
+    tcs_trace_push(&g_trace_ring, &en);
+}
+
 static void goto_state(ctrl_state_t st)
 {
     if (s_state == st) return;
-    s_state = st;
+    {
+        uint8_t from = (uint8_t)s_state;
+        s_state = st;
+        trace_note(from, (uint8_t)st, 0u);   /* S 线 i3（条目 9）：状态迁移环 */
+    }
     if (s_ops.on_state) s_ops.on_state(st);
 }
 
@@ -213,6 +292,7 @@ void tcs_emergency_stop(void)
     out_tec_sw(1, 0);
     out_tec_sw(2, 0);
     out_fan(1);
+    trace_note((uint8_t)s_state, (uint8_t)CTRL_SAFE, 1u);   /* S 线 i3（条目 9）：急停登记单独记一笔 */
     goto_state(CTRL_SAFE);
     /* v2：TEC/风扇在 ESP32，本地动作无物理效果——必须下发 0x15 cmd=8。
      * R-15：只有"首次"发帧；重发由主循环按 200ms 负责（本地动作上面每次都做了）。*/
@@ -278,6 +358,7 @@ void control_observe_temp(float tc1_act)
 /* ====== 500ms 评估 ====== */
 void control_poll(uint32_t now_ms)
 {
+    s_trace_now = now_ms;                /* S 线 i3：迁移环的时间戳（急停落在两拍之间时用最近一拍）*/
 #if TCS_USE_LVGL
     tcs_hist_tick(now_ms);
 #endif

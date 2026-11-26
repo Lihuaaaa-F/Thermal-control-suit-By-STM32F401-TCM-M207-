@@ -49,7 +49,7 @@ int main(void)
     ui_banner_select(&in, &lv, &b);
     CHECK(b.kind == UI_BN_SERVICE, "only ALM_SERVICE: banner kind is SERVICE");
     CHECK(b.red == 1, "only ALM_SERVICE: red banner (needs the user to act)");
-    STREQ(b.title, "服务启动失败", "only ALM_SERVICE: title");
+    STREQ(b.title, "功能启动失败", "only ALM_SERVICE: title");
     STREQ(b.detail, "部分功能不可用 · 请断电重启", "only ALM_SERVICE: detail says what to do");
     CHECK(b.extra == 0, "only ALM_SERVICE: no 'other alarms'");
     CHECK(b.tap == UI_BN_TAP_HINT, "only ALM_SERVICE: tapping gives a hint, not an ack (ack cannot clear it)");
@@ -87,7 +87,7 @@ int main(void)
         ui_in_t up = in_up(1000u, 1u);
         lv = ui_link_view(&up);
     }
-    STREQ(ui_ack_reason(ALM_SERVICE, &lv), "有后台服务没能启动，请断电重启", "ack reason names the service failure");
+    STREQ(ui_ack_reason(ALM_SERVICE, &lv), "有功能没能启动，请重新启动", "ack reason names the service failure");
     CHECK(ui_ack_reason(0, &lv) == NULL, "no residual bits: no reason");
 
     printf("test_ui_svc: PASS=%d FAIL=%d\n", g_pass, g_fail);

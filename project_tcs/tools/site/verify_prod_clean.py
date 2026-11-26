@@ -77,6 +77,52 @@ ESP32_STRINGS_SIM = {
 NM = "arm-none-eabi-nm"
 
 
+def check_recorder(elf):
+    """正向核对（S 线 i3，条目 9；e3a 第五节方案第 4 条）：交付档 ELF 里**必须有**故障记录器与状态迁移环，
+    且都在 .noinit。现在的门禁只查"不该有的符号"——记录器被哪次清理误删、或从 .noinit 挪进 .bss，
+    都不会被发现（上电即被清零，取证价值归零）。"""
+    bad = []
+    try:
+        out = subprocess.run(["arm-none-eabi-objdump", "-t", elf], capture_output=True, text=True,
+                             errors="replace").stdout
+    except OSError as e:
+        return ["  [记录器] 找不到 arm-none-eabi-objdump（%s）" % e]
+    need = {"g_fault_rec": None, "g_trace_ring": None}
+    for ln in out.splitlines():
+        parts = ln.split()
+        if len(parts) < 5:
+            continue
+        name = parts[-1]
+        if name in need:
+            need[name] = parts[-3]          # 形如：200xxxxx l  O .noinit  00000064 g_fault_rec
+    for n, sec in need.items():
+        if sec is None:
+            bad.append("  [记录器] 符号 %s 不在交付档 ELF 里（被清理误删？）" % n)
+        elif not sec.startswith(".noinit"):
+            bad.append("  [记录器] %s 的段是 %s，必须在 .noinit（否则上电即被清零）" % (n, sec))
+    if not bad:
+        try:
+            hdr = subprocess.run(["arm-none-eabi-objdump", "-h", elf], capture_output=True, text=True,
+                                 errors="replace").stdout
+        except OSError:
+            hdr = ""
+        # .noinit 必须是 NOBITS（不占镜像、启动不清零）：objdump -h 对 NOBITS 段的标志行只有 "ALLOC"，
+        # 不会出现 CONTENTS / LOAD。有内容 = 被当普通数据段链接进去了（上电会被初值覆盖）。
+        in_noinit = False
+        for ln in hdr.splitlines():
+            if ".noinit" in ln and len(ln.split()) >= 3 and ln.split()[0].rstrip(".").isdigit():
+                in_noinit = True
+                continue
+            if in_noinit:
+                if "CONTENTS" in ln or re.search(r"\bLOAD\b", ln):
+                    bad.append("  [记录器] .noinit 段不是 NOBITS（标志行：%s）——上电会覆盖记录" % ln.strip()[:60])
+                break
+        else:
+            if not in_noinit:
+                bad.append("  [记录器] 交付档 ELF 里没有 .noinit 段")
+    return bad
+
+
 def h743_symbols(elf):
     try:
         out = subprocess.run([NM, elf], capture_output=True, text=True, errors="replace").stdout
@@ -167,6 +213,9 @@ def main():
     ap.add_argument("--esp32", help="ESP32 app .bin（不要传 bootloader / partition-table）")
     ap.add_argument("--expect-hooks", action="store_true",
                     help="反过来核对（只对 --elf）：台架档产物里这些钩子必须在")
+    ap.add_argument("--expect-recorder", action="store_true",
+                    help="正向核对（只对 --elf）：故障记录器 g_fault_rec 与状态迁移环 g_trace_ring 必须在，"
+                         "且都在 .noinit（S 线 i3，条目 9）")
     ap.add_argument("--esp32-expect", action="append", default=[], metavar="键",
                     help="这条 ESP32 命令必须在这个档里（可重复）：linkmute linkloop webtest "
                          "linkrepin gedge ltx m207raw mode tec fan")
@@ -190,6 +239,8 @@ def main():
     bad = []
     if a.elf:
         bad += check_h743(a.elf, expect)
+        if a.expect_recorder:
+            bad += check_recorder(a.elf)
     if a.esp32:
         bad += check_esp32(a.esp32, expect_keys)
     what = "台架档产物必须含钩子" if expect else "交付（PROD）档产物不得含调试/台架钩子"

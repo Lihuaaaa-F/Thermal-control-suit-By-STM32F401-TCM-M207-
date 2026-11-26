@@ -909,6 +909,27 @@ void console_print_fault_record(void)
     tcs_log("[FAULT]", "  stacked SP=0x%08lx stk_lr=0x%08lx xPSR=0x%08lx ICSR=0x%08lx SHCSR=0x%08lx FPCCR=0x%08lx",
             (unsigned long)g_fault_rec.sp, (unsigned long)g_fault_rec.stk_lr, (unsigned long)g_fault_rec.xpsr,
             (unsigned long)g_fault_rec.icsr, (unsigned long)g_fault_rec.shcsr, (unsigned long)g_fault_rec.fpccr);
+
+    /* S 线 i3（条目 9）：最近 8 条状态迁移（.noinit，软复位后还在；掉电丢）。
+     * 与 HardFault 记录一起打：复位前走过哪些状态、当时报警位是什么。*/
+    {
+        const tcs_trace_t *t = control_trace();
+        static const char *const nm[4] = { "IDLE", "COOL", "HEAT", "SAFE" };
+        uint16_t n = tcs_trace_count(t);
+        if (!n) {
+            tcs_log("[TRACE]", "state trace: none (empty, or invalid contents after a cold power-up)");
+        } else {
+            tcs_log("[TRACE]", "state trace: %u entries (oldest first), seq=%lu",
+                    (unsigned)n, (unsigned long)t->seq);
+            for (uint16_t i = 0; i < n; i++) {
+                const tcs_trace_ent_t *e = tcs_trace_at(t, i);
+                if (!e) break;
+                tcs_log("[TRACE]", "  %lu ms %s -> %s%s alarm=0x%04X",
+                        (unsigned long)e->ms, nm[e->from & 3u], nm[e->to & 3u],
+                        e->ev ? " (estop)" : "", (unsigned)e->alarm);
+            }
+        }
+    }
 }
 
 void console_print_reset_source(void)

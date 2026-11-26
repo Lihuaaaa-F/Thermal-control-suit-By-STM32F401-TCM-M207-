@@ -116,8 +116,8 @@ CLEAN_NOTE="未做（需要 python 与 arm-none-eabi-nm）"
 if command -v python >/dev/null 2>&1 && command -v arm-none-eabi-nm >/dev/null 2>&1; then
     export PYTHONUTF8=1
     CLEAN_NOTE="PASS"
-    python tools/site/verify_prod_clean.py --elf "$OUT/PROD/tcs_main.elf" \
-        || { CLEAN_NOTE="FAIL（交付档产物里有钩子，见上方明细）"; FAIL=1; }
+    python tools/site/verify_prod_clean.py --elf "$OUT/PROD/tcs_main.elf" --expect-recorder \
+        || { CLEAN_NOTE="FAIL（交付档产物里有钩子，或记录器不在 .noinit，见上方明细）"; FAIL=1; }
     for p in BENCH SIM SIMWG; do
         python tools/site/verify_prod_clean.py --elf "$OUT/$p/tcs_main.elf" --expect-hooks \
             || { CLEAN_NOTE="FAIL（$p 档里钩子不全，见上方明细）"; FAIL=1; }

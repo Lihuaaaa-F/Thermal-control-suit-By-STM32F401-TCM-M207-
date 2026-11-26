@@ -204,6 +204,34 @@ check("_Static_assert(WS_MAX_CLIENTS + 2 <= WS_HTTPD_MAX_SOCKETS" in ws
 check("cfg.max_open_sockets = WS_HTTPD_MAX_SOCKETS;" in httpd,
       "web_start sets max_open_sockets explicitly to the asserted value")
 
+# ---------------------------------------------------------------- M10-F-06：口令不进日志 + 正典声明
+print("[gate] M10-F-06 AP password never reaches the serial log; the canon says it is not a secret and NVS is unencrypted")
+_log_stmts = [m.group(0) for m in re.finditer(r"ESP_LOG[IWED]\s*\([^;]*;", softap)]
+
+
+def _args_only(stmt):
+    """去掉格式串（含相邻字面量拼接，如 "a" IPSTR "b"），只留实参部分。"""
+    return re.sub(r'"(?:\\.|[^"\\])*"', '""', stmt)
+
+
+check(len(_log_stmts) > 0, "softap.c logs the AP-up line")
+check("pass=%s" not in softap, "softap.c has no pass=%s log")
+check("pass=***" in softap, "the AP-up log line prints pass=***")
+check(not any(re.search(r"\bpass\b", _args_only(s)) for s in _log_stmts),
+      "no log call in softap.c passes the password variable as an argument")
+canon = None
+_docs = os.path.join(REPO, "docs")
+if os.path.isdir(_docs):
+    _cands = [f for f in os.listdir(_docs) if f.startswith(u"现行规格说明书_v") and f.endswith(".md")]
+    if _cands:
+        _cands.sort(key=lambda fn: [int(x) for x in re.findall(r"\d+", fn.rsplit("_v", 1)[-1])])
+        canon = read(REPO, "docs", _cands[-1])          # 版本号最高的一份就是现行正典
+check(canon is not None, "canon spec found (docs: xianxing guigeshuomingshu, highest version)")
+check(canon is not None and u"口令非机密" in canon and u"NVS 不加密" in canon,
+      "canon: the AP password is not a secret; NVS is not encrypted")
+check(canon is not None and u"产线" in canon and u"后续项" in canon,
+      "canon: production encryption is listed as a follow-up item that needs the production line")
+
 print("===================")
 if FAIL == 0:
     print("test_web_gates: PASS")

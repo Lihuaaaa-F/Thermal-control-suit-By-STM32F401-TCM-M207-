@@ -440,6 +440,31 @@ int main(void)
         in.estop_local = 0u;
         ui_home_state(&in, &v, &h1);
         CHECK(h1.estop == 0, "E 主控断开且没记下急停：急停键是红的（急停必须一直可点）");
+
+        /* r7f（独立复核 R7-06，2026-11-26）：首页风扇卡片在链路不新鲜时不发 0x15（与模式页同一条口径）。
+         * 修前 clk_fan 无条件发帧：快照停更时点它，手动模式暂停里的风扇就是真被切了。*/
+        in.estop_local = 0u;
+        in.snap_age_ms = 4000u;                        /* 快照停更：链路不新鲜 */
+        v = ui_link_view(&in);
+        ui_home_state(&in, &v, &h1);
+        CHECK(h1.link == UI_LINK_DOWN, "R7-06 首页：主控断开");
+        {
+            const char *blk = ui_home_fan_block(&h1);   /* 修前没有这道门：桩回 NULL，下面必红 */
+            CHECK(blk != NULL && strcmp(blk, "主控连接中断，现在不能操作") == 0,
+                  "R7-06 首页风扇卡片：点了只提示");
+        }
+        in = in_up(2000u, 9u);                         /* 链路在：照常可用 */
+        v = ui_link_view(&in);
+        ui_home_state(&in, &v, &h1);
+        CHECK(ui_home_fan_block(&h1) == NULL, "R7-06 首页风扇卡片：链路在时不算拦");
+        in.snap_age_ms = UI_LINK_NEVER;                /* 从未连上（台架只接网页）同样不新鲜 */
+        v = ui_link_view(&in);
+        ui_home_state(&in, &v, &h1);
+        {
+            const char *blk = ui_home_fan_block(&h1);
+            CHECK(blk != NULL && strcmp(blk, "主控连接中断，现在不能操作") == 0,
+                  "R7-06 首页风扇卡片：从未连上也提示");
+        }
     }
 
     /* ====== F. m1"模式"页（用户 2026-11-26 定的新功能）====== */
@@ -506,6 +531,12 @@ int main(void)
         m1 = m0; m1.link = UI_LINK_DOWN;
         CHECK(ui_mode_diff(&m0, &m1) == UI_M_LINK, "F4 链路位");
         STREQ(ui_mode_tap_block(&m1), "主控连接中断，现在不能操作", "F4 主控断开：点了只提示");
+        /* r7f（独立复核 R7-06）：风扇键同一口径——链路不新鲜时不发 0x15（修前这里返回 NULL，照发）*/
+        {
+            const char *blk = ui_mode_fan_block(&m1);
+            CHECK(blk != NULL && strcmp(blk, "主控连接中断，现在不能操作") == 0,
+                  "F4 主控断开：风扇键点了只提示");
+        }
 
         /* F5 自动模式：没有方向键；方向照显（状态机给的）；风扇不锁 */
         in = in_up(10000u, 100u);

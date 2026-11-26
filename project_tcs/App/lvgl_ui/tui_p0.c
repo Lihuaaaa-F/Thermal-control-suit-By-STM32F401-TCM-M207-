@@ -67,7 +67,22 @@ static uint32_t s_note_seq;
 static void clk_tune(lv_event_t *e)  { LV_UNUSED(e); tui_request(TUI_TUNE); }
 static void clk_chart(lv_event_t *e) { LV_UNUSED(e); tui_request(TUI_CHART); }
 static void clk_conn(lv_event_t *e)  { LV_UNUSED(e); tui_request(TUI_CONN); }
-static void clk_fan(lv_event_t *e)   { LV_UNUSED(e); control_fan_toggle(); }   /* v2：0x15 由主控执行 */
+/* 风扇卡片：v2 起 0x15 由主控执行。r7f（独立复核 R7-06，2026-11-26）：链路不新鲜时不发帧——
+ * 主控此刻收不到 / 落不到执行器，屏上也不该报"已切换"（与模式页方向键 / 风扇键同一条口径与文案）。*/
+static void clk_fan(lv_event_t *e)
+{
+    const ui_in_t *in;
+    const ui_link_view_t *lv;
+    ui_home_t now;
+    const char *blk;
+    LV_UNUSED(e);
+    tui_input_refresh();                      /* 要"此刻"的快照年龄 */
+    tui_input(&in, &lv);
+    ui_home_state(in, lv, &now);
+    blk = ui_home_fan_block(&now);
+    if (blk) { ui_toast(blk); return; }
+    control_fan_toggle();
+}
 
 /* m1（模式页，用户 2026-11-26）：首页的模式键只显示当前模式，点击进模式页——不再在首页直接切换。
  * （原先：切手动即时、切自动弹二次确认。二次确认框 tui_dlg_mode 留给模式页"切换到自动"用。）*/

@@ -401,8 +401,19 @@ const char *ui_mode_tap_block(const ui_mode_state_t *s)
 
 const char *ui_mode_fan_block(const ui_mode_state_t *s)
 {
+    /* r7f（独立复核 R7-06，2026-11-26）：链路不新鲜时与方向键同一条口径——所有能让风扇动作的入口
+     * 都不可用（主控此刻的命令落不到执行器，屏上也不该报"已切换"）。*/
+    if (s->link != UI_LINK_UP) return "主控连接中断，现在不能操作";
     /* 只有"想关"才拦：联动期间风扇本来就是开的，点它就是想关 */
-    if (s->link == UI_LINK_UP && s->fan_locked && s->fan) return "TEC 工作时风扇保持开启";
+    if (s->fan_locked && s->fan) return "TEC 工作时风扇保持开启";
+    return NULL;
+}
+
+const char *ui_home_fan_block(const ui_home_t *s)
+{
+    /* r7f（独立复核 R7-06，2026-11-26）：首页风扇卡片与模式页风扇键同一个口径——链路不新鲜时不发 0x15。
+     * 原先 clk_fan 无条件 control_fan_toggle()，快照停更时点它照样发帧（手动模式暂停期就是真把风扇切了）。*/
+    if (s->link != UI_LINK_UP) return "主控连接中断，现在不能操作";
     return NULL;
 }
 

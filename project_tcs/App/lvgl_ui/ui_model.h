@@ -194,6 +194,8 @@ int ui_mode_power(const ui_in_t *in, const ui_mode_state_t *s, int ch,
 /* 点方向键 / 风扇键之前先问：返回 NULL = 可以发；否则返回该提示的话（不发帧）*/
 const char *ui_mode_tap_block(const ui_mode_state_t *s);
 const char *ui_mode_fan_block(const ui_mode_state_t *s);
+/* r7f（独立复核 R7-06，2026-11-26）：首页风扇卡片点击前同样先问一句（链路不新鲜 → 提示、不发 0x15）*/
+const char *ui_home_fan_block(const ui_home_t *s);
 
 /* 点"制冷 / 制热 / 暂停"之后：以主控回读的实际输出为准，不抢先高亮 */
 typedef struct {

@@ -36,6 +36,13 @@ MUTATIONS = [
     ("M04 链路断开的横幅不再压过陈旧报警位",
      "    if (lv->link != UI_LINK_UP) {\n        char detail[80];",
      "    if (0) {\n        char detail[80];"),
+    # ---- r7f（独立复核 R7-06，2026-11-26）：链路不新鲜时风扇入口也不可用。用例 test_ui_model.c 的 F4 / E ----
+    ("R06-1 模式页风扇键不看链路（回到修前：链路断了照发 0x15）",
+     "    if (s->link != UI_LINK_UP) return \"主控连接中断，现在不能操作\";\n    /* 只有\"想关\"才拦",
+     "    /* 只有\"想关\"才拦"),
+    ("R06-2 首页风扇卡片不看链路（回到修前：无条件发 0x15）",
+     "    if (s->link != UI_LINK_UP) return \"主控连接中断，现在不能操作\";\n    return NULL;\n}",
+     "    return NULL;\n}"),
     ("M05 通信类横幅画成红色",
      'set_banner(out, UI_BN_AUTO, 0, UI_BN_TAP_HINT, auto_title,',
      'set_banner(out, UI_BN_AUTO, 1, UI_BN_TAP_HINT, auto_title,'),

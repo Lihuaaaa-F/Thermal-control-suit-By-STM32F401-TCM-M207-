@@ -218,6 +218,7 @@ project_tcs/Core/Src/syscalls_stub.c
 project_tcs/tests/assert_count.py
 project_tcs/tests/check_build_scripts.py
 project_tcs/tests/check_estop_yield.py
+project_tcs/tests/check_keypad_pd5.py
 project_tcs/tests/check_site_tap_guard.py
 project_tcs/tests/check_snap_fresh.py
 project_tcs/tests/check_tautology.py

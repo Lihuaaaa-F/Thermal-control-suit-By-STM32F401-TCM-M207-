@@ -43,6 +43,7 @@
 
 
 
+
 复现命令（仓库根 `/d/Espressif/ws/tcs`，Git Bash；raw 输出路径分隔符为 `\`，表内归一为 `/`）：
 
 ```bash
@@ -72,30 +73,31 @@ vendor 域说明：`App/rtt/`（SEGGER RTT vendor 五文件）同一 pattern 单
 
 
 
+
 | # | 文件:行 | API | 语义一句话 |
 |---|---|---|---|
 | 1 | project_tcs/App/eeprom/eeprom.c:58 | __HAL_RCC_GPIOH_CLK_ENABLE() | EEPROM 软件 I2C 引脚组（GPIOH）时钟使能 |
 | 2 | project_tcs/App/iwdg/iwdg.c:7 | HAL_RCC_OscConfig（注释提及） | 头注：LSI 已在 SystemClock_Config 由 OscConfig 启用（LSION）（非调用点） |
 | 3 | project_tcs/App/iwdg/iwdg.c:27 | __HAL_RCC_GET_FLAG(RCC_FLAG_LSIRDY) | iwdg_init 入口查 LSI 就绪标志（未就绪才进等待） |
 | 4 | project_tcs/App/iwdg/iwdg.c:30 | __HAL_RCC_GET_FLAG(RCC_FLAG_LSIRDY) | 等待循环内复查 LSIRDY（volatile 循环，最多 ~30ms 兜底） |
-| 5 | project_tcs/App/tcs/console.c:367 | HAL_RCC_GPIOA_CLK_ENABLE | 重锚新增：代码摘录见左列 |
-| 6 | project_tcs/App/tcs/console.c:368 | — | 重锚新增：代码摘录见左列 |
-| 7 | project_tcs/App/tcs/console.c:369 | HAL_RCC_GPIOC_CLK_ENABLE | 重锚新增：代码摘录见左列 |
-| 8 | project_tcs/App/tcs/console.c:370 | — | 重锚新增：代码摘录见左列 |
-| 9 | project_tcs/App/tcs/console.c:371 | HAL_RCC_GPIOE_CLK_ENABLE | 重锚新增：代码摘录见左列 |
-| 10 | project_tcs/App/tcs/console.c:372 | — | 重锚新增：代码摘录见左列 |
-| 11 | project_tcs/App/tcs/console.c:373 | HAL_RCC_GPIOG_CLK_ENABLE | 重锚新增：代码摘录见左列 |
-| 12 | project_tcs/App/tcs/console.c:374 | — | 重锚新增：代码摘录见左列 |
-| 13 | project_tcs/App/tcs/console.c:375 | HAL_RCC_GPIOI_CLK_ENABLE | 重锚新增：代码摘录见左列 |
-| 14 | project_tcs/App/tcs/console.c:376 | — | 重锚新增：代码摘录见左列 |
-| 15 | project_tcs/App/tcs/console.c:377 | HAL_RCC_GPIOK_CLK_ENABLE | 重锚新增：代码摘录见左列 |
-| 16 | project_tcs/App/tcs/console.c:455 | HAL_RCC_GPIOA_CLK_ENABLE | 重锚新增：代码摘录见左列 |
-| 17 | project_tcs/App/tcs/console.c:456 | HAL_RCC_GPIOC_CLK_ENABLE | 重锚新增：代码摘录见左列 |
-| 18 | project_tcs/App/tcs/console.c:457 | HAL_RCC_GPIOE_CLK_ENABLE | 重锚新增：代码摘录见左列 |
-| 19 | project_tcs/App/tcs/console.c:458 | HAL_RCC_GPIOG_CLK_ENABLE | 重锚新增：代码摘录见左列 |
-| 20 | project_tcs/App/tcs/console.c:459 | HAL_RCC_GPIOI_CLK_ENABLE | 重锚新增：代码摘录见左列 |
-| 21 | project_tcs/App/tcs/console.c:460 | HAL_RCC_GPIOK_CLK_ENABLE | 重锚新增：代码摘录见左列 |
-| 22 | project_tcs/App/tcs/console.c:925 | __HAL_RCC_CLEAR_RESET_FLAGS() | 复位源解析打印后清全部复位标志（防下次上电误读旧源） |
+| 5 | project_tcs/App/tcs/console.c:369 | HAL_RCC_GPIOA_CLK_ENABLE | 重锚新增：代码摘录见左列 |
+| 6 | project_tcs/App/tcs/console.c:370 | — | 重锚新增：代码摘录见左列 |
+| 7 | project_tcs/App/tcs/console.c:371 | HAL_RCC_GPIOC_CLK_ENABLE | 重锚新增：代码摘录见左列 |
+| 8 | project_tcs/App/tcs/console.c:372 | — | 重锚新增：代码摘录见左列 |
+| 9 | project_tcs/App/tcs/console.c:373 | HAL_RCC_GPIOE_CLK_ENABLE | 重锚新增：代码摘录见左列 |
+| 10 | project_tcs/App/tcs/console.c:374 | — | 重锚新增：代码摘录见左列 |
+| 11 | project_tcs/App/tcs/console.c:375 | HAL_RCC_GPIOG_CLK_ENABLE | 重锚新增：代码摘录见左列 |
+| 12 | project_tcs/App/tcs/console.c:376 | — | 重锚新增：代码摘录见左列 |
+| 13 | project_tcs/App/tcs/console.c:377 | HAL_RCC_GPIOI_CLK_ENABLE | 重锚新增：代码摘录见左列 |
+| 14 | project_tcs/App/tcs/console.c:378 | — | 重锚新增：代码摘录见左列 |
+| 15 | project_tcs/App/tcs/console.c:379 | HAL_RCC_GPIOK_CLK_ENABLE | 重锚新增：代码摘录见左列 |
+| 16 | project_tcs/App/tcs/console.c:457 | HAL_RCC_GPIOA_CLK_ENABLE | 重锚新增：代码摘录见左列 |
+| 17 | project_tcs/App/tcs/console.c:458 | HAL_RCC_GPIOC_CLK_ENABLE | 重锚新增：代码摘录见左列 |
+| 18 | project_tcs/App/tcs/console.c:459 | HAL_RCC_GPIOE_CLK_ENABLE | 重锚新增：代码摘录见左列 |
+| 19 | project_tcs/App/tcs/console.c:460 | HAL_RCC_GPIOG_CLK_ENABLE | 重锚新增：代码摘录见左列 |
+| 20 | project_tcs/App/tcs/console.c:461 | HAL_RCC_GPIOI_CLK_ENABLE | 重锚新增：代码摘录见左列 |
+| 21 | project_tcs/App/tcs/console.c:462 | HAL_RCC_GPIOK_CLK_ENABLE | 重锚新增：代码摘录见左列 |
+| 22 | project_tcs/App/tcs/console.c:927 | __HAL_RCC_CLEAR_RESET_FLAGS() | 复位源解析打印后清全部复位标志（防下次上电误读旧源） |
 | 23 | project_tcs/Core/Src/ft5446.c:287 | __HAL_RCC_GPIOD_CLK_ENABLE() | 触摸 bit-bang SCL/SDA（PD12/PD13）引脚时钟（ct_iic_init） |
 | 24 | project_tcs/Core/Src/ft5446.c:325 | __HAL_RCC_I2C4_CLK_ENABLE | W1a：I2C4 外设时钟 |
 | 25 | project_tcs/Core/Src/ft5446.c:343 | __HAL_RCC_GPIOD_CLK_ENABLE | W1a：I2C4 引脚组时钟（:103 PeriphCLKConfig 属 HAL_RCCEx_ 前缀不入本 grep，已注） |

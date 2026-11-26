@@ -43,6 +43,7 @@
 
 
 
+
 复现命令（仓库根 `/d/Espressif/ws/tcs`，Git Bash；raw 输出路径分隔符为 `\`，表内归一为 `/`）：
 
 ```bash
@@ -72,6 +73,7 @@ vendor 域说明：`App/rtt/`（SEGGER RTT vendor 五文件）同一 pattern 单
 
 
 
+
 | # | 文件:行 | API | 语义一句话 |
 |---|---|---|---|
 | 1 | project_tcs/App/eeprom/eeprom.c:22 | HAL_GPIO_WritePin（宏封装） | 软件 I2C 宏 IIC_SCL(x)：SCL 时钟脚电平输出 |
@@ -79,8 +81,8 @@ vendor 域说明：`App/rtt/`（SEGGER RTT vendor 五文件）同一 pattern 单
 | 3 | project_tcs/App/eeprom/eeprom.c:24 | HAL_GPIO_ReadPin（宏封装） | 软件 I2C 宏 IIC_READ_SDA：读 SDA 回读 |
 | 4 | project_tcs/App/eeprom/eeprom.c:64 | HAL_GPIO_Init(IIC_SCL_PORT, &gi) | EEPROM（AT24C02）软件 I2C SCL 引脚初始化 |
 | 5 | project_tcs/App/eeprom/eeprom.c:68 | HAL_GPIO_Init(IIC_SDA_PORT, &gi) | EEPROM 软件 I2C SDA 引脚初始化 |
-| 6 | project_tcs/App/tcs/console.c:384 | HAL_GPIO_Init | pindrv 调试命令：按参数初始化指定 GPIO（真机取证用，ports 表限界） |
-| 7 | project_tcs/App/tcs/console.c:386 | HAL_GPIO_WritePin | pindrv：按参数驱动引脚电平（链路探针取证命令） |
+| 6 | project_tcs/App/tcs/console.c:386 | HAL_GPIO_Init | pindrv 调试命令：按参数初始化指定 GPIO（真机取证用，ports 表限界） |
+| 7 | project_tcs/App/tcs/console.c:388 | HAL_GPIO_WritePin | pindrv：按参数驱动引脚电平（链路探针取证命令） |
 | 8 | project_tcs/Core/Src/ft5446.c:247 | HAL_GPIO_WritePin | 重锚新增：代码摘录见左列 |
 | 9 | project_tcs/Core/Src/ft5446.c:248 | HAL_GPIO_WritePin | 重锚新增：代码摘录见左列 |
 | 10 | project_tcs/Core/Src/ft5446.c:249 | HAL_GPIO_ReadPin | 重锚新增：代码摘录见左列 |

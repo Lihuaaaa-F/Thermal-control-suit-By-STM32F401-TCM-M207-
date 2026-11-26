@@ -43,6 +43,7 @@
 
 
 
+
 复现命令（仓库根 `/d/Espressif/ws/tcs`，Git Bash；raw 输出路径分隔符为 `\`，表内归一为 `/`）：
 
 ```bash
@@ -72,19 +73,20 @@ vendor 域说明：`App/rtt/`（SEGGER RTT vendor 五文件）同一 pattern 单
 
 
 
+
 | # | 文件:行 | API | 语义一句话 |
 |---|---|---|---|
 | 1 | project_tcs/App/comm/comm.c:6 | HAL_UART_Transmit（注释提及） | 头注：comm 链路唯一消费点串行 Transmit；ISR 内 comm_tick 只判超时+重传入队（非调用点） |
 | 2 | project_tcs/App/comm/comm.c:130 | （注释提及）（注释提及） | 重锚新增（注释提及）：代码摘录见左列 |
 | 3 | project_tcs/App/tcs/console.c:5 | HAL_UART_Transmit（注释提及） | 头注：控制台日志唯一 Transmit 消费点（铁律：ISR 不发送），日志同时进 RTT（非调用点） |
-| 4 | project_tcs/App/tcs/console.c:77 | HAL_UART_Transmit(s_uart, &s_tx_ring[tail], n, 10u) | TX 环形缓冲出队阻塞发送，超时 10ms（n≤32B@115200≈2.8ms，W10 #4） |
-| 5 | project_tcs/App/tcs/console.c:184 | HAL_UART_Receive_IT(s_uart, &s_rx_byte, 1) | RxCplt 回调内单字节连环重挂续收（W10 #1） |
-| 6 | project_tcs/App/tcs/console.c:189 | __HAL_UART_GET_FLAG(s_uart, UART_FLAG_ORE) | 错误恢复入口查 ORE 标志（金标准函数 console_uart_error_recover L111-116，W10 #2） |
-| 7 | project_tcs/App/tcs/console.c:190 | __HAL_UART_CLEAR_OREFLAG(s_uart) | 清 ORE 溢出标志 |
-| 8 | project_tcs/App/tcs/console.c:191 | HAL_UART_AbortReceive(s_uart) | 错误态 BUSY_RX 防重挂 HAL_BUSY（"防 BUSY 导致重挂失败"注释在本行；附录 C 三路配对 1/1/1 之一） |
-| 9 | project_tcs/App/tcs/console.c:192 | HAL_UART_Receive_IT(s_uart, &s_rx_byte, 1) | Abort 后重启接收（恢复完成） |
-| 10 | project_tcs/App/tcs/console.c:847 | __HAL_UART_GET_FLAG(s_uart, UART_FLAG_ORE) | 主循环 RX 自愈巡检：ORE 置位或 RXNEIE 被 HAL 错误路径关掉 → 调恢复函数（启动期线路扰动→控制台失聪的兜底） |
-| 11 | project_tcs/App/tcs/console.c:889 | HAL_UART_Receive_IT(s_uart, &s_rx_byte, 1) | console_init 启动期首挂（W10 #3） |
+| 4 | project_tcs/App/tcs/console.c:78 | HAL_UART_Transmit(s_uart, &s_tx_ring[tail], n, 10u) | TX 环形缓冲出队阻塞发送，超时 10ms（n≤32B@115200≈2.8ms，W10 #4） |
+| 5 | project_tcs/App/tcs/console.c:185 | HAL_UART_Receive_IT(s_uart, &s_rx_byte, 1) | RxCplt 回调内单字节连环重挂续收（W10 #1） |
+| 6 | project_tcs/App/tcs/console.c:190 | __HAL_UART_GET_FLAG(s_uart, UART_FLAG_ORE) | 错误恢复入口查 ORE 标志（金标准函数 console_uart_error_recover L111-116，W10 #2） |
+| 7 | project_tcs/App/tcs/console.c:191 | __HAL_UART_CLEAR_OREFLAG(s_uart) | 清 ORE 溢出标志 |
+| 8 | project_tcs/App/tcs/console.c:192 | HAL_UART_AbortReceive(s_uart) | 错误态 BUSY_RX 防重挂 HAL_BUSY（"防 BUSY 导致重挂失败"注释在本行；附录 C 三路配对 1/1/1 之一） |
+| 9 | project_tcs/App/tcs/console.c:193 | HAL_UART_Receive_IT(s_uart, &s_rx_byte, 1) | Abort 后重启接收（恢复完成） |
+| 10 | project_tcs/App/tcs/console.c:849 | __HAL_UART_GET_FLAG(s_uart, UART_FLAG_ORE) | 主循环 RX 自愈巡检：ORE 置位或 RXNEIE 被 HAL 错误路径关掉 → 调恢复函数（启动期线路扰动→控制台失聪的兜底） |
+| 11 | project_tcs/App/tcs/console.c:891 | HAL_UART_Receive_IT(s_uart, &s_rx_byte, 1) | console_init 启动期首挂（W10 #3） |
 | 12 | project_tcs/App/tcs/m207.c:6 | HAL_UART_ErrorCallback（注释提及） | 头注：ORE 溢出=ErrorCallback 先清标志再重置接收（F401 踩坑防御保留）（非调用点） |
 | 13 | project_tcs/App/tcs/m207.c:7 | HAL_UART_Transmit（注释提及） | 头注：TX 主循环阻塞 Transmit，禁止 ISR 内发送（非调用点） |
 | 14 | project_tcs/App/tcs/m207.c:208 | HAL_UART_Receive_IT（注释提及） | s_rx_byte 变量注释=Receive_IT 单字节落点（非调用点） |

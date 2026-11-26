@@ -154,7 +154,7 @@ int   param_mirror_apply(uint16_t id, float v);
 
 /* R9-05（独立复核 R9，2026-11-26）：屏可写参数被主控拒绝后的收敛。
  *  - param_link_sync / param_mirror_apply 会把"从主控回来的值"记成权威值影子；
- *  - 写被拒（BAD_ID / BUSY / 越界…）时用 param_revert_to_authority 立刻把屏上的值换回影子，
+ *  - 写被拒（BAD_ID / BUSY / 跨参数约束拒绝…）时用 param_revert_to_authority 立刻把屏上的值换回影子，
  *    不再只覆盖 tc1_set / tc2_set 两个、其余等镜像泵下一轮（51 条约 41 秒）；
  *  - param_note_write_result 由 main.c 的应答回调转述：rejected != 0 = 这次写被拒（允许同值再发一次），
  *    0 = 成功/已收下（清掉标记，同值写回到"本地短路"）。

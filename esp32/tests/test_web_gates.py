@@ -163,6 +163,17 @@ check('httpd_query_key_value(q, "m", val, sizeof(val))' in h_ota and "web_ota_mo
       "m is taken by key and judged by web_ota_mode_value")
 check("HTTPD_400" in h_ota and "bad_m" in h_ota, "missing or malformed m -> 400")
 
+# ---------------------------------------------------------------- 条目 10（S 线 i3）：WS 的 ota m 同一口径
+print("[gate] i3 WS {\"t\":\"ota\",\"m\":…}: m judged by web_ota_mode_json (exact 0 / 1); otherwise err bad_m")
+_i = ws.find('strcmp(ts, "ota")')
+ws_ota_txt = ws[_i:_i + 1800] if _i >= 0 else ""     # 取这一段到下一个分支为止（宽一点没关系）
+check("web_ota_mode_json(m)" in ws_ota_txt, "ws ota takes m through web_ota_mode_json")
+check("valueint" not in ws_ota_txt,
+      "no cJSON valueint on the ws ota path (it truncated 1.5 to 1 = rollback)")
+check("bad_m" in ws_ota_txt, "malformed m -> err code bad_m (neither mode triggers)")
+check("web_ota_mode_value(" not in ws_ota_txt.replace("web_ota_mode_json(", ""),
+      "the ws path uses the json variant, not the query-string one")
+
 # ---------------------------------------------------------------- M14-F-11：WS 控制帧
 print("[gate] M14-F-11 WS control frames: httpd answers PING/CLOSE itself (route flag), app handler never sees them")
 _ws_uri = re.search(r"\{[^{}]*?\.uri\s*=\s*\"/ws\"[^{}]*?\}", httpd, re.S)

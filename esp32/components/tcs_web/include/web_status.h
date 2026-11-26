@@ -118,6 +118,12 @@ size_t web_registry_json(const param_desc_t *const *ps, int n, char *buf, size_t
  * 子串 "m=1"（?m=10、?m=1x 也当回滚），取不到 m 时静默按 0 拷贝 + 重启。*/
 int web_ota_mode_value(const char *v);
 
+/* ====== WS {"t":"ota","m":…} 的 m 取值（S 线 i3，条目 10；M14-F-13 在 WS 侧的同类问题）======
+ * 与上面的 HTTP 侧同一口径：只认精确的整数 0（拷贝 + 切换）/ 1（回滚）。缺字段、1.5、字符串 "1"、
+ * true 一律 -1——调用方回 {"t":"err","code":"bad_m"}，两种模式都不触发。
+ * （原先用 cJSON 的 valueint：1.5 被截成 1 当回滚，缺字段 / 字符串 / true 则"不是 1 就当 0"。）*/
+int web_ota_mode_json(const cJSON *m);
+
 #ifdef __cplusplus
 }
 #endif

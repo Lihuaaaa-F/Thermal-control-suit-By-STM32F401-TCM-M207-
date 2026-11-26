@@ -376,3 +376,17 @@ int web_ota_mode_value(const char *v)
     if (strcmp(v, "1") == 0) return 1;
     return -1;
 }
+
+/* S 线 i3（条目 10；M14-F-13 在 WS 侧的同类问题）：浏览器发 {"t":"ota","m":1.5} 时，cJSON 的 valueint
+ * 把 1.5 截成 1 → 当成回滚执行；m 缺失 / 字符串 "1" / true / false 也都落到"不是 1 就当 0"（拷贝 + 重启）。
+ * 这里与 HTTP 侧同一口径：只认精确的整数 0（拷贝 + 切换）/ 1（回滚），其余一律 -1——
+ * 调用方回 {"t":"err","code":"bad_m",…}，两种模式都不触发。 */
+int web_ota_mode_json(const cJSON *m)
+{
+    double d;
+    if (!m || !cJSON_IsNumber(m)) return -1;   /* 缺字段 / 字符串 / true / null / 数组 / 对象 */
+    d = m->valuedouble;
+    if (d == 0.0) return 0;
+    if (d == 1.0) return 1;
+    return -1;                                  /* 1.5 / 2 / -1 / 0.001 … */
+}

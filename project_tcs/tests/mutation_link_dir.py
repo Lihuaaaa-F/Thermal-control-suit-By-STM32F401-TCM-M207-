@@ -39,6 +39,14 @@ SRC = {
     "hcomm":  os.path.join(PT, "App", "comm", "comm.c"),
     "ecomm":  os.path.join(TL, "comm.c"),
     "ltask":  os.path.join(TL, "link_task.c"),
+    # M11-F-15（S 线 e1）：link_task.c 按职责拆开，主控端用例要编全部新文件；
+    # 各文件的变异体指向各自的新归属（谁的内容变了就改谁）。
+    "ldispatch": os.path.join(TL, "link_dispatch.c"),
+    "lregistry": os.path.join(TL, "link_registry.c"),
+    "lsend_esp": os.path.join(TL, "link_send.c"),
+    "lstatus":  os.path.join(TL, "link_status.c"),
+    "ldemo":    os.path.join(TL, "link_demo.c"),
+    "lselftest": os.path.join(TL, "link_selftest.c"),
     "lsend":  os.path.join(PT, "App", "comm", "link_send.c"),
 }
 TEXT = {k: io.open(p, encoding="utf-8").read() for k, p in SRC.items()}
@@ -55,12 +63,15 @@ INC_ESP = [os.path.join(TL, "include"), TL, os.path.join(ESP, "tests", "host_stu
 # 用例：名字 → (哪一端, include 目录, [(源文件键或绝对路径)])
 TARGETS = {
     "h743_dir": ("h743", INC_H743, [os.path.join(PT, "tests", "test_link_dir.c"), "hcomm", "hproto"]),
-    "esp_dir": ("esp", INC_ESP, [os.path.join(ESP, "tests", "test_link_dir.c"), "ltask", "ecomm", "eproto"]),
+    "esp_dir": ("esp", INC_ESP, [os.path.join(ESP, "tests", "test_link_dir.c"),
+                                  "ltask", "ldispatch", "lregistry", "ldemo", "lselftest",
+                                  "lsend_esp", "lstatus", "ecomm", "eproto"]),
     "h743_send": ("h743", INC_H743, [os.path.join(PT, "tests", "test_link_send.c"), "lsend", "hcomm", "hproto"]),
 }
 # 被变异的文件 → 要跑的用例
 RUN_FOR = {"proto": ["h743_dir", "esp_dir"], "hcomm": ["h743_dir"], "ecomm": ["esp_dir"],
-           "ltask": ["esp_dir"], "lsend": ["h743_send"]}
+           "ltask": ["esp_dir"], "ldispatch": ["esp_dir"], "lsend_esp": ["esp_dir"],
+           "lsend": ["h743_send"]}
 # 头文件变异时那棵"最小协议树"里各键的相对位置
 TREE = {
     "proto": "protocol/tcs_proto.h", "layout": "protocol/proto_layout.h",
@@ -108,25 +119,25 @@ MUTANTS = [
     _comm("hcomm", "C5", "交给上层的消息号不去方向位", [("    out[0] = mt;\n", "")]),
     # 主控端没有 C5 的对应变异：那是等价变异。主控接受的帧都来自屏，屏的帧 bit6 恒为 0，
     # "去掉方向位再交付"在主控端没有可观察的差异（屏端接受的帧可以带 bit6=1，所以屏端的 C5 被杀）。
-    ("L1", "镜像帧改用 0x12 发（主控发了只有屏会发的消息号）", "ltask",
-     [("    size_t fn = mt_frame(MT_TCS_PARAM, comm_next_seq(&s_link), pl, n, frame, sizeof(frame));",
-       "    size_t fn = mt_frame(MT_TCS_SET_PARAM, comm_next_seq(&s_link), pl, n, frame, sizeof(frame));")]),
+    ("L1", "镜像帧改用 0x12 发（主控发了只有屏会发的消息号）", "lsend_esp",
+     [("    size_t fn = link_frame_build(MT_TCS_PARAM, comm_next_seq(link_ctx()), pl, n, frame, sizeof(frame));",
+       "    size_t fn = link_frame_build(MT_TCS_SET_PARAM, comm_next_seq(link_ctx()), pl, n, frame, sizeof(frame));")]),
     ("L2", "主控的本端身份写成屏（方向位极性反）", "ltask",
      [("              link_crit_enter, link_crit_exit, TCS_SIDE_ESP32);",
        "              link_crit_enter, link_crit_exit, TCS_SIDE_H743);")]),
     ("L3", "任务循环里按长度丢帧（发送窗过滤的残留写法）", "ltask",
-     [("                        s_rx_frames++;\n                        on_frame(pl, plen);",
-       "                        if (plen == 9) continue;   /* 变异 */\n                        s_rx_frames++;\n                        on_frame(pl, plen);")]),
+     [("                        s_rx_frames++;\n                        link_dispatch_frame(pl, plen);",
+       "                        if (plen == 9) continue;   /* 变异 */\n                        s_rx_frames++;\n                        link_dispatch_frame(pl, plen);")]),
     ("S1", "屏写参数退回变更即推（不等 ACK）", "lsend",
-     [("    return (comm_send(L, frame, n, MT_TCS_SET_PARAM, NULL) == 0) ? 0 : -1;",
+     [("    if (comm_send(L, frame, n, MT_TCS_SET_PARAM, NULL) != 0) return -1;",
        "    comm_txq_push(L, frame, n); return 0;")]),
     ("S2", "广播钩子对 M207 参数重复发", "lsend",
      [("    if (flags & PF_M207) return 0;", "    if (0) return 0;")]),
     # —— M04-F-04 / M04-F-06 / X03-F-09（同属链路层，放在同一个脚本里）——
     ("S3", "序号 255 仍被当成失败（旧 comm_send 的语义）", "lsend",
-     [("    return (comm_send(L, frame, n, MT_TCS_SET_PARAM, NULL) == 0) ? 0 : -1;",
+     [("    if (comm_send(L, frame, n, MT_TCS_SET_PARAM, NULL) != 0) return -1;",
        "    { uint8_t s_ = 0xFF; int r_ = comm_send(L, frame, n, MT_TCS_SET_PARAM, &s_); "
-       "return (r_ != 0 || s_ == 0xFF) ? -1 : 0; }")]),
+       "if (r_ != 0 || s_ == 0xFF) return -1; }")]),
     _comm("hcomm", "X1", "发送失败照样出队（不留在队头重试）",
           [("        if (++L->tx_fail_streak < COMM_TX_MAX_FAIL) return;\n", "        if (0) return;\n")]),
     _comm("hcomm", "K1", "对端的非 ACK 帧不恢复 link_ok", [("    comm_note_peer(L);\n", "")]),

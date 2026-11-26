@@ -103,7 +103,7 @@ EXTRA_DEF=""
 # （IDF / FreeRTOS 用 tests/host_stubs 里的桩，按诊断档），在虚拟时钟上跑一条时间线：
 # 自己发出的帧被回送的三种情形、屏写参数紧跟本端发送之后到达、ACK 回声、方向表、linkloop 20s。
 EXTRA_INC="/I..\..\tests\host_stubs"
-run linkdir tests/test_link_dir.c components/tcs_link/link_task.c components/tcs_link/comm.c components/tcs_link/proto.c
+run linkdir tests/test_link_dir.c components/tcs_link/link_task.c components/tcs_link/link_dispatch.c components/tcs_link/link_registry.c components/tcs_link/link_demo.c components/tcs_link/link_selftest.c components/tcs_link/link_send.c components/tcs_link/link_status.c components/tcs_link/comm.c components/tcs_link/proto.c
 EXTRA_INC=""
 # m1（模式页）：对端帧时刻只在方向闸门之后刷新——"屏链路断开 3 秒 = 急停"的计时起点（comm.c 原样编译）
 run linkpeer tests/test_link_peer.c components/tcs_link/comm.c components/tcs_link/proto.c

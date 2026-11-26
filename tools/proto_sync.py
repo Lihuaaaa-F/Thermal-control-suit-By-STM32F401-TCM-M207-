@@ -51,7 +51,7 @@ SKIP_PARTS = {"tests", "third_party", "build", "managed_components", "host_stubs
 
 OTHER = {"H743": "ESP32", "ESP32": "H743"}
 RX_PAT = re.compile(r"\bcase\s+(MT_TCS_\w+)\s*:")
-TX_PAT = re.compile(r"\b(?:mt_frame|proto_encode_frame_with_mt|frame_with_mt|snap_send)\(\s*(MT_TCS_\w+)")
+TX_PAT = re.compile(r"\b(?:mt_frame|link_frame_build|proto_encode_frame_with_mt|frame_with_mt|snap_send)\(\s*(MT_TCS_\w+)")
 GATE_CALL = "    if (comm_rx_gate(L, payload, plen)) return 0;\n"
 # X01-F-03（2026-11-26）：0x90 的应答处理从"只取 seq/mt"改成"解出 status/ret 交给上层"。
 # "闸门在 ACK 处理之前"这一条盯的仍然是 0x90 分支里的那次调用（两端逐字相同）。

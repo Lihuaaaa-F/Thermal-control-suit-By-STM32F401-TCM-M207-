@@ -594,7 +594,11 @@ int control_apply_cmd_src(uint8_t cmd, uint8_t src)
     case TCS_CMD_TEC1_OFF:      control_manual_tec(1, 0); return 0;
     case TCS_CMD_TEC2_ON:       control_manual_tec(2, 1); return 0;
     case TCS_CMD_TEC2_OFF:      control_manual_tec(2, 0); return 0;
-    case TCS_CMD_FAN_TOGGLE:    control_manual_fan(g_tcs.fan_on ? 0 : 1); return 0;
+    case TCS_CMD_FAN_TOGGLE:
+        /* r7f（独立复核 R7-03，2026-11-26）：自动模式 COOL / HEAT 下风扇是"TEC 在输出"的一部分——
+         * 拒绝"关风扇"（回与安全态同一个拒绝码；只有真要关的时候才拒，风扇不知为何关着时"开"照收）。*/
+        if (g_tcs.fan_on && g_tcs.mode != 0 && (s_state == CTRL_COOL || s_state == CTRL_HEAT)) return -2;
+        control_manual_fan(g_tcs.fan_on ? 0 : 1); return 0;
     /* 改模式：来源原样带进参数表（事件日志据此写"网页/屏幕/控制台"）；被安全校验拒绝
      * （急停/超温锁存期间切自动）时 param_set 返回 -2，这里如实往上带 */
     case TCS_CMD_MODE_AUTO:     rv = param_set(PARAM_ID_MODE, 1.0f, src); return rv < 0 ? rv : 0;
@@ -857,6 +861,14 @@ void control_poll(uint32_t now_ms)
         }
         return;
     }
+
+    /* r7f（独立复核 R7-03，2026-11-26）：自动模式 COOL / HEAT 下风扇与状态机的输出联动，每拍重申一次。
+     * 手动模式本来就有 control_manual_poll 的 fan_link 每拍重申；自动模式原先只在进 COOL / HEAT 那一拍
+     * 开一次风扇——网页 / 屏上点一下风扇就把风扇关了，TEC 继续按状态机运行，直到下一次状态迁移，
+     * 剩余保护只剩 48°C 硬切断和模块自身保护。放这里：安全态在上面已返回（TEC 命令必为 0）。
+     * 只管状态机自己的 COOL / HEAT：自动 IDLE 下网页旧命令开的 TEC2 不在此列（F 模式页 D3 的已知项；
+     * W2-20 的"TEC2 复原后风扇归状态机管"也保持不变）。*/
+    if (!g_tcs.fan_on && g_tcs.mode != 0 && (s_state == CTRL_COOL || s_state == CTRL_HEAT)) out_fan(1);
 
     /* 手动模式：状态机旁路（输出保持人工值）*/
     if (g_tcs.mode == 0) {

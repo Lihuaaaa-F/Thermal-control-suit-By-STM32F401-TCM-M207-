@@ -284,6 +284,72 @@ int main(void)
     tick();
     CHECK(g_tcs.fan_on == 1, "M07 one channel still running -> fan stays on");
 
+    /* ====== M07b（r7f，独立复核 R7-03，2026-11-26）：自动模式 TEC 运行中风扇不许被关 ======
+     * 修前：TCS_CMD_FAN_TOGGLE 只在安全态拒绝，自动状态机只在进 COOL / HEAT 那一拍开一次风扇——
+     * 网页 / 屏上点一下风扇就把风扇关了，TEC 继续按状态机运行，直到下一次状态迁移（只剩 48°C 硬切断）。
+     * 修后：自动模式 COOL / HEAT 下每拍重申风扇开（与手动的 fan_link 同做法），
+     * 并在该状态下拒绝"关风扇"（回 -2，与安全态同一拒绝码）。
+     * 用例 = 执行器不变量扫描：自动模式每个状态 × 每条命令。判别性见 mutation_control_manual.py 的 E01 / E02。
+     * 不变量只管状态机自己的 COOL / HEAT：自动 IDLE 下网页旧命令开的 TEC2 不在此列
+     * （F 模式页 D3 的已知项，W2-20 的"TEC2 复原后风扇归状态机管"也不变）。*/
+    {
+        static const uint8_t CMDS[] = { TCS_CMD_TEC1_ON, TCS_CMD_TEC1_OFF, TCS_CMD_TEC2_ON,
+                                        TCS_CMD_TEC2_OFF, TCS_CMD_FAN_TOGGLE };
+        static const float BODY_OF_STATE[3] = { 37.0f, 40.0f, 36.0f };   /* IDLE / COOL / HEAT */
+        int bad = 0, n = 0;
+        for (int st = 0; st < 3; st++) {
+            for (size_t c = 0; c < sizeof CMDS / sizeof CMDS[0]; c++) {
+                enter_manual();
+                g_tcs.body_sensor_ok = 1;
+                set_armed(1);
+                (void)param_set(PARAM_ID_MODE, 1.0f, PARAM_SRC_WEB);
+                g_tcs.body_temp = BODY_OF_STATE[st];
+                tick(); tick();
+                (void)control_apply_cmd_src(CMDS[c], PARAM_SRC_WEB);
+                for (int i = 0; i < 6; i++) { g_tcs.body_temp = BODY_OF_STATE[st]; tick100(); }
+                n++;
+                if ((control_state() == CTRL_COOL || control_state() == CTRL_HEAT)
+                    && (control_tec_cmd(1) || control_tec_cmd(2)) && !g_tcs.fan_on) bad++;
+            }
+        }
+        CHECK(n == 15, "M07b (sanity) 3 states x 5 commands scanned");
+        CHECK(bad == 0, "M07b auto mode: the state machine's output never runs with the fan off (all states x all commands)");
+
+        /* 自动制热中"关风扇"被拒；有别处把风扇关了，下一拍重申开回来 */
+        enter_manual();
+        g_tcs.body_sensor_ok = 1;
+        set_armed(1);
+        (void)param_set(PARAM_ID_MODE, 1.0f, PARAM_SRC_WEB);
+        g_tcs.body_temp = 36.0f;
+        tick(); tick();
+        CHECK(control_state() == CTRL_HEAT && control_tec_cmd(1) == 1 && g_tcs.fan_on == 1,
+              "M07b precondition: auto HEAT, TEC1 on, fan on");
+        CHECK(control_apply_cmd_src(TCS_CMD_FAN_TOGGLE, PARAM_SRC_WEB) == -2,
+              "M07b fan off is refused while the auto state drives TEC1");
+        CHECK(g_tcs.fan_on == 1, "M07b fan stays on after the refused command");
+        control_manual_fan(0);                      /* 别的入口把风扇关了（网页旧命令 / 台架）*/
+        CHECK(g_tcs.fan_on == 0, "M07b (setup) fan forced off behind the state machine's back");
+        tick100();
+        CHECK(g_tcs.fan_on == 1, "M07b the next tick re-asserts the fan (auto HEAT)");
+        /* 自动制冷同理（HEAT → IDLE → COOL 要走两拍：自动评估每 500ms 只做一次迁移） */
+        g_tcs.body_temp = 40.0f; tick(); tick();
+        CHECK(control_state() == CTRL_COOL && g_tcs.fan_on == 1, "M07b auto COOL, fan on");
+        CHECK(control_apply_cmd_src(TCS_CMD_FAN_TOGGLE, PARAM_SRC_WEB) == -2,
+              "M07b fan off is refused while the auto state drives TEC1 (cool)");
+        control_manual_fan(0);
+        tick100();
+        CHECK(g_tcs.fan_on == 1, "M07b the next tick re-asserts the fan (auto COOL)");
+        /* 自动 IDLE（没有 TEC 在输出）：风扇切换照旧可用 */
+        g_tcs.body_temp = 37.0f; tick();
+        CHECK(control_state() == CTRL_IDLE, "M07b auto IDLE with the body in band");
+        {
+            uint8_t before = g_tcs.fan_on;
+            CHECK(control_apply_cmd_src(TCS_CMD_FAN_TOGGLE, PARAM_SRC_WEB) == 0,
+                  "M07b fan toggle is still accepted when no TEC is running");
+            CHECK(g_tcs.fan_on != before, "M07b the fan actually toggled");
+        }
+    }
+
     /* ====== M08 进安全态：两路清零；自愈解除后不自己恢复输出；风扇回到用户选择 ====== */
     enter_manual();
     control_manual_fan(0);

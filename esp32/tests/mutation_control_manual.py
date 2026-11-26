@@ -133,6 +133,11 @@ MUTATIONS = [
     (PR, "D06 手动输出参数被持久化",
      "    { 0x09, \"tec1_manual\",  \"TEC1 手动输出\",   \"\",   PARAM_TYPE_U8,\n      PF_RW|PF_SCREEN,",
      "    { 0x09, \"tec1_manual\",  \"TEC1 手动输出\",   \"\",   PARAM_TYPE_U8,\n      PF_RW|PF_SCREEN|PF_PERSIST,", ""),
+    # ---- control.c：自动模式 TEC 运行中风扇不许被关（r7f，独立复核 R7-03）。用例 M07b ----
+    (CT, "E01 自动模式照样受理关风扇（回到修前）",
+     "        if (g_tcs.fan_on && g_tcs.mode != 0 && (s_state == CTRL_COOL || s_state == CTRL_HEAT)) return -2;\n", "", ""),
+    (CT, "E02 不再每拍重申\"自动模式 COOL / HEAT 下风扇开\"",
+     "    if (!g_tcs.fan_on && g_tcs.mode != 0 && (s_state == CTRL_COOL || s_state == CTRL_HEAT)) out_fan(1);\n", "", ""),
 ]
 
 

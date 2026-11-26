@@ -262,6 +262,27 @@ def main():
     if '"mstat":' not in vpc or "读数抖动" not in vpc:
         fails.append("verify_prod_clean.py 缺（i3）：mstat 的帮助文本没进禁入清单")
 
+    # 11) S 线 i3（条目 11）：协议版本不配对——屏端单独计数 + 横幅换文案（行为仍是断链那套）。
+    h7c = read(H7, "Core", "Src", "main.c")
+    h7con = read(H7, "App", "tcs", "console.c")
+    h7ls = read(H7, "App", "comm", "link_snap.h")
+    h7tui = read(H7, "App", "lvgl_ui", "tui.c")
+    h7uih = read(H7, "App", "lvgl_ui", "ui_model.h")
+    h7uim = read(H7, "App", "lvgl_ui", "ui_model.c")
+    if "s_snap_ver_reject++" not in h7c or "uint32_t tcs_link_snap_ver_rejects(void)" not in h7c:
+        fails.append("H743 Core/Src/main.c 缺（i3）：被版本校验拒掉的快照没有单独计数")
+    if "tcs_link_snap_ver_rejects(void);" not in h7ls:
+        fails.append("H743 App/comm/link_snap.h 缺（i3）：版本拒收计数的读接口")
+    if "vr=%lu" not in h7con or "tcs_link_snap_ver_rejects()" not in h7con:
+        fails.append("H743 App/tcs/console.c 缺（i3）：stat 行没有打印 vr=")
+    if "ui_vr_mismatch(&s_vr, tcs_link_snap_ver_rejects(), s_in.now_ms)" not in h7tui:
+        fails.append("H743 App/lvgl_ui/tui.c 缺（i3）：没有把版本拒收计数喂给界面纯逻辑")
+    for needle in ("UI_BN_VER_MISMATCH", "uint8_t ui_vr_mismatch(ui_vr_t *v, uint32_t cnt, uint32_t now_ms);"):
+        if needle not in h7uih:
+            fails.append("H743 App/lvgl_ui/ui_model.h 缺（i3）：%s" % needle)
+    if "主控固件与屏不匹配" not in h7uim or "in->ver_mismatch" not in h7uim:
+        fails.append("H743 App/lvgl_ui/ui_model.c 缺（i3）：版本不配对的横幅文案没有接上")
+
     if fails:
         print("[m1gates] FAIL")
         for f in fails:

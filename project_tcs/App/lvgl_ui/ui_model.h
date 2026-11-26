@@ -33,6 +33,9 @@ typedef struct {
     float    tc1_act, tc2_act, body;    /* 两路水温与体温读数 */
     uint8_t  estop_local;               /* 屏端已记下急停（本地锁存，或报警位里有——含主控回传的）*/
     uint8_t  estop_peer;                /* 最近一帧主控快照里有急停位 = 主控已执行 */
+    /* S 线 i3（条目 11）：链路不新鲜、且"被版本校验拒掉的快照"计数还在涨 = 主控在发帧、屏不收，
+     * 多半是两端协议版本不配对。由 tui.c 用 ui_vr_mismatch() 算出后填进来（纯逻辑）。*/
+    uint8_t  ver_mismatch;
     /* m1"模式"页（2026-11-26）：两路 TEC 的输出方向与电学量，取自主控快照（0x20 / 0x21）。
      * 方向是协议值 TCS_TEC_DIR_*（0 暂停 1 制冷 2 制热 3 开着但不是模式页设的）；只在主控在线时有意义。*/
     uint8_t  dir1, dir2;
@@ -76,7 +79,17 @@ typedef enum {
     UI_BN_AUTO,          /* 体温 / 模块 / 探头：源恢复后自动恢复 */
     UI_BN_INFO,          /* 提示级：未布防时传感器不在、参数校验失败 */
     UI_BN_SERVICE,       /* S 线 i3：有后台服务没能启动（ALM_SERVICE）——确认不掉，要断电重启 */
+    UI_BN_VER_MISMATCH,  /* S 线 i3：主控固件与屏的协议版本不配对（屏在收帧、但全被版本校验拒掉）*/
 } ui_bn_kind_t;
+
+/* S 线 i3（条目 11）：版本拒收计数的变化跟踪（纯逻辑，tests/test_ui_mismatch.c 直接编）。
+ * 每拍喂一次最新计数；返回 1 = 计数在 UI_VR_WINDOW_MS 之内涨过（链路不新鲜期间"还在涨"）。*/
+typedef struct {
+    uint32_t last_cnt;       /* 上一次看到的计数 */
+    uint32_t last_change_ms; /* 计数最近一次变化的时刻 */
+    uint8_t  have;           /* 是否已经有基准（首拍只建基准，不下结论）*/
+} ui_vr_t;
+uint8_t ui_vr_mismatch(ui_vr_t *v, uint32_t cnt, uint32_t now_ms);
 
 typedef enum { UI_BN_TAP_NONE = 0, UI_BN_TAP_ACK, UI_BN_TAP_HINT } ui_bn_tap_t;
 

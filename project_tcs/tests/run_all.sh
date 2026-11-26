@@ -528,6 +528,8 @@ fi
 run ui_known    tests/test_ui_known.c        App/lvgl_ui/ui_model.c
 # S-G i3（P1-12 的另一半）：ALM_SERVICE 在屏上有文案（红底、说清"请断电重启"、确认不掉；急停 / 超温压过它）
 run ui_svc      tests/test_ui_svc.c          App/lvgl_ui/ui_model.c
+# S-G i3（条目 11）：协议版本不配对时屏上的表现——版本拒收计数在涨 + 链路不新鲜 → 横幅换文案（行为不变）
+run ui_mismatch tests/test_ui_mismatch.c     App/lvgl_ui/ui_model.c
 if [ -n "$PYBIN" ] && "$PYBIN" tools/proto_ref.py selftest; then :; else echo "[proto_ref_selftest] FAIL"; FAIL=1; fi
 
 echo "==================="

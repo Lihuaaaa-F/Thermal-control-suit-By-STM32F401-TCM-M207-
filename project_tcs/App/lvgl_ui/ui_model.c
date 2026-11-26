@@ -93,6 +93,19 @@ static void set_banner(ui_banner_t *b, ui_bn_kind_t kind, uint8_t red, ui_bn_tap
     b->extra = extra;
 }
 
+/* S 线 i3（条目 11）：版本拒收计数的变化跟踪。首拍只建基准；计数变了就记时刻；
+ * 返回 1 = 最新一次计数变化就在 UI_VR_WINDOW_MS 之内（链路不新鲜期间还在涨）。
+ * 窗口取 2 s：快照 200ms 一帧被全拒时，计数每 200ms 就涨一次；链路真断了两边都不涨。*/
+#define UI_VR_WINDOW_MS 2000u
+uint8_t ui_vr_mismatch(ui_vr_t *v, uint32_t cnt, uint32_t now_ms)
+{
+    if (!v) return 0;
+    if (!v->have) { v->have = 1; v->last_cnt = cnt; v->last_change_ms = 0; return 0; }  /* 首拍只建基准 */
+    if (cnt != v->last_cnt) { v->last_cnt = cnt; v->last_change_ms = now_ms ? now_ms : 1u; }
+    if (!cnt || !v->last_change_ms) return 0;      /* 计数为 0、或建基准后还没涨过 */
+    return (uint8_t)((uint32_t)(now_ms - v->last_change_ms) <= UI_VR_WINDOW_MS);
+}
+
 void ui_banner_select(const ui_in_t *in, const ui_link_view_t *lv, ui_banner_t *out)
 {
     memset(out, 0, sizeof *out);
@@ -119,6 +132,13 @@ void ui_banner_select(const ui_in_t *in, const ui_link_view_t *lv, ui_banner_t *
                 snprintf(detail, sizeof detail, "数据停在 %us 前 · 自动重连中", (unsigned)s);
             else
                 snprintf(detail, sizeof detail, "数据停在 %u 分钟前 · 自动重连中", (unsigned)(s / 60u));
+        }
+        /* S 线 i3（条目 11）：链路不新鲜、但版本拒收计数还在涨 = 主控在发帧、屏不收（版本不配对）。
+         * 行为与"连接中断"完全一样（只换文案）：链路照旧不新鲜，执行器/模式显示未知、按钮不可点。*/
+        if (in->ver_mismatch) {
+            set_banner(out, UI_BN_VER_MISMATCH, 1, UI_BN_TAP_HINT,
+                       "主控固件与屏不匹配", "请同步升级后再用", 0);
+            return;
         }
         /* 此时屏上的报警位也是陈旧的：不拿它画横幅，等链路回来再按真值显示 */
         set_banner(out, UI_BN_LINK_LOST, 1, UI_BN_TAP_HINT, "主控连接中断", detail, 0);
@@ -188,7 +208,8 @@ const char *ui_banner_tap_hint(const ui_banner_t *b)
             if (b->kind == UI_BN_LINK_LOST)    return "正在重新连接主控，连上后会自动刷新";
             if (b->kind == UI_BN_ESTOP_UNSENT) return "急停指令已记下，主控连上后立即送达";
             if (b->kind == UI_BN_ESTOP_PENDING) return "主控确认执行后才能解除";
-            if (b->kind == UI_BN_SERVICE)       return "功能没能恢复，请断电重启";   /* S 线 i3；字库覆盖率门禁限定了用字 */
+            if (b->kind == UI_BN_SERVICE)       return "功能没能恢复，请断电重启";
+            if (b->kind == UI_BN_VER_MISMATCH)  return "屏只能经探针烧录，请先烧屏";   /* S 线 i3，条目 11 */   /* S 线 i3；字库覆盖率门禁限定了用字 */
             return "接好后会自动恢复，不需要点确认";
         default:              return NULL;
     }

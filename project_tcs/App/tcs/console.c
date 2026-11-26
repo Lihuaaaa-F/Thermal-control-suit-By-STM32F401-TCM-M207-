@@ -13,6 +13,7 @@
 #include "proto.h"
 #include "control.h"
 #include "m207.h"
+#include "link_snap.h"   /* S 线 i3（条目 11）：stat 的 vr=（版本拒收计数）*/
 #include "m207_txq.h"   /* M207_CMD_MAX：m207 send 的长度上限（M07-F-10）*/
 #include "audit_ring.h" /* M07-F-08：关键命令的审计留痕环 */
 #include "perf_hist.h"  /* M01-F-09：perf 读最近一个 1 秒窗口 */
@@ -317,13 +318,16 @@ static void cmd_exec(char *line)
         extern volatile uint32_t g_dbg_snap_gap_last;
         extern comm_link_t g_link;
         /* arq / txfail（M04-F-06 / X03-F-09）：comm 层 link_ok；没能上线的发送次数（应与 uartdrop 同源、恒 0）*/
-        printf("lrx=%lu snap=%lu gapmax=%lu gaplast=%lu echo=%lu wdir=%lu arq=%u txfail=%lu\n",
+        /* vr（S 线 i3，条目 11）：被版本校验拒掉的快照数——>0 且屏上一直"连接中断"时，
+         * 多半是两端协议版本不配对（主控 OTA 升过、屏还没烧）。*/
+        printf("lrx=%lu snap=%lu gapmax=%lu gaplast=%lu echo=%lu wdir=%lu arq=%u txfail=%lu vr=%lu\n",
                (unsigned long)g_dbg_lrx_total,
                (unsigned long)g_dbg_snap,
                (unsigned long)g_dbg_snap_gap_max,
                (unsigned long)g_dbg_snap_gap_last,
                (unsigned long)g_link.echo_cnt, (unsigned long)g_link.wrongdir_cnt,
-               (unsigned)g_link.link_ok, (unsigned long)g_link.tx_fail_cnt);
+               (unsigned)g_link.link_ok, (unsigned long)g_link.tx_fail_cnt,
+               (unsigned long)tcs_link_snap_ver_rejects());
         return;
     }
 #if TCS_PROFILE >= 1

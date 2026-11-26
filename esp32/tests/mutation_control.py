@@ -230,17 +230,31 @@ MUTATIONS = [
        "        body_stuck = (uint8_t)(g_tcs.mode != 0 && (s_state == CTRL_HEAT || s_state == CTRL_COOL)\n"
        "                               && (stuck_is(&s_stuck_body, now_ms, s_tec_on_since[0])\n"
        "                                   || stuck_prefrozen(&s_stuck_body, now_ms, s_tec_on_since[0], CTRL_STUCK_WINDOW_MS)));")], ""),
+    # ---- 2026-11-26 r9f（独立复核 R9-02，P2）。用例 K26 在 test_control_esp32.c。----
+    ("M80 锁存期间不再复查水温的长窗口（R9-02 回退：体温一恢复就放行，输出对着冻住的水温读数开下去）",
+     [("            if ((s_stuck_watch & 2u) && s_stuck_tc1.last_change && stuck_water_is(&s_stuck_tc1, now_ms)) wet |= 2u;\n"
+       "            if ((s_stuck_watch & 4u) && s_stuck_tc2.last_change && stuck_water_is(&s_stuck_tc2, now_ms)) wet |= 4u;",
+       "            ;"),
+      ("            if (body_stuck) { tc1_stuck |= tc1_pre; tc2_stuck |= tc2_pre; }   /* 报警位随下面同一条路径置 */",
+       "            (void)tc1_pre; (void)tc2_pre;")], ""),
     ("M62 ack 的超温判据只看 TC1",
      [("    safety_set_ok(SAFETY_BIT_OVERTEMP, (uint8_t)!water_overtemp());   /* r7f R7-08：两路水温 */",
        "    safety_set_ok(SAFETY_BIT_OVERTEMP, (uint8_t)(g_tcs.tc1_act <= ALM_OVERTEMP_HARD_C));")], ""),
     ("M63 TC2 卡死判据不参与（回到只判 TC1 / 体温）",
      [("        if (tc1_stuck || body_stuck || tc2_stuck) {", "        if (tc1_stuck || body_stuck) {")], ""),
+    # M64 / M65（r9f 更新）：R9-02 起"锁存期间复查水温长窗口"这一段也会把 TC2 记进涉事通道并报
+    # 借来的报警位，单改 trip 那一处已经不再等价于"TC2 没有任何保护"（变异会被这一段默默补上）。
+    # 两处一起删，变异的语义保持不变：TC2 卡死时既不进涉事通道，也不出可见报警。
     ("M64 TC2 卡死不进涉事通道（自愈 / 确认不等它恢复变化）",
      [("            s_stuck_chn |= (uint8_t)((body_stuck ? 1u : 0u) | (tc1_stuck ? 2u : 0u) | (tc2_stuck ? 4u : 0u));",
-       "            s_stuck_chn |= (uint8_t)((body_stuck ? 1u : 0u) | (tc1_stuck ? 2u : 0u));")], ""),
+       "            s_stuck_chn |= (uint8_t)((body_stuck ? 1u : 0u) | (tc1_stuck ? 2u : 0u));"),
+      ("            if ((s_stuck_watch & 4u) && s_stuck_tc2.last_change && stuck_water_is(&s_stuck_tc2, now_ms)) wet |= 4u;",
+       "            ;")], ""),
     ("M65 TC2 卡死不报水路的报警位（屏上说不清为什么停在 SAFE）",
      [("            if (tc1_stuck || tc2_stuck)  tcs_alarm_raise(ALM_SENSOR_OPEN);   /* 两路水温共用借来的这一位 */",
-       "            if (tc1_stuck)  tcs_alarm_raise(ALM_SENSOR_OPEN);")], ""),
+       "            if (tc1_stuck)  tcs_alarm_raise(ALM_SENSOR_OPEN);"),
+      ("                tcs_alarm_raise(ALM_SENSOR_OPEN);\n            }\n        } else if (!(s_safety_latch & SAFETY_BIT_STUCK)) {",
+       "                if (wet & 2u) tcs_alarm_raise(ALM_SENSOR_OPEN);\n            }\n        } else if (!(s_safety_latch & SAFETY_BIT_STUCK)) {")], ""),
     # ---- 2026-11-26 S 线 e3a（X06-F-03）：把 5 条 P0 安全路径的修复回退成修前写法，必须被抓住 ----
     ("M47 超温只报警不锁存（回到 P0-01 修前）",
      [("    if (g_tcs.tc1_act > ALM_OVERTEMP_HARD_C) {\n        tcs_alarm_raise(ALM_OVERTEMP);\n        safety_trip(SAFETY_BIT_OVERTEMP);",

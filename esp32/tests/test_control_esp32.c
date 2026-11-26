@@ -1249,6 +1249,41 @@ int main(void)
                   "K24b once the water reading moves too -> self-heals back to HEAT");
         }
 
+        /* K26（R9-02，独立复核 R9）两路**同时**冻住、体温先判出来：水温自己的长窗口（10 分钟）
+         *     在锁存期间满了之后必须记进涉事通道并报借来的水温位。否则体温那一路一恢复，
+         *     锁存连同涉事通道一起清掉，输出就对着一个真冻住的水温读数开下去——48°C 硬切断对
+         *     冻住的读数是失明的（R9 在主机上量到 557.9 秒）。判别性：mutation_control.py 的 M80。*/
+        enter_auto_healthy();
+        g_tcs.body_temp = 30.0f; g_tcs.tc1_act = 25.0f;
+        tick();                                           /* HEAT，TEC1 开；两路读数从此都不动 */
+        for (int i = 0; i < 301; i++) tick100();          /* 30.1 s：体温先判出 */
+        CHECK(control_state() == CTRL_SAFE && (control_safety_latched() & SAFETY_BIT_STUCK) != 0,
+              "K26 precondition: body first -> STUCK");
+        CHECK(tcs_alarm_active(ALM_SENSOR_OPEN) == 0, "K26 precondition: the water channel is not blamed yet");
+        for (int i = 0; i < 6100; i++) tick100();         /* 两路都还冻着：水温的长窗口也满了 */
+        CHECK(tcs_alarm_active(ALM_SENSOR_OPEN) == 1,
+              "K26 [R9-02] the water channel is recorded once its own 10-minute window is full");
+        {
+            int on = 0;
+            for (int i = 0; i < 30; i++) {                /* 体温恢复变化、水温仍冻着 */
+                g_tcs.body_temp = (i & 1) ? 29.99f : 30.01f;
+                tick100();
+                if (control_tec_cmd(1) || control_tec_cmd(2)) on++;
+            }
+            CHECK(control_state() == CTRL_SAFE && on == 0,
+                  "K26 [R9-02] body recovery alone does not resume output while the water is frozen");
+        }
+        {
+            int n = 0;
+            while (control_state() == CTRL_SAFE && n < 40) {   /* 水温也动起来 → 2 秒自愈 */
+                g_tcs.body_temp = (n & 1) ? 29.99f : 30.01f;
+                g_tcs.tc1_act   = (n & 1) ? 24.99f : 25.01f;
+                tick100();
+                n++;
+            }
+            CHECK(control_state() == CTRL_HEAT, "K26 once the water reading moves too -> self-heals back to HEAT");
+        }
+
         /* K14 源不健康时不累计：未布防 + 模块离线 + TC1 开着 + 水温陈旧不变
          *     → 走既有失联路径，不报卡死（离线不是"读数冻结"）*/
         enter_auto_healthy();

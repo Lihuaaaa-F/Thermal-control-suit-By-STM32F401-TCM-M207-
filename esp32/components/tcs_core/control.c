@@ -115,6 +115,7 @@ typedef struct {
 static stuck_src_t s_stuck_body, s_stuck_tc1;
 static stuck_src_t s_stuck_tc2;        /* r7f（R7-08）：TC2 那一路的水温读数——独立水体时它没有任何别的保护在看 */
 static volatile uint8_t s_stuck_chn;   /* 本轮 STUCK 锁存由谁引起：bit0=体温 bit1=TC1 水温 bit2=TC2 水温（随锁存位一起清）*/
+static uint8_t    s_stuck_watch;       /* R9-02：这次 STUCK 锁存时**正被驱动**的水温通道（bit1=TC1 bit2=TC2）*/
 static uint32_t   s_tec_on_since[2];   /* TCx 有效命令最近一次 0→1 的时间（out_tec_sw 里记）*/
 static uint8_t    s_tec_cmd_on[2];       /* TEC 命令意图（只有 out_tec_sw 写；取值 control_tec_cmd，X03-F-08）*/
 static uint32_t   s_poll_now_ms;       /* 最近一拍的时间戳：out_tec_sw 在拍外被调时用它给 TEC 开沿计时*/
@@ -417,6 +418,7 @@ void control_init(const control_ops_t *ops)
 #endif
     memset(&s_stuck_tc2, 0, sizeof(s_stuck_tc2));   /* r7f R7-08：TC2 那一路 */
     s_stuck_chn = 0;
+    s_stuck_watch = 0;      /* R9-02 */
     memset(s_tec_on_since, 0, sizeof(s_tec_on_since));
     memset(s_tec_cmd_on, 0, sizeof(s_tec_cmd_on));
     memset(s_tec_act_on, 0, sizeof(s_tec_act_on));   /* i3：模块回显从头开始，上电还没有回读过 */
@@ -811,13 +813,25 @@ void control_poll(uint32_t now_ms)
          * 体温窗口只有 30 秒，健康读数在稳态本来就可能冻满 30 秒（F2 实测 30–53 秒），自动模式进
          * HEAT 的当拍就会误进 SAFE（报警还写“水温探头断线”）；而且它把 30 秒宽限——唯一给被控
          * 对象留响应时间的机会——从“开 TEC 后 30 秒”提前到了“开 TEC 那一拍”。水温的长窗口
-         * （10 分钟）远大于健康读数的连续不变段，保留预冻不会误报，所以不动（K9c）。*/
+         * （10 分钟）远大于健康读数的连续不变段，保留预冻不会误报，所以不动（K9c）。
+         */
         tc1_stuck  = (uint8_t)(tc1_stuck
                                || (s_tec_cmd_on[0]
                                    && stuck_prefrozen(&s_stuck_tc1, now_ms, s_tec_on_since[0], CTRL_STUCK_WATER_WINDOW_MS)));
         tc2_stuck  = (uint8_t)(tc2_stuck
                                || (s_tec_cmd_on[1]
                                    && stuck_prefrozen(&s_stuck_tc2, now_ms, s_tec_on_since[1], CTRL_STUCK_WATER_WINDOW_MS)));
+        /* R9-02（独立复核 R9，2026-11-26）：体温这一路先判出来时，水温如果**也已经冻满它自己的
+         * 长窗口**（10 分钟，不是 R8-02 撤掉的 30 秒短窗口），同一拍一并记进涉事通道。
+         * 别用短窗口：健康水温稳态本来就会冻 30–53 秒（F2 实测），那会让体温一次卡死之后
+         * 设备被正常不动的水温按在 SAFE 里（R8-02）。*/
+        {
+            uint8_t tc1_pre = (uint8_t)(s_tec_cmd_on[0] && s_stuck_tc1.last_change
+                                        && stuck_water_is(&s_stuck_tc1, now_ms));
+            uint8_t tc2_pre = (uint8_t)(s_tec_cmd_on[1] && s_stuck_tc2.last_change
+                                        && stuck_water_is(&s_stuck_tc2, now_ms));
+            if (body_stuck) { tc1_stuck |= tc1_pre; tc2_stuck |= tc2_pre; }   /* 报警位随下面同一条路径置 */
+        }
         /* S 线 i3（M09-F-09 的注入档口径）：注入源在生效的那一路读数恒等于人给的值，不判卡死（排在预冻之后）。
          * 交付档装配方不接 stuck_exempt，行为不变。TC1 / TC2 同属"水温"注入源（现场档的 water 命令）。*/
         if (body_stuck && stuck_src_injected(1u)) body_stuck = 0;
@@ -833,8 +847,30 @@ void control_poll(uint32_t now_ms)
              * 屏上报警还写错通道。现在只由水温自己的判据决定是否记入（长窗口 10 分钟，见 tc1_stuck /
              * tc2_stuck）：真冻住的那一路照样记；注入档的豁免也走 tc1_stuck（stuck_src_injected(2)）。*/
             s_stuck_chn |= (uint8_t)((body_stuck ? 1u : 0u) | (tc1_stuck ? 2u : 0u) | (tc2_stuck ? 4u : 0u));
+            /* R9-02：记下这一次锁存时哪一路水温**正被驱动**。锁存期间 TEC 命令全被压成 0，
+             * 长窗口复查只能看这两路——没被驱动过的通道（例如从没用过的 TC2）读数冻着与
+             * 48°C 硬切断无关，不该被拖进涉事通道。*/
+            s_stuck_watch = (uint8_t)((s_tec_cmd_on[0] ? 2u : 0u) | (s_tec_cmd_on[1] ? 4u : 0u));
             SAFETY_UNLOCK();
             safety_trip(SAFETY_BIT_STUCK);
+        }
+        /* R9-02（独立复核 R9，2026-11-26）：STUCK 锁存期间 TEC 命令已经被压成 0，tc1_stuck / tc2_stuck
+         * 都不再成立；但"读数逐位不变满 10 分钟"这件事与 TEC 无关（健康水温实测最长 53 秒，F2）。
+         * 锁存期间照样看这两路的长窗口：成立就记进涉事通道 + 报借来的水温位。否则体温那一路一恢复，
+         * 锁存（连同涉事通道）直接清掉，输出就对着一个真冻住的水温读数开下去——48°C 硬切断失明。
+         * 只记长窗口、不记 30 秒短窗口：后者在健康稳态上就会把设备按在 SAFE 里（R8-02）。*/
+        if ((s_safety_latch & SAFETY_BIT_STUCK) && m207_src_ok && !stuck_src_injected(2u)) {
+            uint8_t wet = 0;
+            if ((s_stuck_watch & 2u) && s_stuck_tc1.last_change && stuck_water_is(&s_stuck_tc1, now_ms)) wet |= 2u;
+            if ((s_stuck_watch & 4u) && s_stuck_tc2.last_change && stuck_water_is(&s_stuck_tc2, now_ms)) wet |= 4u;
+            if (wet) {
+                SAFETY_LOCK();
+                s_stuck_chn |= wet;
+                SAFETY_UNLOCK();
+                tcs_alarm_raise(ALM_SENSOR_OPEN);
+            }
+        } else if (!(s_safety_latch & SAFETY_BIT_STUCK)) {
+            s_stuck_watch = 0;      /* 锁存清掉（ack / 自愈）→ 本次的驱动通道记录一并作废 */
         }
         SAFETY_LOCK();
         stuck_chn = stuck_chn_latched(s_safety_latch);

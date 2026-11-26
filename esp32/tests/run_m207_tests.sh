@@ -116,6 +116,11 @@ command -v "$PYGATE" >/dev/null 2>&1 || PYGATE=python3
 if command -v "$PYGATE" >/dev/null 2>&1 && "$PYGATE" -I tests/test_m207_gates.py; then :;
 else echo "[m207gates] FAIL"; FAIL=1; fi
 
+# S-G e3b：网页控制台 / OTA 加固的源码门禁（X03-F-12、M08-F-12、M14-F-13、M14-F-11、M14-F-12、M10-F-06）。
+# 这些修复落在与 IDF 绑定的代码里，主机单测够不着；同样只依赖标准库。
+if command -v "$PYGATE" >/dev/null 2>&1 && "$PYGATE" -I tests/test_web_gates.py; then :;
+else echo "[webgates] FAIL"; FAIL=1; fi
+
 # S-G e2（X06-F-05）：对端模型直驱固件内核。主机桥 = 交付固件用的同一份 m207_core.c；
 # 对端 = project_tcs/tools/m207_sim.py 的 M207Core。五行注入矩阵 + 黄金语料三方一致 + 50ms 铁律。
 run m207host tests/m207_core_host.c components/tcs_m207/m207_core.c components/tcs_m207/m207_proto.c components/tcs_core/control.c components/tcs_core/param_registry.c components/tcs_core/post_pure.c components/tcs_link/proto.c

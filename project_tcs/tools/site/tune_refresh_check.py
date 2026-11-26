@@ -19,7 +19,6 @@
 import argparse
 import os
 import re
-import struct
 import subprocess
 import sys
 import time
@@ -86,12 +85,12 @@ def main():
     a = ap.parse_args()
     os.makedirs(a.shots, exist_ok=True)
     mb = sc.load_mb()
-    A_TAP = mb.nm_addr("g_tap_inject")
     A_PAGE = mb.nm_addr("s_page")
 
     def tap(x, y, mode=1):
-        mb.pr_write(A_TAP + 4, struct.pack("<III", mode, x, y))
-        mb.pr_write(A_TAP, struct.pack("<I", (mb.pr_read("b32", A_TAP, 1)[0] + 1) & 0xFFFFFFFF))
+        # S-G x3（2026-11-26）：注入点击统一走 site_common.tap_guarded——模式页上的执行器禁区
+        # 在这里同样生效（原来这份工具自己写 g_tap_inject，绕过了 estop_matrix 里的禁区）。
+        return sc.tap_guarded(mb, x, y, mode, page)
 
     def page():
         return mb.pr_read("b8", A_PAGE, 1)[0]

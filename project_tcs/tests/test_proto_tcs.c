@@ -105,7 +105,11 @@ int main(void)
 {
     /* ====== proto 原有 self_test（CRC8 + GS 帧编解码字节级）====== */
     int st = proto_self_test();
-    CHECK(st > 0, "proto self_test passes");
+    /* X06-F-06：原来 st > 0——10 个子项里错 9 个也能过。改成精确的"全通过"值：
+     * 3 个 CRC（已知向量 / 空串 / 含 NUL）+ 3 个定点换算（m→i16 正负、i16→m）
+     * + 2 个下行编帧（命令 / ACK 字段逐字节）+ 2 个 RX 状态机（整帧 / 杂字节重同步）。
+     * 增删子项必须同步这个数——有意为之：逼一次复核。*/
+    CHECK(st == 10, "proto self_test 全部 10 项通过");
 
     /* ====== CRC 已知向量（proto.h 注释）====== */
     CHECK(proto_crc8((const uint8_t *)"123456789", 9) == 0xF4, "crc8 123456789=0xF4");
@@ -252,7 +256,10 @@ int main(void)
             comm_tick(&L2);
             tx_seen++;      /* 每次超时重传一帧 */
         }
-        CHECK(comm_txq_count(&L2) == 0 || 1, "txq sane");
+        /* X06-F-06：原来是 `== 0 || 1`（恒真，什么也证明不了）。3 次超时各重传一帧、
+         * 这期间没有调用 comm_poll_tx，所以此刻队列里正好压着这 3 帧；第 4 次 tick 的上限
+         * 判断只清 pending、不再入队（下面的 link_ok==0 断言覆盖那一半）。*/
+        CHECK(comm_txq_count(&L2) == 3, "3 次重传的 3 帧都还在 txq 里（未 poll）");
         fake_now += 500;
         comm_tick(&L2);
         CHECK(L2.link_ok == 0, "link down after 3 retries");

@@ -15,9 +15,10 @@
 #include "cJSON.h"
 
 static int fails;
+static int checks;  /* X06-F-06：断言数基线门禁的取数口 */
 
 #define CHECK(cond, msg) do { \
-    if (!(cond)) { printf("    FAIL: %s\n", msg); fails++; } \
+    if (!(cond)) { printf("    FAIL: %s\n", msg); fails++; } else { checks++; } \
 } while (0)
 
 /* 与 websocket.c 同构的 reg item 构造（敌意 name/key/unit 注入点）*/
@@ -56,8 +57,9 @@ static void vec_escape(const char *tag, const char *hostile)
     }
     /* ② 产物内不得含未转义控制字符（<0x20 原样出现即坏）*/
     for (const char *p = j; *p; p++)
-        CHECK((unsigned char)*p >= 0x20 || *p == '\0',
-              "产物含未转义控制字符");
+        /* X06-F-06：原来的 `|| *p == '\0'` 是死项——循环条件就是 *p，进到体内必然非 0。
+         * 去掉后断言才是它名字说的那件事：产物里不得出现原始控制字符。*/
+        CHECK((unsigned char)*p >= 0x20, "产物含未转义控制字符");
     cJSON_free(j);
     printf("  vec[%s] OK\n", tag);
 }
@@ -102,6 +104,6 @@ int main(void)
     /* 向量 7：中文+引号混合长串（50 参最长名压力形态）*/
     vec_escape("混合长串", "模式\"二\"上限\\温度\"中文\"混\x02合-0123456789");
 
-    printf("test_ws_json_escape: %s\n", fails ? "FAIL" : "PASS");
+    printf("test_ws_json_escape: PASS=%d FAIL=%d\n", checks, fails);
     return fails ? 1 : 0;
 }

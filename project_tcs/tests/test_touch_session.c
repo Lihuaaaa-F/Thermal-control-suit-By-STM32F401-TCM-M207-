@@ -21,8 +21,9 @@
 #include "ft5446.h"
 
 static int g_fail = 0;
+static int g_pass = 0;  /* X06-F-06：断言数基线门禁的取数口 */
 #define CHECK(cond, msg) do { \
-    if (!(cond)) { printf("  FAIL: %s (line %d)\n", msg, __LINE__); g_fail++; } \
+    if (!(cond)) { printf("  FAIL: %s (line %d)\n", msg, __LINE__); g_fail++; } else { g_pass++; } \
 } while (0)
 
 static uint32_t g_now = 0;
@@ -771,7 +772,7 @@ int main(void)
     test_tp_link_replug();
 
     printf("===================\n");
-    if (g_fail == 0) { printf("test_touch_session: PASS\n"); return 0; }
+    if (g_fail == 0) { printf("test_touch_session: PASS=%d FAIL=0\n", g_pass); return 0; }
     printf("test_touch_session: FAIL (%d)\n", g_fail);
     return 1;
 }

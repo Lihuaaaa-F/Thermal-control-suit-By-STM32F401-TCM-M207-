@@ -1,0 +1,29 @@
+# 断言数/用例数基线（S-G x3 / X06-F-06）
+# label<TAB>min   asserts=PASS=n（执行了的断言数）；cases=corpus=/fed=（语料样本数）
+m207	35
+m207golden	16
+registry	84
+control	86
+post	81
+site_logic	119
+proto_comm	46
+fuzz	46935
+touchsession	10497
+qr	5
+uimodel	187
+linkinfo	30
+drvpure	69
+linkdir	154
+link_send	30
+m207txq	30
+auditring	46
+perfhist	29
+proto_m1	45
+ui_known	19
+ui_svc	15
+ui_mismatch	18
+prodlink	32
+linkfollow_prod	30
+auditring_prod	46
+histbody	70
+ws_json	1060

@@ -41,14 +41,9 @@ PAGE_NAME = {0: "首页", 1: "调参", 2: "曲线", 3: "连接", 4: "模式"}
 PAGE_X = (0, 144, 260, 608, 376)
 PAGE_Y = (0, 520, 200, 520, 520)
 UI_CMD = {"dlg_estop": 1, "dlg_mode": 2, "dlg_close": 15}
-# 模式页（页 4）上会让执行器动作的控件（2026-11-26 量自真机截图 shots7/02_mode_manual.png）：
-# 两行"制冷 / 制热"（暂停键是关断方向，不列）、"风扇"、"切换到自动模式"。
-# 矩阵里的任何点击都不得落在这些矩形里。起因：2026-11-26 D7 第一次运行，模式页"点按"那一行用 tap(632,388) 去点确认框的"取消"，
-# 确认框已经不在了，这一下落在 TEC2"制冷"上——主控向 M207 发了一条真实的 TEC2 制冷命令（约 1 秒后被同一行的"按住 2 秒"急停关掉）。
-# 用户明确要求不做任何驱动 TEC 的操作：这类工具必须从结构上做不到，而不是靠坐标碰巧对。
-ACTUATOR_RECTS = [(504, 272, 648, 360), (848, 272, 992, 360),      # TEC1 行：制冷、制热
-                  (504, 376, 648, 464), (848, 376, 992, 464),      # TEC2 行：制冷、制热
-                  (32, 472, 264, 568), (280, 472, 744, 568)]      # 风扇、切换到自动模式
+# 模式页（页 4）上会让执行器动作的控件矩形与"带禁区的点击"都收在 site_common.py 里
+# （S-G x3，2026-11-26：D7 事故后从这里挪出去的——禁区逻辑只能有一份实现，
+#  来源与矩形表见 site_common 里禁区那段上方注释，坐标量自真机截图 shots7/02_mode_manual.png）。
 
 
 def main():
@@ -57,24 +52,15 @@ def main():
     a = ap.parse_args()
     os.makedirs(a.shots, exist_ok=True)
     mb = sc.load_mb()
-    A = {n: mb.nm_addr(n) for n in ("g_estop_calls", "g_estop_dbg", "g_tap_inject", "g_lvgl_freeze",
+    A = {n: mb.nm_addr(n) for n in ("g_estop_calls", "g_estop_dbg", "g_lvgl_freeze",
                                     "g_tap_drop", "g_ui_cmd", "g_indev_pressed_reads", "s_mask", "s_page")}
     r32 = lambda n, k=1: mb.pr_read("b32", A[n], k)
     rows = []
 
-    def raw_tap(x, y, mode=1):
-        mb.pr_write(A["g_tap_inject"] + 4, struct.pack("<III", mode, x, y))
-        seq = (r32("g_tap_inject")[0] + 1) & 0xFFFFFFFF
-        mb.pr_write(A["g_tap_inject"], struct.pack("<I", seq))
-
     def tap(x, y, mode=1):
-        """在模式页（页 4）上只允许点执行器控件之外的位置；落在控件矩形里直接中止（宁可不跑，也不发执行器命令）。
-        其它页不查：同样的坐标在首页是导航键（例如 (376,520) 在首页是模式键、(608,520) 是连接键）。"""
-        if page() == 4:
-            for (x0, y0, x1, y1) in ACTUATOR_RECTS:
-                assert not (x0 <= x < x1 and y0 <= y < y1), \
-                    "要点的 (%d,%d) 落在模式页的执行器控件里，拒绝" % (x, y)
-        raw_tap(x, y, mode)
+        """一次带禁区的注入点击（实现与矩形表都在 site_common.tap_guarded）。
+        模式页上落在执行器控件矩形里会抛 TapRefused，本工具随之中止——宁可不跑，也不发执行器命令。"""
+        return sc.tap_guarded(mb, x, y, mode, page)
 
     def ui_cmd(n):
         mb.pr_write(A["g_ui_cmd"], struct.pack("<I", n))

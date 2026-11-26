@@ -6,7 +6,11 @@
 python project_tcs/tools/site/<脚本>.py ...
 ```
 
-它们**不进固件**。除两个标注"已进 run_all"的自测外，也不参与 `run_all.sh`。
+它们**不进固件**。除标注"已进 run_all"的三项自测（本目录的 test_ws_client.py、tests/ 下的 test_tap_guard.py 与 check_site_tap_guard.py）外，也不参与 `run_all.sh`。
+
+**注入点击必须走 `site_common.tap_guarded`（S-G x3，2026-11-26 D7 事故后）**：模式页（页码 4）上
+落在制冷/制热/风扇/切自动矩形里的点会直接抛 `TapRefused`，一个字节都不写探针。
+矩形表与坐标来源只在 `site_common.py` 一处；`tests/check_site_tap_guard.py` 禁止别处再写一份。
 依赖：Windows + Git Bash、pyserial、Pillow、`arm-none-eabi-nm`、`probe-rs`。
 
 ## 先看这个：这些工具要配台架档固件

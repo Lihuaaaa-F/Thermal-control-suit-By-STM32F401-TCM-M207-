@@ -43,7 +43,13 @@ cl_run() {  # cl_run <out.exe> <src...> — bat 内 cd 到 build，产物/对象
 }
 
 if command -v gcc >/dev/null 2>&1; then
-    GCC=${GCC:-gcc}
+    # S-G x3（X06-F-07）：环境变量覆盖不能静默生效——打印实际取值 + 来源
+    if [ -n "${GCC:-}" ]; then
+        echo "[env] GCC=$GCC（来源：环境变量 GCC，覆盖了默认值 gcc）"
+    else
+        GCC=gcc
+        echo "[env] GCC=$GCC（来源：默认值）"
+    fi
     # 单测按台架语义（TCS_PROFILE=1）：本地闭环/参数持久化都在，才能测到它们。
 # 交付语义（PROD=0）的差异由构建/反汇编门禁覆盖，不在主机单测里跑。
 CFLAGS="-Wall -Wextra -std=c11 -O1 -DTCS_UNIT_TEST -DTCS_PROFILE=1 $IFLAGS"
@@ -89,6 +95,10 @@ run linkinfo    tests/test_link_info.c       App/comm/link_info.c
 
 # H13 二维码解码回读（PC 出图 → zxing-cpp 解码比对）
 PYBIN=$(pick_pybin) || PYBIN=""
+if [ -z "$PYBIN" ]; then PYBIN_SRC="未选中任何候选"
+elif [ -n "${TCS_PYBIN:-}" ] && [ "$PYBIN" = "$TCS_PYBIN" ]; then PYBIN_SRC="环境变量 TCS_PYBIN"
+else PYBIN_SRC="默认候选顺序（TCS_PYBIN=${TCS_PYBIN:-未设置}）"; fi
+echo "[env] python=$PYBIN（来源：$PYBIN_SRC）"
 # S 线 D02：现场网页检查脚本自带的 WebSocket 客户端自测（本机回环，不需要设备）
 if [ -n "$PYBIN" ] && "$PYBIN" tools/site/test_ws_client.py; then :; else echo "[ws_client_selftest] FAIL"; FAIL=1; fi
 # S 线（2026-11-24 晚）：急停屏入口判定的变异验证——把 estop_gate.[ch] 逐个改坏，上面的单测必须每次都变红。
@@ -145,6 +155,10 @@ fi
 
 # H3 字库缺字门禁（2026-11-15 UI 单栈：改为 LVGL 字库审计；旧 font_audit.py 已随栈删除）
 PYBIN=$(pick_pybin) || PYBIN=""
+if [ -z "$PYBIN" ]; then PYBIN_SRC="未选中任何候选"
+elif [ -n "${TCS_PYBIN:-}" ] && [ "$PYBIN" = "$TCS_PYBIN" ]; then PYBIN_SRC="环境变量 TCS_PYBIN"
+else PYBIN_SRC="默认候选顺序（TCS_PYBIN=${TCS_PYBIN:-未设置}）"; fi
+echo "[env] python=$PYBIN（来源：$PYBIN_SRC）"
 if [ -n "$PYBIN" ]; then
     if "$PYBIN" tools/font_audit_lvgl.py; then :; else FAIL=1; fi
 else
@@ -161,12 +175,29 @@ fi
 # RTT printf 调用点总数对账（W5 立；W4.2 vendor 口径 13→；W1a +3 日志点后=16）
 # （App/rtt/ 为 vendor+薄壳域不计；16=业务面 13+W1a i2c4 三行；ltdc.c 4 处为
 # HEAD 既有 G 线文件；增删调用点须同步本数并说明）
+# S-G x3（X06-F-07）：原来硬编码 ==16。硬编码有两个毛病：新增一个日志点就得改门禁（于是有人直接改数字），
+# 而日志被**静默删掉**时又只要改个数字就能放行。现在拆成两件事：
+#   ① 必需的调用点必须在（每个都是排障时唯一的信息源，删了等于把现场的眼睛挖掉）；
+#   ② 总数落在 [16,24]：下界 16 = 当前业务面调用点数（App/rtt/ 的 vendor 与薄壳不计）——
+#      下界就是「一条都不许少」；上界 16+8 留给确实要新增日志的场合，同时挡住宏展开/循环里打日志的刷屏式增长。
 RTTN=$(grep -rn "SEGGER_RTT_printf" App Core --include=*.c | grep -v "App/rtt/" | wc -l)
-if [ "$RTTN" -ne 16 ]; then
-    echo "[rtt_count] FAIL: SEGGER_RTT_printf 调用点 $RTTN ≠ 16（增删须同步本门禁并说明）"
+RTT_ANCHORS='FAULT CFSR=|ltdc init rv=|ft5446 ver=|i2c4 up pclk4=|eeprom online magic=|[POST] done pass='
+RTT_MISS=''
+OLDIFS=$IFS; IFS='|'
+for a in $RTT_ANCHORS; do
+    IFS=$OLDIFS
+    grep -rqF "$a" App Core --include=*.c 2>/dev/null || RTT_MISS="$RTT_MISS [$a]"
+    IFS='|'
+done
+IFS=$OLDIFS
+if [ -n "$RTT_MISS" ]; then
+    echo "[rtt_count] FAIL: 必需日志点缺失：$RTT_MISS"
+    FAIL=1
+elif [ "$RTTN" -lt 16 ] || [ "$RTTN" -gt 24 ]; then
+    echo "[rtt_count] FAIL: SEGGER_RTT_printf 调用点 $RTTN 不在 [16,24]（下界=业务面必需点，上界=防刷屏）"
     FAIL=1
 else
-    echo "[rtt_count] PASS (16)"
+    echo "[rtt_count] PASS ($RTTN 个调用点，必需点齐全，区间 [16,24])"
 fi
 
 # 官方库审计门禁（W5，v13.4 §6）：未入清单/未归类文件 → FAIL
@@ -181,7 +212,13 @@ fi
 
 # W2 转义向量单测（v13.4 §3.3）：真实 IDF cJSON 源编译（与固件同库）；
 # IDF 路径机器相关（与 CMake 工具链绝对路径同性质），缺件即红不静默
-CJSON_DIR="${IDF_CJSON:-/d/Espressif/frameworks/esp-idf-v5.5.5/components/json/cJSON}"
+# S-G x3（X06-F-07）：路径覆盖也要报出处
+if [ -n "${IDF_CJSON:-}" ]; then
+    CJSON_DIR="$IDF_CJSON"; CJSON_SRC="环境变量 IDF_CJSON"
+else
+    CJSON_DIR="/d/Espressif/frameworks/esp-idf-v5.5.5/components/json/cJSON"; CJSON_SRC="默认值"
+fi
+echo "[env] CJSON_DIR=$CJSON_DIR（来源：$CJSON_SRC）"
 if [ -f "$CJSON_DIR/cJSON.c" ]; then
     if [ "$MODE" = gcc ]; then
         if $GCC -Wall -Wextra -std=c11 -O1 "$CJSON_DIR/cJSON.c" \
@@ -220,6 +257,10 @@ for card in glob.glob('../docs/ref/研学卡_*.md'):
             win=re.sub(r'\.$','',win)
             if not os.path.exists(win): bad.append((os.path.basename(card),p))
 print('[card_paths] %d checked, %d bad %s' % (n,len(bad),bad[:3] if bad else ''))
+# S-G x3（X06-F-07）：n==0 时上面那行照样 PASS（研学卡被移走/改格式 → 门禁空过）。
+# 至少要看 1 条路径，否则这条门禁什么也没证明。
+if n < 1:
+    print('[card_paths] FAIL 一条路径都没检查到（研学卡被移走或格式变了？）'); sys.exit(1)
 sys.exit(1 if bad else 0)
 PYEOF
     then :; else FAIL=1; fi
@@ -232,9 +273,11 @@ fi
 VSHA=App/rtt/vendor/VENDOR_SHA256.txt
 if [ -f "$VSHA" ]; then
     ok=1
+    NV=0   # S-G x3（X06-F-07）：先数清单里到底有几条，空清单不许 PASS
     while IFS= read -r line; do
         line=$(printf '%s' "$line" | tr -d '\r')
         case "$line" in ''|\#*) continue;; esac
+        NV=$((NV + 1))
         h=$(printf '%s' "$line" | cut -d' ' -f1)
         name=$(printf '%s' "$line" | awk '{print $NF}')
         want=$(printf '%s' "$h" | tr -d ' ')
@@ -243,7 +286,11 @@ if [ -f "$VSHA" ]; then
             echo "[vendor_sha] FAIL: $name $got != $want"; ok=0
         fi
     done < "$VSHA"
-    [ "$ok" = 1 ] && echo "[vendor_sha] PASS (5 files)" || FAIL=1
+    if [ "$NV" -lt 5 ]; then
+        echo "[vendor_sha] FAIL: 清单里只有 $NV 条（应 ≥ 5）——语料被抽空时这道门禁会空过"
+        ok=0
+    fi
+    [ "$ok" = 1 ] && echo "[vendor_sha] PASS ($NV files)" || FAIL=1
 else
     echo "[vendor_sha] FAIL: $VSHA 缺失"; FAIL=1
 fi
@@ -532,6 +579,70 @@ run ui_svc      tests/test_ui_svc.c          App/lvgl_ui/ui_model.c
 run ui_mismatch tests/test_ui_mismatch.c     App/lvgl_ui/ui_model.c
 if [ -n "$PYBIN" ] && "$PYBIN" tools/proto_ref.py selftest; then :; else echo "[proto_ref_selftest] FAIL"; FAIL=1; fi
 
+
+# S-G x3（X06-F-06）：恒真断言静态扫描。抓 `|| 1`、`CHECK(1,`、对无符号/枚举值 `>= 0`、
+# 以及"循环条件就是 *p、体内还写 || *p == '\0'"这类死项。起因：审计在 4 处断言里找到永不红的写法，
+# 其中 `comm_txq_count(...) == 0 || 1` 是字面恒真（comm 丢帧时仍然绿）。
+# 先跑 --self-test（5 个构造样例：4 个 C 写法 + 1 个 python，必须全被抓到），再扫全仓测试源码。
+if [ -n "$PYBIN" ] && "$PYBIN" -X utf8 tests/check_tautology.py --self-test; then :; else
+    echo "[tautology_selftest] FAIL"; FAIL=1
+fi
+if [ -n "$PYBIN" ] && "$PYBIN" -X utf8 tests/check_tautology.py; then :; else
+    echo "[tautology] FAIL"; FAIL=1
+fi
+
+# S-G x3（X06-F-06）：断言数 / 用例数基线门禁。逐个运行主机单测，取它自己打印的 PASS=<n>
+# （或语料/模糊测试的 corpus=/fed=），与 tests/baseline/assert_counts.tsv 比较，低于基线即红。
+# 防的是"删断言 / 把循环次数改小 / 抽掉一半语料"这类静默减配——run_all 全绿但覆盖变少。
+if [ -n "$PYBIN" ] && "$PYBIN" -X utf8 tests/assert_count.py; then :; else
+    echo "[assert_count] FAIL"; FAIL=1
+fi
+
+# S-G x3（X06-F-07）：语料最小样本数。两道 golden 门禁都是"逐条比对语料"——语料被抽空或抽到
+# 只剩几条时，比对 0 条也能全绿（这正是审查说的"门禁可绕过点"）。这里钉住下限：两个 CSV 各 ≥ 16 条。
+# 16 是 2026-11-26 时的实际条数；要减少语料必须同时改这里并说明理由（提高不用改）。
+if [ -n "$PYBIN" ]; then
+    if "$PYBIN" -X utf8 - <<'PYEOF'
+import io, sys
+MIN = 16
+bad = 0
+for f in ("tests/m207_golden.csv", "tests/m207_golden_rx.csv"):
+    try:
+        n = sum(1 for l in io.open(f, encoding="utf-8") if l.strip() and not l.lstrip().startswith("#"))
+    except OSError as e:
+        print("[golden_corpus] FAIL 读不到 %s：%s" % (f, e)); bad += 1; continue
+    if n < MIN:
+        print("[golden_corpus] FAIL %s 只有 %d 条（应 ≥ %d）——语料少了，逐条比对就证明不了什么" % (f, n, MIN))
+        bad += 1
+    else:
+        print("[golden_corpus] %s: %d 条" % (f, n))
+sys.exit(1 if bad else 0)
+PYEOF
+    then :; else FAIL=1; fi
+else
+    echo "[golden_corpus] SKIP: python not found"; FAIL=1
+fi
+
+# S-G x3（条目 3，2026-11-26 D7 事故）：现场工具的"带禁区的点击"。
+# 事故：estop_matrix 在模式页点确认框的"取消"，确认框已不在，那一下落到 TEC2"制冷"上——
+# 主控向 M207 发了一条真实的 TEC2 制冷命令。禁区逻辑现在只有一份实现（site_common.tap_guarded）。
+# 这两行不碰探针：test_tap_guard 用假页号/假探针证明六个矩形全拦、急停/返回/导航键放行；
+# check_site_tap_guard 是静态门禁，禁止 tools/site 下再出现第二份写 g_tap_inject 或矩形表的代码。
+if [ -n "$PYBIN" ] && "$PYBIN" -X utf8 tests/test_tap_guard.py; then :; else
+    echo "[tap_guard] FAIL"; FAIL=1
+fi
+if [ -n "$PYBIN" ] && "$PYBIN" -X utf8 tests/check_site_tap_guard.py; then :; else
+    echo "[tap_guard_gate] FAIL"; FAIL=1
+fi
+
+# S-G x3（条目 4，2026-11-26 台架档增量构建失败）：构建脚本回归门禁。
+# 那天 H743 四档 / ESP32 三档 / 主机全量都过，只有台架档增量构建失败：模式页新增 tui_p4.c，
+# 而 App/lvgl_ui/*.c 的 GLOB 没带 CONFIGURE_DEPENDS，旧构建目录不会重新配置。
+# 三条判据：① GLOB 必须 CONFIGURE_DEPENDS；② build_bench.sh 必须无条件重新配置（否则版本串/源清单过期）；
+# ③ proto_sync.py --check 的输出里必须有第 9 项结论（对外报的协议版本取自 TCS_PROTO_VER）。
+if [ -n "$PYBIN" ] && "$PYBIN" -X utf8 tests/check_build_scripts.py; then :; else
+    echo "[build_scripts] FAIL"; FAIL=1
+fi
 echo "==================="
 if [ "$FAIL" = 0 ]; then echo "run_all: ALL GREEN"; else echo "run_all: HAS FAILURES"; fi
 exit $FAIL

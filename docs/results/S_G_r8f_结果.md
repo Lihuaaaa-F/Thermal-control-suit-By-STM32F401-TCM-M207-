@@ -238,6 +238,24 @@ R8-04 的缺陷本体，`CAUGHT by 7 checks`）；B03 的锚点随缺陷本体�
 逐条的红证据都是在“该条修之前、前一条已修”的树上门控出来的（每条的 K/L 断言相互独立），
 命令与修后 green 完全相同（见各节）。原始日志在 `/tmp/r8f_*.log`（不入库）。
 
+### 环境发现：现场档配置比仓库要求旧一格（已在本工作树修补，未入库）
+
+按批次说明把 `D:\Espressif\ws\tcs\esp32\sdkconfig.site` 复制进来跑现场档后，`esp32/tests/check_layout.py`
+报红：`现场档 sdkconfig.site 没有 CONFIG_ESP_COREDUMP_ENABLE_TO_FLASH=y`。核对：那份文件是
+2026-11-25 之前的完整配置快照（`CONFIG_ESP_COREDUMP_ENABLE_TO_NONE=y`），没跟上同一天 X04-F-03 加进
+`sdkconfig.defaults` 的两行——正是该文件末尾“完整配置快照不会自动带上 sdkconfig.defaults 里新加的
+默认值，手动补上”说的那件事；`tcs-int2` / `tcs-g-e1` 工作树里的同名文件已经补过了。
+处理：在本工作树的**本地**副本上按同一约定补 `CONFIG_ESP_COREDUMP_ENABLE_TO_FLASH=y` /
+`CONFIG_ESP_COREDUMP_STACK_SIZE=1792`（`..._TO_NONE=y` 改成 not set），`check_layout: PASS`。
+`build_matrix.sh` 那一次现场档用的是**未修补**的副本（只差 coredump 一项；本批次代码没有任何
+coredump 条件分支，编译覆盖不受影响）；修补后又单独跑了一次现场档从零构建做对照（同一份配置、
+`-B build-matrix-site2`）：第一次在 IDF 自带文件上撞到已知的 GCC 崩溃
+（`esp_lcd_panel_rgb.c:722` internal compiler error: Segmentation fault，与批次说明里预告的一致），
+从断点续编后 `exit=0 error=0 warning=0`、现场档命令集核对 PASS。首次配置还报了一条
+`FREERTOS_ISR_STACKSIZE=1536` 超出 IDF 5.5.5 允许区间（[2096, 32768]）的告警——同样是这份旧快照的
+遗留（IDF 回退到默认值），与本批次代码无关。
+`sdkconfig.site` 本就不入库（`.gitignore`），这里只记录事实。
+
 ### 真机部分（未做，按批次约定）
 
 - 本批次**不碰设备**：没有 probe-rs、没有串口、没有烧录、没有任何驱动 TEC / 加热的操作。
@@ -264,3 +282,6 @@ R8-04 的缺陷本体，`CAUGHT by 7 checks`）；B03 的锚点随缺陷本体�
    `param_persist_now` 的调用点与 persist_worker 的语义，R8-06 是诊断口径 / 文档，另批处理。
 6. TC1 / TC2 的水路拓扑仍未确认（沿用 r7f“两路独立水体”的口径）；若实际同一水体，多出来的是
    保守（可能误报），不是缺口。
+7. **现场档配置陈旧**（§5 环境发现）：`D:\Espressif\ws\tcs\esp32\sdkconfig.site` 缺 X04-F-03 的
+   coredump 两行，任何拿它跑现场档 / `run_m207_tests.sh` 的批次都会在 `check_layout` 上红一次。
+   建议协调者把它换成 `tcs-int2` 里的那份（或重新生成），这是一处**共享环境**问题，不是某个批次的代码问题。

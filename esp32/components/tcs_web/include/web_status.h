@@ -111,6 +111,13 @@ int web_registry_fill_json(const param_desc_t *const *ps, int n, cJSON *root);
 /* 同上并序列化进 buf（结尾带 NUL 的 C 串）；返回串长，cap 不够或失败返回 0。*/
 size_t web_registry_json(const param_desc_t *const *ps, int n, char *buf, size_t cap);
 
+/* ====== POST /api/ota?m=… 的 m 取值（M14-F-13）======
+ * 入参是查询串里 m 这一项的值（httpd_query_key_value 取出来、已做百分号解码）。
+ * 返回 0 = 自拷贝 + 切换；1 = 回滚；-1 = 不是精确的 "0" 或 "1"。
+ * 两种模式都会重启设备，所以输入不合法时什么都不做（调用方回 400）——以前是在查询串里找
+ * 子串 "m=1"（?m=10、?m=1x 也当回滚），取不到 m 时静默按 0 拷贝 + 重启。*/
+int web_ota_mode_value(const char *v);
+
 #ifdef __cplusplus
 }
 #endif

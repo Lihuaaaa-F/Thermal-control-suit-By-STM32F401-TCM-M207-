@@ -102,6 +102,8 @@ EXTRA_INC=""; EXTRA_DEF=""
 if [ -f "$CJSON_DIR/cJSON.c" ]; then
     EXTRA_INC="/I\"$(cygpath -w "$CJSON_DIR")\""
     run webstatus tests/test_web_status.c components/tcs_web/web_status.c "$CJSON_DIR/cJSON.c"
+    # S-G e3b（M14-F-13）：/api/ota 的 m 取值判定（web_status.c 的纯逻辑）
+    run webhard   tests/test_web_hardening.c components/tcs_web/web_status.c "$CJSON_DIR/cJSON.c"
     EXTRA_INC=""
 else
     echo "[webstatus] FAIL: IDF cJSON 源缺失（$CJSON_DIR，可用 IDF_CJSON 覆盖路径）"; FAIL=1

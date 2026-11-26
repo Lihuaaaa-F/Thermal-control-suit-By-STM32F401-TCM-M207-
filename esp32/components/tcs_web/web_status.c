@@ -367,3 +367,12 @@ size_t web_registry_json(const param_desc_t *const *ps, int n, char *buf, size_t
     cJSON_Delete(root);
     return out;
 }
+
+/* ====== /api/ota 的 m 取值（M14-F-13）====== */
+int web_ota_mode_value(const char *v)
+{
+    if (!v) return -1;
+    if (strcmp(v, "0") == 0) return 0;
+    if (strcmp(v, "1") == 0) return 1;
+    return -1;
+}

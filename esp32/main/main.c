@@ -3,8 +3,9 @@
  * ESP32 = 主控（参数/控制闭环/锁存的权威）+ Web 服务器；H743 是显示与操作终端（v2 架构）。
  * 启动序：NVS → event loop → SoftAP(TCS-XXXX/12345678) → 回环自测(WP-F.1)
  *        → 链路任务(UART1 230400，含内置注册表快照+演示模式 WP-F.2/F3) → HTTP/WS :80
- * OTA（WP-F.4）：/api/ota 或 WS {"t":"ota"} 触发——运行镜像自拷贝到对槽+切换；
+ * OTA（WP-F.4）：POST /api/ota?m=0 或 WS {"t":"ota"} 触发——运行镜像自拷贝到对槽+切换；
  *        m=1 直接把 boot 指回对槽（回滚），两次重启日志即证据。
+ *        HTTP 的 m 必填、只认精确的 "0" / "1"，其余 400（M14-F-13）；同一时刻只跑一例，并发的回 409（X03-F-12）。
  *
  * 日常闭环：bash ~/.claude/skills/embedded-dev-loop/platforms/esp32/scripts/esp_loop.sh all
  * 引脚红线：GPIO17(TX)→H743 PA3(RX)，GPIO18(RX)←H743 PD5(TX)；17/18 非保留脚 ✓

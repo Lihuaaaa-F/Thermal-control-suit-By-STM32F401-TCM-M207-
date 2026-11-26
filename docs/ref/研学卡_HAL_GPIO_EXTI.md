@@ -53,14 +53,16 @@
 
 
 
+
 复现命令（仓库根 `/d/Espressif/ws/tcs`，Git Bash；raw 输出路径分隔符为 `\`，表内归一为 `/`）：
 
 ```bash
 grep -rnE "HAL_GPIO_|HAL_EXTI_" project_tcs/App project_tcs/Core/Src --include=*.c
-# → 58 命中（2026-11-26 重锚），下表 58 行逐一对应
+# → 58 命中（2026-11-27 重锚），下表 58 行逐一对应
 ```
 
 vendor 域说明：`App/rtt/`（SEGGER RTT vendor 五文件）同一 pattern 单独跑=**0 命中**（无需列行）。
+
 
 
 
@@ -166,4 +168,4 @@ vendor 域说明：`App/rtt/`（SEGGER RTT vendor 五文件）同一 pattern 单
 | HAL_GPIO_Init 单点集中（#53） | **符合官方推荐 ✓**——uart_gpio_af 通用函数收敛三路 UART 引脚配置，避免散抄 |
 | 行号时效 | ltdc.c 行号=G 线未提交工作区快照（git M 态）；**G 线合入后本卡 ltdc.c 域 19 行需复核** |
 
-——研学卡完（58/58，2026-11-26 重锚）。
+——研学卡完（58/58，2026-11-27 重锚）。

@@ -53,14 +53,16 @@
 
 
 
+
 复现命令（仓库根 `/d/Espressif/ws/tcs`，Git Bash；raw 输出路径分隔符为 `\`，表内归一为 `/`）：
 
 ```bash
 grep -rnE "HAL_UART_" project_tcs/App project_tcs/Core/Src --include=*.c
-# → 43 命中（2026-11-26 重锚），下表 43 行逐一对应（含注释行，注明"注释"）
+# → 43 命中（2026-11-27 重锚），下表 43 行逐一对应（含注释行，注明"注释"）
 ```
 
 vendor 域说明：`App/rtt/`（SEGGER RTT vendor 五文件）同一 pattern 单独跑=**0 命中**（RTT 不触 HAL，无需列行）。
+
 
 
 
@@ -152,4 +154,4 @@ vendor 域说明：`App/rtt/`（SEGGER RTT vendor 五文件）同一 pattern 单
 | 错误回调使用域 | `HAL_UART_ErrorCallback` 在 m207 头注(#12)与 it.c 定义(#43) 成对在案——分发后各模块自恢复，与官方"错误回调内做清理+用户重启"流程一致 ✓ |
 | 扩展面未用（FIFO/RX event/CLKSOURCE 等 uart_ex 域） | 现状=最小调用面，无待整改；若 W2/W3 引入收发增强再评估（不预设 W 号） |
 
-——研学卡完（43/43，2026-11-26 重锚）。
+——研学卡完（43/43，2026-11-27 重锚）。

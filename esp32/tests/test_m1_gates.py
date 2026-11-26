@@ -182,6 +182,37 @@ def main():
         if needle not in p0c:
             fails.append("H743 App/lvgl_ui/tui_p0.c 缺（i3）：首页 TEC 胶囊没有跟着开关状态是否可信走：%s" % needle)
 
+    # 8) S 线 i3（P1-12 的另一半）：link_start / web_start 带返回值并进启动汇总——原来是 void 接口，
+    #    启动汇总只能记成"未核实"，链路任务 / WS 推送任务没起来时照样打 all up。
+    #    link_task.c 原样编译的主机用例在 tests/test_link_dir.c 末尾；web 侧依赖 httpd，只有这条源码门禁。
+    linkc = read(LINK, "link_task.c")
+    for needle in (
+        "esp_err_t link_start(void)",
+        "return ESP_ERR_NO_MEM;",                       # 任务没建成：带出去
+        "uart_driver_delete(LINK_UART);",               # 并把 UART 驱动卸掉
+    ):
+        if needle not in linkc:
+            fails.append("tcs_link/link_task.c 缺（i3）：%s" % needle)
+    wsc = read(ESP, "components", "tcs_web", "websocket.c")
+    for needle in ("esp_err_t ws_init(httpd_handle_t hd)", "return ESP_ERR_NO_MEM;"):
+        if needle not in wsc:
+            fails.append("tcs_web/websocket.c 缺（i3）：%s" % needle)
+    httpc = read(ESP, "components", "tcs_web", "http_server.c")
+    for needle in ("esp_err_t web_start(void)", "return ws_init(s_httpd);"):
+        if needle not in httpc:
+            fails.append("tcs_web/http_server.c 缺（i3）：%s" % needle)
+    if httpc.count("ws_init(") != 1:
+        fails.append("tcs_web/http_server.c：web_start 只能调一次 ws_init（调两次会起两个推送任务）")
+    mainesp = read(ESP, "main", "main.c")
+    for needle in ("svc_note(&svc, SVC_BIT_LINK, link_start());", "svc_note(&svc, SVC_BIT_WEB, web_start());"):
+        if needle not in mainesp:
+            fails.append("esp32/main/main.c 缺（i3）：%s" % needle)
+    for stale in ("svc_unverified(&svc, SVC_BIT_LINK)", "svc_unverified(&svc, SVC_BIT_WEB)"):
+        if stale in mainesp:
+            fails.append("esp32/main/main.c 还在把 link / web 记成未核实：%s" % stale)
+    if mainesp.count("link_start()") != 1:
+        fails.append("esp32/main/main.c：link_start 只能调一次（重入会重复安装 UART 驱动）")
+
     if fails:
         print("[m1gates] FAIL")
         for f in fails:

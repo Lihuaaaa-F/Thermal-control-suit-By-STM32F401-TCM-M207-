@@ -170,8 +170,9 @@ static void esp_on_broadcast(param_desc_t *p, uint8_t src)
 /* ====== P1-12：服务启动结果汇总 ======
  * 此前五个服务的 int 返回值在 app_main 里被直接丢掉，末尾无条件打印 all up。现在逐个登记进
  * svc_status，结束时由 svc_report 统一出报告：全起来才说 all up；有失败 → E 级日志 + 名单 +
- * ALM_SERVICE。link_start / web_start 是 void（tcs_link / tcs_web，不归本批次改）：如实登记成
- * "未核实"，不冒充成功——接口约定见 docs/results/S_G_e3a_结果.md。*/
+ * ALM_SERVICE。link_start / web_start 原先是 void 接口，只能如实登记成"未核实"；
+ * i3（2026-11-26）起两者带返回值（任务创建失败 = 非 0），同样进汇总。接口约定见
+ * docs/results/S_G_e3a_结果.md 第七节与 S_G_i3_结果.md。*/
 static void app_svc_log(void *arg, int level, const char *text)
 {
     (void)arg;
@@ -290,12 +291,11 @@ void app_main(void)
     softap_start();
     svc_note(&svc, SVC_BIT_SOFTAP, softap_probe());
     link_loopback_run();          /* WP-F.1：真机自环自测（独占 UART1，~2.5s，证据=[LPBK]）*/
-    link_start();
-    svc_unverified(&svc, SVC_BIT_LINK);     /* void 接口：UART 段失败即 abort，任务创建结果无从核实 */
+    /* P1-12 的另一半（i3）：link / web 改成带返回值，启动结果进汇总——任务没起来就不再说 all up */
+    svc_note(&svc, SVC_BIT_LINK, link_start());
     link_on_setparam(esp_on_setparam);   /* R2：屏写参数回调装配 */
     link_on_cmd(esp_on_cmd);             /* v2：屏急停/确认 → 本端执行 */
-    web_start();
-    svc_unverified(&svc, SVC_BIT_WEB);      /* void 接口：httpd 失败即 abort，WS 推送任务的结果无从核实 */
+    svc_note(&svc, SVC_BIT_WEB, web_start());   /* 带出 WebSocket 推送任务的结果 */
     /* R1b：M207 服务（UART2 21/47@57600）。回环自测先行（独占 UART2 ~1s，
      * 含物理短接探测），随后常驻服务钉核 1（第八章预算）。 */
     m207_lb_boottest();

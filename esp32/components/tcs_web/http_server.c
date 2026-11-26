@@ -169,7 +169,7 @@ static const httpd_uri_t s_uris[] = {
 
 static httpd_handle_t s_httpd;
 
-void web_start(void)
+esp_err_t web_start(void)
 {
     httpd_config_t cfg = HTTPD_DEFAULT_CONFIG();
     cfg.max_uri_handlers = sizeof(s_uris) / sizeof(s_uris[0]) + 2;
@@ -184,6 +184,7 @@ void web_start(void)
     ESP_ERROR_CHECK(httpd_start(&s_httpd, &cfg));
     for (size_t i = 0; i < sizeof(s_uris) / sizeof(s_uris[0]); i++)
         ESP_ERROR_CHECK(httpd_register_uri_handler(s_httpd, &s_uris[i]));
-    ws_init(s_httpd);
+    /* P1-12 的另一半（S 线 i3）：WebSocket 推送任务的结果经返回值交给启动汇总 */
     ESP_LOGI(TAG, "httpd up on :80 (%u uris)", (unsigned)(sizeof(s_uris) / sizeof(s_uris[0])));
+    return ws_init(s_httpd);
 }

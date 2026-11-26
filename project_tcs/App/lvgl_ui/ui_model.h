@@ -75,6 +75,7 @@ typedef enum {
     UI_BN_OVERTEMP,      /* 超温：必须人工解除 */
     UI_BN_AUTO,          /* 体温 / 模块 / 探头：源恢复后自动恢复 */
     UI_BN_INFO,          /* 提示级：未布防时传感器不在、参数校验失败 */
+    UI_BN_SERVICE,       /* S 线 i3：有后台服务没能启动（ALM_SERVICE）——确认不掉，要断电重启 */
 } ui_bn_kind_t;
 
 typedef enum { UI_BN_TAP_NONE = 0, UI_BN_TAP_ACK, UI_BN_TAP_HINT } ui_bn_tap_t;

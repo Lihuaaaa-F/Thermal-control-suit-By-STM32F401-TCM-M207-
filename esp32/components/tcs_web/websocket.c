@@ -483,7 +483,7 @@ static void ws_push_task(void *arg)
     }
 }
 
-void ws_init(httpd_handle_t hd)
+esp_err_t ws_init(httpd_handle_t hd)
 {
     s_hd = hd;
     memset(s_fds, 0xFF, sizeof(s_fds));   /* -1 */
@@ -491,8 +491,11 @@ void ws_init(httpd_handle_t hd)
     web_log_reset();
     web_log_addf(now_ms(), 'i', "boot", "主控启动：固件 %s", s_fw);
     s_log_sent = 0;
-    if (xTaskCreate(ws_push_task, "tcs_ws", 4096, NULL, 4, NULL) != pdPASS)
+    if (xTaskCreate(ws_push_task, "tcs_ws", 4096, NULL, 4, NULL) != pdPASS) {
         ESP_LOGE(TAG, "push task not created: pages will get the first push only");
+        return ESP_ERR_NO_MEM;             /* P1-12 的另一半（i3）：结果带出去，启动汇总里看得见 */
+    }
+    return ESP_OK;
 }
 
 /* ====== 握手 / 接收 ====== */

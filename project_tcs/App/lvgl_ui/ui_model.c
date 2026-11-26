@@ -147,6 +147,13 @@ void ui_banner_select(const ui_in_t *in, const ui_link_view_t *lv, ui_banner_t *
                    "已停止加热 · 降下来后点击解除", (uint8_t)(alarm_count(a) - 1u));
         return;
     }
+    /* S 线 i3（P1-12 的另一半）：主控有后台服务没能启动（ALM_SERVICE）。这一位确认不掉——要断电重启，
+     * 所以不给"点击解除"，只给提示；排在急停 / 超温之后（安全第一），压过会自己好的通信类（根因在这儿）。*/
+    if (a & ALM_SERVICE) {
+        set_banner(out, UI_BN_SERVICE, 1, UI_BN_TAP_HINT, "服务启动失败",
+                   "部分功能不可用 · 请断电重启", (uint8_t)(alarm_count(a) - 1u));
+        return;
+    }
     /* 自动恢复类：源没好之前点确认没有意义（主控会拒绝），所以文案只说"接好后自动恢复" */
     const char *auto_title = NULL;
     if (a & ALM_BODY_SENSOR)      auto_title = "体温传感器失联";
@@ -181,6 +188,7 @@ const char *ui_banner_tap_hint(const ui_banner_t *b)
             if (b->kind == UI_BN_LINK_LOST)    return "正在重新连接主控，连上后会自动刷新";
             if (b->kind == UI_BN_ESTOP_UNSENT) return "急停指令已记下，主控连上后立即送达";
             if (b->kind == UI_BN_ESTOP_PENDING) return "主控确认执行后才能解除";
+            if (b->kind == UI_BN_SERVICE)       return "这一条确认不掉，请断电重启";   /* S 线 i3 */
             return "接好后会自动恢复，不需要点确认";
         default:              return NULL;
     }
@@ -241,6 +249,7 @@ const char *ui_ack_reason(uint16_t still, const ui_link_view_t *lv)
         return "急停仍未解除，请再点一次";
     }
     if (still & ALM_EEPROM)       return "参数校验仍失败，请重新设定";
+    if (still & ALM_SERVICE)      return "有后台服务没能启动，请断电重启";   /* S 线 i3 */
     return NULL;
 }
 

@@ -526,6 +526,8 @@ fi
 # tec_known 位进 ui_model；另把协议参考实现 proto_ref.py 的 selftest 接进入口（TCS_PROTO_VER 3、快照 52 字节，
 # 与两端 C 用例同一组字节）。
 run ui_known    tests/test_ui_known.c        App/lvgl_ui/ui_model.c
+# S-G i3（P1-12 的另一半）：ALM_SERVICE 在屏上有文案（红底、说清"请断电重启"、确认不掉；急停 / 超温压过它）
+run ui_svc      tests/test_ui_svc.c          App/lvgl_ui/ui_model.c
 if [ -n "$PYBIN" ] && "$PYBIN" tools/proto_ref.py selftest; then :; else echo "[proto_ref_selftest] FAIL"; FAIL=1; fi
 
 echo "==================="

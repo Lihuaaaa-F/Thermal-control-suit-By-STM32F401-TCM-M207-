@@ -3,7 +3,7 @@
 """test_m207_gates.py — M207 / TMP117 / 风扇服务的源码门禁（S-G e2）
 
 门禁内容：M12-F-13（上电回环自检）、M12-F-14（unexpected 计数出口）、M12-F-16（UART 安装失败不 abort）、
-M12-F-09 下沉的风扇引脚注释核对（M13-F-09）等。
+M12-F-09 下沉的风扇引脚注释核对（M13-F-09）、M08-F-11（gedge 忙等循环每轮让出 CPU）等。
 
 有些修复落在与硬件绑定的代码里（上电回环自检、UART 驱动安装、控制台 perf 行），主机单测够不着；
 这类改动用"读源码、逐字核对"来把关，和单测一起进 run_m207_tests.sh。只依赖标准库。
@@ -281,6 +281,37 @@ check(h_h7 == h_es, ".h declaration region is byte-identical (H743 %d chars vs E
       % (len(h_h7 or ""), len(h_es or "")))
 for fn in ("m207_lineasm_reset", "m207_lineasm_feed", "m207_parse_line", "m207_mod_name", "m207_map_format"):
     check(fn in (c_h7 or "") and fn in (c_es or ""), "shared function %s is inside the compared region" % fn)
+
+# ---------------------------------------------------------------------------
+# M08-F-11 gedge：忙等循环必须每轮让出 CPU
+# 修复前循环体纯忙等、ms 上限 5000：同核 idle 任务 3 s 不跑就触发任务看门狗（PANIC=y）复位。
+# 现在上限 2000 且每轮 vTaskDelay(1)。主机编不了（依赖 IDF / FreeRTOS），用源码门禁钉住。
+# ---------------------------------------------------------------------------
+print("[gate] M08-F-11 gedge: the polling loop yields every round; ms is capped at 2000")
+gedge = strip_comments(function_body(console, "static int cmd_gedge("))
+check(gedge != "", "cmd_gedge found in tcs_console.c")
+check(re.search(r"ms\s*>\s*2000", gedge) is not None,
+      "ms is capped at 2000 (the old 5000 outlived the 3 s task watchdog)")
+check("vTaskDelay(" in gedge or "vTaskDelayUntil(" in gedge or "taskYIELD()" in gedge,
+      "cmd_gedge yields (vTaskDelay / vTaskDelayUntil / taskYIELD) somewhere in the function")
+# 循环体本身：截到配平的右花括号，防止"函数别处有 vTaskDelay、循环里仍是纯忙等"
+_loop = ""
+_wi = gedge.find("while")
+if _wi >= 0:
+    _j = gedge.find("{", _wi)
+    _depth = 0
+    for _k in range(_j, len(gedge)):
+        if gedge[_k] == "{":
+            _depth += 1
+        elif gedge[_k] == "}":
+            _depth -= 1
+            if _depth == 0:
+                _loop = gedge[_j:_k + 1]
+                break
+check(_loop != "", "the polling while-loop body is found")
+check(("vTaskDelay(" in _loop) or ("vTaskDelayUntil(" in _loop) or ("taskYIELD()" in _loop),
+      "the polling loop body yields on every round (otherwise the same-core idle task starves)")
+check("esp_timer_get_time()" in gedge, "the loop is bounded by esp_timer, not by a bare counter")
 
 print("===================")
 if FAIL == 0:

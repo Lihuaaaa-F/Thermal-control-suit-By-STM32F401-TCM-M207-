@@ -97,16 +97,25 @@ static esp_err_t h_api_linkstats(httpd_req_t *req)
 
 /* WP-F.4 OTA 触发：POST /api/ota?m=0（自拷贝+切换）/ m=1（回滚）。仅台架/出厂构建注册。*/
 #if CONFIG_TCS_DIAG
-extern void app_ota_trigger(int rollback);
+/* 实现在 main.c（组件不能依赖 main，这里只声明）。返回 ESP_OK = 已受理；
+ * ESP_ERR_INVALID_STATE = 已有一次 OTA 在进行（X03-F-12）；其余 = 这次没做成。 */
+extern esp_err_t app_ota_trigger(int rollback);
 static esp_err_t h_api_ota(httpd_req_t *req)
 {
     char q[32] = {0};
     int m = 0;
     if (httpd_req_get_url_query_str(req, q, sizeof(q)) == ESP_OK && strstr(q, "m=1"))
         m = 1;
-    app_ota_trigger(m);
+    esp_err_t rv = app_ota_trigger(m);
     httpd_resp_set_type(req, "application/json");
-    return httpd_resp_sendstr(req, "{\"t\":\"ota\",\"started\":true}");
+    if (rv == ESP_OK)
+        return httpd_resp_sendstr(req, "{\"t\":\"ota\",\"started\":true}");
+    /* X03-F-12：并发 OTA 只跑一个。409 = 上一次还没做完（拷贝进行中，或回滚后的 1s 重启窗口里）；
+     * 500 = 这次没做成（没有对槽 / 任务或内存没申请到 / otadata 写失败）。以前不论成败都回 started:true。 */
+    httpd_resp_set_status(req, rv == ESP_ERR_INVALID_STATE ? "409 Conflict" : HTTPD_500);
+    return httpd_resp_sendstr(req, rv == ESP_ERR_INVALID_STATE
+                                    ? "{\"t\":\"ota\",\"started\":false,\"reason\":\"busy\"}"
+                                    : "{\"t\":\"ota\",\"started\":false,\"reason\":\"failed\"}");
 }
 #endif /* CONFIG_TCS_DIAG: /api/ota */
 

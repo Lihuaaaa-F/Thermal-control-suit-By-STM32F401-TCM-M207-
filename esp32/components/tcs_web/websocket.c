@@ -707,12 +707,14 @@ esp_err_t ws_on_recv(httpd_req_t *req)
     }
 #if CONFIG_TCS_DIAG
     else if (strcmp(ts, "ota") == 0) {
-        /* WP-F.4：m=0 自拷贝+切换；m=1 回滚（boot 指回对槽）*/
-        extern void app_ota_trigger(int rollback);
+        /* WP-F.4：m=0 自拷贝+切换；m=1 回滚（boot 指回对槽）。实现在 main.c（组件不能依赖 main）。
+         * X03-F-12：已有一次 OTA 在进行时如实回绝；这里原先不看返回值（也没有返回值）。 */
+        extern esp_err_t app_ota_trigger(int rollback);
         const cJSON *m = cJSON_GetObjectItem(root, "m");
         int rb = (cJSON_IsNumber(m) && m->valueint == 1) ? 1 : 0;
         ESP_LOGI(TAG, "ws ota trigger rollback=%d", rb);
-        app_ota_trigger(rb);
+        if (app_ota_trigger(rb) == ESP_ERR_INVALID_STATE)
+            ws_send_str("{\"t\":\"err\",\"code\":\"server_busy\",\"msg\":\"OTA 进行中，请稍后再试\"}", fd);
     }
 #endif /* CONFIG_TCS_DIAG: ws ota */
     else {

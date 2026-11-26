@@ -92,6 +92,12 @@ EXTRA_INC=""
 run tcscore   tests/test_tcs_core.c       components/tcs_core/boot_record.c components/tcs_core/nvs_store.c components/tcs_core/svc_status.c components/tcs_core/param_registry.c components/tcs_link/proto.c
 
 
+# S-G e3b（X03-F-12 / M08-F-12）：OTA 自拷贝的纯逻辑（main/ota_pure.c）——单实例闸门、镜像长度。
+# C11 原子操作在 MSVC 上要 /experimental:c11atomics（14.42 实测；cl_run 把 EXTRA_DEF 追加在编译命令末尾）
+EXTRA_INC="/I..\..\main"; EXTRA_DEF="/experimental:c11atomics"
+run otapure  tests/test_ota_pure.c main/ota_pure.c
+EXTRA_INC=""; EXTRA_DEF=""
+
 # U 线 W1：网页 WS 契约（st / log 消息，真实 cJSON）
 if [ -f "$CJSON_DIR/cJSON.c" ]; then
     EXTRA_INC="/I\"$(cygpath -w "$CJSON_DIR")\""

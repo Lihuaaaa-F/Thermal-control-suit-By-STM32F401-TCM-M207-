@@ -10,6 +10,7 @@
  * 引脚红线：GPIO17(TX)→H743 PA3(RX)，GPIO18(RX)←H743 PD5(TX)；17/18 非保留脚 ✓
  */
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -21,6 +22,7 @@
 #include "esp_partition.h"
 #include "esp_app_desc.h"
 #include "esp_system.h"
+#include "esp_heap_caps.h"   /* X03-F-12：OTA 拷贝缓冲 heap_caps_malloc（内部 RAM）*/
 
 #include "softap.h"
 #include "link_task.h"
@@ -39,6 +41,7 @@
 #include "svc_status.h"
 #include "esp_wifi.h"       /* P1-12：softap_probe 用 esp_wifi_get_mode */
 #include "tcs_bootrec.h"
+#include "ota_pure.h"        /* X03-F-12：OTA 单实例闸门（纯逻辑，主机可测）*/
 
 static const char *TAG = "TCS";
 
@@ -70,52 +73,86 @@ static uint32_t ota_image_size(const esp_partition_t *p)
     return (end <= p->size) ? end : p->size;
 }
 
+#define OTA_COPY_CHUNK 8192u
+
+/* X03-F-12：同一时刻只允许一例在跑（闸门在 app_ota_trigger 里拿）。缓冲随任务从堆上申请、用完即释放——
+ * 以前是 static buf[8192]，两个并发实例读写同一块，写进对槽的镜像会错乱。 */
 static void ota_copy_task(void *arg)
 {
+    (void)arg;
     const esp_partition_t *run = esp_ota_get_running_partition();
     const esp_partition_t *next = esp_ota_get_next_update_partition(NULL);
-    if (!next) { ESP_LOGE(TAG, "ota FAIL: no next slot"); vTaskDelete(NULL); return; }
+    if (!next) { ESP_LOGE(TAG, "ota FAIL: no next slot"); goto leave; }
     uint32_t len = ota_image_size(run);
     ESP_LOGI(TAG, "ota: copy %s@0x%08lx img=%luKB -> %s",
              run->label, (unsigned long)run->address,
              (unsigned long)(len / 1024), next->label);
+    /* 缓冲先于 esp_ota_begin 申请：申请不到就不去擦对槽。放内部 RAM（同以前的 static 缓冲） */
+    uint8_t *buf = heap_caps_malloc(OTA_COPY_CHUNK, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+    if (!buf) { ESP_LOGE(TAG, "ota FAIL: no copy buffer"); goto leave; }
     esp_ota_handle_t h = 0;
     esp_err_t err = esp_ota_begin(next, len, &h);
-    if (err != ESP_OK) { ESP_LOGE(TAG, "ota begin=%s", esp_err_to_name(err)); vTaskDelete(NULL); return; }
-    static uint8_t buf[8192];
-    for (uint32_t off = 0; off < len; off += sizeof(buf)) {
-        uint32_t chunk = (len - off > sizeof(buf)) ? sizeof(buf) : (len - off);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "ota begin=%s", esp_err_to_name(err));
+        free(buf);
+        goto leave;
+    }
+    for (uint32_t off = 0; off < len; off += OTA_COPY_CHUNK) {
+        uint32_t chunk = (len - off > OTA_COPY_CHUNK) ? OTA_COPY_CHUNK : (len - off);
         ESP_ERROR_CHECK(esp_partition_read(run, off, buf, chunk));
         err = esp_ota_write(h, buf, chunk);
-        if (err != ESP_OK) { ESP_LOGE(TAG, "ota write=%s", esp_err_to_name(err)); vTaskDelete(NULL); return; }
+        if (err != ESP_OK) {
+            ESP_LOGE(TAG, "ota write=%s", esp_err_to_name(err));
+            (void)esp_ota_abort(h);             /* 释放 OTA 句柄，否则下一次 esp_ota_begin 会受影响 */
+            free(buf);
+            goto leave;
+        }
     }
+    free(buf);
     err = esp_ota_end(h);
-    if (err != ESP_OK) { ESP_LOGE(TAG, "ota end=%s", esp_err_to_name(err)); vTaskDelete(NULL); return; }
+    if (err != ESP_OK) { ESP_LOGE(TAG, "ota end=%s", esp_err_to_name(err)); goto leave; }
     ESP_ERROR_CHECK(esp_ota_set_boot_partition(next));
     ESP_LOGI(TAG, "ota OK: boot -> %s, restart in 1s", next->label);
     vTaskDelay(pdMS_TO_TICKS(1000));
     esp_restart();
+leave:
+    /* 没走到 esp_restart() 的出口都要放开闸门：否则一次失败之后 OTA 永远回 409 */
+    ota_gate_leave();
+    vTaskDelete(NULL);
 }
 
-/* m=0：自拷贝到对槽并切换；m=1：回滚（boot 指回对槽，不拷贝）*/
-void app_ota_trigger(int rollback)
+/* m=0：自拷贝到对槽并切换；m=1：回滚（boot 指回对槽，不拷贝）。
+ * 返回 ESP_OK = 已受理（拷贝任务已起 / 随即重启）；ESP_ERR_INVALID_STATE = 已有一次 OTA 在进行
+ * （X03-F-12：调用方回 409）；其余 = 这次没做成，设备不会重启。 */
+esp_err_t app_ota_trigger(int rollback)
 {
+    /* 拷贝与回滚共用这一道闸门：回滚会把 boot 指向正在被拷贝任务写着的那个槽 */
+    if (!ota_gate_try_enter()) {
+        ESP_LOGW(TAG, "ota refused: another OTA is in progress");
+        return ESP_ERR_INVALID_STATE;
+    }
+    const esp_partition_t *run = esp_ota_get_running_partition();
+    const esp_partition_t *next = esp_ota_get_next_update_partition(NULL);
+    if (!next) { ESP_LOGE(TAG, "ota FAIL: no next slot"); ota_gate_leave(); return ESP_ERR_NOT_FOUND; }
     if (rollback) {
-        const esp_partition_t *run = esp_ota_get_running_partition();
-        const esp_partition_t *next = esp_ota_get_next_update_partition(NULL);
-        if (!next) { ESP_LOGE(TAG, "rollback FAIL: no next slot"); return; }
         ESP_LOGI(TAG, "ota ROLLBACK: boot %s -> %s, restart in 1s",
                  run->label, next->label);
         /* R1 修复 M08-F-09：不用 ESP_ERROR_CHECK（失败会 abort），改为记录并放弃回滚 */
         esp_err_t rb = esp_ota_set_boot_partition(next);
         if (rb != ESP_OK) {
             ESP_LOGE(TAG, "ota ROLLBACK set_boot fail=%s", esp_err_to_name(rb));
-            return;
+            ota_gate_leave();
+            return ESP_FAIL;
         }
-        vTaskDelay(pdMS_TO_TICKS(1000));
+        vTaskDelay(pdMS_TO_TICKS(1000));      /* 这 1s 里闸门保持占用（重启后清零）*/
         esp_restart();
     }
-    xTaskCreate(ota_copy_task, "ota_copy", 6144, NULL, 4, NULL);
+    if (xTaskCreate(ota_copy_task, "ota_copy", 6144, NULL, 4, NULL) != pdPASS) {
+        ESP_LOGE(TAG, "ota FAIL: copy task not created");
+        ota_gate_leave();
+        return ESP_ERR_NO_MEM;
+    }
+    return ESP_OK;
 }
 
 /* R2 协议换向：屏（H743）0x12 → 本端权威注册表 → M207 verify → 回 ACK。

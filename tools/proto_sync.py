@@ -14,7 +14,8 @@
      出队处打方向位并重算 CRC；
   7) 旧的"等长 + 发送窗"回声过滤没有任何残留符号；
   8) 屏端 ISR 不碰 comm 层（M04-F-07 的生产模型：仅主循环生产）；USART2 的错误回调只置标志、
-     恢复在主循环做（X03-F-09）。
+     恢复在主循环做（X03-F-09）；
+  9) 对外报出的协议版本只能取 TCS_PROTO_VER：屏端版本串不得把协议版本写死，WS_PROTOCOL.md 不得写"目前 N"（2026-11-26）。
 
 用法：python tools/proto_sync.py --check        退出码 0 = 一致；1 = 漂移（构建/CI 应阻断）。
       python tools/proto_sync.py --table        打印"消息号 → 谁会发 → 发送点 / 接收分支（文件:行）"核对表。
@@ -196,6 +197,28 @@ def check_isr(fails):
             fails.append(f"main.c 的 {fn}() 在 ISR 上下文里调用 comm_*：ISR 不得碰 comm 层")
 
 
+VER_DOC = REPO / "esp32" / "components" / "tcs_web" / "WS_PROTOCOL.md"
+
+
+def check_reported_ver(fails):
+    """9) 对外报出的协议版本只能取 TCS_PROTO_VER（2026-11-26，D7 第 ⓪ 步发现屏端版本串把协议版本写死成 1，
+    而实际协议已经是 2——版本串是现场取证的第一手依据，写死就是假证据）：
+    固件源码里带 "proto=v%u" 的那条打印语句，实参里必须有 TCS_PROTO_VER；
+    WS_PROTOCOL.md 里提到 TCS_PROTO_VER 的行不得再写"（目前 N）"这种会过期的数字。"""
+    for p in firmware_sources():
+        txt = read(p)
+        for m in re.finditer(r"proto=v%u", txt):
+            end = txt.find(");", m.start())
+            stmt = txt[m.start(): end if end > 0 else m.start() + 240]
+            if "TCS_PROTO_VER" not in stmt:
+                fails.append(f"{p.relative_to(REPO)}:{txt.count(chr(10), 0, m.start()) + 1} "
+                             f"版本串里的协议版本写死了，必须用 TCS_PROTO_VER")
+    if VER_DOC.exists():
+        for i, line in enumerate(read(VER_DOC).splitlines(), 1):
+            if "TCS_PROTO_VER" in line and re.search(r"目前\s*\d+", line):
+                fails.append(f"{VER_DOC.relative_to(REPO)}:{i} 不要写会过期的数字（目前 N），只引用 TCS_PROTO_VER")
+
+
 def main() -> int:
     fails = []
 
@@ -238,13 +261,14 @@ def main() -> int:
     check_direction(fails, table=("--table" in sys.argv))
     check_gate(fails)
     check_isr(fails)
+    check_reported_ver(fails)
 
     if fails:
         print("proto_sync: FAIL")
         for f in fails:
             print("  -", f)
         return 1
-    print("proto_sync: OK (单一源 + 2 包装一致，无重复定义；方向表与两端收发分支一致；两端闸门相同；屏端 ISR 不碰 comm 层)")
+    print("proto_sync: OK (单一源 + 2 包装一致，无重复定义；方向表与两端收发分支一致；两端闸门相同；屏端 ISR 不碰 comm 层；对外报的协议版本取自 TCS_PROTO_VER)")
     return 0
 
 

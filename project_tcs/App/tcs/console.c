@@ -11,6 +11,7 @@
 #include "param_registry.h"
 #include "comm.h"       /* comm_link_t：stat 里报屏链回声 / 方向不符计数（R5-01）*/
 #include "proto.h"
+#include "tcs_proto.h"  /* TCS_PROTO_VER：版本串里的协议版本（2026-11-26 之前写死成 1）*/
 #include "control.h"
 #include "m207.h"
 #include "m207_txq.h"   /* M207_CMD_MAX：m207 send 的长度上限（M07-F-10）*/
@@ -274,12 +275,13 @@ static void cmd_exec(char *line)
     /* --- ver --- */
     if (strcmp(argv[0], "ver") == 0) {
         /* 构建时间与提交号来自 CMake 生成的 build_info.h（可复现构建，审查条目 X05-F-06）：
-         * 时间是提交时间（或 SOURCE_DATE_EPOCH），不是按下编译键的时间；工作树有未提交改动时提交号带 -dirty。 */
+         * 时间是提交时间（或 SOURCE_DATE_EPOCH），不是按下编译键的时间；工作树有未提交改动时提交号带 -dirty。
+         * 协议版本取 TCS_PROTO_VER：2026-11-26 之前这里写死成 1，协议抬到 2 之后版本串还在报 1（D7 第 ⓪ 步发现）。 */
         printf("tcs v%lu.%lu.%lu build=%s git=%s params=v1(8+0x100resv) proto=v%u\n",
                (unsigned long)(g_tcs.fw_ver >> 16) & 0xFFu,
                (unsigned long)(g_tcs.fw_ver >> 8) & 0xFFu,
                (unsigned long)(g_tcs.fw_ver) & 0xFFu,
-               TCS_BUILD_STAMP, TCS_BUILD_GIT, 1);
+               TCS_BUILD_STAMP, TCS_BUILD_GIT, (unsigned)TCS_PROTO_VER);
         return;
     }
     /* --- audit：审计留痕回放（只读；三档都在，M07-F-08）---

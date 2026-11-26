@@ -208,8 +208,11 @@ target_sources(tcs_main.elf PRIVATE ${LVGL_SRC}
     ${CMAKE_CURRENT_SOURCE_DIR}/App/lvgl_port/lv_port_disp.c
     ${CMAKE_CURRENT_SOURCE_DIR}/App/lvgl_port/lv_port_indev.c
     ${CMAKE_CURRENT_SOURCE_DIR}/App/lvgl_port/tcs_lvgl.c)
-file(GLOB TUI_SRC ${CMAKE_CURRENT_SOURCE_DIR}/App/lvgl_ui/*.c
-                  ${CMAKE_CURRENT_SOURCE_DIR}/App/lvgl_ui/fonts/*.c)
+# CONFIGURE_DEPENDS：新增界面源文件后，已有的构建目录在下次构建时会自己重新配置。
+# 不带 CONFIGURE_DEPENDS 的 GLOB 只在配置时求值一次——2026-11-26 模式页新增 tui_p4.c，台架档用的 build-bench/
+# 是旧目录、没有重新配置，链接时 tui_p4_* 全部未定义（从零构建的矩阵四档都过，只有增量目录失败）。
+file(GLOB TUI_SRC CONFIGURE_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/App/lvgl_ui/*.c
+                                    ${CMAKE_CURRENT_SOURCE_DIR}/App/lvgl_ui/fonts/*.c)
 target_sources(tcs_main.elf PRIVATE ${TUI_SRC})
 target_include_directories(tcs_main.elf PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/App/lvgl_ui

@@ -1,0 +1,14 @@
+ID	状态	提交	证据	遗留
+P1-09(另一半)	已实施待真机	24553cf	test_m207_force 74/0（旧内核红 11）；mutation_control M55 CAUGHT；mutation_m207_force 9抓1等价	真机：拔 M207 后急停，重连后 TEC=0、离线期 tec_known=0
+P1-12(另一半)	已实施待真机	89f7f42	test_link_dir 79/0（未修红）；test_ui_svc 15/0；m1gates 第8项未修红10；默认/SIM档构建0告警	真机：人为让 m207_service_start 失败 → 不 abort、日志+屏上可见
+快照补三量/协议3	已实施待真机	21d303e	两端 tcsproto 74/0、45/0 + proto_ref selftest OK；K19/M16 未修红；mutation_ui_model 34抓；proto_sync OK	复联窗口 tec_act 旧值 0.1–0.3s；真机看屏端未知与协议3联调
+M09-F-09注入豁免	已实施待真机	4035b91	K22 未修红2→默认291/0、SIM 296/0；test_m207_sim 14/0；M57–M59；默认档无 water 文本/SIM档在	真机：现场档 water 打开恒定水温注入 >10min 不进安全态，water off 后进
+M09-F-06布防语义	已修并验证	bdfc5fc	规格§6 追加一条（逐字核对）；横幅副标题改文案；font_audit 缺0；m1gates 第14项	无（文档项）
+X04-F-05决策表	已修并验证	（结果文档）	决策表见 docs/results/S_G_i3_结果.md 第六节（机制未动，逐条列选项/风险/建议）	需用户/协调者拍板；第7行要真机实验（模块自身保护是否独立于探头）
+X06-F-09版本漂移	已修并验证	acfdab8	version_bump --check PASS；README 改指唯一源；m1gates 第12项；版本号未动（用户定）	规格文档的 v1.1.0/v1.2.0 是规格版本，保留为 NOTE
+M207保护状态入口	已实施待真机	372fee1	mstat（DIAG/SIM）；S1 用例默认291/0、SIM 296/0；默认档 bin 无 mstat 文本、SIM档在；m1gates 第10项	真机：mstat 采 TCERRORSTATUS/OTPSTATUS 与读数抖动，供决策表
+HardFault迁移环	已实施待真机	1c96139	test_control T1–T13 86/0（未修链接红）；objdump：g_fault_rec/g_trace_ring 在 .noinit；--expect-recorder PASS；门禁反向自证两种缺口	真机：软复位后 fault 打出复位前迁移(.noinit 跨复位)；掉电仍丢
+WS ota m 收紧	已修并验证	6de8f58	test_web_hardening 31/0（未修链接红）；web_gates 新增4条门禁；默认/SIM档构建0告警	无（前端不改，按用户要求）
+协议版本不配对	已实施待真机	e1cf175	test_ui_mismatch 18/0（未修编译红）；既有UI 182+19+15 全绿；font_audit 缺0；m1gates 第11项	真机：两端不同版本时屏应显示不匹配、stat 的 vr= 增长
+真机脚本护栏	已修并验证	d146d10	site_lib.sh（guard/FLASH/REBUILT）bash -n 通过；site README 四条规则；m1gates 第13项	无（真机脚本以后照此写）
+研学卡重锚/审计	已修并验证	（收尾提交）	reanchor_study_cards.py 重锚三张卡与行数基线；official_lib_audit 重新生成（单独提交）	合并时由协调者统一重新生成

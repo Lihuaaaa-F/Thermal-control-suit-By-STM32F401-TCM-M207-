@@ -797,11 +797,24 @@ static void m207_handle_line(const char *line)
                 control_safety_trip(SAFETY_BIT_OVERTEMP);
                 tcs_alarm_raise(ALM_OVERTEMP);   /* 锁存必须伴随可见报警，否则屏/网页只看到"停机"不知原因 */
                 /* X03-F-07：安全关断走旁路，不排在普通写后面。i3：改走 m207_tec_force()——
-                 * 这一帧发出后链路若随即断开、没等到读回确认，复联时凭保持位照样先补发。*/
+                 * 这一帧发出后链路若随即断开、没等到读回确认，复联时凭保持位照样先补发。
+                 * r7f（R7-11）：锁存之后进 SAFE 会停两路；控制任务不在 / 卡死时这里也把两路都停掉。*/
+                (void)m207_tec_force(1, 0);
+                (void)m207_tec_force(2, 0);
+            }
+        }
+        else {
+            g_tcs.tc2_act = r.value;
+            /* r7f（R7-08 ③，R7-11 的同一处）：TC2 那一路的水温超温同样立刻锁存 + 旁路关断两路。
+             * 用户确认水路拓扑之前按"两路独立水体"处理：TC1 的探头测不到 TC2 的热量，模块自带的
+             * 保护位语义又没有逐位上机核实。与控制内核同一口径（SAFE 没有"只停一路"的形态）。*/
+            if (r.value > ALM_OVERTEMP_HARD_C) {
+                control_safety_trip(SAFETY_BIT_OVERTEMP);
+                tcs_alarm_raise(ALM_OVERTEMP);
+                (void)m207_tec_force(2, 0);
                 (void)m207_tec_force(1, 0);
             }
         }
-        else               g_tcs.tc2_act = r.value;
         m207_go_online(s_ever_online ? "recover" : "first");
         s_ever_online = 1;
         s_waiting = 0;

@@ -104,6 +104,79 @@ static void enter_auto_healthy(void)
     reset_stubs();
 }
 
+/* ====== r7f（独立复核 R7-02，2026-11-26）：带 NVS 的重启往返 =====
+ * 两份"掉电也在"的副本各一个桩：参数镜像（eeprom_commit 写的那一张）、安全锁存（safety_persist 写的那个字节）。
+ * boot_nvs() 的顺序与 main.c 相同：注册表默认 + 钩子 → 读镜像 → control_init（读回锁存）。*/
+static uint8_t g_nv_img[EE_IMG_SIZE];    /* NVS 里的参数镜像 */
+static int     g_nv_img_have;
+static uint8_t g_nv_latch;               /* NVS 里的安全锁存 */
+static int     g_nv_latch_have;
+static int     g_nv_dead;                /* 1 = 掉电了：之后的镜像写一律不生效（上电前置 0）*/
+static int     g_nv_cut;                 /* 1 = 下一次锁存写完就掉电（卡在"锁存已落盘、模式还没落盘"之间）*/
+static int     g_nv_commits;             /* eeprom_commit 被调用的次数 */
+static int nv_commit(const uint8_t *img)
+{
+    g_nv_commits++;
+    if (g_nv_dead) return -1;
+    memcpy(g_nv_img, img, sizeof g_nv_img);
+    g_nv_img_have = 1;
+    return 0;
+}
+static void nv_latch_save(uint8_t latch)
+{
+    g_nv_latch = latch; g_nv_latch_have = 1;
+    if (g_nv_cut) { g_nv_cut = 0; g_nv_dead = 1; }
+}
+static uint8_t nv_latch_load(void) { return g_nv_latch_have ? g_nv_latch : 0u; }
+static int nv_img_mode(void)             /* NVS 镜像里 0x06（控制模式）的值；没有镜像 / 没有记录 = -1 */
+{
+    if (!g_nv_img_have) return -1;
+    for (int i = 0; i < g_nv_img[2]; i++) {
+        const uint8_t *r = &g_nv_img[4 + 8 * i];
+        if (r[0] == 0x06 && r[1] == 0x00) return r[4];
+    }
+    return -1;
+}
+static void boot_nvs(int with_nvs)
+{
+    param_registry_init(&(param_hooks_t){ .eeprom_commit = nv_commit,
+                                          .on_mode_change = control_on_mode_change,
+                                          .on_check = control_param_check });
+    if (with_nvs && g_nv_img_have) { int sk = 0; (void)param_deserialize_ex(g_nv_img, &sk); }
+    control_init(&(control_ops_t){
+        .fan_set = stub_fan, .tec_sw = stub_tec, .tec_temp = stub_temp, .on_state = 0,
+        .safety_persist = nv_latch_save, .safety_load = nv_latch_load,
+    });
+}
+/* 控制节拍 + 落盘冲洗（固件里 persist_worker 每 500ms 调一次 param_persist_flush）*/
+static void nv_run(uint32_t ms)
+{
+    for (uint32_t t = 0u; t < ms; t += 100u) {
+        poll100();
+        if (((t + 100u) % 500u) == 0u) param_persist_flush(s_now);
+    }
+}
+static void nv_sources_ok(void)
+{
+    set_armed(1);
+    g_tcs.body_sensor_ok = 1; g_tcs.m207_online = 1; g_tcs.m207_sensor_open = 0;
+    g_tcs.tc1_act = 25.0f; g_tcs.body_temp = 36.0f;      /* 体温低于 cold-hyst：一旦是自动模式就会制热 */
+}
+/* 全新上电（NVS 空）→ 自动制热，"模式 = 自动"已落盘 */
+static void nv_fresh_auto_heat(void)
+{
+    memset(g_nv_img, 0, sizeof g_nv_img);
+    g_nv_img_have = 0; g_nv_latch = 0; g_nv_latch_have = 0;
+    g_nv_dead = 0; g_nv_cut = 0; g_nv_commits = 0;
+    nv_sources_ok();
+    boot_nvs(0);
+    nv_sources_ok();
+    s_now = 10000u;
+    (void)param_set(PARAM_ID_MODE, 1.0f, PARAM_SRC_WEB);
+    reset_stubs();
+    nv_run(4000u);
+}
+
 /* W2-22：记录最近一次参数广播的 id 与来源（钩子须是文件作用域：MSVC 不支持嵌套函数）*/
 static uint16_t g_bc_id;
 static uint8_t  g_bc_src;
@@ -1062,21 +1135,82 @@ int main(void)
         CHECK(control_state() == CTRL_IDLE && control_safety_latched() == 0,
               "K8 frozen water with TC1 off -> no trip, even after 10 min");
 
-        /* K9 读数早就冻住了、TEC 后开：从 TEC 开起再等满一个窗口才判（给被控对象留响应时间），
-         *     不是一开 TEC 就判 */
+        /* K9 读数在 TEC 开之前**不久**冻住（10 秒）：从 TEC 开起再等满一个窗口才判（给被控对象留响应时间）。
+         *     r7f（R7-04）之后这句话的适用范围变窄了：读数如果早在 TEC 开之前就冻满了一个窗口，当拍就判，
+         *     见 K9b / K9c。*/
         enter_auto_healthy();
         (void)param_set(PARAM_ID_MODE, 0.0f, 4);
         g_tcs.body_temp = 30.0f; tick();
-        for (int i = 0; i < 120; i++) tick_tc1_live();   /* 手动模式下体温冻 60 s */
+        for (int i = 0; i < 20; i++) tick_tc1_live();    /* 手动模式下体温冻 10 s（不足一个窗口）*/
         (void)param_set(PARAM_ID_MODE, 1.0f, 4);       /* 切自动：下一拍进 HEAT */
         tick();
-        CHECK(control_state() == CTRL_HEAT, "K9 precondition: HEAT starts with an already-frozen reading");
+        CHECK(control_state() == CTRL_HEAT, "K9 precondition: HEAT starts with a recently-frozen reading");
         for (int i = 0; i < 299; i++) tick100_tc1_live();
         CHECK(control_state() == CTRL_HEAT,
-              "K9 window counts from TEC turn-on, not from when the reading froze");
+              "K9 a reading frozen shortly before TEC turn-on: the window counts from the turn-on");
         tick100_tc1_live();
         CHECK(control_state() == CTRL_SAFE && (control_safety_latched() & SAFETY_BIT_STUCK) != 0,
               "K9 trips one window after TEC turn-on");
+
+        /* K9b（r7f R7-04）读数在 TEC 开之前已经冻了 60 秒：一开 TEC 当拍就判卡死。
+         *     修前还要再等 30 秒——这 30 秒里 48°C 硬切断与卡死判据一起失明（真机场景：探头在 TEC 没开时就冻住了）。*/
+        enter_auto_healthy();
+        (void)param_set(PARAM_ID_MODE, 0.0f, 4);
+        g_tcs.body_temp = 30.0f; tick();
+        for (int i = 0; i < 120; i++) tick_tc1_live();   /* 手动模式下体温已冻 60 s（超过一个窗口）*/
+        (void)param_set(PARAM_ID_MODE, 1.0f, 4);
+        tick();                                           /* 这一拍进 HEAT、TEC1 开 */
+        CHECK(control_state() == CTRL_HEAT, "K9b precondition: HEAT starts with a long-frozen reading");
+        for (int i = 0; i < 5 && control_state() == CTRL_HEAT; i++) tick100_tc1_live();
+        CHECK(control_state() == CTRL_SAFE && (control_safety_latched() & SAFETY_BIT_STUCK) != 0,
+              "K9b a reading frozen long before TEC turn-on trips at once (no 30 s blind window)");
+
+        /* K9c（r7f R7-04）水温在 TC1 没开的时候就冻了 11 分钟：TC1 一开就当拍判卡死。
+         *     修前要等 TEC 开满 30 秒，而水温窗口是 10 分钟——这 11 分钟里读数一直是冻的，没有可等的响应。*/
+        enter_auto_healthy();
+        (void)param_set(PARAM_ID_MODE, 0.0f, 4);
+        g_tcs.tc1_act = 30.0f; tick();                    /* 喂进第一个样本，之后不再变 */
+        for (int i = 0; i < 6800; i++) tick100();         /* 11 分钟，TC1 关着 → 不判 */
+        CHECK(control_state() == CTRL_IDLE && control_safety_latched() == 0,
+              "K9c precondition: water frozen for 11 min with TC1 off, no trip");
+        control_manual_tec(1, 1);                         /* TC1 开（开沿记在最近一拍的时间戳上）*/
+        for (int i = 0; i < 5 && control_state() == CTRL_IDLE; i++) tick100();
+        CHECK(control_state() == CTRL_SAFE && (control_safety_latched() & SAFETY_BIT_STUCK) != 0,
+              "K9c water frozen long before TC1 turn-on trips at once");
+
+        /* K24（r7f R7-04）体温、水温同时冻住：体温先判出来（30 秒）时，水温这一路也要记进涉事通道；
+         *     体温读数恢复变化之后**不得**重开 TEC（水温仍冻着 → 48°C 硬切断对它失明），
+         *     要等水温也动了才 2 秒自愈。*/
+        enter_auto_healthy();
+        g_tcs.body_temp = 30.0f; g_tcs.tc1_act = 25.0f;
+        tick();                                           /* HEAT，TEC1 开；两路读数从此都不动 */
+        CHECK(control_state() == CTRL_HEAT, "K24 precondition: HEAT with both readings frozen");
+        for (int i = 0; i < 301; i++) tick100();
+        CHECK(control_state() == CTRL_SAFE && (control_safety_latched() & SAFETY_BIT_STUCK) != 0,
+              "K24 both readings frozen -> STUCK");
+        CHECK(tcs_alarm_active(ALM_SENSOR_OPEN) == 1 && tcs_alarm_active(ALM_BODY_SENSOR) == 1,
+              "K24 the water channel is recorded too (ALM_SENSOR_OPEN), not only the body");
+        {
+            int on = 0;
+            for (int i = 0; i < 60; i++) {                 /* 6 秒：体温恢复变化、水温仍冻着 */
+                g_tcs.body_temp = (i & 1) ? 29.99f : 30.01f;
+                tick100();
+                if (control_tec_cmd(1) || control_tec_cmd(2)) on++;
+            }
+            CHECK(on == 0 && control_state() == CTRL_SAFE,
+                  "K24 the body recovering alone does not restart the TEC while the water reading is still frozen");
+        }
+        {
+            int n = 0;
+            while (control_state() == CTRL_SAFE && n < 40) {   /* 水温也动起来 → 2 秒自愈 */
+                g_tcs.body_temp = (n & 1) ? 29.99f : 30.01f;
+                g_tcs.tc1_act   = (n & 1) ? 24.99f : 25.01f;
+                tick100();
+                n++;
+            }
+            CHECK(control_state() == CTRL_HEAT,
+                  "K24 once the water reading moves too -> self-heals back to HEAT");
+        }
 
         /* K14 源不健康时不累计：未布防 + 模块离线 + TC1 开着 + 水温陈旧不变
          *     → 走既有失联路径，不报卡死（离线不是"读数冻结"）*/
@@ -1117,6 +1251,88 @@ int main(void)
         param_registry_init(&(param_hooks_t){0});
         CHECK(control_safety_latched() == 0 && control_state() == CTRL_IDLE,
               "K16 a STUCK bit found in storage is dropped at boot");
+
+        /* ====== K22 / K23（r7f，独立复核 R7-08，P1）：TC2 那一路的水温参与超温硬切断与卡死判据 ======
+         * 仓库里 TC1 / TC2 写作"贴身水箱 / 环境水箱"，各有一路 TCACTTEMP 探头。用户确认水路拓扑之前按
+         * "两路独立水体"处理：TC1 的探头测不到 TC2 的热量。修前 tc2_act 不进任何保护判据——手动让
+         * TC2 制热时主控侧没有超温保护（I5）。判别性由 tests/mutation_control.py 的 M60–M65 给出。*/
+
+        /* K22 TC2 水温 90°C、两路都在输出 → 当拍锁存 OVERTEMP + 报警 + 两路命令为关；
+         *     TC2 降温之前 ack 不清，降温 + ack 才退出 */
+        control_init(&(control_ops_t){
+            .fan_set = stub_fan, .tec_sw = stub_tec, .tec_temp = stub_temp, .on_state = 0,
+            .tec_force = stub_force,
+        });
+        param_registry_init(&(param_hooks_t){0});
+        set_armed(0);
+        g_tcs.body_sensor_ok = 1; g_tcs.m207_online = 1; g_tcs.m207_sensor_open = 0;
+        g_tcs.body_temp = 37.0f; g_tcs.tc1_act = 30.0f; g_tcs.tc2_act = 30.0f;
+        s_now = 10000u; s_stub_now_ms = s_now; s_link_down = 0;
+        (void)param_set(PARAM_ID_MODE, 0.0f, 4);
+        poll100();
+        control_manual_tec(1, 1);
+        control_manual_tec(2, 1);
+        CHECK(g_tcs.tec1_on == 1 && g_tcs.tec2_on == 1 && control_state() == CTRL_IDLE
+              && control_safety_latched() == 0,
+              "K22 precondition: manual, both TEC on, TC2 water 30");
+        reset_stubs();
+        g_tcs.tc2_act = 90.0f;                     /* TC2 那一路的水温（独立水体）*/
+        poll100();
+        CHECK((control_safety_latched() & SAFETY_BIT_OVERTEMP) != 0,
+              "K22 TC2 water over 48 latches OVERTEMP");
+        CHECK(tcs_alarm_active(ALM_OVERTEMP) == 1, "K22 ALM_OVERTEMP raised");
+        CHECK(g_tcs.tec1_on == 0 && g_tcs.tec2_on == 0 && control_state() == CTRL_SAFE,
+              "K22 both TEC off and SAFE (the same shape as a TC1 overtemp)");
+        CHECK(force_calls == 2 && last_tec_on == 0, "K22 both 'off' went out through the safety channel");
+        g_tcs.tc1_act = 30.0f;                     /* TC1 早已正常 */
+        tcs_alarm_ack();
+        CHECK((control_safety_latched() & SAFETY_BIT_OVERTEMP) != 0,
+              "K22 ack cannot clear while the TC2 water is still over 48");
+        CHECK(control_state() == CTRL_SAFE, "K22 still SAFE while the TC2 water is over 48");
+        g_tcs.tc2_act = 30.0f;                     /* TC2 降温 */
+        tcs_alarm_ack();
+        poll100();
+        CHECK(control_safety_latched() == 0 && control_state() == CTRL_IDLE,
+              "K22 TC2 cooled down + ack -> released");
+
+        /* K23 TC2 命令开着 + tc2_act 逐位不变满水温窗口（10 分钟）→ STUCK + ALM_SENSOR_OPEN、两路关；
+         *     TC1 那一路读数一直活着（不干扰通道归属）；TC2 读数仍冻着时 ack 不清，重新变化后 2 秒自愈 */
+        control_init(&(control_ops_t){
+            .fan_set = stub_fan, .tec_sw = stub_tec, .tec_temp = stub_temp, .on_state = 0,
+        });
+        param_registry_init(&(param_hooks_t){0});
+        set_armed(0);
+        g_tcs.body_sensor_ok = 1; g_tcs.m207_online = 1; g_tcs.m207_sensor_open = 0;
+        g_tcs.body_temp = 37.0f; g_tcs.tc1_act = 25.0f; g_tcs.tc2_act = 25.0f;
+        s_now = 10000u;
+        (void)param_set(PARAM_ID_MODE, 0.0f, 4);
+        poll100();                                 /* 喂进第一个样本 */
+        control_manual_tec(2, 1);                  /* TC2 制热；tc2_act 从此不动 */
+        CHECK(g_tcs.tec2_on == 1 && control_state() == CTRL_IDLE && control_safety_latched() == 0,
+              "K23 precondition: manual, TC2 on, TC2 water frozen");
+        for (int i = 0; i < 5900; i++) { g_tcs.tc1_act = (i & 1) ? 24.99f : 25.01f; poll100(); }
+        CHECK(control_state() == CTRL_IDLE && (control_safety_latched() & SAFETY_BIT_STUCK) == 0,
+              "K23 frozen TC2 water: no trip before 600 s");
+        for (int i = 0; i < 200; i++) { g_tcs.tc1_act = (i & 1) ? 24.99f : 25.01f; poll100(); }
+        CHECK(control_state() == CTRL_SAFE && (control_safety_latched() & SAFETY_BIT_STUCK) != 0,
+              "K23 frozen TC2 water + TC2 on for 600 s -> SAFE");
+        CHECK(tcs_alarm_active(ALM_SENSOR_OPEN) == 1 && tcs_alarm_active(ALM_BODY_SENSOR) == 0,
+              "K23 the water channel is blamed (ALM_SENSOR_OPEN), not the body");
+        CHECK(g_tcs.tec2_on == 0 && g_tcs.tec1_on == 0, "K23 both TEC off");
+        tcs_alarm_ack();                           /* TC2 读数还冻着：ack 不能越过 */
+        CHECK((control_safety_latched() & SAFETY_BIT_STUCK) != 0,
+              "K23 ack cannot clear while the TC2 reading is still frozen");
+        {   /* TC2 读数重新开始变化 → 2 秒自愈退出 SAFE */
+            int n = 0;
+            while (control_state() == CTRL_SAFE && n < 40) {
+                g_tcs.tc2_act = (n & 1) ? 24.99f : 25.01f;
+                g_tcs.tc1_act = (n & 1) ? 24.99f : 25.01f;
+                poll100();
+                n++;
+            }
+            CHECK(control_state() == CTRL_IDLE && control_safety_latched() == 0,
+                  "K23 TC2 reading moves again -> self-heals out of SAFE");
+        }
     }
 
     /* ====== 2026-11-25 S 线 e3a（P1-09）：SAFE 必须到得了执行器 ======
@@ -1473,6 +1689,98 @@ int main(void)
         CHECK(control_stuck_max_ms(3u, s_now) == 0, "S1 bad channel -> 0");
     }
 #endif
+    /* ====== r7f（独立复核 R7-02，2026-11-26，P1）：急停后 2.5 秒内掉电重启带回"自动 + 急停锁存" =====
+     * 不变量 I1：急停之后人工确认也不恢复任何输出，只有用户重新按才恢复。
+     * 现象（R7 的 t2 复现）：急停把模式切回手动走普通写路径（置脏 → 2 秒防抖 + 500ms 冲洗才落盘），
+     * 急停锁存却是立刻落盘的——这 2.5 秒内掉电重启，NVS 里就是"自动模式 + 急停锁存"；人工点一次"解除"，
+     * 状态机当拍按体温把 TEC 又开了起来，用户没有重新切过自动。
+     * 修法两处：① 上电读到急停锁存 → 模式无条件置回手动并立刻落盘；② 急停路径里"模式 = 手动"同步落盘。
+     * 用例：急停之后 0 ~ 3 秒每隔 100ms 做一次"重新 init + 读回镜像与锁存"，断言重启后的
+     * （模式, 锁存, 状态）与事件之后一致、人工确认后没有任何输出。*/
+    {
+        int n0, bad_mode = 0, bad_out = 0, iters = 0;
+
+        /* R7-02 a（②）：急停路径同步落盘——急停返回时 NVS 镜像里已经是"手动"，不必等任何冲洗节拍 */
+        nv_fresh_auto_heat();
+        CHECK(g_nv_img_have && nv_img_mode() == 1, "R7-02a setup: mode=auto already persisted before the estop");
+        n0 = g_nv_commits;
+        tcs_emergency_stop_src(PARAM_SRC_TOUCH);
+        CHECK(g_nv_commits == n0 + 1 && nv_img_mode() == 0,
+              "R7-02a the estop path persists mode=manual at once (no debounce tick in between)");
+        CHECK(g_tcs.mode == 0 && (g_nv_latch & SAFETY_BIT_ESTOP) != 0,
+              "R7-02a RAM: manual + estop latched");
+
+        /* R7-02 b（①）：掉电正好卡在"锁存已落盘、模式还没落盘"之间 → 重启仍必须是手动 */
+        nv_fresh_auto_heat();
+        g_nv_cut = 1;                              /* 下一次锁存写完就掉电：之后的镜像写不生效 */
+        tcs_emergency_stop_src(PARAM_SRC_TOUCH);
+        CHECK((g_nv_latch & SAFETY_BIT_ESTOP) != 0 && nv_img_mode() == 1,
+              "R7-02b setup: latch saved, the image still says auto (the 2.5 s window)");
+        g_nv_dead = 0;                             /* 上电 */
+        n0 = g_nv_commits;
+        boot_nvs(1);
+        CHECK(g_tcs.mode == 0 && control_state() == CTRL_SAFE
+              && control_safety_latched() == SAFETY_BIT_ESTOP,
+              "R7-02b boot with an estop latch forces manual mode (mode, latch, state)");
+        CHECK(nv_img_mode() == 0 && g_nv_commits > n0,
+              "R7-02b the forced manual mode is persisted right at boot");
+        nv_sources_ok();
+        reset_stubs();
+        tcs_alarm_ack();
+        nv_run(1500u);
+        CHECK(control_state() == CTRL_IDLE && tec_on_calls == 0 && control_tec_cmd(1) == 0 && g_tcs.mode == 0,
+              "R7-02b after the ack: no output at all (the user never re-selected auto)");
+
+        /* R7-02 c：急停之后 0 ~ 3 秒每隔 100ms 掉电重启一次（31 次），每次都要（手动, 急停, SAFE），
+         *          人工确认后没有任何输出。修前：2.5 秒内的 25 次都带回自动模式，确认后 TEC1 被重新开起来。*/
+        for (uint32_t waited = 0u; waited <= 3000u; waited += 100u) {
+            nv_fresh_auto_heat();
+            tcs_emergency_stop_src(PARAM_SRC_TOUCH);
+            nv_run(waited);                        /* 防抖窗口里等这么久，然后掉电 */
+            g_nv_dead = 0;
+            boot_nvs(1);                           /* 上电 */
+            iters++;
+            if (!(g_tcs.mode == 0 && control_safety_latched() == SAFETY_BIT_ESTOP
+                  && control_state() == CTRL_SAFE)) bad_mode++;
+            nv_sources_ok();
+            reset_stubs();
+            tcs_alarm_ack();
+            nv_run(1500u);
+            if (!(control_state() == CTRL_IDLE && tec_on_calls == 0
+                  && control_tec_cmd(1) == 0 && control_tec_cmd(2) == 0)) bad_out++;
+        }
+        printf("   R7-02c 急停后 0~3000ms 掉电重启 %d 次：带回自动模式 %d 次，确认后 TEC 被开 %d 次\n",
+               iters, bad_mode, bad_out);
+        CHECK(bad_mode == 0, "R7-02c a reboot 0~3 s after the estop always comes back manual + estop + SAFE");
+        CHECK(bad_out == 0, "R7-02c acknowledging after such a reboot never restarts any output");
+
+        /* R7-02 d（对照）：超温事件不碰模式——重启前后的（模式, 锁存, 状态）本来就一致，
+         *      说明上面的扫描真的在读重启后的值，不是恒过 */
+        for (uint32_t waited = 0u; waited <= 3000u; waited += 1500u) {
+            nv_fresh_auto_heat();
+            g_tcs.tc1_act = 49.0f;
+            poll100();
+            CHECK(control_state() == CTRL_SAFE && (control_safety_latched() & SAFETY_BIT_OVERTEMP) != 0
+                  && g_tcs.mode == 1, "R7-02d setup: auto mode, overtemp latched");
+            nv_run(waited);
+            g_nv_dead = 0;
+            boot_nvs(1);
+            CHECK(g_tcs.mode == 1 && control_safety_latched() == SAFETY_BIT_OVERTEMP
+                  && control_state() == CTRL_SAFE,
+                  "R7-02d overtemp does not touch the mode: (mode, latch, state) survive the reboot as they were");
+        }
+
+        /* R7-02 e（写不进时）：镜像写一直失败也要保证①——RAM 里是手动、状态是 SAFE；NVS 恢复后
+         *      防抖冲洗把"手动"补上 */
+        nv_fresh_auto_heat();
+        g_nv_dead = 1;                             /* 掉电以后的镜像写全部失败 */
+        tcs_emergency_stop_src(PARAM_SRC_TOUCH);
+        CHECK(g_tcs.mode == 0 && control_state() == CTRL_SAFE && (g_nv_latch & SAFETY_BIT_ESTOP) != 0,
+              "R7-02e the estop still leaves the RAM state safe when the image write fails");
+        g_nv_dead = 0;                             /* NVS 恢复 */
+        nv_run(3500u);
+        CHECK(nv_img_mode() == 0, "R7-02e the dirty 'manual' is retried and lands once NVS works again");
+    }
 
     printf("test_control: PASS=%d FAIL=%d\n", g_pass, g_fail);
     return g_fail ? 1 : 0;

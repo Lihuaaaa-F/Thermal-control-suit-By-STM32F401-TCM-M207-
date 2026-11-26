@@ -53,6 +53,15 @@ H743_STRINGS = {
     "TEMP-DIAG2 首帧取证日志（M01-F-05）：上电往控制台打 [R8] / [A1..A4]": ["[R8]", "[A1]"],
 }
 
+# ---- H743：PROD 档**必须**有的文本（r7f，独立复核 R7-12，2026-11-26）。
+# 邮箱 p set 的执行器参数（0x06 控制模式 / 0x09、0x0A 两路手动输出）在交付档一律拒——它等效于交付档
+# 已经删掉的 mode / tec / fan。这句拒绝文本只在 TCS_PROFILE < 1 的分支里编译：交付档必须有、台架档必须没有。
+# （方向与 H743_STRINGS 相反：--expect-hooks 时要求它不在，证明本工具查得出来。）----
+H743_PROD_ONLY = {
+    "p set 执行器参数（交付档没有 mode / tec / fan，邮箱也不能等效绕过）":
+        ["rejected (prod: mode / TEC outputs are not writable from this mailbox)"],
+}
+
 # ---- ESP32：键 → (说明, 帮助文本里独有的片段)。bin 里没有符号表，只能查文本 ----
 ESP32_STRINGS = {
     "linkmute": ("链路静默；SIM 或 DIAG 档", ["linkmute"]),
@@ -191,6 +200,12 @@ def check_h743(elf, expect):
         hit = sorted(n for n in needles if any(n.encode() in t for t in strs))
         present = bool(hit)
         if present != expect:
+            bad.append("  [%s] 回复文本 %s：%s" % (why, hit or needles, "在" if present else "不在"))
+    # r7f（R7-12）：交付档**必须**有的拒绝文本——方向反过来（交付档在、台架档不在）。
+    for why, needles in H743_PROD_ONLY.items():
+        hit = sorted(n for n in needles if any(n.encode() in t for t in strs))
+        present = bool(hit)
+        if present != (not expect):
             bad.append("  [%s] 回复文本 %s：%s" % (why, hit or needles, "在" if present else "不在"))
     return bad
 

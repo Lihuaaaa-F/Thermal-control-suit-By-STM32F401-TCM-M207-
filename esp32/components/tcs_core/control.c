@@ -7,7 +7,7 @@
  *   COOL : body < body_hot−hyst → TCSW=0 + 风扇关 → IDLE
  *   HEAT : body > body_cold+hyst → TCSW=0 + 风扇关 → IDLE
  *   任意 : 传感器丢失 / M207 失联 → SAFE（TCSW=0 + 风扇开 + ALM）
- *   任意 : 过温（tc1_act > 48°C）→ SAFE，不受布防门控（P0-01）
+ *   任意 : 过温（tc1_act 或 tc2_act > 48°C）→ SAFE，不受布防门控（P0-01；TC2 见 r7f R7-08）
  *   任意 : 读数卡死（源自报健康，但读数逐位不变 ≥30s 且 TEC 已开 ≥30s）→ SAFE，不受布防门控
  *          （M09-F-09 / X04-F-06，见下方"卡死值活性判据"）
  *   SAFE : 通信类故障（体温/M207/探头/卡死）源健康 2s → 自动退出；急停/超温 → 人工确认后退出
@@ -111,7 +111,8 @@ typedef struct {
 } stuck_src_t;
 
 static stuck_src_t s_stuck_body, s_stuck_tc1;
-static volatile uint8_t s_stuck_chn;   /* 本轮 STUCK 锁存由谁引起：bit0=体温 bit1=水温（随锁存位一起清）*/
+static stuck_src_t s_stuck_tc2;        /* r7f（R7-08）：TC2 那一路的水温读数——独立水体时它没有任何别的保护在看 */
+static volatile uint8_t s_stuck_chn;   /* 本轮 STUCK 锁存由谁引起：bit0=体温 bit1=TC1 水温 bit2=TC2 水温（随锁存位一起清）*/
 static uint32_t   s_tec_on_since[2];   /* TCx 有效命令最近一次 0→1 的时间（out_tec_sw 里记）*/
 static uint8_t    s_tec_cmd_on[2];       /* TEC 命令意图（只有 out_tec_sw 写；取值 control_tec_cmd，X03-F-08）*/
 static uint32_t   s_poll_now_ms;       /* 最近一拍的时间戳：out_tec_sw 在拍外被调时用它给 TEC 开沿计时*/
@@ -162,11 +163,23 @@ static uint8_t stuck_water_is(const stuck_src_t *c, uint32_t now_ms)
     return (uint8_t)((uint32_t)(now_ms - c->last_change) >= CTRL_STUCK_WATER_WINDOW_MS);
 }
 
+/* r7f（独立复核 R7-04，2026-11-26）：TEC 开沿那一刻读数如果**已经**冻满一个窗口，直接算卡死，不再等 30 秒。
+ * 那 30 秒的本意是"刚开 TEC 时给被控对象留出响应时间"；读数在 TEC 开之前就冻住时并没有可等的响应，
+ * 等下去只是让 48°C 硬切断和卡死判据一起失明（真机场景：探头在 TEC 没开的时候就冻住了）。
+ * 写法上只用无符号差值：等价于"TEC 开沿时距读数最后一次变化已满 win"，又避开两个时间戳的排序问题。*/
+static uint8_t stuck_prefrozen(const stuck_src_t *c, uint32_t now_ms, uint32_t on_since, uint32_t win)
+{
+    if (!c->last_change || !on_since) return 0;
+    return (uint8_t)((uint32_t)(now_ms - c->last_change)
+                     >= (uint32_t)(win + (uint32_t)(now_ms - on_since)));
+}
+
 /* 涉事通道的读数是否都已重新开始变化（STUCK 自愈与 ack 的依据）*/
 static uint8_t stuck_recovered(uint32_t now_ms, uint8_t chn)
 {
     if ((chn & 1u) && !stuck_live(&s_stuck_body, now_ms)) return 0;
     if ((chn & 2u) && !stuck_live(&s_stuck_tc1,  now_ms)) return 0;
+    if ((chn & 4u) && !stuck_live(&s_stuck_tc2,  now_ms)) return 0;   /* r7f R7-08：TC2 那一路 */
     return 1;
 }
 
@@ -195,6 +208,15 @@ static uint8_t stuck_src_injected(uint8_t ch)
     return r;
 }
 
+/* r7f（独立复核 R7-08，2026-11-26）：两路水温都参与超温硬切断与"是否已经降温"的判据。
+ * 仓库里 TC1 / TC2 写作"贴身水箱 / 环境水箱"（WS_PROTOCOL.md），各有一路 TCACTTEMP 探头。原先所有
+ * 超温 / 退出 / 确认 / 自愈的判据只看 tc1_act——TC2 若是一路独立水体（用户确认接线之前按独立处理），
+ * 手动让 TC2 制热时主控侧没有任何超温保护，只剩模块自带保护（保护位的语义还没有逐位上机核实）。
+ * 与 TC1 完全同一口径（48°C，不受布防门控）。用例：tests/test_control_esp32.c 的 K22–K23。*/
+static uint8_t water_overtemp(void)
+{
+    return (uint8_t)(g_tcs.tc1_act > ALM_OVERTEMP_HARD_C || g_tcs.tc2_act > ALM_OVERTEMP_HARD_C);
+}
 
 /* 涉事通道：锁存里有 STUCK 才有意义。调用方持有 SAFETY_LOCK（lat 就是锁里读出的那份）*/
 static uint8_t stuck_chn_latched(uint8_t lat)
@@ -357,6 +379,18 @@ static void goto_state(ctrl_state_t st)
     if (s_ops.on_state) s_ops.on_state(st);
 }
 
+/* r7f（独立复核 R7-02 ①，2026-11-26）：上电读到急停锁存 → 模式无条件置回手动，并立刻落盘。
+ * 为什么：急停把模式切回手动原先走普通写路径（置脏 → 2 秒防抖 + 500ms 冲洗才落盘），急停锁存却是
+ * 立刻落盘的；这 2.5 秒内掉电重启，NVS 里就是"自动模式 + 急停锁存"——人工点一次"解除"，状态机当拍
+ * 按体温把 TEC 重新开起来，用户没有重新切过自动（不变量 I1）。这里不等防抖：写不进（返回 < 0）时脏位
+ * 还在，persist_worker 会按防抖重试；而且每次上电读到急停锁存都会再置一次。急停路径里那一次同步落盘
+ * 见 tcs_emergency_stop_src（②）。用例：tests/test_control_esp32.c 的 R7-02a…e。*/
+static void estop_boot_force_manual(void)
+{
+    (void)param_set(PARAM_ID_MODE, 0.0f, PARAM_SRC_KERNEL);
+    (void)param_persist_now();                  /* r7f R7-02 ① */
+}
+
 void control_init(const control_ops_t *ops)
 {
     if (ops) s_ops = *ops;
@@ -377,6 +411,7 @@ void control_init(const control_ops_t *ops)
 #if CONFIG_TCS_DIAG || CONFIG_TCS_SIM
     s_stuck_max_ms[0] = s_stuck_max_ms[1] = 0;   /* S 线 i3：最长连续时长从这次上电算起 */
 #endif
+    memset(&s_stuck_tc2, 0, sizeof(s_stuck_tc2));   /* r7f R7-08：TC2 那一路 */
     s_stuck_chn = 0;
     memset(s_tec_on_since, 0, sizeof(s_tec_on_since));
     memset(s_tec_cmd_on, 0, sizeof(s_tec_cmd_on));
@@ -406,6 +441,8 @@ void control_init(const control_ops_t *ops)
     if (s_safety_latch & SAFETY_BIT_BODY_LOST)  g_tcs.alarm_bits |= ALM_BODY_SENSOR;
     if (s_safety_latch & SAFETY_BIT_M207_LOST)  g_tcs.alarm_bits |= ALM_M207;
     if (s_safety_latch) s_state = CTRL_SAFE;   /* 绕过 on_state：ops 可能尚未装配回调 */
+    /* r7f（独立复核 R7-02 ①）：读到急停锁存 → 模式无条件回手动并立刻落盘，理由见 estop_boot_force_manual */
+    if (s_safety_latch & SAFETY_BIT_ESTOP) estop_boot_force_manual();
 }
 
 void tcs_alarm_raise(uint16_t bit)
@@ -502,7 +539,7 @@ static uint8_t safe_sources_recovered(void)
     if (commissioned() && !g_tcs.body_sensor_ok) return 0;
     if (!g_tcs.m207_online) return 0;
     if (g_tcs.m207_sensor_open) return 0;   /* 复核 B4：探头开路不算"源恢复" */
-    if (g_tcs.tc1_act > ALM_OVERTEMP_HARD_C) return 0;
+    if (water_overtemp()) return 0;         /* r7f R7-08：两路水温都算（原来看 tc1_act）*/
     return 1;
 }
 
@@ -511,7 +548,7 @@ void tcs_alarm_ack(void)
     uint8_t lat;
     uint8_t stuck_chn;      /* STUCK 涉事通道：bit0=体温 bit1=水温；锁存里没有 STUCK 则为 0 */
     /* 先按"当前"源状态刷新（不依赖上一拍缓存）：操作员降温后立即 ack 也应生效。*/
-    safety_set_ok(SAFETY_BIT_OVERTEMP, (uint8_t)(g_tcs.tc1_act <= ALM_OVERTEMP_HARD_C));
+    safety_set_ok(SAFETY_BIT_OVERTEMP, (uint8_t)!water_overtemp());   /* r7f R7-08：两路水温 */
     safety_set_ok(SAFETY_BIT_BODY_LOST, g_tcs.body_sensor_ok);
     safety_set_ok(SAFETY_BIT_M207_LOST, (uint8_t)(g_tcs.m207_online && !g_tcs.m207_sensor_open));
     /* 卡死（STUCK）：按涉事通道"读数是否重新开始变化"刷新。活性是窗口概念，依赖 control_poll 的
@@ -539,7 +576,7 @@ void tcs_alarm_ack(void)
     /* 卡死借用的报警位：涉事通道读数还没恢复变化时不清——否则设备停在 SAFE 而屏上说不出原因 */
     if (!(lat & SAFETY_BIT_M207_LOST) && !g_tcs.m207_sensor_open && !(stuck_chn & 2u))
         g_tcs.alarm_bits &= (uint16_t)~ALM_SENSOR_OPEN;
-    if (!(lat & SAFETY_BIT_OVERTEMP) && g_tcs.tc1_act <= ALM_OVERTEMP_HARD_C)
+    if (!(lat & SAFETY_BIT_OVERTEMP) && !water_overtemp())   /* r7f R7-08：两路水温 */
         g_tcs.alarm_bits &= (uint16_t)~ALM_OVERTEMP;
     if (!(lat & SAFETY_BIT_ESTOP)) {
         g_tcs.alarm_bits &= (uint16_t)~ALM_ESTOP;
@@ -562,6 +599,11 @@ void tcs_emergency_stop_src(uint8_t src)
      * 分清是网页、屏幕还是控制台按的急停（原先一律记成"控制台：控制模式 改为 0"）。*/
     (void)param_set(PARAM_ID_MODE, 0.0f, src);
     safe_outputs();
+    /* r7f（独立复核 R7-02 ②，2026-11-26）：模式 = 手动必须与急停锁存一起落盘，不能等 2 秒防抖 + 500ms 冲洗。
+     * 急停后这 2.5 秒内掉电重启，NVS 里就是"自动 + 急停锁存"：人工点一次解除，状态机当拍就把 TEC 开回来。
+     * 放在 safe_outputs() 之后：先把两路 TCSW=0 发出去，再做这次可能阻塞几十~几百毫秒的 NVS 写。
+     * 值没变（已经是手动）时不产生写；写不进时脏位还在，persist_worker 会重试，上电还有 ① 兜底。*/
+    (void)param_persist_now();                  /* r7f R7-02 ② */
     /* m1（模式页）：两路手动输出回暂停（输出上面已全停）。急停可能来自别的任务：只登记请求，
      * 由 control_poll 在控制任务里执行，见 s_manual_reset_req。*/
     s_manual_reset_req = 1;
@@ -614,7 +656,11 @@ int control_apply_cmd_src(uint8_t cmd, uint8_t src)
     case TCS_CMD_TEC1_OFF:      control_manual_tec(1, 0); return 0;
     case TCS_CMD_TEC2_ON:       control_manual_tec(2, 1); return 0;
     case TCS_CMD_TEC2_OFF:      control_manual_tec(2, 0); return 0;
-    case TCS_CMD_FAN_TOGGLE:    control_manual_fan(g_tcs.fan_on ? 0 : 1); return 0;
+    case TCS_CMD_FAN_TOGGLE:
+        /* r7f（独立复核 R7-03，2026-11-26）：自动模式 COOL / HEAT 下风扇是"TEC 在输出"的一部分——
+         * 拒绝"关风扇"（回与安全态同一个拒绝码；只有真要关的时候才拒，风扇不知为何关着时"开"照收）。*/
+        if (g_tcs.fan_on && g_tcs.mode != 0 && (s_state == CTRL_COOL || s_state == CTRL_HEAT)) return -2;
+        control_manual_fan(g_tcs.fan_on ? 0 : 1); return 0;
     /* 改模式：来源原样带进参数表（事件日志据此写"网页/屏幕/控制台"）；被安全校验拒绝
      * （急停/超温锁存期间切自动）时 param_set 返回 -2，这里如实往上带 */
     case TCS_CMD_MODE_AUTO:     rv = param_set(PARAM_ID_MODE, 1.0f, src); return rv < 0 ? rv : 0;
@@ -729,6 +775,10 @@ void control_poll(uint32_t now_ms)
         tcs_alarm_raise(ALM_OVERTEMP);
         safety_trip(SAFETY_BIT_OVERTEMP);
         safety_set_ok(SAFETY_BIT_OVERTEMP, 0);
+    } else if (g_tcs.tc2_act > ALM_OVERTEMP_HARD_C) {   /* r7f R7-08：TC2 那一路的水温同样硬切断 */
+        tcs_alarm_raise(ALM_OVERTEMP);
+        safety_trip(SAFETY_BIT_OVERTEMP);
+        safety_set_ok(SAFETY_BIT_OVERTEMP, 0);
     } else {
         safety_set_ok(SAFETY_BIT_OVERTEMP, 1);
     }
@@ -739,21 +789,42 @@ void control_poll(uint32_t now_ms)
     {
         uint8_t m207_src_ok = (uint8_t)(g_tcs.m207_online && !g_tcs.m207_sensor_open);
         uint8_t tc1_stuck, body_stuck, stuck_chn;
+        uint8_t tc2_stuck;                     /* r7f R7-08：TC2 那一路的水温 */
+        uint8_t tc1_pre;                       /* r7f R7-04：水温"已经冻过一个短窗口"（长窗口判据的前半）*/
         stuck_feed(&s_stuck_body, g_tcs.body_temp, now_ms, g_tcs.body_sensor_ok, 0u);
         stuck_feed(&s_stuck_tc1, g_tcs.tc1_act, now_ms, m207_src_ok, 1u);
+        stuck_feed(&s_stuck_tc2, g_tcs.tc2_act, now_ms, m207_src_ok, 1u);   /* r7f R7-08；idx=1 = 水温类，与 TC1 共用最长连续时长统计 */
+        tc1_pre    = (uint8_t)(s_tec_cmd_on[0] && stuck_is(&s_stuck_tc1, now_ms, s_tec_on_since[0]));   /* r7f R7-04 */
         tc1_stuck  = (uint8_t)(s_tec_cmd_on[0] && stuck_is(&s_stuck_tc1, now_ms, s_tec_on_since[0]));   /* X03-F-08：读命令意图，不读回显 */
         tc1_stuck  = (uint8_t)(tc1_stuck && stuck_water_is(&s_stuck_tc1, now_ms));   /* 水温窗口 10 分钟（2026-11-26）*/
+        tc2_stuck  = (uint8_t)(s_tec_cmd_on[1] && stuck_is(&s_stuck_tc2, now_ms, s_tec_on_since[1]));   /* r7f R7-08：TC2 命令开着 */
+        tc2_stuck  = (uint8_t)(tc2_stuck && stuck_water_is(&s_stuck_tc2, now_ms));                     /* 同一水温窗口 */
         body_stuck = (uint8_t)(g_tcs.mode != 0 && (s_state == CTRL_HEAT || s_state == CTRL_COOL)
                                && stuck_is(&s_stuck_body, now_ms, s_tec_on_since[0]));
-        /* S 线 i3（M09-F-09 的注入档口径）：注入源在生效的那一路读数恒等于人给的值，不判卡死。
-         * 交付档装配方不接 stuck_exempt，行为不变。*/
+        /* r7f（独立复核 R7-04）：起步盲窗——TEC 开沿那一刻读数如果已经冻满自己的窗口，直接判卡死 */
+        tc1_stuck  = (uint8_t)(tc1_stuck
+                               || (s_tec_cmd_on[0]
+                                   && stuck_prefrozen(&s_stuck_tc1, now_ms, s_tec_on_since[0], CTRL_STUCK_WATER_WINDOW_MS)));
+        tc2_stuck  = (uint8_t)(tc2_stuck
+                               || (s_tec_cmd_on[1]
+                                   && stuck_prefrozen(&s_stuck_tc2, now_ms, s_tec_on_since[1], CTRL_STUCK_WATER_WINDOW_MS)));
+        body_stuck = (uint8_t)(body_stuck
+                               || (g_tcs.mode != 0 && (s_state == CTRL_HEAT || s_state == CTRL_COOL)
+                                   && stuck_prefrozen(&s_stuck_body, now_ms, s_tec_on_since[0], CTRL_STUCK_WINDOW_MS)));
+        /* S 线 i3（M09-F-09 的注入档口径）：注入源在生效的那一路读数恒等于人给的值，不判卡死（排在预冻之后）。
+         * 交付档装配方不接 stuck_exempt，行为不变。TC1 / TC2 同属"水温"注入源（现场档的 water 命令）。*/
         if (body_stuck && stuck_src_injected(1u)) body_stuck = 0;
         if (tc1_stuck  && stuck_src_injected(2u)) tc1_stuck  = 0;
-        if (tc1_stuck || body_stuck) {
+        if (tc2_stuck  && stuck_src_injected(2u)) tc2_stuck  = 0;
+        if (tc1_stuck || body_stuck || tc2_stuck) {
             if (body_stuck) tcs_alarm_raise(ALM_BODY_SENSOR);
-            if (tc1_stuck)  tcs_alarm_raise(ALM_SENSOR_OPEN);
+            if (tc1_stuck || tc2_stuck)  tcs_alarm_raise(ALM_SENSOR_OPEN);   /* 两路水温共用借来的这一位 */
+            if (body_stuck && tc1_pre)   tcs_alarm_raise(ALM_SENSOR_OPEN);   /* r7f R7-04：见下面那一行 */
             SAFETY_LOCK();
-            s_stuck_chn |= (uint8_t)((body_stuck ? 1u : 0u) | (tc1_stuck ? 2u : 0u));
+            s_stuck_chn |= (uint8_t)((body_stuck ? 1u : 0u) | (tc1_stuck ? 2u : 0u) | (tc2_stuck ? 4u : 0u));
+            /* r7f（R7-04）：体温先判出来时，水温如果同拍也已经冻过一个短窗口，一并记进涉事通道——
+             * 否则体温读数一恢复，2 秒自愈就把 TEC 重开，对着一个仍冻着的水温读数。 */
+            if (body_stuck && tc1_pre) s_stuck_chn |= 2u;
             SAFETY_UNLOCK();
             safety_trip(SAFETY_BIT_STUCK);
         }
@@ -776,7 +847,7 @@ void control_poll(uint32_t now_ms)
     if (s_safety_latch) {
         uint8_t comm_ok = (uint8_t)(g_tcs.body_sensor_ok && g_tcs.m207_online
                                     && !g_tcs.m207_sensor_open
-                                    && g_tcs.tc1_act <= ALM_OVERTEMP_HARD_C);
+                                    && !water_overtemp());   /* r7f R7-08：两路水温 */
         /* 通信类位各看各的源：失联类看 comm_ok，STUCK 只看涉事通道的读数是否重新开始变化。
          * 锁存里没有 STUCK 时与原先逐位等价（ready 恒为"全部失联类位"或 0）。*/
         uint8_t stuck_chn;
@@ -872,6 +943,14 @@ void control_poll(uint32_t now_ms)
         }
         return;
     }
+
+    /* r7f（独立复核 R7-03，2026-11-26）：自动模式 COOL / HEAT 下风扇与状态机的输出联动，每拍重申一次。
+     * 手动模式本来就有 control_manual_poll 的 fan_link 每拍重申；自动模式原先只在进 COOL / HEAT 那一拍
+     * 开一次风扇——网页 / 屏上点一下风扇就把风扇关了，TEC 继续按状态机运行，直到下一次状态迁移，
+     * 剩余保护只剩 48°C 硬切断和模块自身保护。放这里：安全态在上面已返回（TEC 命令必为 0）。
+     * 只管状态机自己的 COOL / HEAT：自动 IDLE 下网页旧命令开的 TEC2 不在此列（F 模式页 D3 的已知项；
+     * W2-20 的"TEC2 复原后风扇归状态机管"也保持不变）。*/
+    if (!g_tcs.fan_on && g_tcs.mode != 0 && (s_state == CTRL_COOL || s_state == CTRL_HEAT)) out_fan(1);
 
     /* 手动模式：状态机旁路（输出保持人工值）*/
     if (g_tcs.mode == 0) {

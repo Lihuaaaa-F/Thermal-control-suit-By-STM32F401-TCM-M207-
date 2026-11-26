@@ -79,6 +79,20 @@ MUTATIONS = [
     (LL, "B06 链路恢复后不重新武装",
      "    if (peer_age_ms < TCS_LINK_LOST_ESTOP_MS) {\n        g->tripped = 0;",
      "    if (peer_age_ms < TCS_LINK_LOST_ESTOP_MS) {\n        ;", ""),
+    # ---- link_loss_guard.c：already_safe 只认急停 / 超温锁存（r7f，独立复核 R7-01）。
+    #      用例 L04（断链 × 安全态原因 矩阵）在 test_control_manual.c ----
+    (LL, "B07 already_safe 认任何安全态（回到修前：会自愈的安全态里断链不锁急停）",
+     "    return (uint8_t)((safety_latched & (uint8_t)(SAFETY_BIT_ESTOP | SAFETY_BIT_OVERTEMP)) != 0u);",
+     "    return (uint8_t)(safety_latched != 0u);", ""),
+    (LL, "B08 already_safe 恒为 0（急停 / 超温的安全态里断链照样重复触发）",
+     "    return (uint8_t)((safety_latched & (uint8_t)(SAFETY_BIT_ESTOP | SAFETY_BIT_OVERTEMP)) != 0u);",
+     "    return 0;", ""),
+    (LL, "B09 already_safe 不认超温（超温的安全态里断链会叠加急停位）",
+     "    return (uint8_t)((safety_latched & (uint8_t)(SAFETY_BIT_ESTOP | SAFETY_BIT_OVERTEMP)) != 0u);",
+     "    return (uint8_t)((safety_latched & (uint8_t)SAFETY_BIT_ESTOP) != 0u);", ""),
+    (LL, "B10 already_safe 不认急停（急停的安全态里断链会再触发一次）",
+     "    return (uint8_t)((safety_latched & (uint8_t)(SAFETY_BIT_ESTOP | SAFETY_BIT_OVERTEMP)) != 0u);",
+     "    return (uint8_t)((safety_latched & (uint8_t)SAFETY_BIT_OVERTEMP) != 0u);", ""),
     # ---- control.c ----
     (CT, "C01 手动分支不驱动两路输出", "        control_manual_poll();\n", "", ""),
     (CT, "C02 进安全态不清零", "    control_manual_reset(0);\n}", "}", ""),
@@ -122,6 +136,11 @@ MUTATIONS = [
     (PR, "D06 手动输出参数被持久化",
      "    { 0x09, \"tec1_manual\",  \"TEC1 手动输出\",   \"\",   PARAM_TYPE_U8,\n      PF_RW|PF_SCREEN,",
      "    { 0x09, \"tec1_manual\",  \"TEC1 手动输出\",   \"\",   PARAM_TYPE_U8,\n      PF_RW|PF_SCREEN|PF_PERSIST,", ""),
+    # ---- control.c：自动模式 TEC 运行中风扇不许被关（r7f，独立复核 R7-03）。用例 M07b ----
+    (CT, "E01 自动模式照样受理关风扇（回到修前）",
+     "        if (g_tcs.fan_on && g_tcs.mode != 0 && (s_state == CTRL_COOL || s_state == CTRL_HEAT)) return -2;\n", "", ""),
+    (CT, "E02 不再每拍重申\"自动模式 COOL / HEAT 下风扇开\"",
+     "    if (!g_tcs.fan_on && g_tcs.mode != 0 && (s_state == CTRL_COOL || s_state == CTRL_HEAT)) out_fan(1);\n", "", ""),
 ]
 
 

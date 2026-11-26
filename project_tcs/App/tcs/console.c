@@ -585,6 +585,18 @@ static void cmd_exec(char *line)
         if (strcmp(argv[1], "set") == 0 && argc == 4) {
             uint16_t id = (uint16_t)strtoul(argv[2], NULL, 0);
             float v = strtof(argv[3], NULL);
+#if TCS_PROFILE < 1
+            /* r7f（独立复核 R7-12，2026-11-26）：交付档没有 mode / tec / fan（见下面 TCS_PROFILE >= 1 那一段），
+             * 但邮箱命令 p set 0x06 / 0x09 / 0x0A 与它们等效（控制模式、两路手动输出）——交付固件里不该有这条路。
+             * 执行器类参数一律拒；非执行器参数照旧（屏幕调参页本来就能写，不新增能力）。
+             * 判据在 param_registry.c（纯逻辑，主机用例 tests/test_param_registry.c）；口径同步在
+             * tools/site/verify_prod_clean.py（交付档产物必须有这句拒绝文本、台架档必须没有——整段只在这里编译）。*/
+            if (param_mailbox_blocked(id, 1)) {
+                s_cmd_rv = -2;              /* M07-F-08：留痕用 */
+                printf("rejected (prod: mode / TEC outputs are not writable from this mailbox)\n");
+                return;
+            }
+#endif /* TCS_PROFILE < 1: 交付档邮箱 p set 的执行器参数拒绝表 */
             int rv = param_set(id, v, PARAM_SRC_CONSOLE);
             s_cmd_rv = rv;                  /* M07-F-08：留痕用 */
             if (rv == 0)      printf("ok %.2f\n", (double)param_get(id));

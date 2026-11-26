@@ -120,7 +120,7 @@ static void control_task(void *arg)
  * "断链时必须安全优先，等于发送急停。" 取代 2026-11 的旧裁决"断链只报告、不进安全态"。
  * 判定是纯逻辑（link_loss_guard.c，主机可测）；这里每个控制节拍问一次，要触发就走和屏上急停
  * 同一条路径（tcs_emergency_stop_src：两路 TEC 全停、风扇全开、锁存、要确认才解除）。
- * 只对"上电后连上过、然后断开"生效；已在安全态不重复触发；链路恢复后保持安全态直到屏上确认。
+ * 只对"上电后连上过、然后断开"生效；已在急停 / 超温的安全态不重复触发；链路恢复后保持安全态直到屏上确认。
  * 逐字核对在 esp32/tests/test_m1_gates.py（本文件依赖 RTOS，主机编译不了）。*/
 static link_loss_guard_t s_link_loss;
 
@@ -128,7 +128,11 @@ static void link_loss_check(uint32_t now_ms)
 {
     uint32_t age = 0u;
     int seen = link_peer_age_ms(&age);
-    if (link_loss_guard_step(&s_link_loss, seen, age, control_state() == CTRL_SAFE)
+    /* r7f（独立复核 R7-01，2026-11-26）：传给判定的"已在安全态"只认急停 / 超温锁存着的安全态（那两种只有
+     * 人工确认能解除，输出已经停了，不重复触发）。原先传的是 control_state() == CTRL_SAFE——模块失联 /
+     * 体温失联 / 读数卡死的安全态也算进去，而它们会 2 秒自愈：屏断链期间故障一自愈，设备就在没有人确认的
+     * 情况下自己恢复输出。现在这几种安全态里断链照常触发急停（tcs_emergency_stop_src 对已停的输出幂等）。*/
+    if (link_loss_guard_step(&s_link_loss, seen, age, link_loss_already_safe(control_safety_latched()))
         != TCS_LINK_LOSS_ESTOP) return;
     ESP_LOGE(TAG, "SCREEN LINK LOST: no frame from the display for %lums (connected before) "
              "-> ESTOP now=%lu (user ruling 2026-11-26: link loss = estop)",

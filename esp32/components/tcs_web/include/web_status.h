@@ -124,6 +124,12 @@ int web_ota_mode_value(const char *v);
  * （原先用 cJSON 的 valueint：1.5 被截成 1 当回滚，缺字段 / 字符串 / true 则"不是 1 就当 0"。）*/
 int web_ota_mode_json(const cJSON *m);
 
+/* ====== OTA / 回滚触发前的"输出已停"判据（r7f，独立复核 R7-07）======
+ * 入参是两路 TEC 的命令意图（control_tec_cmd(1) / (2)）。1 = 都已停，可以升级；0 = 还有一路在输出。
+ * 拷贝与回滚都会重启设备，重启期间模块保持断电前的状态——加热途中升级等于把 TEC 留在没人看的闭环里。
+ * 纯逻辑，主机用例 tests/test_web_hardening.c。*/
+int web_ota_outputs_stopped(int tec1_cmd_on, int tec2_cmd_on);
+
 #ifdef __cplusplus
 }
 #endif

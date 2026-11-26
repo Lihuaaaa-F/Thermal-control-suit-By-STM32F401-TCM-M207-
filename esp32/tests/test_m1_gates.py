@@ -53,7 +53,7 @@ def main():
     elif task.count("link_loss_check(now_ms);") != 1:
         fails.append("control_service.c 的控制节拍必须恰好调一次 link_loss_check(now_ms)")
     elif task.index("link_loss_check(now_ms);") < task.index("control_poll(now_ms);"):
-        fails.append("link_loss_check 必须排在 control_poll 之后（先按最新状态机状态判'是否已在安全态'）")
+        fails.append("link_loss_check 必须排在 control_poll 之后（先按最新锁存判'是否已在急停 / 超温的安全态'）")
     # 取定义（带紧随其后的 '{'），不会误取上方的前置声明
     chk = body_of(cs, "static void link_loss_check(uint32_t now_ms)\n{")
     if chk is None:
@@ -61,14 +61,29 @@ def main():
     else:
         if "link_peer_age_ms(&age)" not in chk:
             fails.append("link_loss_check 必须用 link_peer_age_ms 取'距最近一帧对端帧的毫秒数'")
-        if "link_loss_guard_step(&s_link_loss, seen, age, control_state() == CTRL_SAFE)" not in chk:
-            fails.append("link_loss_check 必须把 是否连上过 / 对端帧龄 / 是否已在安全态 交给 link_loss_guard_step")
+        if ("link_loss_guard_step(&s_link_loss, seen, age, link_loss_already_safe(control_safety_latched()))"
+                not in chk):
+            fails.append("link_loss_check 必须把 是否连上过 / 对端帧龄 / 是否已在急停·超温的安全态 交给 link_loss_guard_step")
+        # r7f（独立复核 R7-01）：already_safe 不得再按"状态机在安全态"算——模块失联 / 体温失联 / 读数卡死的
+        # 安全态会 2 秒自愈，原先被当成"这次断开处理过了"，故障一自愈设备就在屏还断着时自己恢复输出。
+        # 判定只许有一处调用，且实参必须逐字是上面那一行（改回 control_state() == CTRL_SAFE 即红）。
+        if chk.count("link_loss_guard_step(") != 1:
+            fails.append("link_loss_check 里 link_loss_guard_step 必须恰好调用一次（实参逐字核对，见上一条）")
         if "!= TCS_LINK_LOSS_ESTOP) return;" not in chk:
             fails.append("link_loss_check 只在判定为 TCS_LINK_LOSS_ESTOP 时继续")
         if chk.count("tcs_emergency_stop_src(PARAM_SRC_KERNEL);") != 1:
             fails.append("link_loss_check 触发时必须调一次 tcs_emergency_stop_src(PARAM_SRC_KERNEL)")
         if "SCREEN LINK LOST" not in chk:
             fails.append("link_loss_check 的日志必须写明原因（SCREEN LINK LOST）")
+    # 1b) r7f（R7-01）："已在安全态"的判据本体在 link_loss_guard.c（主机用例 tests/test_control_manual.c 的 L04、
+    #     变异 mutation_control_manual.py 的 B07–B10）；这里逐字钉住它只认急停 / 超温两位。
+    lg = read(CORE, "link_loss_guard.c")
+    als = body_of(lg, "uint8_t link_loss_already_safe(uint8_t safety_latched)\n{")
+    if als is None:
+        fails.append("link_loss_guard.c 找不到 link_loss_already_safe")
+    elif ("return (uint8_t)((safety_latched & (uint8_t)(SAFETY_BIT_ESTOP | SAFETY_BIT_OVERTEMP)) != 0u);"
+          not in als):
+        fails.append("link_loss_already_safe 必须只认 SAFETY_BIT_ESTOP | SAFETY_BIT_OVERTEMP（r7f / R7-01）")
 
     # 2) "对端帧"的计时起点在方向闸门之后：comm.c 只在 comm_note_peer 里记，
     #    comm_rx_feed_byte 里闸门调用在前、comm_note_peer 在后。

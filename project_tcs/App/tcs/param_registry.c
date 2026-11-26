@@ -205,6 +205,14 @@ const param_desc_t *param_find_by_key(const char *key)
     return 0;
 }
 
+/* r7f（独立复核 R7-12，2026-11-26）：交付档的邮箱命令 p set 该不该拒（口径见头文件）。
+ * 执行器类参数：0x06 控制模式、0x09 / 0x0A 两路手动输出——与交付档删掉的 mode / tec / fan 等效。*/
+int param_mailbox_blocked(uint16_t id, uint8_t prod)
+{
+    if (!prod) return 0;
+    return (id == PARAM_ID_MODE || id == PARAM_ID_TEC1_MANUAL || id == PARAM_ID_TEC2_MANUAL) ? 1 : 0;
+}
+
 float param_get(uint16_t id)
 {
     param_desc_t *p = param_find(id);

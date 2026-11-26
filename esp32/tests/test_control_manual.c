@@ -92,6 +92,59 @@ static void release_estop_unarmed(void)
     tick();
 }
 
+/* ====== r7f（独立复核 R7-01，2026-11-26）：断链 × 安全态原因 矩阵（L04）======
+ * control_service.c 的 link_loss_check（控制节拍：先 control_poll，再问一次判定；要触发就走急停路径）
+ * 在主机上的同构物。already_safe 一行与固件同一写法——逐字核对在 tests/test_m1_gates.py 第 1 项。*/
+static int g_ll_estops;                /* 判定为"触发急停"的次数 */
+static void link_check(link_loss_guard_t *g, int seen, uint32_t age)
+{
+    if (link_loss_guard_step(g, seen, age, link_loss_already_safe(control_safety_latched()))
+        != TCS_LINK_LOSS_ESTOP) return;
+    g_ll_estops++;
+    tcs_emergency_stop_src(PARAM_SRC_KERNEL);   /* control_service.c 在这一拍做的事 */
+}
+/* 屏链路断开 lost_ms：每 100ms 一拍（对端帧龄每拍 +100ms）；从 heal_at 起每拍调一次 heal（故障源恢复）*/
+static void link_lost_run(link_loss_guard_t *g, uint32_t lost_ms, uint32_t heal_at, void (*heal)(void))
+{
+    uint32_t age = 0u;
+    for (uint32_t t = 0u; t < lost_ms; t += 100u) {
+        if (heal && t >= heal_at) heal();
+        tick100();
+        age += 100u;
+        link_check(g, 1, age);
+    }
+}
+/* 屏链路恢复（对端帧龄 200ms）之后跑 ms 毫秒 */
+static void link_alive_run(link_loss_guard_t *g, uint32_t ms, void (*heal)(void))
+{
+    for (uint32_t t = 0u; t < ms; t += 100u) {
+        if (heal) heal();
+        tick100();
+        link_check(g, 1, 200u);
+    }
+}
+static void heal_m207(void)  { g_tcs.m207_online = 1; }
+static void heal_water(void) { g_tcs.tc1_act = 25.0f; }
+static uint8_t s_ll_flick;
+static void heal_body(void)  { s_ll_flick = (uint8_t)!s_ll_flick; g_tcs.body_sensor_ok = 1; g_tcs.body_temp = s_ll_flick ? 35.99f : 36.01f; }
+static void ll_begin(link_loss_guard_t *g) { memset(g, 0, sizeof *g); g_ll_estops = 0; log_reset(); }
+static void ll_print(const char *row, const link_loss_guard_t *g)
+{
+    printf("   L04 %-8s：屏断链 5s 末 estop 判定 %d 次，tripped=%u，锁存=0x%02X，状态=%d，TEC1/TEC2 命令=%u/%u，模式=%u\n",
+           row, g_ll_estops, (unsigned)g->tripped, (unsigned)control_safety_latched(), (int)control_state(),
+           (unsigned)control_tec_cmd(1), (unsigned)control_tec_cmd(2), (unsigned)g_tcs.mode);
+}
+/* 自动模式制热中（已布防、体温探头在、模块在线、水温 25°C 不动）*/
+static void enter_auto_heat(void)
+{
+    enter_manual();
+    g_tcs.body_sensor_ok = 1;
+    set_armed(1);
+    (void)param_set(PARAM_ID_MODE, 1.0f, PARAM_SRC_WEB);
+    g_tcs.body_temp = 36.0f;                 /* < cold - hyst → 制热 */
+    tick(); tick();
+}
+
 int main(void)
 {
     /* ====== M01 上电默认暂停；两个参数的标志 ====== */
@@ -230,6 +283,72 @@ int main(void)
     (void)param_set(PARAM_ID_TEC1_MANUAL, 0.0f, PARAM_SRC_LINK);
     tick();
     CHECK(g_tcs.fan_on == 1, "M07 one channel still running -> fan stays on");
+
+    /* ====== M07b（r7f，独立复核 R7-03，2026-11-26）：自动模式 TEC 运行中风扇不许被关 ======
+     * 修前：TCS_CMD_FAN_TOGGLE 只在安全态拒绝，自动状态机只在进 COOL / HEAT 那一拍开一次风扇——
+     * 网页 / 屏上点一下风扇就把风扇关了，TEC 继续按状态机运行，直到下一次状态迁移（只剩 48°C 硬切断）。
+     * 修后：自动模式 COOL / HEAT 下每拍重申风扇开（与手动的 fan_link 同做法），
+     * 并在该状态下拒绝"关风扇"（回 -2，与安全态同一拒绝码）。
+     * 用例 = 执行器不变量扫描：自动模式每个状态 × 每条命令。判别性见 mutation_control_manual.py 的 E01 / E02。
+     * 不变量只管状态机自己的 COOL / HEAT：自动 IDLE 下网页旧命令开的 TEC2 不在此列
+     * （F 模式页 D3 的已知项，W2-20 的"TEC2 复原后风扇归状态机管"也不变）。*/
+    {
+        static const uint8_t CMDS[] = { TCS_CMD_TEC1_ON, TCS_CMD_TEC1_OFF, TCS_CMD_TEC2_ON,
+                                        TCS_CMD_TEC2_OFF, TCS_CMD_FAN_TOGGLE };
+        static const float BODY_OF_STATE[3] = { 37.0f, 40.0f, 36.0f };   /* IDLE / COOL / HEAT */
+        int bad = 0, n = 0;
+        for (int st = 0; st < 3; st++) {
+            for (size_t c = 0; c < sizeof CMDS / sizeof CMDS[0]; c++) {
+                enter_manual();
+                g_tcs.body_sensor_ok = 1;
+                set_armed(1);
+                (void)param_set(PARAM_ID_MODE, 1.0f, PARAM_SRC_WEB);
+                g_tcs.body_temp = BODY_OF_STATE[st];
+                tick(); tick();
+                (void)control_apply_cmd_src(CMDS[c], PARAM_SRC_WEB);
+                for (int i = 0; i < 6; i++) { g_tcs.body_temp = BODY_OF_STATE[st]; tick100(); }
+                n++;
+                if ((control_state() == CTRL_COOL || control_state() == CTRL_HEAT)
+                    && (control_tec_cmd(1) || control_tec_cmd(2)) && !g_tcs.fan_on) bad++;
+            }
+        }
+        CHECK(n == 15, "M07b (sanity) 3 states x 5 commands scanned");
+        CHECK(bad == 0, "M07b auto mode: the state machine's output never runs with the fan off (all states x all commands)");
+
+        /* 自动制热中"关风扇"被拒；有别处把风扇关了，下一拍重申开回来 */
+        enter_manual();
+        g_tcs.body_sensor_ok = 1;
+        set_armed(1);
+        (void)param_set(PARAM_ID_MODE, 1.0f, PARAM_SRC_WEB);
+        g_tcs.body_temp = 36.0f;
+        tick(); tick();
+        CHECK(control_state() == CTRL_HEAT && control_tec_cmd(1) == 1 && g_tcs.fan_on == 1,
+              "M07b precondition: auto HEAT, TEC1 on, fan on");
+        CHECK(control_apply_cmd_src(TCS_CMD_FAN_TOGGLE, PARAM_SRC_WEB) == -2,
+              "M07b fan off is refused while the auto state drives TEC1");
+        CHECK(g_tcs.fan_on == 1, "M07b fan stays on after the refused command");
+        control_manual_fan(0);                      /* 别的入口把风扇关了（网页旧命令 / 台架）*/
+        CHECK(g_tcs.fan_on == 0, "M07b (setup) fan forced off behind the state machine's back");
+        tick100();
+        CHECK(g_tcs.fan_on == 1, "M07b the next tick re-asserts the fan (auto HEAT)");
+        /* 自动制冷同理（HEAT → IDLE → COOL 要走两拍：自动评估每 500ms 只做一次迁移） */
+        g_tcs.body_temp = 40.0f; tick(); tick();
+        CHECK(control_state() == CTRL_COOL && g_tcs.fan_on == 1, "M07b auto COOL, fan on");
+        CHECK(control_apply_cmd_src(TCS_CMD_FAN_TOGGLE, PARAM_SRC_WEB) == -2,
+              "M07b fan off is refused while the auto state drives TEC1 (cool)");
+        control_manual_fan(0);
+        tick100();
+        CHECK(g_tcs.fan_on == 1, "M07b the next tick re-asserts the fan (auto COOL)");
+        /* 自动 IDLE（没有 TEC 在输出）：风扇切换照旧可用 */
+        g_tcs.body_temp = 37.0f; tick();
+        CHECK(control_state() == CTRL_IDLE, "M07b auto IDLE with the body in band");
+        {
+            uint8_t before = g_tcs.fan_on;
+            CHECK(control_apply_cmd_src(TCS_CMD_FAN_TOGGLE, PARAM_SRC_WEB) == 0,
+                  "M07b fan toggle is still accepted when no TEC is running");
+            CHECK(g_tcs.fan_on != before, "M07b the fan actually toggled");
+        }
+    }
 
     /* ====== M08 进安全态：两路清零；自愈解除后不自己恢复输出；风扇回到用户选择 ====== */
     enter_manual();
@@ -403,6 +522,126 @@ int main(void)
             CHECK(link_loss_guard_step(&g, 0, a, control_state() == CTRL_SAFE) == TCS_LINK_LOSS_NONE,
                   "L03 never connected -> never estop");
         CHECK(control_state() == CTRL_IDLE && g_tcs.tec1_on == 1, "L03 manual output keeps running (web-only bench)");
+    }
+
+    /* ====== L04 断链 × 安全态原因 矩阵（r7f，独立复核 R7-01；由 R7 的复现用例 t1 改写）======
+     * 不变量 I2：屏链路断开 3 秒 = 急停；链路恢复后保持安全态，直到屏上确认。
+     * 修前：control_service.c 把"状态机在安全态"一律当成"这次断开处理过了"。模块失联 / 体温失联 / 读数卡死的
+     * 安全态会在源恢复 2 秒后自愈——屏断着链，故障一自愈设备就自己把 TEC 开了回来，没有人确认过。
+     * 修后：already_safe 只认急停 / 超温锁存着的安全态（link_loss_already_safe）。
+     * 每一行：先进入对应原因的安全态，再让屏断链 5 秒（第 1.5 秒起故障源恢复），然后链路恢复再跑 10 秒。
+     *   急停 / 超温（只有确认能解除）：不重复触发、不叠加急停位，留在安全态；
+     *   模块失联 / 体温失联 / 读数卡死（会自愈）：断链满 3 秒判一次急停，锁存里出现急停位，故障好了也不出去。*/
+    {
+        link_loss_guard_t g;
+        uint8_t lat;
+
+        /* ① 急停：屏先按了急停、然后线才断 */
+        enter_auto_heat();
+        CHECK(control_state() == CTRL_HEAT && g_tcs.tec1_on == 1, "L04 estop row: precondition HEAT");
+        tcs_emergency_stop_src(PARAM_SRC_TOUCH);
+        ll_begin(&g);
+        link_lost_run(&g, 5000u, 0u, 0);
+        ll_print("急停", &g);
+        lat = control_safety_latched();
+        CHECK(g_ll_estops == 0 && g.tripped == 1, "L04 estop row: link loss in an estop SAFE does not trigger again");
+        CHECK(lat == SAFETY_BIT_ESTOP, "L04 estop row: latch unchanged (estop only)");
+        CHECK(control_state() == CTRL_SAFE && control_tec_cmd(1) == 0 && control_tec_cmd(2) == 0,
+              "L04 estop row: still SAFE, both TEC off");
+        log_reset();
+        link_alive_run(&g, 10000u, 0);
+        CHECK(control_state() == CTRL_SAFE && (control_safety_latched() & SAFETY_BIT_ESTOP) != 0,
+              "L04 estop row: link back -> stays SAFE until acknowledged");
+        CHECK(count_sw_on() == 0, "L04 estop row: no TEC on while waiting");
+        tcs_alarm_ack(); tick100();
+        CHECK(control_state() == CTRL_IDLE && control_safety_latched() == 0 && count_sw_on() == 0 && g_tcs.mode == 0,
+              "L04 estop row: acknowledged -> IDLE in manual mode, nothing restarted");
+
+        /* ② 超温：同上——断链不叠加急停位；降了温、链路也恢复了，仍要确认才出去 */
+        enter_manual();
+        g_tcs.tc1_act = 49.0f; tick();
+        CHECK(control_state() == CTRL_SAFE && control_safety_latched() == SAFETY_BIT_OVERTEMP,
+              "L04 overtemp row: precondition SAFE (OVERTEMP)");
+        ll_begin(&g);
+        link_lost_run(&g, 5000u, 1500u, heal_water);
+        ll_print("超温", &g);
+        CHECK(g_ll_estops == 0 && g.tripped == 1, "L04 overtemp row: link loss in an overtemp SAFE does not trigger again");
+        CHECK(control_safety_latched() == SAFETY_BIT_OVERTEMP, "L04 overtemp row: no estop bit added");
+        CHECK(control_state() == CTRL_SAFE && control_tec_cmd(1) == 0 && control_tec_cmd(2) == 0,
+              "L04 overtemp row: still SAFE, both TEC off");
+        log_reset();
+        link_alive_run(&g, 10000u, heal_water);
+        CHECK(control_state() == CTRL_SAFE && control_safety_latched() == SAFETY_BIT_OVERTEMP,
+              "L04 overtemp row: cooled down + link back -> still SAFE until acknowledged");
+        CHECK(count_sw_on() == 0, "L04 overtemp row: no TEC on while waiting");
+        tcs_alarm_ack(); tick100();
+        CHECK(control_state() == CTRL_IDLE && control_safety_latched() == 0 && count_sw_on() == 0,
+              "L04 overtemp row: acknowledged -> IDLE, nothing restarted");
+
+        /* ③ 模块失联（会自愈的安全态）：屏断链 3 秒 → 急停；模块回来也不自己恢复输出 */
+        enter_auto_heat();
+        s_now += 5000u;                            /* 越过 5 s 上电宽限 */
+        g_tcs.m207_online = 0; tick100();
+        CHECK(control_state() == CTRL_SAFE && control_safety_latched() == SAFETY_BIT_M207_LOST,
+              "L04 m207 row: precondition SAFE (M207_LOST, no estop)");
+        ll_begin(&g);
+        link_lost_run(&g, 5000u, 1500u, heal_m207);
+        ll_print("模块失联", &g);
+        lat = control_safety_latched();
+        CHECK(g_ll_estops == 1 && g.tripped == 1, "L04 m207 row: link lost 3 s -> estop tripped exactly once");
+        CHECK((lat & SAFETY_BIT_ESTOP) != 0, "L04 m207 row: estop bit in the latch");
+        CHECK(control_state() == CTRL_SAFE && control_tec_cmd(1) == 0 && control_tec_cmd(2) == 0,
+              "L04 m207 row: still SAFE, both TEC off (module back at 1.5 s, no self-restart)");
+        CHECK(g_tcs.mode == 0, "L04 m207 row: estop forces manual");
+        log_reset();
+        link_alive_run(&g, 10000u, heal_m207);
+        CHECK(control_state() == CTRL_SAFE && (control_safety_latched() & SAFETY_BIT_ESTOP) != 0 && count_sw_on() == 0,
+              "L04 m207 row: link back + fault gone -> stays SAFE until acknowledged, no TEC on");
+        tcs_alarm_ack(); tick100();
+        CHECK(control_state() == CTRL_IDLE && control_safety_latched() == 0 && count_sw_on() == 0 && g_tcs.mode == 0,
+              "L04 m207 row: acknowledged -> IDLE in manual mode, nothing restarted");
+
+        /* ④ 体温失联（会自愈）：同上 */
+        enter_auto_heat();
+        g_tcs.body_sensor_ok = 0; tick100();
+        CHECK(control_state() == CTRL_SAFE && control_safety_latched() == SAFETY_BIT_BODY_LOST,
+              "L04 body row: precondition SAFE (BODY_LOST, no estop)");
+        ll_begin(&g);
+        link_lost_run(&g, 5000u, 1500u, heal_body);
+        ll_print("体温失联", &g);
+        lat = control_safety_latched();
+        CHECK(g_ll_estops == 1 && g.tripped == 1, "L04 body row: link lost 3 s -> estop tripped exactly once");
+        CHECK((lat & SAFETY_BIT_ESTOP) != 0, "L04 body row: estop bit in the latch");
+        CHECK(control_state() == CTRL_SAFE && control_tec_cmd(1) == 0 && control_tec_cmd(2) == 0,
+              "L04 body row: still SAFE, both TEC off (probe back at 1.5 s, no self-restart)");
+        log_reset();
+        link_alive_run(&g, 10000u, heal_body);
+        CHECK(control_state() == CTRL_SAFE && (control_safety_latched() & SAFETY_BIT_ESTOP) != 0 && count_sw_on() == 0,
+              "L04 body row: link back + fault gone -> stays SAFE until acknowledged, no TEC on");
+        tcs_alarm_ack(); tick100();
+        CHECK(control_state() == CTRL_IDLE && control_safety_latched() == 0 && count_sw_on() == 0 && g_tcs.mode == 0,
+              "L04 body row: acknowledged -> IDLE in manual mode, nothing restarted");
+
+        /* ⑤ 读数卡死（会自愈）：体温冻住、TEC 开满 30 秒进的安全态；同上 */
+        enter_auto_heat();
+        for (int i = 0; i < 301; i++) { g_tcs.tc1_act = (i & 1) ? 24.99f : 25.01f; tick100(); }
+        CHECK(control_state() == CTRL_SAFE && control_safety_latched() == SAFETY_BIT_STUCK,
+              "L04 stuck row: precondition SAFE (STUCK, no estop)");
+        ll_begin(&g);
+        link_lost_run(&g, 5000u, 1500u, heal_body);
+        ll_print("读数卡死", &g);
+        lat = control_safety_latched();
+        CHECK(g_ll_estops == 1 && g.tripped == 1, "L04 stuck row: link lost 3 s -> estop tripped exactly once");
+        CHECK((lat & SAFETY_BIT_ESTOP) != 0, "L04 stuck row: estop bit in the latch");
+        CHECK(control_state() == CTRL_SAFE && control_tec_cmd(1) == 0 && control_tec_cmd(2) == 0,
+              "L04 stuck row: still SAFE, both TEC off (reading live again at 1.5 s, no self-restart)");
+        log_reset();
+        link_alive_run(&g, 10000u, heal_body);
+        CHECK(control_state() == CTRL_SAFE && (control_safety_latched() & SAFETY_BIT_ESTOP) != 0 && count_sw_on() == 0,
+              "L04 stuck row: link back + reading live -> stays SAFE until acknowledged, no TEC on");
+        tcs_alarm_ack(); tick100();
+        CHECK(control_state() == CTRL_IDLE && control_safety_latched() == 0 && count_sw_on() == 0 && g_tcs.mode == 0,
+              "L04 stuck row: acknowledged -> IDLE in manual mode, nothing restarted");
     }
 
     /* ====== M13–M15 水温卡死在手动模式下的口径（2026-11-26，合并 e3a 之后加的）======

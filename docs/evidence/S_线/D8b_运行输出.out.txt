@@ -1,0 +1,71 @@
+=== D8b start 18:19:28 HEAD=85a009c77 期望=85a009c77
+----- ⓪ 现状 18:19:28
+tc1=22.11 tc2=22.54 body=0.00(ok=0) fan=0% mode=0 m207=1 alarm=0x0000 armed=0 state=0 sim=0 latch=0x00 heap=8496328 up=171s rst=11 prst=11 pup=68s palm=0x0000 plat=0x00 pseq=2 nvalm=0x0004 cd=0
+tc1=22.1 tc2=22.5 body=0.0 tec1=0 tec2=0 fan=0 mode=0 alarm=0x0000 m207=1 sensor=0 esp=1 ctrl=0 arm=0(0x08=0) loop=8016 drops=0
+lrx=27435 snap=398 gapmax=972 gaplast=120 echo=0 wdir=0 arq=1 txfail=0 vr=0
+----- ① 屏台架档：模式页（协议 3、模块在线、功率 0.0 W）18:19:46
+>>> 屏台架档
+tcs v1.2.0 build=2026-11-26 09:56 UTC git=85a009c77 params=v1(8+0x100resv) proto=v3
+tc1=22.1 tc2=22.5 body=0.0 tec1=0 tec2=0 fan=0 mode=0 alarm=0x0000 m207=1 sensor=0 esp=1 ctrl=0 arm=0(0x08=0) loop=1022 drops=0
+lrx=3994 snap=47 gapmax=896 gaplast=150 echo=0 wdir=0 arq=1 txfail=0 vr=0
+[flash] PASS
+[18:21:10] status
+tc1=22.09 tc2=22.51 body=0.00(ok=0) fan=0% mode=0 m207=1 alarm=0x0000 armed=0 state=0 sim=0 latch=0x00 heap=8496328 up=85s rst=11 prst=11 pup=178s palm=0x0000 plat=0x00 pseq=3 nvalm=0x0004 cd=0
+ack: alarm=0x0000 armed=0 state=0
+[18:21:13] ack 之后
+tc1=22.09 tc2=22.51 body=0.00(ok=0) fan=0% mode=0 m207=1 alarm=0x0000 armed=0 state=0 sim=0 latch=0x00 heap=8496328 up=88s rst=11 prst=11 pup=178s palm=0x0000 plat=0x00 pseq=3 nvalm=0x0004 cd=0
+起点页=0 主控：tc1=22.09 tc2=22.51 body=0.00(ok=0) fan=0% mode=0 m207=1 alarm=0x0000 armed=0 state=0 sim=0 latch=0x00 heap=8496328 up=89s rst=11 prst=11 pup=178s palm=0x0000 plat=0x00 pseq=3 nvalm=0x0004 cd=0
+  截图 01_home_prod.png
+PASS 点模式键 → 进模式页
+  主控：tc1=22.07 tc2=22.49 body=0.00(ok=0) fan=0% mode=0 m207=1 alarm=0x0000 armed=0 state=0 sim=0 latch=0x00 heap=8496328 up=143s rst=11 prst=11 pup=178s palm=0x0000 plat=0x00 pseq=3 nvalm=0x0004 cd=0
+  截图 02_mode_manual_online.png
+  截图 03_after_pause_tap.png
+PASS 返回 → 首页
+>>> 主控 status（走查之后）
+tc1=22.04 tc2=22.44 body=0.00(ok=0) fan=0% mode=0 m207=1 alarm=0x0000 armed=0 state=0 sim=0 latch=0x00 heap=8496328 up=245s rst=11 prst=11 pup=178s palm=0x0000 plat=0x00 pseq=3 nvalm=0x0004 cd=0
+----- ② 首页横幅点击解除（linkmute → 急停 → 点横幅）18:23:53
+flash site rc=0 sha256=b4dd001cca2063bf
+[18:24:21] status
+I (7514) tcs_link: REG[9/53] 0x09 tec1_manual
+tc1=22.03 tc2=22.43 body=0.00(ok=0) fan=0% mode=0 m207=1 alarm=0x0000 armed=0 state=0 sim=0 latch=0x00 heap=8477356 up=6s rst=11 prst=11 pup=10s palm=0x0000 plat=0x00 pseq=5 nvalm=0x0004 cd=0
+I (8154) tcs_link: REG[14/53] 0x103 m207_t1_otp_ht
+ack
+ack: alarm=0x0000 armed=0 state=0
+[18:24:24] ack 之后
+tc1=22.03 tc2=22.43 body=0.00(ok=0) fan=0% mode=0 m207=1 alarm=0x0000 armed=0 state=0 sim=0 latch=0x00 heap=8477356 up=10s rst=11 prst=11 pup=10s palm=0x0000 plat=0x00 pseq=5 nvalm=0x0004 cd=0
+[18:24:24] 基线：tc1=22.03 tc2=22.43 body=0.00(ok=0) fan=0% mode=0 m207=1 alarm=0x0000 armed=0 state=0 sim=0 latch=0x00 heap=8477356 up=10s rst=11 prst=11 pup=10s palm=0x0000 plat=0x00 pseq=5 nvalm=0x0004 cd=0
+[18:24:25] linkmute 5 → linkmute 5 s (0 = resume)
+note: mute >= 3 s triggers the link-loss ESTOP (user ruling 2026-11-26); acknowledge on the display after resume
+  +1s tc1=22.03 tc2=22.43 body=0.00(ok=0) fan=0% mode=0 m207=1 alarm=0x0000 armed=0 state=0 sim=0 latch=0x00 heap=8477356 up=12s rst=11 prst=11 pup=10s palm=0x0000 plat=0x00 pseq=5 nvalm=0x0004 cd=0
+  +2s tc1=22.03 tc2=22.43 body=0.00(ok=0) fan=100% mode=0 m207=1 alarm=0x0004 armed=0 state=3 sim=0 latch=0x08 heap=8475068 up=13s rst=11 prst=11 pup=10s palm=0x0000 plat=0x00 pseq=5 nvalm=0x0004 cd=0
+  +3s tc1=22.03 tc2=22.43 body=0.00(ok=0) fan=100% mode=0 m207=1 alarm=0x0004 armed=0 state=3 sim=0 latch=0x08 heap=8474724 up=15s rst=11 prst=11 pup=10s palm=0x0000 plat=0x00 pseq=5 nvalm=0x0004 cd=0
+  +4s tc1=22.03 tc2=22.43 body=0.00(ok=0) fan=100% mode=0 m207=1 alarm=0x0004 armed=0 state=3 sim=0 latch=0x08 heap=8474216 up=17s rst=11 prst=11 pup=10s palm=0x0000 plat=0x00 pseq=5 nvalm=0x0004 cd=0
+  +5s tc1=22.03 tc2=22.43 body=0.00(ok=0) fan=100% mode=0 m207=1 alarm=0x0004 armed=0 state=3 sim=0 latch=0x08 heap=8474216 up=18s rst=11 prst=11 pup=10s palm=0x0000 plat=0x00 pseq=5 nvalm=0x0004 cd=0
+  +6s tc1=22.03 tc2=22.43 body=0.00(ok=0) fan=100% mode=0 m207=1 alarm=0x0004 armed=0 state=3 sim=0 latch=0x08 heap=8474216 up=20s rst=11 prst=11 pup=10s palm=0x0000 plat=0x00 pseq=5 nvalm=0x0004 cd=0
+  +7s tc1=22.03 tc2=22.43 body=0.00(ok=0) fan=100% mode=0 m207=1 alarm=0x0004 armed=0 state=3 sim=0 latch=0x08 heap=8474216 up=21s rst=11 prst=11 pup=10s palm=0x0000 plat=0x00 pseq=5 nvalm=0x0004 cd=0
+  +8s tc1=22.03 tc2=22.43 body=0.00(ok=0) fan=100% mode=0 m207=1 alarm=0x0004 armed=0 state=3 sim=0 latch=0x08 heap=8474216 up=23s rst=11 prst=11 pup=10s palm=0x0000 plat=0x00 pseq=5 nvalm=0x0004 cd=0
+[18:24:37] 点首页横幅 (400,36) 确认
+点之前：state=3 alarm=0x0004 latch=0x08
+已点首页横幅 (400,36)
+点之后：state=0 alarm=0x0000 latch=0x00 fan=0
+PASS 屏上点横幅就能解除急停
+[18:24:45] 确认之后：
+tc1=22.02 tc2=22.42 body=0.00(ok=0) fan=0% mode=0 m207=1 alarm=0x0000 armed=0 state=0 sim=0 latch=0x00 heap=8471276 up=31s rst=11 prst=11 pup=10s palm=0x0000 plat=0x00 pseq=5 nvalm=0x0004 cd=0
+----- ⑤ 两端烧回交付档 18:24:48
+>>> 主控交付档
+flash default rc=0 sha256=d5c0890b185f315d
+>>> 屏交付档
+tcs v1.2.0 build=2026-11-26 09:56 UTC git=85a009c77 params=v1(8+0x100resv) proto=v3
+tc1=22.0 tc2=22.4 body=0.0 tec1=0 tec2=0 fan=0 mode=0 alarm=0x0000 m207=1 sensor=0 esp=1 ctrl=0 arm=0(0x08=0) loop=1066 drops=0
+lrx=4202 snap=51 gapmax=509 gaplast=163 echo=0 wdir=0 arq=1 txfail=0 vr=0
+[flash] PASS
+[18:26:31] status
+tc1=22.00 tc2=22.38 body=0.00(ok=0) fan=0% mode=0 m207=1 alarm=0x0000 armed=0 state=0 sim=0 latch=0x00 heap=8496328 up=82s rst=11 prst=11 pup=10s palm=0x0000 plat=0x00 pseq=7 nvalm=0x0004 cd=0
+ack: alarm=0x0000 armed=0 state=0
+[18:26:34] ack 之后
+tc1=21.99 tc2=22.38 body=0.00(ok=0) fan=0% mode=0 m207=1 alarm=0x0000 armed=0 state=0 sim=0 latch=0x00 heap=8496328 up=85s rst=11 prst=11 pup=10s palm=0x0000 plat=0x00 pseq=7 nvalm=0x0004 cd=0
+>>> 屏 ver / stat（交付档，应为 proto=v3、vr=0）
+tcs v1.2.0 build=2026-11-26 09:56 UTC git=85a009c77 params=v1(8+0x100resv) proto=v3
+tc1=22.0 tc2=22.4 body=0.0 tec1=0 tec2=0 fan=0 mode=0 alarm=0x0000 m207=1 sensor=0 esp=1 ctrl=0 arm=0(0x08=0) loop=2963 drops=0
+lrx=11191 snap=145 gapmax=566 gaplast=93 echo=0 wdir=0 arq=1 txfail=0 vr=0
+=== D8b end 18:26:51

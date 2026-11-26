@@ -1,0 +1,162 @@
+=== D8 start 18:07:08 HEAD=85a009c77 期望=85a009c77
+----- ⓪ 两端交付档（协议 3）18:07:08
+>>> 主控交付档
+flash default rc=0 sha256=d5c0890b185f315d
+>>> 屏交付档
+tcs v1.2.0 build=2026-11-26 09:56 UTC git=85a009c77 params=v1(8+0x100resv) proto=v3
+tc1=22.3 tc2=22.8 body=0.0 tec1=0 tec2=0 fan=1 mode=0 alarm=0x0004 m207=1 sensor=0 esp=1 ctrl=0 arm=0(0x08=0) loop=1082 drops=0
+[flash] PASS
+>>> 主控 status
+tc1=22.30 tc2=22.81 body=0.00(ok=0) fan=100% mode=0 m207=1 alarm=0x0004 armed=0 state=3 sim=0 latch=0x08 heap=8492940 up=86s rst=11 prst=11 pup=35s palm=0x0000 plat=0x00 pseq=2 nvalm=0x0004 cd=0
+>>> 屏 ver / stat（应为 proto=v3；stat 里 vr=0）
+tcs v1.2.0 build=2026-11-26 09:56 UTC git=85a009c77 params=v1(8+0x100resv) proto=v3
+tc1=22.3 tc2=22.8 body=0.0 tec1=0 tec2=0 fan=1 mode=0 alarm=0x0004 m207=1 sensor=0 esp=1 ctrl=0 arm=0(0x08=0) loop=2705 drops=0
+lrx=10856 snap=138 gapmax=1212 gaplast=100 echo=0 wdir=0 arq=1 txfail=0 vr=0
+>>> 首页截图 + 模式页（模块在线，功率应为 0.0 W）
+起点页=0 主控：tc1=22.29 tc2=22.80 body=0.00(ok=0) fan=100% mode=0 m207=1 alarm=0x0004 armed=0 state=3 sim=0 latch=0x08 heap=8492576 up=101s rst=11 prst=11 pup=35s palm=0x0000 plat=0x00 pseq=2 nvalm=0x0004 cd=0
+  截图 01_home_prod.png
+symbol not found: g_tap_inject
+这个符号是调试/测试钩子，只在台架/仿真档里有；这份 ELF 是交付档（PROD）。
+要用现场工具：cmake -S . -B build-bench -G Ninja -DCMAKE_TOOLCHAIN_FILE=arm-none-eabi-gcc.cmake -DTCS_PROFILE=BENCH && cmake --build build-bench
+烧录 build-bench/tcs_main.elf，再把 TCS_ELF 指向它。
+（2026-11-24 S 线 C01：交付固件不再带这些钩子）
+tc1=22.28 tc2=22.78 body=0.00(ok=0) fan=100% mode=0 m207=1 alarm=0x0004 armed=0 state=3 sim=0 latch=0x08 heap=8492576 up=151s rst=11 prst=11 pup=35s palm=0x0000 plat=0x00 pseq=2 nvalm=0x0004 cd=0
+----- ① 主控现场档 + 断链急停 + 首页横幅解除 18:10:11
+flash site rc=0 sha256=b4dd001cca2063bf
+>>> 主控 status (site)
+sI (7524) tcs_link: REG[7/53] 0x07 tc_set_confirm
+tatus
+tc1=22.27 tc2=22.77 body=0.00(ok=0) fan=100% mode=0 m207=1 alarm=0x0004 armed=0 state=3 sim=0 latch=0x08 heap=8476460 up=6s rst=11 prst=11 pup=10s palm=0x0004 plat=0x08 pseq=4 nvalm=0x0000 cd=0
+0 基线：主控 mode=0 alarm=0x0004 state=3 latch=0x08 fan=100 sim=0
+        注册表 {'0x0006': '0.00', '0x0009': '0.00', '0x000A': '0.00'}
+        屏     
+FAIL  基线：手动、无报警、不在安全态、两路手动输出为暂停  —— mode=0 alarm=0x0004 state=3 latch=0x08 fan=100 sim=0
+1 linkmute 5 → linkmute 5 s (0 = resume) / note: mute >= 3 s triggers the link-loss ESTOP (user ruling 2026-11-26); acknowledge on the display after resume
+     0.4s  mode=0 alarm=0x0004 state=3 latch=0x08 fan=100 sim=0
+     1.0s  mode=0 alarm=0x0004 state=3 latch=0x08 fan=100 sim=0
+     1.7s  mode=0 alarm=0x0004 state=3 latch=0x08 fan=100 sim=0
+     2.6s  mode=0 alarm=0x0004 state=3 latch=0x08 fan=100 sim=0
+     3.4s  mode=0 alarm=0x0004 state=3 latch=0x08 fan=100 sim=0
+     4.3s  mode=0 alarm=0x0004 state=3 latch=0x08 fan=100 sim=0
+     5.1s  mode=0 alarm=0x0004 state=3 latch=0x08 fan=100 sim=0
+     5.9s  mode=0 alarm=0x0004 state=3 latch=0x08 fan=100 sim=0
+     6.8s  mode=0 alarm=0x0004 state=3 latch=0x08 fan=100 sim=0
+     7.5s  mode=0 alarm=0x0004 state=3 latch=0x08 fan=100 sim=0
+     8.3s  mode=0 alarm=0x0004 state=3 latch=0x08 fan=100 sim=0
+     9.1s  mode=0 alarm=0x0004 state=3 latch=0x08 fan=100 sim=0
+    10.0s  mode=0 alarm=0x0004 state=3 latch=0x08 fan=100 sim=0
+PASS  断链后进急停（state=3；alarm 含 0x0004）  —— 首次见到 state=3 在 0.4s
+2 之后：主控 mode=0 alarm=0x0004 state=3 latch=0x08 fan=100 sim=0
+        屏     
+        注册表 {'0x0006': '0.00', '0x0009': '0.00', '0x000A': '0.00'}
+FAIL  急停时两路 TEC 命令为关（屏侧）
+PASS  风扇全开  —— fan=100
+PASS  模式被置为手动  —— mode=0
+FAIL  两路手动输出回暂停  —— {'0x0006': '0.00', '0x0009': '0.00', '0x000A': '0.00'}
+PASS  链路静默结束后仍锁存急停（没有自己解除）  —— latch=0x08
+   截图 10_estop_latched.png
+板上固件与 ELF 不是同一份，拒绝写入。
+  ELF：D:\Espressif\ws\tcs-int2\project_tcs\build-bench\tcs_main.elf
+  回读 Flash 0x08000000：期望 20020000 08000D5D 080066BD 080066CB …
+                      实得 20020000 08000D5D 08006081 0800608F …
+  先确认板上烧的是哪份固件，把 TCS_ELF 指向它的 ELF；或者把这份 ELF 重新烧进去。
+>>> webtest
+webtest base=http://192.168.4.1
+/              HTTP 200  2750 bytes  OK
+/index.html    HTTP 200  2750 bytes  OK
+/style.css     HTTP 200  3588 bytes  OK
+/app.js        HTTP 200  15445 bytes  OK
+/chart.js      HTTP 200  4101 bytes  OK
+/api/status    HTTP 200  284 bytes  OK
+/api/registry  HTTP 200  6818 bytes  OK
+/api/log       HTTP 200  623 bytes  OK
+/api/linkstats HTTP 200  248 bytes  OK
+webtest: 9/9 PASS (HTTP)
+ws loopback 192.168.4.1:80
+I (76084) tcs_ws: ws client fd=58
+handshake: 101 Switching Protocols             OK
+reg numbers carry no float32 tail              OK
+first frames in order: reg, log, st            OK
+current hyst / body_cold read back from reg    OK
+ping -> pong carries ref                       OK
+WS PING frame -> PONG frame with the same payload OK
+I (76574) tcs_ws: ws set id=0x05 v=0.200 rv=0 -> 0.200
+set (same value) -> pv ok=1 with my ref        OK
+I (76824) tcs_ws: ws set id=0x03 v=36.500 rv=-2 -> 37.500
+set (rejected by constraint) -> pv ok=0 err=-2 OK
+set id=65537 -> err bad_set (not truncated)    OK
+cmd 11 (screen-only) -> err bad_cmd            OK
+I (77584) tcs_ws: ws cmd=9 rv=0 -> state=3 alarm=0x0000
+cmd 9 (ack, nothing latched) -> ack with ref   OK
+CLOSE -> server answers CLOSE                  OK
+client table empty after CLOSE                 OK
+W (77994) httpd_uri: httpd_uri: uri handler execution failed
+plain GET /ws -> 400 (not registered as a WS client) OK
+I (78014) tcs_ws: ws client fd=58
+I (78024) tcs_ws: ws client fd=60
+I (78044) tcs_ws: ws client fd=62
+clients 1..3 handshakes accepted               OK
+client table lists all three                   OK
+W (78064) httpd_txrx: httpd_sock_err: error in recv : 104
+W (78064) httpd_ws: httpd_ws_get_frame_type: Failed to read header byte (socket FD invalid), closing socket now
+W (78064) httpd_txrx: httpd_sock_err: error in recv : 104
+W (78064) httpd_ws: httpd_ws_get_frame_type: Failed to read header byte (socket FD invalid), closing socket now
+W (78074) httpd_txrx: httpd_sock_err: error in recv : 104
+W (78074) httpd_ws: httpd_ws_get_frame_type: Failed to read header byte (socket FD invalid), closing socket now
+client table empty after abrupt disconnects    OK
+ws loopback: 17/17 PASS
+webtest: HTTP 9/9, WS 17/17 -> ALL PASS
+----- ② 从未连上不触发 / 屏单独复位不触发 18:11:52
+[18:12:07] 屏已停住；主控（已连上过）应在 3 秒后进急停：
+tc1=22.24 tc2=22.73 body=0.00(ok=0) fan=100% mode=0 m207=1 alarm=0x0004 armed=0 state=3 sim=0 latch=0x08 heap=8475368 up=16s rst=11 prst=11 pup=77s palm=0x0000 plat=0x00 pseq=5 nvalm=0x0004 cd=0
+[18:12:07] 重启主控（屏仍停住）：
+[18:12:28] 先确认掉上一次的急停：
+ack: alarm=0x0000 armed=0 state=3
+tc1=22.23 tc2=22.72 body=0.00(ok=0) fan=0% mode=0 m207=1 alarm=0x0000 armed=0 state=0 sim=0 latch=0x00 heap=8474200 up=13s rst=11 prst=3 pup=7s palm=0x0004 plat=0x08 pseq=7 nvalm=0x0000 cd=0
+  [18:12:36] +20s  tc1=22.24 tc2=22.72 body=0.00(ok=0) fan=0% mode=0 m207=1 alarm=0x0000 armed=0 state=0 sim=0 latch=0x00 heap=8474200 up=18s rst=11 prst=3 pup=7s palm=0x0004 plat=0x08 pseq=7 nvalm=0x0000 cd=0
+  [18:12:42] +25s  tc1=22.23 tc2=22.72 body=0.00(ok=0) fan=0% mode=0 m207=1 alarm=0x0000 armed=0 state=0 sim=0 latch=0x00 heap=8473972 up=24s rst=11 prst=3 pup=7s palm=0x0004 plat=0x08 pseq=7 nvalm=0x0000 cd=0
+  [18:12:48] +30s  tc1=22.23 tc2=22.71 body=0.00(ok=0) fan=0% mode=0 m207=1 alarm=0x0000 armed=0 state=0 sim=0 latch=0x00 heap=8473972 up=30s rst=11 prst=3 pup=7s palm=0x0004 plat=0x08 pseq=7 nvalm=0x0000 cd=0
+  [18:12:53] +35s  tc1=22.23 tc2=22.71 body=0.00(ok=0) fan=0% mode=0 m207=1 alarm=0x0000 armed=0 state=0 sim=0 latch=0x00 heap=8473972 up=35s rst=11 prst=3 pup=7s palm=0x0004 plat=0x08 pseq=7 nvalm=0x0000 cd=0
+  [18:12:59] +40s  tc1=22.23 tc2=22.71 body=0.00(ok=0) fan=0% mode=0 m207=1 alarm=0x0000 armed=0 state=0 sim=0 latch=0x00 heap=8473972 up=41s rst=11 prst=3 pup=7s palm=0x0004 plat=0x08 pseq=7 nvalm=0x0000 cd=0
+  [18:13:04] +45s  tc1=22.22 tc2=22.71 body=0.00(ok=0) fan=0% mode=0 m207=1 alarm=0x0000 armed=0 state=0 sim=0 latch=0x00 heap=8473972 up=46s rst=11 prst=3 pup=7s palm=0x0004 plat=0x08 pseq=7 nvalm=0x0000 cd=0
+[18:13:27] 屏已放开；6 秒后：
+tc1=22.21 tc2=22.69 body=0.00(ok=0) fan=0% mode=0 m207=1 alarm=0x0000 armed=0 state=0 sim=0 latch=0x00 heap=8473056 up=75s rst=11 prst=3 pup=7s palm=0x0004 plat=0x08 pseq=7 nvalm=0x0000 cd=0
+link rx_b=3439 rx_f=65 crc=0 len=0 gap=11 dup=0 retry=54 txqdrop=12 uartdrop=0 echo=0 evict=0 verg=0 arq=1 wdir=0 txwdir=0 txfail=0
+link echo_by: 11=0 13=0 20+21=0 22=0 90=0
+[18:13:34] 屏单独复位（约 1 秒）不触发急停：
+  [18:13:34] +1s  tc1=22.22 tc2=22.69 body=0.00(ok=0) fan=0% mode=0 m207=1 alarm=0x0000 armed=0 state=0 sim=0 latch=0x00 heap=8473056 up=76s rst=11 prst=3 pup=7s palm=0x0004 plat=0x08 pseq=7 nvalm=0x0000 cd=0
+  [18:13:36] +2s  tc1=22.22 tc2=22.69 body=0.00(ok=0) fan=0% mode=0 m207=1 alarm=0x0000 armed=0 state=0 sim=0 latch=0x00 heap=8473056 up=78s rst=11 prst=3 pup=7s palm=0x0004 plat=0x08 pseq=7 nvalm=0x0000 cd=0
+  [18:13:38] +3s  tc1=22.22 tc2=22.69 body=0.00(ok=0) fan=0% mode=0 m207=1 alarm=0x0000 armed=0 state=0 sim=0 latch=0x00 heap=8473056 up=80s rst=11 prst=3 pup=7s palm=0x0004 plat=0x08 pseq=7 nvalm=0x0000 cd=0
+  [18:13:39] +4s  tc1=22.22 tc2=22.69 body=0.00(ok=0) fan=0% mode=0 m207=1 alarm=0x0000 armed=0 state=0 sim=0 latch=0x00 heap=8473056 up=81s rst=11 prst=3 pup=7s palm=0x0004 plat=0x08 pseq=7 nvalm=0x0000 cd=0
+  [18:13:41] +5s  tc1=22.22 tc2=22.69 body=0.00(ok=0) fan=0% mode=0 m207=1 alarm=0x0000 armed=0 state=0 sim=0 latch=0x00 heap=8473056 up=82s rst=11 prst=3 pup=7s palm=0x0004 plat=0x08 pseq=7 nvalm=0x0000 cd=0
+  [18:13:42] +6s  tc1=22.22 tc2=22.69 body=0.00(ok=0) fan=0% mode=0 m207=1 alarm=0x0000 armed=0 state=0 sim=0 latch=0x00 heap=8473056 up=84s rst=11 prst=3 pup=7s palm=0x0004 plat=0x08 pseq=7 nvalm=0x0000 cd=0
+----- ③ 诊断档 mstat 18:13:46
+flash diag rc=0 sha256=8e8cc5685f052a3a
+>>> status
+tc1=22.20 tc2=22.67 body=0.00(ok=0) fan=0% mode=0 m207=1 alarm=0x0000 armed=0 state=0 sim=0 latch=0x00 heap=8476576 up=8s rst=11 prst=11 pup=11s palm=0x0000 plat=0x00 pseq=9 nvalm=0x0004 cd=0
+>>> mstat
+TC1 errstat=255(0xFF) otpstat=1(0x01) fault=0x00(none) age=5250ms valid=1
+TC2 errstat=255(0xFF) otpstat=1(0x01) fault=0x00(none) age=5150ms valid=1
+stuck: body max=0ms water max=4159ms (longest bit-identical run, current one included)
+note: TCERRORSTATUS 含上电锁存位（模块断电才清）——fault!=0 不等于此刻有故障；本命令只读
+----- ⑤ 两端烧回交付档 18:14:19
+>>> 主控交付档
+flash default rc=0 sha256=d5c0890b185f315d
+>>> 屏交付档
+[18:15:25] status
+tc1=22.18 tc2=22.65 body=0.00(ok=0) fan=0% mode=0 m207=1 alarm=0x0000 armed=0 state=0 sim=0 latch=0x00 heap=8496328 up=10s rst=1 prst=-1 pup=0s palm=0x0000 plat=0x00 pseq=0 nvalm=0x0004 cd=0
+ack: alarm=0x0000 armed=0 state=0
+[18:15:28] ack 之后
+tc1=22.18 tc2=22.64 body=0.00(ok=0) fan=0% mode=0 m207=1 alarm=0x0000 armed=0 state=0 sim=0 latch=0x00 heap=8496328 up=13s rst=1 prst=-1 pup=0s palm=0x0000 plat=0x00 pseq=0 nvalm=0x0004 cd=0
+>>> 屏 ver / stat（交付档）
+板上固件与 ELF 不是同一份，拒绝写入。
+  ELF：D:\Espressif\ws\tcs-int2\project_tcs\build-matrix\PROD\tcs_main.elf
+  回读 Flash 0x0806F7E4：期望 20202020 20202020 20202020 7FF90BB0 …
+                      实得 FFFFFFFF FFFFFFFF FFFFFFFF FFFFFFFF …
+  先确认板上烧的是哪份固件，把 TCS_ELF 指向它的 ELF；或者把这份 ELF 重新烧进去。
+板上固件与 ELF 不是同一份，拒绝写入。
+  ELF：D:\Espressif\ws\tcs-int2\project_tcs\build-matrix\PROD\tcs_main.elf
+  回读 Flash 0x0806F7E4：期望 20202020 20202020 20202020 7FF90BB0 …
+                      实得 FFFFFFFF FFFFFFFF FFFFFFFF FFFFFFFF …
+  先确认板上烧的是哪份固件，把 TCS_ELF 指向它的 ELF；或者把这份 ELF 重新烧进去。
+=== D8 end 18:15:36

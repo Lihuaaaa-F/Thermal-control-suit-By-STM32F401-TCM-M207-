@@ -634,6 +634,15 @@ fi
 if [ -n "$PYBIN" ] && "$PYBIN" -X utf8 tests/check_site_tap_guard.py; then :; else
     echo "[tap_guard_gate] FAIL"; FAIL=1
 fi
+
+# S-G x3（条目 4，2026-11-26 台架档增量构建失败）：构建脚本回归门禁。
+# 那天 H743 四档 / ESP32 三档 / 主机全量都过，只有台架档增量构建失败：模式页新增 tui_p4.c，
+# 而 App/lvgl_ui/*.c 的 GLOB 没带 CONFIGURE_DEPENDS，旧构建目录不会重新配置。
+# 三条判据：① GLOB 必须 CONFIGURE_DEPENDS；② build_bench.sh 必须无条件重新配置（否则版本串/源清单过期）；
+# ③ proto_sync.py --check 的输出里必须有第 9 项结论（对外报的协议版本取自 TCS_PROTO_VER）。
+if [ -n "$PYBIN" ] && "$PYBIN" -X utf8 tests/check_build_scripts.py; then :; else
+    echo "[build_scripts] FAIL"; FAIL=1
+fi
 echo "==================="
 if [ "$FAIL" = 0 ]; then echo "run_all: ALL GREEN"; else echo "run_all: HAS FAILURES"; fi
 exit $FAIL

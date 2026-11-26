@@ -328,8 +328,14 @@ static void cmd_exec(char *line)
          * 被主控拒绝或限幅，`[WARN] param write rejected ...` 那条日志里有 id 与值。*/
         uint32_t wbad = 0, wclamp = 0, wbusy = 0;
         link_send_ack_stats(&wbad, &wclamp, &wbusy);
+        /* fresh / bdg / stl（S 线 e1，X01-F-04）：主控快照里的 M207 温度数据龄、布防角标，
+         * 以及"现在算不算陈旧"（fresh_ms 0xFFFF / 超 3s，或快照超过 2s 没来）。*/
+        extern void tcs_link_fresh_copy(tcs_link_fresh_t *out);
+        tcs_link_fresh_t fr; tcs_link_fresh_copy(&fr);
+        uint32_t snap_age = 0, snap_seq = 0; uint8_t snap_have = 0;
+        tcs_link_snap_info(&snap_age, &snap_seq, &snap_have);
         printf("lrx=%lu snap=%lu gapmax=%lu gaplast=%lu echo=%lu wdir=%lu arq=%u txfail=%lu vr=%lu "
-               "ackbad=%lu wbad=%lu wclamp=%lu wbusy=%lu\n",
+               "ackbad=%lu wbad=%lu wclamp=%lu wbusy=%lu fresh=%u bdg=%u stl=%u\n",
                (unsigned long)g_dbg_lrx_total,
                (unsigned long)g_dbg_snap,
                (unsigned long)g_dbg_snap_gap_max,
@@ -338,7 +344,9 @@ static void cmd_exec(char *line)
                (unsigned)g_link.link_ok, (unsigned long)g_link.tx_fail_cnt,
                (unsigned long)tcs_link_snap_ver_rejects(),
                (unsigned long)g_link.ack_nonok_cnt,
-               (unsigned long)wbad, (unsigned long)wclamp, (unsigned long)wbusy);
+               (unsigned long)wbad, (unsigned long)wclamp, (unsigned long)wbusy,
+               (unsigned)fr.fresh_ms, (unsigned)fr.badge,
+               (unsigned)tcs_link_stale_at(fr.fresh_ms, snap_age, fr.have));
         return;
     }
 #if TCS_PROFILE >= 1

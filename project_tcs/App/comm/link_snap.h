@@ -41,6 +41,60 @@ typedef struct {
 } tcs_link_tec_t;
 void tcs_link_tec_copy(tcs_link_tec_t *out);
 
+/* ====== X01-F-04（S 线 e1，2026-11-26）：0x20 的 fresh_ms / badge 终于有人消费 ======
+ * 修复前：0x20 每 200ms 带着 fresh_ms（M207 温度缓存龄）与 badge（布防角标）来，H743 解出来
+ * 就扔在 s_last_snap 里，没有任何消费者；屏幕温度卡永远显示主控最后一次给的数（可能早已陈旧），
+ * 布防状态（含失联报警）永远到不了屏。
+ *
+ * 语义（与生产端 esp32/main/tcs_snap.c 对照）：
+ *   fresh_ms = m207_temp_age_ms()，**较旧那一路**温度缓存的龄；0xFFFF = 离线/未知。
+ *              主控温度轮询是 500ms/通道，正常值 ≤ 约 1000ms。
+ *   badge    = post_arm_state()：0 = 未布防，1 = 已布防，2 = 布防后失联报警。
+ *              ⚠ 与屏本地 POST 角标（post_badge_state：0 未开始 / 1 显示中 / 2 已淡出）
+ *              **同名异义**，不许接同一个控件——这是修复前的第二个坑。
+ *
+ * 界面怎么显示（界面层不在本批次范围，方案写在 docs/results/S_G_e1_结果.md）：
+ *   温度卡：stale = 1 时整卡转灰 + 文案"数据陈旧"（沿用现有"连接中断"那套灰化样式），
+ *           不显示具体数字（0xFFFF 更不能按毫秒显示成 65.5s）。
+ *   布防角标：独立控件（与 POST 角标分开），badge 2 用红底"布防失联"、1 用"已布防"、0 不显示。*/
+#define LINK_SNAP_FRESH_STALE_MS   3000u   /* 温度龄超过 3 个轮询周期 = 陈旧（500ms/通道，较旧者约 1000ms）*/
+#define LINK_SNAP_AGE_STALE_MS     2000u   /* 距最近一帧快照超过 2s = 链路层面的陈旧（X01 关单条件）*/
+
+typedef struct {
+    uint16_t fresh_ms;   /* 最近一帧的 M207 温度缓存龄（0xFFFF = 未知/离线）*/
+    uint8_t  badge;      /* 布防角标请求（post_arm_t 语义：0/1/2）*/
+    uint8_t  have;       /* 上电后收到过快照（否则 fresh_ms/badge 无意义）*/
+    uint8_t  stale;      /* 收到那一帧时按 fresh_ms 判定的陈旧（链龄要用 tcs_link_stale_at 现算）*/
+} tcs_link_fresh_t;
+
+/* 收到 0x20：整块刷新（fresh_ms + badge）*/
+static inline void tcs_link_fresh_apply(tcs_link_fresh_t *f, uint16_t fresh_ms, uint8_t badge)
+{
+    f->fresh_ms = fresh_ms;
+    f->badge    = (uint8_t)(badge & 0x03u);
+    f->have     = 1;
+    f->stale    = (uint8_t)((fresh_ms == 0xFFFFu || fresh_ms > LINK_SNAP_FRESH_STALE_MS) ? 1u : 0u);
+}
+
+/* 收到 0x21 的 TCS_D_BADGE：只换 badge，fresh_ms 与陈旧判定不变 */
+static inline void tcs_link_fresh_badge(tcs_link_fresh_t *f, uint8_t badge)
+{
+    f->badge = (uint8_t)(badge & 0x03u);
+}
+
+/* 界面绘制时现算：fresh_ms 陈旧、快照本身超过 2s 没来、或还没收到过快照 → 陈旧。
+ * （snap_age_ms 取自 tcs_link_snap_info 的 age_ms；"断链 2s 后出现数据陈旧"就是这条。）*/
+static inline uint8_t tcs_link_stale_at(uint16_t fresh_ms, uint32_t snap_age_ms, uint8_t have)
+{
+    if (!have) return 1;
+    if (snap_age_ms > LINK_SNAP_AGE_STALE_MS) return 1;
+    if (fresh_ms == 0xFFFFu || fresh_ms > LINK_SNAP_FRESH_STALE_MS) return 1;
+    return 0;
+}
+
+/* 主控那一帧的 freshness 镜像（整块拷贝，与 tcs_link_tec_copy 同规：界面只读）*/
+void tcs_link_fresh_copy(tcs_link_fresh_t *out);
+
 /* m1（模式页）：屏写参数的"补发"入口——同一帧等 ACK 的 0x12（策略在 App/comm/link_send.c），
  * 不经本地注册表的相等短路。只在"镜像里已经是这个值、但主控回读不是"时用（tui_p4_mode.c 的 mode_write）。
  * 返回 0 = 已入队并登记等待确认；-1 = 组帧失败。交付档以外（台架 / 仿真）同样走这一条。*/

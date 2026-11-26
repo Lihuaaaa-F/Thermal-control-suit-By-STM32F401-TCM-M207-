@@ -421,9 +421,19 @@ static tcs_snap_pl_t s_last_snap;   /* v2：屏为纯显示终端，链路存活
  * 界面只读（tcs_link_tec_copy）；链路断了由界面按"快照陈旧"整体转灰，这里不另作失效处理。*/
 static tcs_link_tec_t s_tec;
 
+/* X01-F-04（S 线 e1）：0x20 的 fresh_ms / badge 镜像。修复前这两个字段解出来就没人用——
+ * 温度卡永远显示主控最后一次给的数（可能早已陈旧），布防状态（含失联报警）到不了屏。
+ * 语义与显示规则见 link_snap.h；界面层怎么画不在本批次（方案见 results 文档）。*/
+static tcs_link_fresh_t s_fresh;
+
 void tcs_link_tec_copy(tcs_link_tec_t *out)
 {
     if (out) *out = s_tec;
+}
+
+void tcs_link_fresh_copy(tcs_link_fresh_t *out)
+{
+    if (out) *out = s_fresh;
 }
 
 /* S 线 i3（条目 11）：被版本校验拒掉的快照数（只增；上电清零）*/
@@ -471,6 +481,7 @@ static void snap_apply(const tcs_snap_pl_t *s)
     tcs_link_tec_set_dirs(&s_tec, s->tec_dir);                       /* m1（模式页）：末尾追加的 9 字节 */
     tcs_link_tec_set_elec(&s_tec, s->tec1_v, s->tec1_i, s->tec2_v, s->tec2_i);
     tcs_link_tec_set_state(&s_tec, s->tec_cmd, s->tec_act, s->tec_known);   /* S 线 i3：末尾追加的 3 字节 */
+    tcs_link_fresh_apply(&s_fresh, s->fresh_ms, s->badge);                  /* X01-F-04：数据龄 + 布防角标 */
     s_last_snap = *s;
 }
 
@@ -648,6 +659,7 @@ void on_frame(const uint8_t *payload, size_t len)
         if (mask & TCS_D_ALARM)   /* X01-F-02：与 0x20 同规——本机独占位不被覆盖 */
             g_tcs.alarm_bits = alarm_merge_peer(d.alarm, ALM_SRC_LOCAL_H743, g_tcs.alarm_bits);
         if (mask & TCS_D_BODY)    g_tcs.body_temp = d.body;
+        if (mask & TCS_D_BADGE)   tcs_link_fresh_badge(&s_fresh, d.badge);   /* X01-F-04：布防角标（增量）*/
         if (mask & TCS_D_TEC_DIR) tcs_link_tec_set_dirs(&s_tec, d.tec_dir);                              /* m1（模式页）*/
         if (mask & TCS_D_ELEC)    tcs_link_tec_set_elec(&s_tec, d.tec1_v, d.tec1_i, d.tec2_v, d.tec2_i); /* m1（模式页）*/
         break;

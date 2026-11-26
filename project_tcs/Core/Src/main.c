@@ -411,6 +411,7 @@ static void hook_broadcast(param_desc_t *p, uint8_t src)
 
 static uint32_t s_snap_ms;      /* 最近 0x20 到达时刻（ms）*/
 static uint32_t s_snap_ver_reject;   /* S 线 i3（条目 11）：被版本校验拒掉的快照数（0x20 帧到过、ver 不符）*/
+static uint32_t s_snap_ver_last = 0xFFFFFFFFu;   /* R8-06：最近一帧 0x20 的 ver 原值（不合版本也记）；这个初值 = 还没收到过 */
 static uint32_t s_snap_seq;     /* 最近快照 seq（去重键）*/
 static uint8_t  s_snap_have;
 static tcs_snap_pl_t s_last_snap;   /* v2：屏为纯显示终端，链路存活期内以它为准 */
@@ -438,6 +439,9 @@ void tcs_link_fresh_copy(tcs_link_fresh_t *out)
 
 /* S 线 i3（条目 11）：被版本校验拒掉的快照数（只增；上电清零）*/
 uint32_t tcs_link_snap_ver_rejects(void) { return s_snap_ver_reject; }
+
+/* R8-06：最近一帧 0x20 的 ver 原值（0xFFFFFFFF = 还没收到过）。vr= 在涨时用它看对端版本。*/
+uint32_t tcs_link_snap_ver_last(void) { return s_snap_ver_last; }
 
 /* m1（模式页）：屏写参数的补发入口（说明见 link_snap.h）；与 hook_broadcast 同一条 0x12 路径 */
 int tcs_link_write_param(uint16_t id, uint8_t type, float value)
@@ -608,6 +612,7 @@ void on_frame(const uint8_t *payload, size_t len)
         g_dbg_snap++;
         tcs_snap_pl_t s;
         if (tcs_scan_snapshot(body, blen, &s) != 0) break;
+        s_snap_ver_last = s.ver;              /* R8-06：对端报的版本原值——vr= 在涨时看它就知道差在哪 */
         if (s.ver != TCS_PROTO_VER) {         /* S 线 i3（条目 11）：单独计数，stat 里打出来 */
             if (s_snap_ver_reject != 0xFFFFFFFFu) s_snap_ver_reject++;
             break;

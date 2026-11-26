@@ -322,7 +322,9 @@ static void cmd_exec(char *line)
         extern comm_link_t g_link;
         /* arq / txfail（M04-F-06 / X03-F-09）：comm 层 link_ok；没能上线的发送次数（应与 uartdrop 同源、恒 0）*/
         /* vr（S 线 i3，条目 11）：被版本校验拒掉的快照数——>0 且屏上一直"连接中断"时，
-         * 多半是两端协议版本不配对（主控 OTA 升过、屏还没烧）。*/
+         * 多半是两端协议版本不配对（主控 OTA 升过、屏还没烧）。
+         * R8-06：vrlast= 是最近一帧 0x20 的 ver 原值（0xFFFFFFFF = 还没收到过快照）。两个数
+         * 一起看才知道差在哪：vr 在涨 + vrlast 与本端 TCS_PROTO_VER 不同 = 对端版本变了。*/
         /* ackbad / wbad / wclamp / wbusy（S 线 e1，X01-F-03）：0x90 应答里 status != OK 的计数；
          * 其中按参数写入分类的三种（BAD_ID / CLAMP / BUSY）单独列出——非 0 说明屏写参数
          * 被主控拒绝或限幅，`[WARN] param write rejected ...` 那条日志里有 id 与值。*/
@@ -334,7 +336,7 @@ static void cmd_exec(char *line)
         tcs_link_fresh_t fr; tcs_link_fresh_copy(&fr);
         uint32_t snap_age = 0, snap_seq = 0; uint8_t snap_have = 0;
         tcs_link_snap_info(&snap_age, &snap_seq, &snap_have);
-        printf("lrx=%lu snap=%lu gapmax=%lu gaplast=%lu echo=%lu wdir=%lu arq=%u txfail=%lu vr=%lu "
+        printf("lrx=%lu snap=%lu gapmax=%lu gaplast=%lu echo=%lu wdir=%lu arq=%u txfail=%lu vr=%lu vrlast=%lu "
                "ackbad=%lu wbad=%lu wclamp=%lu wbusy=%lu fresh=%u bdg=%u stl=%u\n",
                (unsigned long)g_dbg_lrx_total,
                (unsigned long)g_dbg_snap,
@@ -343,6 +345,7 @@ static void cmd_exec(char *line)
                (unsigned long)g_link.echo_cnt, (unsigned long)g_link.wrongdir_cnt,
                (unsigned)g_link.link_ok, (unsigned long)g_link.tx_fail_cnt,
                (unsigned long)tcs_link_snap_ver_rejects(),
+               (unsigned long)tcs_link_snap_ver_last(),
                (unsigned long)g_link.ack_nonok_cnt,
                (unsigned long)wbad, (unsigned long)wclamp, (unsigned long)wbusy,
                (unsigned)fr.fresh_ms, (unsigned)fr.badge,

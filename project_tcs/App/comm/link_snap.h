@@ -24,7 +24,11 @@ uint8_t tcs_link_snap_peer_estop(void);
  * 屏看到的就是"主控连接中断"——行为安全（执行器/模式显示未知、按钮不可点、没有急停），但提示不贴切。
  * 这里把"被版本校验拒掉的快照"单独计数，界面据此把横幅换成"主控固件与屏不匹配"。*/
 uint32_t tcs_link_snap_ver_rejects(void);
-/* 计数怎么用（"在涨"的判定）是界面纯逻辑，在 ui_model.h 的 ui_vr_mismatch()；这里只管读数 */
+/* 计数怎么用（"在涨"的判定）是界面纯逻辑，在 ui_model.h 的 ui_vr_mismatch()；这里只管读数。
+ * R8-06：拒收计数只说明"不配对"，看不出对端报的是哪一版。这里给出最近一帧 0x20 的 ver 原值
+ * （不管它合不合 TCS_PROTO_VER），0xFFFFFFFF = 上电后还没收到过 0x20 帧。
+ * stat 行里 vr= 是拒收数、vrlast= 是对端当前版本——两边一对就知道是"主控升过、屏没烧"。*/
+uint32_t tcs_link_snap_ver_last(void);
 
 /* ====== m1（模式页，2026-11-26 用户定的新功能）：两路 TEC 的输出方向与电学量 ======
  * 取自 0x20 快照末尾 / 0x21 增量的两个新 mask 位（protocol/tcs_proto.h，TCS_PROTO_VER 2）。

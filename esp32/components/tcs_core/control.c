@@ -121,9 +121,11 @@ static uint8_t    s_tec_cmd_on[2];       /* TEC 命令意图（只有 out_tec_sw
 static uint32_t   s_water_pre_ms[2];   /* R9-03：水温预冻挂起的起始时刻（0 = 没挂起）；按通道 TC1/TC2 */
 static uint32_t   s_poll_now_ms;       /* 最近一拍的时间戳：out_tec_sw 在拍外被调时用它给 TEC 开沿计时*/
 #if CONFIG_TCS_DIAG || CONFIG_TCS_SIM
-/* S 线 i3（条目 8）：读数"逐位不变"的最长连续时长（[0] 体温、[1] 水温）。mstat 用它量 TEC 开着时的
- * 读数抖动（F2 第四节第 3 点）；只读导出，不参与任何判据。交付档不编译。*/
-static uint32_t   s_stuck_max_ms[2];
+/* S 线 i3（条目 8）：读数"逐位不变"的最长连续时长（[0] 体温、[1] TC1 水温、[2] TC2 水温）。
+ * mstat 用它量 TEC 开着时的读数抖动（F2 第四节第 3 点）；只读导出，不参与任何判据。交付档不编译。
+ * R8-06：TC2 单独一路。原先 TC1/TC2 共用 [1]，两路水温混在一起——mstat 的 water max 只会
+ * 报"先收尾的那一段"，另一路冻着也看不出来。*/
+static uint32_t   s_stuck_max_ms[3];
 #endif
 
 static void stuck_feed(stuck_src_t *c, float v, uint32_t now_ms, uint8_t src_ok, uint8_t idx)
@@ -438,7 +440,7 @@ void control_init(const control_ops_t *ops)
     memset(&s_stuck_body, 0, sizeof(s_stuck_body));
     memset(&s_stuck_tc1, 0, sizeof(s_stuck_tc1));
 #if CONFIG_TCS_DIAG || CONFIG_TCS_SIM
-    s_stuck_max_ms[0] = s_stuck_max_ms[1] = 0;   /* S 线 i3：最长连续时长从这次上电算起 */
+    s_stuck_max_ms[0] = s_stuck_max_ms[1] = s_stuck_max_ms[2] = 0;   /* S 线 i3：最长连续时长从这次上电算起 */
 #endif
     memset(&s_stuck_tc2, 0, sizeof(s_stuck_tc2));   /* r7f R7-08：TC2 那一路 */
     s_stuck_chn = 0;
@@ -826,7 +828,7 @@ void control_poll(uint32_t now_ms)
         uint8_t tc2_stuck;                     /* r7f R7-08：TC2 那一路的水温 */
         stuck_feed(&s_stuck_body, g_tcs.body_temp, now_ms, g_tcs.body_sensor_ok, 0u);
         stuck_feed(&s_stuck_tc1, g_tcs.tc1_act, now_ms, m207_src_ok, 1u);
-        stuck_feed(&s_stuck_tc2, g_tcs.tc2_act, now_ms, m207_src_ok, 1u);   /* r7f R7-08；idx=1 = 水温类，与 TC1 共用最长连续时长统计 */
+        stuck_feed(&s_stuck_tc2, g_tcs.tc2_act, now_ms, m207_src_ok, 2u);   /* r7f R7-08；R8-06：TC2 单独一路（idx=2），不再与 TC1 共用统计 */
         tc1_stuck  = (uint8_t)(s_tec_cmd_on[0] && stuck_is(&s_stuck_tc1, now_ms, s_tec_on_since[0]));   /* X03-F-08：读命令意图，不读回显 */
         tc1_stuck  = (uint8_t)(tc1_stuck && stuck_water_is(&s_stuck_tc1, now_ms));   /* 水温窗口 10 分钟（2026-11-26）*/
         tc2_stuck  = (uint8_t)(s_tec_cmd_on[1] && stuck_is(&s_stuck_tc2, now_ms, s_tec_on_since[1]));   /* r7f R7-08：TC2 命令开着 */
@@ -1063,15 +1065,16 @@ void    control_safety_trip(uint8_t bit) { safety_trip(bit); }
 
 #if CONFIG_TCS_DIAG || CONFIG_TCS_SIM
 /* S 线 i3（条目 8）：体温 / 水温读数"逐位不变"的最长连续时长（毫秒；含正在进行的这一段）。
- * which：1 = 体温、2 = 水温。只给 mstat 读，不参与判据；交付档不编译。*/
+ * which：1 = 体温、2 = TC1 水温、3 = TC2 水温（R8-06：两路水温分开统计，不再混在一起）。
+ * 只给 mstat 读，不参与判据；交付档不编译。*/
 uint32_t control_stuck_max_ms(uint8_t which, uint32_t now_ms)
 {
     uint8_t i;
     const stuck_src_t *c;
     uint32_t mx;
-    if (which != 1u && which != 2u) return 0;
-    i = (which == 1u) ? 0u : 1u;
-    c = (which == 1u) ? &s_stuck_body : &s_stuck_tc1;
+    if (which < 1u || which > 3u) return 0;
+    i = (uint8_t)(which - 1u);
+    c = (which == 1u) ? &s_stuck_body : (which == 2u) ? &s_stuck_tc1 : &s_stuck_tc2;
     mx = s_stuck_max_ms[i];
     if (c->last_change && now_ms > c->last_change) {
         uint32_t cur = now_ms - c->last_change;

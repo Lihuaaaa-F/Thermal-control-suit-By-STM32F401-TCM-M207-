@@ -442,11 +442,14 @@ static int cmd_mstat(int argc, char **argv)
                (unsigned)st.fault_mask, bits, age, (unsigned)st.valid);
     }
     {
-        /* 卡死判据的两个输入：最长连续"逐位不变"时长（含正在进行的这一段）*/
+        /* 卡死判据的三个输入：最长连续"逐位不变"时长（含正在进行的这一段）。
+         * R8-06：两路水温分开报（TC1 / TC2）。原先只有一路 water max、TC1/TC2 共用统计，
+         * 读的人分不清是哪一路冻着（F2 第四节第 3 点要的是"TEC 开着的那一路读数动不动"）。*/
         uint32_t now = (uint32_t)(esp_timer_get_time() / 1000);
-        printf("stuck: body max=%lums water max=%lums (longest bit-identical run, current one included)\n",
+        printf("stuck: body max=%lums water TC1 max=%lums water TC2 max=%lums (longest bit-identical run, current one included)\n",
                (unsigned long)control_stuck_max_ms(1u, now),
-               (unsigned long)control_stuck_max_ms(2u, now));
+               (unsigned long)control_stuck_max_ms(2u, now),
+               (unsigned long)control_stuck_max_ms(3u, now));
     }
     printf("note: TCERRORSTATUS 含上电锁存位（模块断电才清）——fault!=0 不等于此刻有故障；本命令只读\n");
     return 0;
@@ -522,7 +525,7 @@ int tcs_console_start(void)
           .func=cmd_webtest, .argtable=NULL },
         { .command="linkmute", .help="linkmute <秒>：链路静默（不收不发，快照也停发），用来诱导断链再恢复；0=恢复；静默>=3s 触发断链急停", .hint="<0-3600>",
           .func=cmd_linkmute, .argtable=NULL },
-        { .command="mstat", .help="模块保护状态与读数抖动（只读）：TCERRORSTATUS / TCOTPSTATUS 原值、故障位掩码与位名、数据龄；体温 / 水温读数逐位不变的最长连续时长", .hint=NULL,
+        { .command="mstat", .help="模块保护状态与读数抖动（只读）：TCERRORSTATUS / TCOTPSTATUS 原值、故障位掩码与位名、数据龄；体温 / 水温（TC1、TC2 各一路）读数逐位不变的最长连续时长", .hint=NULL,
           .func=cmd_mstat, .argtable=NULL },
 #endif
 #if CONFIG_TCS_DIAG

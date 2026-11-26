@@ -121,7 +121,8 @@ void    control_safety_trip(uint8_t bit);
 
 #if CONFIG_TCS_DIAG || CONFIG_TCS_SIM
 /* 只读导出（S 线 i3，条目 8）：体温 / 水温读数"逐位不变"的最长连续时长（毫秒；含正在进行的这一段）。
- * which：1 = 体温、2 = 水温。给 mstat 量 TEC 开着时的读数抖动（F2 第四节第 3 点）；不参与判据。
+ * which：1 = 体温、2 = TC1 水温、3 = TC2 水温（R8-06：两路水温各算各的，不再混成一路）。
+ * 给 mstat 量 TEC 开着时的读数抖动（F2 第四节第 3 点）；不参与判据。
  * 交付档不编译（诊断功能的实现体也进 #if）。*/
 uint32_t control_stuck_max_ms(uint8_t which, uint32_t now_ms);
 #endif

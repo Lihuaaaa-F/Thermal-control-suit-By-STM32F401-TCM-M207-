@@ -75,6 +75,7 @@ esp32/tests/m207_tb.h
 esp32/tests/mutation_control.py
 esp32/tests/mutation_control_manual.py
 esp32/tests/mutation_core.py
+esp32/tests/mutation_m207_force.py
 esp32/tests/mutation_web.py
 esp32/tests/shim_h7/m207.h
 esp32/tests/test_control_esp32.c
@@ -85,6 +86,7 @@ esp32/tests/test_link_peer.c
 esp32/tests/test_m1_gates.py
 esp32/tests/test_m207_core.c
 esp32/tests/test_m207_elec.c
+esp32/tests/test_m207_force.c
 esp32/tests/test_m207_fw_adv.py
 esp32/tests/test_m207_gates.py
 esp32/tests/test_m207_golden.c
@@ -92,6 +94,7 @@ esp32/tests/test_m207_lb.c
 esp32/tests/test_m207_link.c
 esp32/tests/test_m207_proto.c
 esp32/tests/test_m207_queue.c
+esp32/tests/test_m207_sim.c
 esp32/tests/test_m207_status.c
 esp32/tests/test_ota_pure.c
 esp32/tests/test_tcs_core.c
@@ -232,7 +235,10 @@ project_tcs/tests/test_proto_tcs.c
 project_tcs/tests/test_qr.c
 project_tcs/tests/test_site_logic.c
 project_tcs/tests/test_touch_session.c
+project_tcs/tests/test_ui_known.c
+project_tcs/tests/test_ui_mismatch.c
 project_tcs/tests/test_ui_model.c
+project_tcs/tests/test_ui_svc.c
 project_tcs/tests/test_ws_json_escape.c
 project_tcs/tools/card_surface_check.py
 project_tcs/tools/colorblind_check.py

@@ -74,9 +74,16 @@ void ui_status_module(const ui_link_view_t *lv, char *text, size_t cap, ui_led_t
 
 /* ====== 横幅 ====== */
 
+/* R9-08（独立复核 R9，2026-11-26）：ALM_PROTO（对端协议版本不一致）是**提示位**，不参与任何
+ * 安全判定，也没有可点开的详情。它原先被算进"还有 N 条"：版本不配对时，急停 / 超温 / 功能启动
+ * 失败横幅会写"还有 1 条"，但没有任何一条横幅能指出是协议版本——用户找不到那"一条"。
+ * 计数时把它排除；它自己另有一条横幅文案（见 ui_banner_select）与确认原因（ui_ack_reason）。*/
+#define UI_ALARM_TIPS_MASK   ((uint16_t)ALM_PROTO)
+
 static uint8_t alarm_count(uint16_t alarm)
 {
     uint8_t n = 0;
+    alarm = (uint16_t)(alarm & (uint16_t)~UI_ALARM_TIPS_MASK);
     for (uint16_t b = alarm; b; b &= (uint16_t)(b - 1u)) n++;
     return n;
 }
@@ -189,6 +196,14 @@ void ui_banner_select(const ui_in_t *in, const ui_link_view_t *lv, ui_banner_t *
                    "已恢复默认参数 · 重新设定后恢复保护", 0);   /* S 线 i3 条目 5：写清后果（对照规格 §6 布防语义）*/
         return;
     }
+    /* R9-08：对端协议版本不一致（ALM_PROTO）。排在安全类和通信类之后——它是提示，不改变
+     * 设备当前的安全态；但主控收不下屏发的帧（版本不符被丢弃）时，屏上的按钮点了没反应，
+     * 必须给一句人话。文案复用现有"主控固件与屏不匹配"（字库覆盖率门禁限定了用字）。*/
+    if (a & ALM_PROTO) {
+        set_banner(out, UI_BN_VER_MISMATCH, 1, UI_BN_TAP_HINT,
+                   "主控固件与屏不匹配", "请同步升级后再用", 0);
+        return;
+    }
     /* 没有报警位、但源确实不在（未布防时不上报警）：只提示，不说"已停止"——未布防时并不停机 */
     if (lv->body == UI_SRC_LOST) {
         set_banner(out, UI_BN_INFO, 0, UI_BN_TAP_HINT, "体温传感器未连接",
@@ -271,6 +286,7 @@ const char *ui_ack_reason(uint16_t still, const ui_link_view_t *lv)
     }
     if (still & ALM_EEPROM)       return "参数校验仍失败，请重新设定";
     if (still & ALM_SERVICE)      return "有功能没能启动，请重新启动";   /* S 线 i3 */
+    if (still & ALM_PROTO)        return "主控固件与屏不匹配";           /* R9-08：不再"没原因" */
     return NULL;
 }
 

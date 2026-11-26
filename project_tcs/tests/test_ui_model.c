@@ -259,6 +259,22 @@ int main(void)
             CHECK(hint != NULL && strstr(hint, "自动恢复") != NULL, "C 通信类点击提示");
         }
 
+        /* R9-08（独立复核 R9）：ALM_PROTO（对端协议版本不一致）是提示位——不进"还有 N 条"，
+         * 自己有一条横幅文案与确认原因。修前：急停横幅会写"还有 1 条"却指不出是版本问题，
+         * ui_ack_reason 对它返回 NULL（点"解除"后只说"仍未解除"、没有原因）。*/
+        in.alarm = ALM_ESTOP | ALM_PROTO;
+        in.estop_peer = 1u;
+        v = ui_link_view(&in);
+        ui_banner_select(&in, &v, &b);
+        CHECK(b.kind == UI_BN_ESTOP && b.extra == 0,
+              "R9-08 ALM_PROTO is not counted as an extra '还有 N 条' item");
+        in.alarm = ALM_PROTO;
+        ui_banner_select(&in, &v, &b);
+        CHECK(b.kind == UI_BN_VER_MISMATCH && strstr(b.title, "不匹配") != NULL,
+              "R9-08 ALM_PROTO alone has its own banner");
+        CHECK(ui_ack_reason(ALM_PROTO, &v) != NULL,
+              "R9-08 ALM_PROTO has an ack reason (not 'no reason')");
+
         /* 未布防：没有报警位，但源确实不在 → 提示级 */
         in.alarm = 0;
         in.body_ok = 0;

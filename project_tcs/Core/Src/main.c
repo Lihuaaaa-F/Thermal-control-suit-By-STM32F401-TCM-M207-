@@ -410,6 +410,7 @@ static void hook_broadcast(param_desc_t *p, uint8_t src)
 #define ALM_SRC_LOCAL_H743   ((uint16_t)ALM_EEPROM)
 
 static uint32_t s_snap_ms;      /* 最近 0x20 到达时刻（ms）*/
+static uint32_t s_snap_ver_reject;   /* S 线 i3（条目 11）：被版本校验拒掉的快照数（0x20 帧到过、ver 不符）*/
 static uint32_t s_snap_seq;     /* 最近快照 seq（去重键）*/
 static uint8_t  s_snap_have;
 static tcs_snap_pl_t s_last_snap;   /* v2：屏为纯显示终端，链路存活期内以它为准 */
@@ -424,6 +425,9 @@ void tcs_link_tec_copy(tcs_link_tec_t *out)
 {
     if (out) *out = s_tec;
 }
+
+/* S 线 i3（条目 11）：被版本校验拒掉的快照数（只增；上电清零）*/
+uint32_t tcs_link_snap_ver_rejects(void) { return s_snap_ver_reject; }
 
 /* m1（模式页）：屏写参数的补发入口（说明见 link_snap.h）；与 hook_broadcast 同一条 0x12 路径 */
 int tcs_link_write_param(uint16_t id, uint8_t type, float value)
@@ -466,6 +470,7 @@ static void snap_apply(const tcs_snap_pl_t *s)
     param_link_sync(PARAM_ID_TC2_SET, s->tc2_set);
     tcs_link_tec_set_dirs(&s_tec, s->tec_dir);                       /* m1（模式页）：末尾追加的 9 字节 */
     tcs_link_tec_set_elec(&s_tec, s->tec1_v, s->tec1_i, s->tec2_v, s->tec2_i);
+    tcs_link_tec_set_state(&s_tec, s->tec_cmd, s->tec_act, s->tec_known);   /* S 线 i3：末尾追加的 3 字节 */
     s_last_snap = *s;
 }
 
@@ -567,7 +572,10 @@ void on_frame(const uint8_t *payload, size_t len)
         g_dbg_snap++;
         tcs_snap_pl_t s;
         if (tcs_scan_snapshot(body, blen, &s) != 0) break;
-        if (s.ver != TCS_PROTO_VER) break;
+        if (s.ver != TCS_PROTO_VER) {         /* S 线 i3（条目 11）：单独计数，stat 里打出来 */
+            if (s_snap_ver_reject != 0xFFFFFFFFu) s_snap_ver_reject++;
+            break;
+        }
         /* 去重只认 seq 相等：UART 点对点链路保序，不存在乱序帧；
          * 单调递增判据会在对端重启（seq 归 1）后把之后所有快照当旧帧丢弃
          * ——2026-10-30 真机实证：s_snap_ms 冻结、esp_link_ok 恒 0、屏数据停更。*/

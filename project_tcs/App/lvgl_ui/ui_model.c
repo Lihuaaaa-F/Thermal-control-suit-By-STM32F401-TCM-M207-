@@ -93,6 +93,19 @@ static void set_banner(ui_banner_t *b, ui_bn_kind_t kind, uint8_t red, ui_bn_tap
     b->extra = extra;
 }
 
+/* S 线 i3（条目 11）：版本拒收计数的变化跟踪。首拍只建基准；计数变了就记时刻；
+ * 返回 1 = 最新一次计数变化就在 UI_VR_WINDOW_MS 之内（链路不新鲜期间还在涨）。
+ * 窗口取 2 s：快照 200ms 一帧被全拒时，计数每 200ms 就涨一次；链路真断了两边都不涨。*/
+#define UI_VR_WINDOW_MS 2000u
+uint8_t ui_vr_mismatch(ui_vr_t *v, uint32_t cnt, uint32_t now_ms)
+{
+    if (!v) return 0;
+    if (!v->have) { v->have = 1; v->last_cnt = cnt; v->last_change_ms = 0; return 0; }  /* 首拍只建基准 */
+    if (cnt != v->last_cnt) { v->last_cnt = cnt; v->last_change_ms = now_ms ? now_ms : 1u; }
+    if (!cnt || !v->last_change_ms) return 0;      /* 计数为 0、或建基准后还没涨过 */
+    return (uint8_t)((uint32_t)(now_ms - v->last_change_ms) <= UI_VR_WINDOW_MS);
+}
+
 void ui_banner_select(const ui_in_t *in, const ui_link_view_t *lv, ui_banner_t *out)
 {
     memset(out, 0, sizeof *out);
@@ -119,6 +132,13 @@ void ui_banner_select(const ui_in_t *in, const ui_link_view_t *lv, ui_banner_t *
                 snprintf(detail, sizeof detail, "数据停在 %us 前 · 自动重连中", (unsigned)s);
             else
                 snprintf(detail, sizeof detail, "数据停在 %u 分钟前 · 自动重连中", (unsigned)(s / 60u));
+        }
+        /* S 线 i3（条目 11）：链路不新鲜、但版本拒收计数还在涨 = 主控在发帧、屏不收（版本不配对）。
+         * 行为与"连接中断"完全一样（只换文案）：链路照旧不新鲜，执行器/模式显示未知、按钮不可点。*/
+        if (in->ver_mismatch) {
+            set_banner(out, UI_BN_VER_MISMATCH, 1, UI_BN_TAP_HINT,
+                       "主控固件与屏不匹配", "请同步升级后再用", 0);
+            return;
         }
         /* 此时屏上的报警位也是陈旧的：不拿它画横幅，等链路回来再按真值显示 */
         set_banner(out, UI_BN_LINK_LOST, 1, UI_BN_TAP_HINT, "主控连接中断", detail, 0);
@@ -147,6 +167,13 @@ void ui_banner_select(const ui_in_t *in, const ui_link_view_t *lv, ui_banner_t *
                    "已停止加热 · 降下来后点击解除", (uint8_t)(alarm_count(a) - 1u));
         return;
     }
+    /* S 线 i3（P1-12 的另一半）：主控有后台服务没能启动（ALM_SERVICE）。这一位确认不掉——要断电重启，
+     * 所以不给"点击解除"，只给提示；排在急停 / 超温之后（安全第一），压过会自己好的通信类（根因在这儿）。*/
+    if (a & ALM_SERVICE) {
+        set_banner(out, UI_BN_SERVICE, 1, UI_BN_TAP_HINT, "功能启动失败",
+                   "部分功能不可用 · 请断电重启", (uint8_t)(alarm_count(a) - 1u));
+        return;
+    }
     /* 自动恢复类：源没好之前点确认没有意义（主控会拒绝），所以文案只说"接好后自动恢复" */
     const char *auto_title = NULL;
     if (a & ALM_BODY_SENSOR)      auto_title = "体温传感器失联";
@@ -159,7 +186,7 @@ void ui_banner_select(const ui_in_t *in, const ui_link_view_t *lv, ui_banner_t *
     }
     if (a & ALM_EEPROM) {
         set_banner(out, UI_BN_INFO, 0, UI_BN_TAP_ACK, "参数校验失败",
-                   "已恢复默认参数 · 请重新设定", 0);
+                   "已恢复默认参数 · 重新设定后恢复保护", 0);   /* S 线 i3 条目 5：写清后果（对照规格 §6 布防语义）*/
         return;
     }
     /* 没有报警位、但源确实不在（未布防时不上报警）：只提示，不说"已停止"——未布防时并不停机 */
@@ -181,6 +208,8 @@ const char *ui_banner_tap_hint(const ui_banner_t *b)
             if (b->kind == UI_BN_LINK_LOST)    return "正在重新连接主控，连上后会自动刷新";
             if (b->kind == UI_BN_ESTOP_UNSENT) return "急停指令已记下，主控连上后立即送达";
             if (b->kind == UI_BN_ESTOP_PENDING) return "主控确认执行后才能解除";
+            if (b->kind == UI_BN_SERVICE)       return "功能没能恢复，请断电重启";
+            if (b->kind == UI_BN_VER_MISMATCH)  return "屏只能经探针烧录，请先烧屏";   /* S 线 i3，条目 11 */   /* S 线 i3；字库覆盖率门禁限定了用字 */
             return "接好后会自动恢复，不需要点确认";
         default:              return NULL;
     }
@@ -241,6 +270,7 @@ const char *ui_ack_reason(uint16_t still, const ui_link_view_t *lv)
         return "急停仍未解除，请再点一次";
     }
     if (still & ALM_EEPROM)       return "参数校验仍失败，请重新设定";
+    if (still & ALM_SERVICE)      return "有功能没能启动，请重新启动";   /* S 线 i3 */
     return NULL;
 }
 
@@ -261,6 +291,9 @@ void ui_home_state(const ui_in_t *in, const ui_link_view_t *lv, ui_home_t *out)
     out->fan = in->fan ? 1u : 0u;
     out->tec1 = in->tec1 ? 1u : 0u;
     out->tec2 = in->tec2 ? 1u : 0u;
+    /* S 线 i3（P1-09 收口）：主控说这一路的开关状态不可信（M207 离线）时，胶囊画"未知"，
+     * 不拿命令意图冒充"已关"（tui_p0.c 的 paint_tec 同时看这两个量）*/
+    out->tec_known = (uint8_t)(in->tec_known & 0x03u);
 }
 
 uint32_t ui_home_diff(const ui_home_t *was, const ui_home_t *now)
@@ -274,6 +307,7 @@ uint32_t ui_home_diff(const ui_home_t *was, const ui_home_t *now)
     if (was->tec1 != now->tec1)   m |= UI_H_TEC1;
     if (was->tec2 != now->tec2)   m |= UI_H_TEC2;
     if (was->estop != now->estop) m |= UI_H_ESTOP;
+    if (was->tec_known != now->tec_known) m |= UI_H_TECK;
     return m;
 }
 
@@ -316,8 +350,10 @@ void ui_mode_state(const ui_in_t *in, const ui_link_view_t *lv, ui_mode_state_t 
     if (out->link != UI_LINK_UP) return;
     out->manual = (uint8_t)(in->mode == 0);
     out->safe = (uint8_t)((in->alarm & UI_SAFE_ALARMS) != 0);
-    out->dir[0] = ui_mode_dir_of(in->dir1);
-    out->dir[1] = ui_mode_dir_of(in->dir2);
+    /* S 线 i3（P1-09 收口）：主控说这一路的开关状态不可信（M207 离线）→ "未知"、转灰，
+     * 不拿上一次的方向冒充当前状态；版面不变 */
+    out->dir[0] = (in->tec_known & 1u) ? ui_mode_dir_of(in->dir1) : UI_TD_UNKNOWN;
+    out->dir[1] = ((in->tec_known >> 1) & 1u) ? ui_mode_dir_of(in->dir2) : UI_TD_UNKNOWN;
     out->elec_ok[0] = (uint8_t)(in->tec_valid & 1u);
     out->elec_ok[1] = (uint8_t)((in->tec_valid >> 1) & 1u);
     out->keys_on = (uint8_t)(out->manual && !out->safe);

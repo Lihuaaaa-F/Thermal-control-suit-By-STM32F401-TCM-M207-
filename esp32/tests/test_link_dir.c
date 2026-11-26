@@ -130,10 +130,12 @@ void vTaskDelayUntil(TickType_t *last_wake, TickType_t inc)
 }
 TickType_t xTaskGetTickCount(void) { return (TickType_t)g_now_ms; }
 
+static int g_task_fail;             /* P1-12 的另一半（i3）：让下一次 xTaskCreate 失败 */
 BaseType_t xTaskCreate(TaskFunction_t fn, const char *name, uint32_t stack,
                        void *arg, UBaseType_t prio, TaskHandle_t *handle)
 {
     (void)name; (void)stack; (void)arg; (void)prio;
+    if (g_task_fail) { g_task_fail = 0; return 0; }   /* 任务没建成（桩里没有 pdFAIL，按 FreeRTOS 的值回 0）*/
     g_task = fn;                 /* 不起线程：用例在 sim_until 里亲自驱动 */
     if (handle) *handle = (TaskHandle_t)1;
     return pdPASS;
@@ -800,6 +802,12 @@ int main(void)
 
     qsort(g_act, (size_t)g_nact, sizeof(g_act[0]), cmp_act);
     sim_until(33400);
+
+    /* P1-12 的另一半（S 线 i3）：link_start 把任务创建的结果带出来。原来是 void 接口，
+     * 启动汇总只能把它记成"未核实"；任务没起来时屏链整个不存在，汇总里却看不出来。*/
+    CHECK(link_start() == ESP_OK, "P1-12: link_start reports success when the task is created");
+    g_task_fail = 1;
+    CHECK(link_start() == ESP_ERR_NO_MEM, "P1-12: link_start reports a task that could not be created");
 
     printf("test_link_dir: PASS=%d FAIL=%d\n", g_pass, g_fail);
     return g_fail ? 1 : 0;

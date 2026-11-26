@@ -723,7 +723,7 @@ static void link_task(void *arg)
     }
 }
 
-void link_start(void)
+esp_err_t link_start(void)
 {
     memset(&s_status, 0, sizeof(s_status));
     memset(s_reg, 0, sizeof(s_reg));
@@ -750,8 +750,14 @@ void link_start(void)
     ESP_ERROR_CHECK(uart_param_config(LINK_UART, &cfg));
     ESP_ERROR_CHECK(uart_set_pin(LINK_UART, LINK_TXD, LINK_RXD,
                                  UART_PIN_NO_CHANGE, UART_PIN_NO_CHANGE));
-    xTaskCreate(link_task, "tcs_link", 4096, NULL, 5, NULL);
+    /* P1-12 的另一半（S 线 i3）：任务创建的结果带出去——原来是 void 接口，启动汇总只能记成"未核实"。*/
+    if (xTaskCreate(link_task, "tcs_link", 4096, NULL, 5, NULL) != pdPASS) {
+        ESP_LOGE(TAG, "link task not created: no screen link (snapshots / commands will not pass)");
+        uart_driver_delete(LINK_UART);
+        return ESP_ERR_NO_MEM;
+    }
     ESP_LOGI(TAG, "started uart1 %d baud tx=%d rx=%d", LINK_BAUD, LINK_TXD, LINK_RXD);
+    return ESP_OK;
 }
 
 /* ===================================================================== */

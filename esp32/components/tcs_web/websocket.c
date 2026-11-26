@@ -483,7 +483,7 @@ static void ws_push_task(void *arg)
     }
 }
 
-void ws_init(httpd_handle_t hd)
+esp_err_t ws_init(httpd_handle_t hd)
 {
     s_hd = hd;
     memset(s_fds, 0xFF, sizeof(s_fds));   /* -1 */
@@ -491,8 +491,11 @@ void ws_init(httpd_handle_t hd)
     web_log_reset();
     web_log_addf(now_ms(), 'i', "boot", "主控启动：固件 %s", s_fw);
     s_log_sent = 0;
-    if (xTaskCreate(ws_push_task, "tcs_ws", 4096, NULL, 4, NULL) != pdPASS)
+    if (xTaskCreate(ws_push_task, "tcs_ws", 4096, NULL, 4, NULL) != pdPASS) {
         ESP_LOGE(TAG, "push task not created: pages will get the first push only");
+        return ESP_ERR_NO_MEM;             /* P1-12 的另一半（i3）：结果带出去，启动汇总里看得见 */
+    }
+    return ESP_OK;
 }
 
 /* ====== 握手 / 接收 ====== */
@@ -721,10 +724,16 @@ esp_err_t ws_on_recv(httpd_req_t *req)
          * X03-F-12：已有一次 OTA 在进行时如实回绝；这里原先不看返回值（也没有返回值）。 */
         extern esp_err_t app_ota_trigger(int rollback);
         const cJSON *m = cJSON_GetObjectItem(root, "m");
-        int rb = (cJSON_IsNumber(m) && m->valueint == 1) ? 1 : 0;
-        ESP_LOGI(TAG, "ws ota trigger rollback=%d", rb);
-        if (app_ota_trigger(rb) == ESP_ERR_INVALID_STATE)
-            ws_send_str("{\"t\":\"err\",\"code\":\"server_busy\",\"msg\":\"OTA 进行中，请稍后再试\"}", fd);
+        /* S 线 i3（条目 10，M14-F-13 的 WS 侧同类问题）：只认精确的整数 0 / 1——原先 m->valueint 把
+         * 1.5 截成 1 当回滚，缺字段 / 字符串 "1" / true 则是"不是 1 就当 0"（拷贝 + 重启）。*/
+        int rb = web_ota_mode_json(m);
+        if (rb < 0) {
+            ws_send_str("{\"t\":\"err\",\"code\":\"bad_m\",\"msg\":\"m 只能是 0（拷贝并切换）或 1（回滚）\"}", fd);
+        } else {
+            ESP_LOGI(TAG, "ws ota trigger rollback=%d", rb);
+            if (app_ota_trigger(rb) == ESP_ERR_INVALID_STATE)
+                ws_send_str("{\"t\":\"err\",\"code\":\"server_busy\",\"msg\":\"OTA 进行中，请稍后再试\"}", fd);
+        }
     }
 #endif /* CONFIG_TCS_DIAG: ws ota */
     else {

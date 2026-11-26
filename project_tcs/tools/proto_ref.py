@@ -133,13 +133,16 @@ TEC_DIR_PAUSE, TEC_DIR_COOL, TEC_DIR_HEAT, TEC_DIR_EXT = 0, 1, 2, 3
 ELEC_V_UNKNOWN, ELEC_I_UNKNOWN = -32768, 0xFFFF     # 0x8000 / 0xFFFF
 
 
-def enc_snapshot(ver=2, seq=0, ms=0, tc1_act=0.0, tc2_act=0.0, body=0.0,
+def enc_snapshot(ver=3, seq=0, ms=0, tc1_act=0.0, tc2_act=0.0, body=0.0,
                  tc1_set=0.0, tc2_set=0.0, tec1=0, tec2=0, fan=0, mode=0,
                  alarm=0, online=0, fresh_ms=0xFFFF, badge=0, rfu=0,
                  tec_dir=0, tec1_v=ELEC_V_UNKNOWN, tec1_i=ELEC_I_UNKNOWN,
-                 tec2_v=ELEC_V_UNKNOWN, tec2_i=ELEC_I_UNKNOWN) -> bytes:
-    """0x20 载荷（49B，TCS_PROTO_VER 2）。末尾 9B（m1"模式"页）：tec_dir（低半字节第一路、高半字节第二路）、
-    tec1_v（i16，0.01 V，制热为负）、tec1_i（u16，0.01 A）、tec2_v、tec2_i。"""
+                 tec2_v=ELEC_V_UNKNOWN, tec2_i=ELEC_I_UNKNOWN,
+                 tec_cmd=0, tec_act=0, tec_known=0) -> bytes:
+    """0x20 载荷（52B，TCS_PROTO_VER 3）。偏移 40 起的 9B（m1"模式"页）：tec_dir（低半字节第一路、
+    高半字节第二路）、tec1_v（i16，0.01 V，制热为负）、tec1_i（u16，0.01 A）、tec2_v、tec2_i。
+    偏移 49 起的 3B（S 线 i3，P1-09 / X03-F-08 收口）：tec_cmd 命令意图、tec_act 模块回显、
+    tec_known 开关状态是否可信（各 bit0=tec1 bit1=tec2；known=0 的那一路界面显示"未知"，不是"已关"）。"""
     b = struct.pack("<BIIfffff BBBBHBHBB", ver, seq, ms,
                     tc1_act, tc2_act, body, tc1_set, tc2_set,
                     tec1, tec2, fan, mode, alarm, online, fresh_ms, badge, rfu)
@@ -152,6 +155,8 @@ def enc_snapshot(ver=2, seq=0, ms=0, tc1_act=0.0, tc2_act=0.0, body=0.0,
     if not (0 <= tec2_i <= 60000): tec2_i = ELEC_I_UNKNOWN
     b += struct.pack("<BhHhH", tec_dir & 0xFF, tec1_v, tec1_i, tec2_v, tec2_i)
     assert len(b) == 49, len(b)
+    b += struct.pack("<BBB", tec_cmd & 0xFF, tec_act & 0xFF, tec_known & 0xFF)
+    assert len(b) == 52, len(b)
     return b
 
 
@@ -166,6 +171,10 @@ def dec_snapshot(b: bytes) -> dict:
         # m1"模式"页追加段：tec_dir + 两路电压（i16）/ 电流（u16），单位 0.01
         (tec_dir, tec1_v, tec1_i, tec2_v, tec2_i) = struct.unpack_from("<BhHhH", b, 40)
         d.update(tec_dir=tec_dir, tec1_v=tec1_v, tec1_i=tec1_i, tec2_v=tec2_v, tec2_i=tec2_i)
+    if len(b) >= 52:
+        # S 线 i3（TCS_PROTO_VER 3）：命令意图 / 模块回显 / 开关状态是否可信
+        tec_cmd, tec_act, tec_known = struct.unpack_from("<BBB", b, 49)
+        d.update(tec_cmd=tec_cmd, tec_act=tec_act, tec_known=tec_known)
     return d
 
 
@@ -294,15 +303,20 @@ def cmd_selftest():
     sn = enc_snapshot(seq=0x11223344, ms=0x00AABBCC, tc1_act=22.5, tc2_act=23.5, body=36.8,
                       tc1_set=25.0, tc2_set=30.0, tec2=1, fan=1, alarm=3, online=3,
                       fresh_ms=1234, badge=1,
-                      tec_dir=0x21, tec1_v=-823, tec1_i=310, tec2_i=ELEC_I_UNKNOWN)
+                      tec_dir=0x21, tec1_v=-823, tec1_i=310, tec2_i=ELEC_I_UNKNOWN,
+                      tec_cmd=0x02, tec_act=0x01, tec_known=0x02)
     if sn[:40] != enc_snapshot(seq=0x11223344, ms=0x00AABBCC, tc1_act=22.5, tc2_act=23.5,
                                body=36.8, tc1_set=25.0, tc2_set=30.0, tec2=1, fan=1,
-                               alarm=3, online=3, fresh_ms=1234, badge=1)[:40] or len(sn) != 49:
+                               alarm=3, online=3, fresh_ms=1234, badge=1)[:40] or len(sn) != 52:
         fails += 1
-        print("FAIL snapshot (m1): first 40 bytes must be unchanged, total 49")
-    if sn[40:] != bytes.fromhex("21" + "c9fc" + "3601" + "0080" + "ffff"):
+        print("FAIL snapshot (m1): first 40 bytes must be unchanged, total 52")
+    if sn[40:49] != bytes.fromhex("21" + "c9fc" + "3601" + "0080" + "ffff"):
         fails += 1
-        print(f"FAIL snapshot tail (m1): {sn[40:].hex()}")
+        print(f"FAIL snapshot tail (m1): {sn[40:49].hex()}")
+    # S 线 i3（TCS_PROTO_VER 3）：末尾 3B。与两端 C 用例同一组字节。
+    if sn[49:] != bytes.fromhex("02" + "01" + "02"):
+        fails += 1
+        print(f"FAIL snapshot tail (i3: tec_cmd / tec_act / tec_known): {sn[49:].hex()}")
     ds = dec_snapshot(sn)
     if not (ds["tec_dir"] == 0x21 and ds["tec1_v"] == -823 and ds["tec1_i"] == 310
             and ds["tec2_v"] == ELEC_V_UNKNOWN and ds["tec2_i"] == ELEC_I_UNKNOWN):
@@ -311,6 +325,12 @@ def cmd_selftest():
     if enc_snapshot(tec1_v=1e9)[41:43] != b"\x00\x80" or enc_snapshot(tec2_i=-1)[47:49] != b"\xff\xff":
         fails += 1
         print("FAIL out-of-range electrical values must encode as unknown")
+    if not (ds.get("tec_cmd") == 0x02 and ds.get("tec_act") == 0x01 and ds.get("tec_known") == 0x02):
+        fails += 1
+        print("FAIL snapshot tail (i3) roundtrip")
+    if enc_snapshot()[49:] != b"\x00\x00\x00" or enc_snapshot(tec_cmd=0x102, tec_known=0x103)[49:] != b"\x02\x00\x03":
+        fails += 1
+        print("FAIL snapshot tail (i3): defaults 0, each byte masked to 8 bits")
     e = dict(tec_dir=0x21, tec1_v=-823, tec1_i=310, tec2_v=ELEC_V_UNKNOWN, tec2_i=ELEC_I_UNKNOWN)
     dl = enc_delta(D_TEC_DIR | D_ELEC, e)
     if dl != bytes.fromhex("0003" + "21" + "c9fc3601" + "0080ffff"):

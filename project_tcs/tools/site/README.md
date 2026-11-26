@@ -71,3 +71,28 @@ ESP32 侧对应的诊断命令（也只在 SIM 或 DIAG 档）：`linkmute <秒>
 `TCS_ELF`（H743 ELF，默认 `project_tcs/build/tcs_main.elf`，即交付档）。
 
 日志与命令文件：`%TEMP%\tcs_site\esp_out.log`（串口日志）、`esp_cmd.txt`（桥看到就取走）。
+
+## 真机脚本的护栏（`site_lib.sh`，S 线 i3 条目 12）
+
+D6 第八节的事故（2026-11-26）：真机脚本跑到一半、有人在同一个工作树里合并了新代码，而
+`idf.py flash` **会先构建再烧**——"烧回交付档"实际烧的是新源码；两端协议版本从此不配对，
+屏拒收全部快照（表现为"主控连接中断"），脚本输出里的"已烧回交付档"也不成立。
+
+**规则（写在这里，所有真机脚本照做）：**
+
+1. **真机脚本运行期间不改同一个工作树**：不合并、不改源码、不切分支、不 `git checkout`。
+2. 烧录前先 `guard <期望HEAD> [档名] || exit 1`（`site_lib.sh`）：HEAD 必须等于期望值、已跟踪文件必须干净；
+   给了档名时还要求 `esp32/build-matrix-<档>/tcs_wireless.bin` 不早于会进固件的源码。
+3. 用 `FLASH <档> <标签>` 烧录：它烧前烧后各算一次固件 sha256，变了就打印 `REBUILT`——
+   这一步"自动重建 + 烧录"的结果**不能当证据**，要重新登记。
+4. 证据里"烧回了什么"以屏 / 主控自己报的版本串和 sha256 为准，不以脚本里的字样为准。
+
+```bash
+. project_tcs/tools/site/site_lib.sh          # 或 . "$(dirname "$0")/site_lib.sh"
+guard "$(git -C "$R" rev-parse --short=9 HEAD)" default || exit 1
+FLASH default d7-step0
+```
+
+环境变量：`TCS_SITE_REPO`（工作树根，缺省=本文件所在仓库）、`TCS_SITE_PORT`（串口，缺省 `COM3`）、
+`TCS_SITE_LOG`（日志目录）、`TCS_SITE_BAUD`（烧录波特率，缺省 921600）。
+

@@ -30,6 +30,7 @@ static ui_in_t in_up(uint32_t now, uint32_t seq)
     in.m207_online = 1;
     in.body_ok = 1;
     in.sensor_open = 0;
+    in.tec_known = 0x03u;                   /* S 线 i3：两路 TEC 开关状态可信（未知的情形在 test_ui_known.c）*/
     return in;
 }
 

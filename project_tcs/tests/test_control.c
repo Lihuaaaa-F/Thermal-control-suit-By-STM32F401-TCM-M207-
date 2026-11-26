@@ -297,6 +297,61 @@ int main(void)
     tick();
     CHECK(tcs_alarm_active(ALM_OVERTEMP) == 1, "unarmed: overtemp still raises");
 
+    /* ====== S 线 i3（条目 9）：状态迁移环（最近 8 条，.noinit，纯逻辑 + CRC 判有效）====== */
+    {
+        extern tcs_trace_t g_trace_ring;
+        tcs_trace_t t;
+        tcs_trace_ent_t e;
+        tcs_trace_reset(&t);
+        CHECK(tcs_trace_valid(&t) && tcs_trace_count(&t) == 0, "T1 a fresh ring is valid and empty");
+        for (int i = 0; i < 5; i++) {
+            memset(&e, 0, sizeof e);
+            e.ms = (uint32_t)(100u * (uint32_t)i);
+            e.from = (uint8_t)(i & 3); e.to = (uint8_t)((i + 1) & 3);
+            tcs_trace_push(&t, &e);
+        }
+        CHECK(tcs_trace_valid(&t) && tcs_trace_count(&t) == 5 && t.seq == 5, "T2 five entries, seq counted");
+        CHECK(tcs_trace_at(&t, 0) && tcs_trace_at(&t, 0)->ms == 0 &&
+              tcs_trace_at(&t, 4) && tcs_trace_at(&t, 4)->ms == 400, "T3 oldest first, newest last");
+        CHECK(tcs_trace_at(&t, 5) == NULL, "T4 past the end -> NULL");
+        for (int i = 5; i < 11; i++) {
+            memset(&e, 0, sizeof e); e.ms = (uint32_t)(100u * (uint32_t)i);
+            tcs_trace_push(&t, &e);
+        }
+        CHECK(tcs_trace_count(&t) == TCS_TRACE_N && t.seq == 11 &&
+              tcs_trace_at(&t, TCS_TRACE_N - 1) && tcs_trace_at(&t, TCS_TRACE_N - 1)->ms == 1000,
+              "T5 wrap-around: only the last 8 survive");
+        {
+            tcs_trace_t c = t;
+            ((uint8_t *)&c)[3] ^= 0x01u;      /* 一位翻转 */
+            CHECK(!tcs_trace_valid(&c) && tcs_trace_count(&c) == 0 && tcs_trace_at(&c, 0) == NULL,
+                  "T6 one flipped byte -> the whole ring is invalid");
+            c = t; c.magic = 0;
+            CHECK(!tcs_trace_valid(&c), "T7 bad magic -> invalid");
+            memset(&c, 0xFF, sizeof c);       /* 掉电后的随机内容 */
+            CHECK(!tcs_trace_valid(&c), "T8 0xFF garbage -> invalid");
+            tcs_trace_push(&c, &e);
+            CHECK(tcs_trace_valid(&c) && tcs_trace_count(&c) == 1, "T9 pushing into garbage starts a fresh ring");
+        }
+        /* 真状态机：一次急停 → 一笔 ev=1（急停登记）+ 一笔迁移 */
+        control_init(&(control_ops_t){0});
+        param_registry_init(&(param_hooks_t){0});
+        set_armed(0);
+        g_tcs.body_sensor_ok = 1; g_tcs.m207_online = 1; g_tcs.tc1_act = 25.0f;
+        control_poll(1000u);
+        tcs_trace_reset(&g_trace_ring);        /* 用例里清一次；目标机不清——正是要看复位前的 */
+        tcs_emergency_stop();
+        CHECK(tcs_trace_count(control_trace()) >= 2, "T10 an emergency stop writes entries");
+        {
+            const tcs_trace_ent_t *a = tcs_trace_at(control_trace(), 0);
+            const tcs_trace_ent_t *b = tcs_trace_at(control_trace(), 1);
+            CHECK(a && a->ev == 1 && a->to == CTRL_SAFE, "T11 the first entry is the estop registration (to SAFE)");
+            CHECK(b && b->ev == 0 && b->to == CTRL_SAFE && b->from == CTRL_IDLE,
+                  "T12 then the state machine transition IDLE -> SAFE");
+            CHECK(a && a->ms == 1000u, "T13 entries carry the last poll timestamp");
+        }
+    }
+
     printf("test_control: PASS=%d FAIL=%d\n", g_pass, g_fail);
     return g_fail ? 1 : 0;
 }

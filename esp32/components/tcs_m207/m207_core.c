@@ -181,8 +181,14 @@ static const char s_elec_q[4][18] = {
 /* ====== 安全关断旁路（X03-F-07）======
  * TCSW=0 不进普通队列：每通道一个单槽，最新值覆盖，下一拍优先上线路（排在重发与队列帧之前），
  * 所以不会被 16 条普通写挤掉。上线路时作废该通道队列里还没发的 TCSW 写、以及在途未确认的
- * TCSW 事务——后者若按重试预算重发 TCSW=1，会把刚发出去的关断盖掉（TEC 重新打开而系统以为已关）。*/
-typedef struct { uint8_t pending; uint8_t on; } m207_lane_t;
+ * TCSW 事务——后者若按重试预算重发 TCSW=1，会把刚发出去的关断盖掉（TEC 重新打开而系统以为已关）。
+ *
+ * i3（P1-09 的另一半，2026-11-26）：槽多一个"保持"位 hold。m207_tec() 第一行就是"离线 → 回 -2"，
+ * 拔掉 M207 之后的安全关断连槽都进不了；槽里的帧离线期间发出去也没人听，发完即清，复联时无从补发。
+ * 所以安全关断另走 m207_tec_force()：离线也受理，只记 hold；复联第一拍由 m207_go_online() 放回
+ * pending，先于队列帧 / 重发 / 轮询上线路。hold 只在两处清：回读到与请求一致（TCSW? 应答为 0），
+ * 或者该通道来了更新的"开"。离线沿的清队列只清普通队列，碰不到它。*/
+typedef struct { uint8_t pending; uint8_t on; uint8_t hold; } m207_lane_t;
 static m207_lane_t s_lane[M207_MOD_MAX];
 
 /* ====== "保存到模块"序列（M12-F-08）======
@@ -243,6 +249,29 @@ static int64_t m207_now_us(void)
 {
     return s_io.now_us ? s_io.now_us(s_io.time_ctx) : 0;
 }
+
+#if CONFIG_TCS_SIM
+/* 台架注入（S 线 i3，M09-F-09 的注入档口径）：把某一路水温钉在给定值。每拍在 tick_end 里覆盖对外读数
+ * （在 RX 之后，模块的真应答也盖得掉）；不碰模块、不发帧。 */
+static uint8_t s_wsim_mask;                  /* bit0 = TC1、bit1 = TC2 注入生效 */
+static float   s_wsim[3];
+
+void m207_sim_water(uint8_t ch, float c)
+{
+    if (ch != 1 && ch != 2) return;
+    if (!(c >= -20.0f && c <= 80.0f)) return;   /* NaN / 越界：忽略（与 TCADJTEMP 同域）*/
+    s_wsim[ch] = c;
+    s_wsim_mask = (uint8_t)(s_wsim_mask | (uint8_t)(1u << (ch - 1u)));
+}
+
+void m207_sim_water_off(uint8_t ch)
+{
+    if (ch == 0) { s_wsim_mask = 0; return; }
+    if (ch == 1 || ch == 2) s_wsim_mask = (uint8_t)(s_wsim_mask & (uint8_t)~(1u << (ch - 1u)));
+}
+
+uint8_t m207_sim_water_active(void) { return s_wsim_mask; }
+#endif
 
 /* 返回 0=已交给发送出口（计 tx）；-1=发送环满被丢（计 txdrop；调用方决定是否重发）*/
 static int m207_core_tx(const char *cmd, size_t len)
@@ -412,11 +441,29 @@ static void m207_go_online(const char *why)
     s_elec_unsupported = 0;                /* m1（模式页）：复联后重新试电学量查询 */
     /* 复联重同步（E-08 预研）：目标温度只读回；TEC 该关的通道经安全关断旁路补发 TCSW=0
      * （X03-F-07：先于只读查询上线路，且自带一次回读确认），该开的通道只读回 TCSW?。
-     * 不在这里开环恢复 TEC：模块侧是什么就镜像什么，要不要重开由 control 裁决。*/
+     * 不在这里开环恢复 TEC：模块侧是什么就镜像什么，要不要重开由 control 裁决。
+     *
+     * "该关"的判据（i3，P1-09 的另一半 / X03-F-08）——三条任一成立就补发，普通队列放行之前先发它：
+     *   ① hold：离线期间经 m207_tec_force() 记下的关断还没被读回确认；
+     *   ② 命令意图是关（control_tec_cmd）：不读回显 g_tcs.tecN_on——关断之后晚到的 TCSW? 应答会把
+     *      回显写成"开"，按回显判就漏发，模块带着输出复联而系统以为已关；
+     *   ③ 回显是关：原有判据，保留（命令是开而回显是关的通道照旧补发一次，由 control 的
+     *      "模块回读关断"把参数置回暂停，不自动重开）。*/
     m207_enqueue_simple("TC1:TCADJTEMP?\r");
     m207_enqueue_simple("TC2:TCADJTEMP?\r");
-    if (!g_tcs.tec1_on) m207_lane_set(1, 0); else m207_enqueue_simple("TC1:TCSW?\r");
-    if (!g_tcs.tec2_on) m207_lane_set(2, 0); else m207_enqueue_simple("TC2:TCSW?\r");
+    for (int ch = 1; ch <= 2; ch++) {
+        uint8_t cmd_on  = control_tec_cmd((uint8_t)ch);
+        uint8_t echo_on = (ch == 1) ? (uint8_t)(g_tcs.tec1_on ? 1u : 0u)
+                                    : (uint8_t)(g_tcs.tec2_on ? 1u : 0u);
+        if (s_lane[ch].hold || !cmd_on || !echo_on) {
+            M207_Q_LOCK();
+            s_lane[ch].pending = 1;
+            s_lane[ch].on = 0u;
+            M207_Q_UNLOCK();
+        } else {
+            m207_enqueue_simple(ch == 1 ? "TC1:TCSW?\r" : "TC2:TCSW?\r");
+        }
+    }
 }
 
 static void m207_go_offline(void)
@@ -749,7 +796,9 @@ static void m207_handle_line(const char *line)
             if (r.value > ALM_OVERTEMP_HARD_C) {
                 control_safety_trip(SAFETY_BIT_OVERTEMP);
                 tcs_alarm_raise(ALM_OVERTEMP);   /* 锁存必须伴随可见报警，否则屏/网页只看到"停机"不知原因 */
-                m207_lane_set(1, 0);            /* X03-F-07：安全关断走旁路，不排在普通写后面 */
+                /* X03-F-07：安全关断走旁路，不排在普通写后面。i3：改走 m207_tec_force()——
+                 * 这一帧发出后链路若随即断开、没等到读回确认，复联时凭保持位照样先补发。*/
+                (void)m207_tec_force(1, 0);
             }
         }
         else               g_tcs.tc2_act = r.value;
@@ -759,6 +808,15 @@ static void m207_handle_line(const char *line)
     } else if (r.kind == M207_KIND_REPLY && strcmp(r.param, "TCSW") == 0) {
         if (r.module == 1) g_tcs.tec1_on = (r.value != 0.0f);
         else               g_tcs.tec2_on = (r.value != 0.0f);
+        /* i3：同一条应答也写进独立的回显字段（快照 tec_act 取它；上面的 g_tcs.tecN_on 命令与回显混用）*/
+        control_tec_echo_set((uint8_t)r.module, (uint8_t)(r.value != 0.0f));
+        /* i3（P1-09 的另一半）：读回是"关" = 旁路里保持的关断已经到了执行器，解除保持。
+         * 读回仍是"开"则保持不动，下一次复联照样先补发。*/
+        if (r.value == 0.0f) {
+            M207_Q_LOCK();
+            s_lane[r.module].hold = 0;
+            M207_Q_UNLOCK();
+        }
     } else if (r.kind == M207_KIND_REPLY &&
                (strcmp(r.param, "TCERRORSTATUS") == 0 || strcmp(r.param, "TCOTPSTATUS") == 0)) {
         /* 模块自带保护状态（X04-F-05 ①）：原值入缓存并留痕。不在这里报警、不进 SAFE。 */
@@ -1047,6 +1105,11 @@ static void m207_arbitrate(void)
 
 void m207_core_tick_end(int64_t t0_us)
 {
+#if CONFIG_TCS_SIM
+    /* 台架注入在 RX 之后覆盖对外读数：注入值恒等于人给的值（卡死判据对这一路豁免，见 control.c）*/
+    if (s_wsim_mask & 1u) g_tcs.tc1_act = s_wsim[1];
+    if (s_wsim_mask & 2u) g_tcs.tc2_act = s_wsim[2];
+#endif
     /* 1) 在途事务超时检查（重试只标记，TX 交给本拍仲裁）*/
     for (int i = 0; i < M207_PEND_MAX; i++) {
         m207_pend_t *p = &s_pend[i];
@@ -1154,6 +1217,10 @@ void m207_core_init(const m207_core_io_t *io)
     s_elec_issued_tick = 0;
     s_elec_fail = 0;
     s_elec_unsupported = 0;
+#if CONFIG_TCS_SIM
+    memset(s_wsim, 0, sizeof(s_wsim));   /* S 线 i3：台架水温注入从头开始 */
+    s_wsim_mask = 0;
+#endif
     g_tcs.m207_online = 0;               /* 上电默认值 */
     g_tcs.m207_sensor_open = 0;
     s_started = 1;
@@ -1192,6 +1259,7 @@ int m207_tec(uint8_t ch, uint8_t on)
     if (ch != 1 && ch != 2) return -1;
     if (!s_started || !s_online) { s_stat.wdrop++; return -2; }
     M207_Q_LOCK();
+    if (on) s_lane[ch].hold = 0;         /* "开"是更新的请求：解除旁路里保持的关断（i3）*/
     if (!on || s_lane[ch].pending) {
         /* X03-F-07：关断走旁路单槽，不进普通队列——队列满了也收得下，下一拍优先上线路。
          * "开"照旧走普通队列，保住 control"先设目标、后开"的入队顺序；但旁路槽里若还有
@@ -1210,6 +1278,26 @@ int m207_tec(uint8_t ch, uint8_t on)
     return m207_submit(&m);
 }
 
+/* P1-09 的另一半（i3，2026-11-26）：安全关断专用入口（control 的 ops.tec_force 接到这里）。
+ * 与 m207_tec() 的差别只有一条——模块离线也受理：
+ *   在线：等同 m207_tec(ch, 0)，下一拍优先上线路并读回确认；
+ *   离线：只记保持位（不发：模块不在，发了也只是把这拍的名额让给一帧没人听的帧，发完即清，
+ *         复联时无从补发），复联第一拍由 m207_go_online() 放回槽里补发，先于普通队列放行。
+ * 不占普通队列，离线沿的清队列碰不到它。每 500ms 的重试由 control 的锁存重申驱动
+ * （enter_safe → safe_outputs → ops.tec_force），这里不自带定时器。
+ * 只有"关"走这里："开"转回普通入口，保住"先设目标、后开"的入队顺序。
+ * 返回 0 = 已受理；-1 = 通道非法。*/
+int m207_tec_force(uint8_t ch, uint8_t on)
+{
+    if (ch != 1 && ch != 2) return -1;
+    if (on) return m207_tec(ch, 1);
+    M207_Q_LOCK();
+    s_lane[ch].hold = 1;
+    s_lane[ch].on = 0u;
+    if (s_online) s_lane[ch].pending = 1;
+    M207_Q_UNLOCK();
+    return 0;
+}
 
 int m207_map_set(uint16_t pid, float v)
 {

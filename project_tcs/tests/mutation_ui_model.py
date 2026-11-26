@@ -20,6 +20,8 @@ HERE = Path(__file__).resolve().parent
 PROJ = HERE.parent
 SRC = PROJ / "App" / "lvgl_ui" / "ui_model.c"
 TEST = HERE / "test_ui_model.c"
+# S 线 i3（2026-11-26）：TEC 开关状态"未知"的用例。变异表里带第 4 个元素的条目配这一份编译运行。
+TEST_KNOWN = HERE / "test_ui_known.c"
 VARS64 = r"C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Auxiliary\Build\vcvars64.bat"
 
 # (名称, 文件内唯一原文, 替换文)。原文必须在 ui_model.c 里恰好出现一次。
@@ -117,11 +119,28 @@ MUTATIONS = [
      "void ui_ack_cancel(ui_ack_t *a)\n{\n    a->waiting = 1;"),
     ("M29 “主控未连接”的灯是绿",
      '            snprintf(text, cap, "主控未连接");\n            *led = UI_LED_RED;',
-     '            snprintf(text, cap, "主控未连接");\n            *led = UI_LED_GREEN;'),
+             '            snprintf(text, cap, "主控未连接");\n            *led = UI_LED_GREEN;'),
+    # ---- S 线 i3（2026-11-26；P1-09 收口）：TEC 开关状态不可信时画"未知"。用例 tests/test_ui_known.c ----
+    ("M30 首页：TEC 开关状态一律当可信（M207 离线也画成停止）",
+     "    out->tec_known = (uint8_t)(in->tec_known & 0x03u);",
+     "    out->tec_known = 0x03u;", TEST_KNOWN),
+    ("M31 首页：可信度变了不重画 TEC 胶囊（停在上一帧的文案上）",
+     "    if (was->tec_known != now->tec_known) m |= UI_H_TECK;",
+     "    ;", TEST_KNOWN),
+    ("M32 模式页：TEC1 状态不可信仍报上一次的方向",
+     "    out->dir[0] = (in->tec_known & 1u) ? ui_mode_dir_of(in->dir1) : UI_TD_UNKNOWN;",
+     "    out->dir[0] = ui_mode_dir_of(in->dir1);", TEST_KNOWN),
+    ("M33 模式页：TEC2 状态不可信仍报上一次的方向",
+     "    out->dir[1] = ((in->tec_known >> 1) & 1u) ? ui_mode_dir_of(in->dir2) : UI_TD_UNKNOWN;",
+     "    out->dir[1] = ui_mode_dir_of(in->dir2);", TEST_KNOWN),
+    ("M34 模式页：TEC2 的可信度看错位（跟着 TEC1 走）",
+     "    out->dir[1] = ((in->tec_known >> 1) & 1u) ? ui_mode_dir_of(in->dir2) : UI_TD_UNKNOWN;",
+     "    out->dir[1] = (in->tec_known & 1u) ? ui_mode_dir_of(in->dir2) : UI_TD_UNKNOWN;", TEST_KNOWN),
 ]
 
 
-def compile_run(src_text):
+def compile_run(src_text, test=None):
+    test = test or TEST
     d = tempfile.mkdtemp(prefix="tcs_uimut_")
     c = os.path.join(d, "ui_model.c")
     with open(c, "w", encoding="utf-8", newline="\n") as f:
@@ -131,7 +150,7 @@ def compile_run(src_text):
            PROJ / "App" / "lvgl_ui", PROJ / "Core" / "Inc"]
     cmd = ("cl /nologo /W4 /std:c11 /utf-8 /D_CRT_SECURE_NO_WARNINGS /DTCS_UNIT_TEST /DTCS_PROFILE=1 "
            + " ".join('/I"%s"' % p for p in inc)
-           + ' "%s" "%s" /Fe:t.exe' % (TEST, c))
+           + ' "%s" "%s" /Fe:t.exe' % (test, c))
     with open(bat, "w", encoding="ascii", newline="\r\n") as f:
         f.write("@echo off\ncall \"%s\" >nul 2>&1\ncd /d \"%s\"\n%s\nexit /b %%ERRORLEVEL%%\n"
                 % (VARS64, d, cmd))
@@ -160,13 +179,15 @@ def main():
     print("[current] PASS=%s FAIL=%s" % (m.group(1), m.group(2)))
 
     bad = 0
-    for name, a, b in MUTATIONS:
+    for entry in MUTATIONS:
+        name, a, b = entry[0], entry[1], entry[2]
+        test = entry[3] if len(entry) > 3 else TEST       # S 线 i3：可选的第 4 个元素指定用例文件
         n = cur.count(a)
         if n != 1:
             print("[mut] %-44s SKIP: 原文出现 %d 次（变异表过期）" % (name, n))
             bad += 1
             continue
-        ok, out, rc = compile_run(cur.replace(a, b))
+        ok, out, rc = compile_run(cur.replace(a, b), test)
         if ok and rc != 0:
             fl = fails_of(out)
             print("[mut] %-44s CAUGHT by %d checks, e.g. %s" % (name, len(fl), fl[0] if fl else "?"))

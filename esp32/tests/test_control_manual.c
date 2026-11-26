@@ -440,6 +440,23 @@ int main(void)
     CHECK(control_state() == CTRL_IDLE && control_safety_latched() == 0 && g_tcs.tec1_on == 1,
           "M15 frozen water near the heat target: no trip at 30 s (nor at 200 s)");
 
+    /* ====== M16 快照的输出方向跟着"开关状态是否可信"走（S 线 i3，2026-11-26：P1-09 / X03-F-08 收口）======
+     * 模块离线时 g_tcs.tecN_on 只是本端的命令意图：上一次的方向还在里面，但执行器实际在做什么
+     * 无从得知。control_tec_dir() 这时必须回暂停（屏另据快照的 tec_known 位把这一路画成"未知"），
+     * 不能回上一次的方向。*/
+    enter_manual();
+    (void)param_set(PARAM_ID_TEC1_MANUAL, 2.0f, PARAM_SRC_LINK);   /* 制热 */
+    tick();
+    CHECK(control_tec_dir(1) == TEC_DIR_HEAT && control_tec_known() == 3,
+          "M16 precondition: manual heat, TEC state known");
+    g_tcs.m207_online = 0;                                          /* 拔掉 M207（未布防，不进安全态）*/
+    CHECK(control_tec_dir(1) == TEC_DIR_PAUSE,
+          "M16 module offline: snapshot direction is PAUSE, not the last direction");
+    CHECK(control_manual_dir(1) == TEC_DIR_HEAT,
+          "M16 the applied direction itself is still remembered (only the snapshot answers pause)");
+    g_tcs.m207_online = 1;
+    CHECK(control_tec_dir(1) == TEC_DIR_HEAT, "M16 back online: the direction reads again");
+
     printf("test_control_manual: PASS=%d FAIL=%d\n", g_pass, g_fail);
     return g_fail ? 1 : 0;
 }

@@ -7,6 +7,7 @@ typedef int esp_err_t;
 
 #define ESP_OK    0
 #define ESP_FAIL  -1
+#define ESP_ERR_NO_MEM 0x101     /* 与 IDF 的 esp_err.h 同值（i3：link_start 把任务创建失败带出来）*/
 
 void        host_stub_abort(const char *why);
 const char *esp_err_to_name(esp_err_t err);

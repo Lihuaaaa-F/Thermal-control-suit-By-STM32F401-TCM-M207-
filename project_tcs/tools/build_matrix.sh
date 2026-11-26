@@ -116,8 +116,8 @@ CLEAN_NOTE="未做（需要 python 与 arm-none-eabi-nm）"
 if command -v python >/dev/null 2>&1 && command -v arm-none-eabi-nm >/dev/null 2>&1; then
     export PYTHONUTF8=1
     CLEAN_NOTE="PASS"
-    python tools/site/verify_prod_clean.py --elf "$OUT/PROD/tcs_main.elf" \
-        || { CLEAN_NOTE="FAIL（交付档产物里有钩子，见上方明细）"; FAIL=1; }
+    python tools/site/verify_prod_clean.py --elf "$OUT/PROD/tcs_main.elf" --expect-recorder \
+        || { CLEAN_NOTE="FAIL（交付档产物里有钩子，或记录器不在 .noinit，见上方明细）"; FAIL=1; }
     for p in BENCH SIM SIMWG; do
         python tools/site/verify_prod_clean.py --elf "$OUT/$p/tcs_main.elf" --expect-hooks \
             || { CLEAN_NOTE="FAIL（$p 档里钩子不全，见上方明细）"; FAIL=1; }
@@ -200,7 +200,7 @@ if [ "$DO_ESP32" = 1 ] || [ "$DO_DIAG" = 1 ] || [ "$DO_SITE" = 1 ]; then
                 rm -rf build-matrix-repro sdkconfig.matrix.repro sdkconfig.matrix.repro.old build-matrix-repro.build.log
             fi
             # 干净核对：默认档不得含台架命令；诊断档必须全含（证明查得出来）；
-            # 现场档（SIM）只含 linkmute / linkloop / webtest 这三条 SIM 也有的。
+            # 现场档（SIM）只含 linkmute / linkloop / webtest / water 这几条 SIM 也有的（S 线 i3 加 water）。
             V=../project_tcs/tools/site/verify_prod_clean.py
             export PYTHONUTF8=1
             python "$V" --esp32 "build-matrix-default/$APP" || { echo "[esp32-default] 干净核对 FAIL"; exit 1; }
@@ -209,7 +209,7 @@ if [ "$DO_ESP32" = 1 ] || [ "$DO_DIAG" = 1 ] || [ "$DO_SITE" = 1 ]; then
             fi
             if [ -f "build-matrix-site/$APP" ]; then
                 python "$V" --esp32 "build-matrix-site/$APP" --esp32-expect linkmute --esp32-expect linkloop \
-                    --esp32-expect webtest || { echo "[esp32-site] 命令集与现场档不符"; exit 1; }
+                    --esp32-expect webtest --esp32-expect water --esp32-expect mstat || { echo "[esp32-site] 命令集与现场档不符"; exit 1; }
             fi
             echo "[esp32] 干净核对 PASS（默认档无台架命令；诊断档 / 现场档命令集相符）"
             exit 0

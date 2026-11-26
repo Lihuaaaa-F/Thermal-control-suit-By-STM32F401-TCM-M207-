@@ -49,6 +49,14 @@ static void stub_force(uint8_t ch, uint8_t on)
     if (!on) s_off_delivered_ms = s_stub_now_ms ? s_stub_now_ms : 1u;
 }
 
+/* S 线 i3（M09-F-09 的注入档口径）：装配方告诉控制核"这一路的读数来自注入"（bit0 = 体温、bit1 = 水温）。
+ * 注入值是人给的常数，卡死判据豁免这一路；交付档不接（NULL）。*/
+static uint8_t s_exempt_mask;
+static uint8_t stub_exempt(uint8_t ch)
+{
+    return (uint8_t)((ch == 1u) ? (s_exempt_mask & 1u) : ((s_exempt_mask >> 1) & 1u));
+}
+
 /* P0-08 持久化钩子桩（文件作用域：MSVC 不支持嵌套函数定义）*/
 static uint8_t s_persisted;
 static void    persist_cb(uint8_t latch) { s_persisted = latch; }
@@ -1215,6 +1223,11 @@ int main(void)
                   "P9-6 'off' reaches the actuator channel within 3 s even with the link down");
         }
         for (int i = 0; i < 10; i++) poll100();
+        /* i3（P1-09 的另一半）：离线期没有一帧能发出去，但关断必须每 500ms 照样敲安全关断通道——
+         * 服务侧靠它保持"有关断还没送到"（m207_tec_force 的保持位），复联第一帧才补得上。
+         * 1 s 内：急停当拍 2 次 + 两次重申各 2 次。变异 M55。*/
+        CHECK(force_calls == 6,
+              "P9-6 the shutdown keeps going through the force channel every 500ms while the link is down");
         CHECK(control_tec_known() == 0,
               "P9-6 while the module is offline the TEC state is UNKNOWN, not 'off'");
         CHECK(g_tcs.tec_known == 0, "P9-6 snapshot copy of tec_known is 0 while offline");
@@ -1237,8 +1250,9 @@ int main(void)
         (void)param_set(PARAM_ID_MODE, 0.0f, 4);
         tick();
         control_manual_tec(1, 1);
+        control_tec_echo_set(1, 1);                   /* 模块回读：开着（i3 起回显是独立字段）*/
         CHECK(control_tec_cmd(1) == 1 && control_tec_act(1) == 1, "K18 precondition: command on, echo on");
-        g_tcs.tec1_on = 0;                            /* 晚到的回显：模块回的是"关" */
+        control_tec_echo_set(1, 0);                   /* 晚到的回显：模块回的是"关" */
         CHECK(control_tec_cmd(1) == 1 && control_tec_act(1) == 0,
               "K18 command intent and module echo are two different quantities");
         g_tcs.tc1_act = 30.0f; tick();                /* 喂进第一个水温样本 */
@@ -1253,6 +1267,80 @@ int main(void)
         /* 关断后两个量一致：都是"关" */
         control_manual_tec(2, 1);                     /* SAFE 期被拒 */
         CHECK(control_tec_cmd(2) == 0 && control_tec_act(2) == 0, "K18 in SAFE both channels read off");
+    }
+
+    /* ====== 2026-11-26 S 线 i3（P1-09 收口）：模块回显是独立的字段，不跟控制自己的命令走 =====
+     * control_tec_act() 原先读 g_tcs.tecN_on：控制每写一次命令就把它改成命令值，"回显"名不副实——
+     * 快照里的 tec_act 会在模块还没回话时就跟着命令变，屏分不清"要它关"和"它确实关了"。
+     * 现在只有 M207 服务收到 TCSW? 应答时经 control_tec_echo_set() 写它。变异 M56。*/
+    {
+        enter_auto_healthy();
+        (void)param_set(PARAM_ID_MODE, 0.0f, 4);
+        tick();
+        control_manual_tec(1, 1);                     /* 命令：开 */
+        CHECK(control_tec_cmd(1) == 1 && control_tec_act(1) == 0,
+              "K19 a command does not forge the echo: the module has not answered yet");
+        control_tec_echo_set(1, 1);                   /* 模块回读：开着 */
+        control_tec_echo_set(2, 0);
+        CHECK(control_tec_act(1) == 1 && control_tec_act(2) == 0, "K19 the echo follows the module's read-back");
+        control_manual_tec(1, 0);                     /* 命令：关；回显还没到 */
+        CHECK(control_tec_cmd(1) == 0 && control_tec_act(1) == 1,
+              "K19 'told to turn off' is not 'it is off': act still says on until the module answers");
+        control_tec_echo_set(1, 0);                   /* 模块回读：关了 */
+        CHECK(control_tec_act(1) == 0, "K19 echo off once the module confirms");
+        control_tec_echo_set(0, 1); control_tec_echo_set(3, 1);
+        CHECK(control_tec_act(1) == 0 && control_tec_act(2) == 0, "K19 a bad channel writes nothing");
+        g_tcs.tec1_on = 1;                            /* 旧字段被别处改写，不串到回显里 */
+        CHECK(control_tec_act(1) == 0, "K19 the echo field is independent of the shared g_tcs.tecN_on");
+    }
+
+    /* ====== 2026-11-26 S 线 i3（M09-F-09 的注入档口径）：注入源在生效的那一路不判卡死 ======
+     * 体温：自动 HEAT + 冻着的体温 30 秒会进 SAFE（K1–K5）；注入在生效时豁免。
+     * 水温：手动 + TEC1 开 + 冻着的水温 10 分钟会进 SAFE（K6）；注入在生效时豁免。
+     * 注入关掉之后，两条判据立刻回来（真实传感器照旧受保护；交付档不接 hook，等于恒关）。变异 M57–M59。*/
+    {
+        control_init(&(control_ops_t){
+            .fan_set = stub_fan, .tec_sw = stub_tec, .tec_temp = stub_temp, .on_state = 0,
+            .stuck_exempt = stub_exempt,
+        });
+        param_registry_init(&(param_hooks_t){0});
+        set_armed(0);
+        g_tcs.body_sensor_ok = 1; g_tcs.m207_online = 1; g_tcs.m207_sensor_open = 0;
+        g_tcs.body_temp = 30.0f; g_tcs.tc1_act = 25.0f;
+        s_now = 10000u; s_stub_now_ms = s_now;
+        (void)param_set(PARAM_ID_MODE, 1.0f, 4);       /* 自动 */
+        tick();
+        CHECK(control_state() == CTRL_HEAT && g_tcs.tec1_on == 1, "K22 precondition: auto HEAT");
+        s_exempt_mask = 1u;                             /* 体温注入在生效 */
+        for (int i = 0; i < 70; i++) tick_tc1_live();   /* 35 秒：体温冻着，水温活着 */
+        CHECK(control_state() == CTRL_HEAT && (control_safety_latched() & SAFETY_BIT_STUCK) == 0,
+              "K22 an injected body reading is exempt from the stuck check (35 s frozen, still HEAT)");
+        s_exempt_mask = 0u;                             /* 注入关掉 */
+        for (int i = 0; i < 70; i++) tick_tc1_live();   /* 又 35 秒，体温仍冻着 */
+        CHECK(control_state() == CTRL_SAFE && (control_safety_latched() & SAFETY_BIT_STUCK) != 0,
+              "K22 with the injection off a frozen body reading trips after 30 s again");
+
+        /* 水温那一半 */
+        control_init(&(control_ops_t){
+            .fan_set = stub_fan, .tec_sw = stub_tec, .tec_temp = stub_temp, .on_state = 0,
+            .stuck_exempt = stub_exempt,
+        });
+        param_registry_init(&(param_hooks_t){0});
+        set_armed(0);
+        g_tcs.body_sensor_ok = 1; g_tcs.m207_online = 1; g_tcs.m207_sensor_open = 0;
+        g_tcs.body_temp = 37.0f; g_tcs.tc1_act = 25.0f;
+        s_now = 10000u;
+        (void)param_set(PARAM_ID_MODE, 0.0f, 4);        /* 手动 */
+        tick();
+        control_manual_tec(1, 1);                       /* TEC1 开 */
+        s_exempt_mask = 2u;                             /* 水温注入在生效 */
+        for (int i = 0; i < 6300; i++) tick100();       /* 630 秒：水温冻着，超过 10 分钟窗口 */
+        CHECK(control_state() == CTRL_IDLE && (control_safety_latched() & SAFETY_BIT_STUCK) == 0 && g_tcs.tec1_on == 1,
+              "K22 an injected water reading is exempt from the stuck check (630 s frozen, still running)");
+        s_exempt_mask = 0u;
+        for (int i = 0; i < 6300; i++) tick100();
+        CHECK(control_state() == CTRL_SAFE && (control_safety_latched() & SAFETY_BIT_STUCK) != 0,
+              "K22 with the injection off a frozen water reading trips after the 10-minute window");
     }
 
     /* ====== 2026-11-26 S 线 e3a（X06-F-03）：5 条 P0 安全路径的判别性用例 ======
@@ -1354,6 +1442,37 @@ int main(void)
         control_poll(s_now + 100u);
         CHECK(tcs_alarm_active(ALM_EEPROM) == 1, "E3 re-raised on the next tick while the failure count stands");
     }
+
+#if CONFIG_TCS_DIAG || CONFIG_TCS_SIM
+    /* ====== S 线 i3（条目 8）：读数"逐位不变"的最长连续时长（mstat 的输入；只在诊断 / 仿真档编译）======
+     * 交付档不编译这段实现（control_stuck_max_ms），所以这两条也在同一个 #if 里。*/
+    {
+        control_init(&(control_ops_t){
+            .fan_set = stub_fan, .tec_sw = stub_tec, .tec_temp = stub_temp, .on_state = 0,
+        });
+        param_registry_init(&(param_hooks_t){0});
+        set_armed(0);
+        g_tcs.body_sensor_ok = 1; g_tcs.m207_online = 1; g_tcs.m207_sensor_open = 0;
+        g_tcs.body_temp = 37.0f; g_tcs.tc1_act = 25.0f;
+        s_now = 10000u;
+        poll100();
+        /* 水温每拍变一次（0.01°C 级），体温一直冻着：10 秒 */
+        for (int i = 0; i < 100; i++) {
+            g_tcs.tc1_act = (i & 1) ? 24.99f : 25.01f;
+            poll100();
+        }
+        CHECK(control_stuck_max_ms(2u, s_now) < 1000u, "S1 water keeps moving: its longest frozen run stays small");
+        CHECK(control_stuck_max_ms(1u, s_now) >= 9900u && control_stuck_max_ms(1u, s_now) <= 10100u,
+              "S1 body: the ongoing frozen run is counted (>= 9.9 s)");
+        uint32_t mx = control_stuck_max_ms(1u, s_now);
+        g_tcs.body_temp = 37.5f; poll100();      /* 变一下：这一段收尾（记进最大值）*/
+        CHECK(control_stuck_max_ms(1u, s_now) >= mx, "S1 after the change the closed run is kept as the max");
+        for (int i = 0; i < 150; i++) poll100(); /* 再冻 15 秒：当前这一段比最大值长 */
+        CHECK(control_stuck_max_ms(1u, s_now) > mx,
+              "S1 the current run takes over once it is longer than the closed one");
+        CHECK(control_stuck_max_ms(3u, s_now) == 0, "S1 bad channel -> 0");
+    }
+#endif
 
     printf("test_control: PASS=%d FAIL=%d\n", g_pass, g_fail);
     return g_fail ? 1 : 0;

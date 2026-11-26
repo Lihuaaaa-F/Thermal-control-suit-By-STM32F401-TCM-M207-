@@ -49,6 +49,20 @@ static const char *TAG = "TCS";
 /* control ops 适配（m207 API 返回 int，ops 签名 void；错误由服务内 NAK/重发计数承载）*/
 static void op_tec_sw(uint8_t ch, uint8_t on) { (void)m207_tec(ch, on); }
 static void op_tec_temp(uint8_t ch, float v) { (void)m207_set_temp(ch, v); }
+/* P1-09 的另一半（i3）：安全关断通道——SAFE 的关断 / 500ms 重申 / cmd 11 停机都走它。
+ * 模块离线时 m207_tec 回 -2、连旁路槽都进不了；m207_tec_force 离线也记下意图，复联第一帧补发。*/
+static void op_tec_force(uint8_t ch, uint8_t on) { (void)m207_tec_force(ch, on); }
+#if CONFIG_TCS_SIM
+/* 注入源在生效的那一路（S 线 i3，M09-F-09 的注入档口径）：卡死判据豁免这一路——注入值是人给的常数，
+ * "逐位不变"是它的本性。体温 = tmp117_sim_active()（body 命令 / E-21）；水温 = m207_sim_water_active()
+ * （water 命令）。交付档不编译，op 为 NULL，行为不变。*/
+static uint8_t op_stuck_exempt(uint8_t ch)
+{
+    if (ch == 1u) return tmp117_sim_active();
+    if (ch == 2u) return m207_sim_water_active();
+    return 0;
+}
+#endif
 /* X02-F-05 / M12-F-08：参数钩子要把模块服务的结果带回来（离线 -2 / 队列满或忙 -1）。
  * 原先接的是 tcs_m207 里的 void 包装（m207_hook_*），返回值在那里就被丢了。*/
 static int op_m207_set_temp(uint8_t ch, float v) { return m207_set_temp(ch, v); }
@@ -167,8 +181,9 @@ static void esp_on_broadcast(param_desc_t *p, uint8_t src)
 /* ====== P1-12：服务启动结果汇总 ======
  * 此前五个服务的 int 返回值在 app_main 里被直接丢掉，末尾无条件打印 all up。现在逐个登记进
  * svc_status，结束时由 svc_report 统一出报告：全起来才说 all up；有失败 → E 级日志 + 名单 +
- * ALM_SERVICE。link_start / web_start 是 void（tcs_link / tcs_web，不归本批次改）：如实登记成
- * "未核实"，不冒充成功——接口约定见 docs/results/S_G_e3a_结果.md。*/
+ * ALM_SERVICE。link_start / web_start 原先是 void 接口，只能如实登记成"未核实"；
+ * i3（2026-11-26）起两者带返回值（任务创建失败 = 非 0），同样进汇总。接口约定见
+ * docs/results/S_G_e3a_结果.md 第七节与 S_G_i3_结果.md。*/
 static void app_svc_log(void *arg, int level, const char *text)
 {
     (void)arg;
@@ -287,12 +302,11 @@ void app_main(void)
     softap_start();
     svc_note(&svc, SVC_BIT_SOFTAP, softap_probe());
     link_loopback_run();          /* WP-F.1：真机自环自测（独占 UART1，~2.5s，证据=[LPBK]）*/
-    link_start();
-    svc_unverified(&svc, SVC_BIT_LINK);     /* void 接口：UART 段失败即 abort，任务创建结果无从核实 */
+    /* P1-12 的另一半（i3）：link / web 改成带返回值，启动结果进汇总——任务没起来就不再说 all up */
+    svc_note(&svc, SVC_BIT_LINK, link_start());
     link_on_setparam(esp_on_setparam);   /* R2：屏写参数回调装配 */
     link_on_cmd(esp_on_cmd);             /* v2：屏急停/确认 → 本端执行 */
-    web_start();
-    svc_unverified(&svc, SVC_BIT_WEB);      /* void 接口：httpd 失败即 abort，WS 推送任务的结果无从核实 */
+    svc_note(&svc, SVC_BIT_WEB, web_start());   /* 带出 WebSocket 推送任务的结果 */
     /* R1b：M207 服务（UART2 21/47@57600）。回环自测先行（独占 UART2 ~1s，
      * 含物理短接探测），随后常驻服务钉核 1（第八章预算）。 */
     m207_lb_boottest();
@@ -316,9 +330,11 @@ void app_main(void)
         .fan_set = fan_set_on,
         .tec_sw = op_tec_sw,
         .tec_temp = op_tec_temp,
-        /* P1-09：这里还要接 .tec_force = op_tec_force（转调 m207_tec_force(ch, on)）。
-         * m207_tec_force 由 e2 批次在 tcs_m207 里实现，合入前不能引用（链接不过）；
-         * 合入前 SAFE 的关断退化为 tec_sw（普通队列）。接口约定见 docs/results/S_G_e3a_结果.md。*/
+        /* P1-09：接上安全关断通道（i3；此前退化成 tec_sw，模块离线时关断送不到执行器）。*/
+        .tec_force = op_tec_force,
+#if CONFIG_TCS_SIM
+        .stuck_exempt = op_stuck_exempt,   /* 注入源在生效的那一路不判卡死（M09-F-09 的注入档口径，i3）*/
+#endif
         .on_state = NULL,             /* 迁移沿由 post 步进日志承载 */
         .safety_persist = safety_persist_cb,   /* P0-08：锁存跨复位存活 */
         .safety_load    = safety_state_load,

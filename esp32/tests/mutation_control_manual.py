@@ -104,6 +104,9 @@ MUTATIONS = [
      "        tc1_stuck  = (uint8_t)(tc1_stuck && stuck_water_is(&s_stuck_tc1, now_ms));", "        ;", ""),
     (CT, "C12 水温卡死窗口无限长（永不判）",
      "#define CTRL_STUCK_WATER_WINDOW_MS 600000u", "#define CTRL_STUCK_WATER_WINDOW_MS 0xFFFFFFFFu", ""),
+    # ---- S 线 i3（2026-11-26，P1-09 收口）：模块离线时快照的输出方向必须是暂停，不是上一次的方向（M16）----
+    (CT, "C13 模块离线时快照仍报上一次的输出方向（屏会把它当成当前状态）",
+     "    if (!(tec_known_now() & (uint8_t)(1u << (ch - 1u)))) return TEC_DIR_PAUSE;", "    ;", ""),
     # ---- param_registry.c ----
     (PR, "D01 越界不拒绝（退回钳制）",
      "        if (!(v >= p->min && v <= p->max) || v != (float)(uint8_t)v) return PARAM_REJECT_RANGE;",

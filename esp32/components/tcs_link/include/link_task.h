@@ -8,6 +8,7 @@
 #include <stdint.h>
 #include <stdbool.h>
 #include "tcs_proto.h"
+#include "esp_err.h"
 
 #define LINK_REGISTRY_MAX   64   /* R1 P1-01：权威表 50 条 + 余量（原 32 截 18 条）*/
 #define LINK_MAX_KEY        24
@@ -33,7 +34,10 @@ typedef struct {
 
 typedef void (*link_event_cb_t)(void);   /* 参数/注册表/状态变更通知（ws 推送）*/
 
-void link_start(void);                    /* 建 UART + 任务 */
+/* 建 UART + 任务。P1-12 的另一半（S 线 i3）：返回 ESP_OK = 任务已起；ESP_ERR_NO_MEM = 任务没建成
+ * （UART 驱动已卸掉）——app_main 的启动汇总据此置 ALM_SERVICE。UART 驱动安装 / 配置失败仍是
+ * ESP_ERROR_CHECK（硬件级故障，照旧中止）。*/
+esp_err_t link_start(void);               /* 建 UART + 任务 */
 void link_loopback_run(void);             /* WP-F.1 开机自环自测（link_start 前独占 UART1，证据=[LPBK] 日志）：
                                             * 屏 / 主控两个身份的链路实例共用一条芯片内回环线 */
 bool link_alive(void);                    /* 0x10 3s 内有新鲜帧 */

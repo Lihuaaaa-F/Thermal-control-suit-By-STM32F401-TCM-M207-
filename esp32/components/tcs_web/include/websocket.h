@@ -13,7 +13,9 @@
  * websocket.c 里的两条容量断言以它为准（M14-F-12）。*/
 #define WS_HTTPD_MAX_SOCKETS 7
 
-void      ws_init(httpd_handle_t hd);
+/* P1-12 的另一半（S 线 i3）：返回 ESP_OK = 推送任务已起；ESP_ERR_NO_MEM = 没建成（页面只收到第一帧推送）。
+ * web_start() 把它带出去，app_main 的启动汇总据此置 ALM_SERVICE。*/
+esp_err_t ws_init(httpd_handle_t hd);
 esp_err_t ws_on_open(httpd_req_t *req);     /* GET /ws 握手完成 → 校验并入册 + 首推 reg/log/st */
 esp_err_t ws_on_recv(httpd_req_t *req);     /* 完整的文本帧：{"t":"set"/"cmd"/"ping"} */
 int       ws_client_count(void);            /* 客户端表里现有几条（自检用）*/

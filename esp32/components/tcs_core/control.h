@@ -62,10 +62,15 @@ typedef struct {
     /* 安全关断通道（P1-09，AD-4）：SAFE 的 TCSW=0——进入沿 + 锁存期间每 500ms 的重申、以及
      * cmd 11 的停机——都走这里。可为 NULL：退化为 tec_sw（普通命令队列）。
      * 为什么要单独一条通道：普通队列在模块离线时拒收（m207_tec 回 -2），离线沿还会被清空，
-     * "关"就送不到执行器。实现方（tcs_m207 的 m207_tec_force，e2 批次）的约定：
-     *   不占普通队列；离线也记下意图，复联第一帧补发；每 500ms 重试到读回一致。
+     * "关"就送不到执行器。实现方（tcs_m207 的 m207_tec_force，i3 批次）的约定：
+     *   不占普通队列；离线也记下意图，复联第一帧补发；读回到关之后服务侧自己解除保持。
+     *   重试的节拍由这里的锁存重申给出（服务侧不自带定时器）。
      * 只有"关"走这条通道：状态机与手动的"开"永远走 tec_sw。*/
     void    (*tec_force)(uint8_t ch, uint8_t on);
+    /* 注入源是否在生效（S 线 i3，M09-F-09 的注入档口径）：ch 1 = 体温、2 = 水温；非 0 = 这一路的读数
+     * 是注入值（人给的常数）→ 卡死判据豁免这一路，生效 / 失效各打一次 W 级日志。
+     * 交付档不接（NULL）= 行为不变：真实读数逐位不变满窗口仍然进安全态。*/
+    uint8_t (*stuck_exempt)(uint8_t ch);
 } control_ops_t;
 
 void  control_init(const control_ops_t *ops);
@@ -108,8 +113,18 @@ uint8_t control_tec_known(void);
  * （回显晚到 / 模块离线期间的旧值），"复联判据""卡死判据"读 cmd，界面要显示"实际"读 act。*/
 uint8_t control_tec_cmd(uint8_t ch);
 uint8_t control_tec_act(uint8_t ch);
+/* M207 服务在收到 TCSW? 应答时写模块回显（i3）：control_tec_act() 只跟它走，不跟控制自己下的命令走。
+ * ch = 1 / 2；其它通道忽略。*/
+void    control_tec_echo_set(uint8_t ch, uint8_t on);
 /* N-01：设备服务层（M207 解析等）可直接置安全锁存——超温切断不得只依赖 control 任务存活。*/
 void    control_safety_trip(uint8_t bit);
+
+#if CONFIG_TCS_DIAG || CONFIG_TCS_SIM
+/* 只读导出（S 线 i3，条目 8）：体温 / 水温读数"逐位不变"的最长连续时长（毫秒；含正在进行的这一段）。
+ * which：1 = 体温、2 = 水温。给 mstat 量 TEC 开着时的读数抖动（F2 第四节第 3 点）；不参与判据。
+ * 交付档不编译（诊断功能的实现体也进 #if）。*/
+uint32_t control_stuck_max_ms(uint8_t which, uint32_t now_ms);
+#endif
 
 /* 统一命令执行端（网页 WS 与屏幕 0x15 共用一份语义，避免两处 switch 漂移）。
  * 覆盖 cmd 1..9（TEC1/2 开/关、风扇切换、自动/手动、急停、确认）；

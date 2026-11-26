@@ -115,8 +115,13 @@ static volatile uint8_t s_stuck_chn;   /* 本轮 STUCK 锁存由谁引起：bit0
 static uint32_t   s_tec_on_since[2];   /* TCx 有效命令最近一次 0→1 的时间（out_tec_sw 里记）*/
 static uint8_t    s_tec_cmd_on[2];       /* TEC 命令意图（只有 out_tec_sw 写；取值 control_tec_cmd，X03-F-08）*/
 static uint32_t   s_poll_now_ms;       /* 最近一拍的时间戳：out_tec_sw 在拍外被调时用它给 TEC 开沿计时*/
+#if CONFIG_TCS_DIAG || CONFIG_TCS_SIM
+/* S 线 i3（条目 8）：读数"逐位不变"的最长连续时长（[0] 体温、[1] 水温）。mstat 用它量 TEC 开着时的
+ * 读数抖动（F2 第四节第 3 点）；只读导出，不参与任何判据。交付档不编译。*/
+static uint32_t   s_stuck_max_ms[2];
+#endif
 
-static void stuck_feed(stuck_src_t *c, float v, uint32_t now_ms, uint8_t src_ok)
+static void stuck_feed(stuck_src_t *c, float v, uint32_t now_ms, uint8_t src_ok, uint8_t idx)
 {
     uint32_t b;
     if (!src_ok) {                       /* 源不健康：从头再来，恢复后要有完整的一个窗口 */
@@ -125,6 +130,11 @@ static void stuck_feed(stuck_src_t *c, float v, uint32_t now_ms, uint8_t src_ok)
     }
     memcpy(&b, &v, sizeof(b));
     if (!c->last_change || b != c->bits) {
+#if CONFIG_TCS_DIAG || CONFIG_TCS_SIM
+        if (c->last_change && now_ms > c->last_change &&
+            (now_ms - c->last_change) > s_stuck_max_ms[idx])      /* 一段收尾：记最长 */
+            s_stuck_max_ms[idx] = now_ms - c->last_change;
+#endif
         c->bits = b;
         c->last_change = now_ms ? now_ms : 1u;   /* 0 是"时间基准未建立"，不能当时间戳 */
     }
@@ -159,6 +169,32 @@ static uint8_t stuck_recovered(uint32_t now_ms, uint8_t chn)
     if ((chn & 2u) && !stuck_live(&s_stuck_tc1,  now_ms)) return 0;
     return 1;
 }
+
+/* S 线 i3（M09-F-09 的注入档口径，2026-11-26）：该路的注入源是否在生效（ch 1 = 体温，2 = 水温）。
+ * 注入值是人给的常数，"逐位不变"是它的本性，不代表传感器卡死——不豁免的话，仿真 / 自检 / 现场档里
+ * 恒定注入 + TEC 开 → 体温 30 秒（水温 10 分钟）必进安全态，打断台架流程。
+ * 判据由装配方给（control_ops_t.stuck_exempt；main.c 接注入源，交付档恒 0），控制核不依赖任何注入实现。
+ * 生效 / 失效各打一次 W 级日志（注入期间每拍都成立，不能每拍打）。*/
+static uint8_t stuck_src_injected(uint8_t ch)
+{
+    static uint8_t s_logged;                 /* bit0 = 体温，bit1 = 水温 */
+    uint8_t m = (uint8_t)(1u << (ch - 1u));
+    uint8_t r = (uint8_t)((s_ops.stuck_exempt && s_ops.stuck_exempt(ch)) ? 1u : 0u);
+    if (r && !(s_logged & m)) {
+        s_logged |= m;
+#ifdef ESP_PLATFORM
+        ESP_LOGW("ctrl", "stuck check exempt on %s: the reading comes from an injection (constant by design); "
+                         "real sensors stay checked", ch == 1u ? "body" : "water");
+#endif
+    } else if (!r && (s_logged & m)) {
+        s_logged &= (uint8_t)~m;
+#ifdef ESP_PLATFORM
+        ESP_LOGI("ctrl", "stuck check back on %s", ch == 1u ? "body" : "water");
+#endif
+    }
+    return r;
+}
+
 
 /* 涉事通道：锁存里有 STUCK 才有意义。调用方持有 SAFETY_LOCK（lat 就是锁里读出的那份）*/
 static uint8_t stuck_chn_latched(uint8_t lat)
@@ -286,10 +322,22 @@ uint8_t control_tec_known(void) { return tec_known_now(); }
 /* 命令意图与模块回显是两个量（X03-F-08）。此前只有 g_tcs.tecN_on 一个字段：控制写命令意图，
  * M207 服务在回 TCSW? 时写模块回显——"控制已判定关闭、执行器实际还开着"时它说哪个都不对。
  *   control_tec_cmd()：命令意图，只有 out_tec_sw() 写（锁存期间被压成 0 的"开"也算"关"）。
- *   control_tec_act()：模块回显 = g_tcs.tecN_on（M207 服务写；e2 把回显挪到独立字段之前两者共用）。
+ *   control_tec_act()：模块回显 = 独立字段 s_tec_act_on（i3 起只有 control_tec_echo_set 写，M207 服务在
+ *   回 TCSW? 时调它；此前读的是与命令混用的 g_tcs.tecN_on）。
  * 复联判据（m207_go_online 里"命令是关就补发 TCSW=0"）应当读 cmd；快照两个字段都带是 tcs_snap.c 的事。*/
 uint8_t control_tec_cmd(uint8_t ch) { return (ch == 2) ? s_tec_cmd_on[1] : s_tec_cmd_on[0]; }
-uint8_t control_tec_act(uint8_t ch) { return (ch == 2) ? (g_tcs.tec2_on ? 1u : 0u) : (g_tcs.tec1_on ? 1u : 0u); }
+
+/* 模块回显（i3，2026-11-26；P1-09 收口）：独立的字段，只有 M207 服务收到 TCSW? 应答时经
+ * control_tec_echo_set() 写。此前 control_tec_act() 读的是 g_tcs.tecN_on——控制每写一次命令就把它
+ * 改成命令值，"回显"名不副实：快照里的 tec_act 会在模块还没回话时就跟着命令变，屏分不清
+ * "要它关"和"它确实关了"。g_tcs.tecN_on 保持原样（命令与回显混用，旧消费者仍读它）。*/
+static uint8_t    s_tec_act_on[2];       /* TEC 模块回显（只有 control_tec_echo_set 写；取值 control_tec_act）*/
+uint8_t control_tec_act(uint8_t ch) { return (ch == 2) ? s_tec_act_on[1] : s_tec_act_on[0]; }
+void control_tec_echo_set(uint8_t ch, uint8_t on)
+{
+    if (ch == 1)      s_tec_act_on[0] = on ? 1u : 0u;
+    else if (ch == 2) s_tec_act_on[1] = on ? 1u : 0u;
+}
 
 static void out_tec_temp(uint8_t ch, float v)
 {
@@ -326,9 +374,13 @@ void control_init(const control_ops_t *ops)
     /* 卡死判据从头开始：上电没有"读数多久没变""TEC 开了多久"可言 */
     memset(&s_stuck_body, 0, sizeof(s_stuck_body));
     memset(&s_stuck_tc1, 0, sizeof(s_stuck_tc1));
+#if CONFIG_TCS_DIAG || CONFIG_TCS_SIM
+    s_stuck_max_ms[0] = s_stuck_max_ms[1] = 0;   /* S 线 i3：最长连续时长从这次上电算起 */
+#endif
     s_stuck_chn = 0;
     memset(s_tec_on_since, 0, sizeof(s_tec_on_since));
     memset(s_tec_cmd_on, 0, sizeof(s_tec_cmd_on));
+    memset(s_tec_act_on, 0, sizeof(s_tec_act_on));   /* i3：模块回显从头开始，上电还没有回读过 */
     s_poll_now_ms = 0;
     control_manual_init(&(control_manual_ops_t){ mo_tec_sw, mo_tec_temp, mo_fan_set });   /* m1 */
     s_manual_reset_req = 0;                                                              /* m1 */
@@ -687,12 +739,16 @@ void control_poll(uint32_t now_ms)
     {
         uint8_t m207_src_ok = (uint8_t)(g_tcs.m207_online && !g_tcs.m207_sensor_open);
         uint8_t tc1_stuck, body_stuck, stuck_chn;
-        stuck_feed(&s_stuck_body, g_tcs.body_temp, now_ms, g_tcs.body_sensor_ok);
-        stuck_feed(&s_stuck_tc1, g_tcs.tc1_act, now_ms, m207_src_ok);
+        stuck_feed(&s_stuck_body, g_tcs.body_temp, now_ms, g_tcs.body_sensor_ok, 0u);
+        stuck_feed(&s_stuck_tc1, g_tcs.tc1_act, now_ms, m207_src_ok, 1u);
         tc1_stuck  = (uint8_t)(s_tec_cmd_on[0] && stuck_is(&s_stuck_tc1, now_ms, s_tec_on_since[0]));   /* X03-F-08：读命令意图，不读回显 */
         tc1_stuck  = (uint8_t)(tc1_stuck && stuck_water_is(&s_stuck_tc1, now_ms));   /* 水温窗口 10 分钟（2026-11-26）*/
         body_stuck = (uint8_t)(g_tcs.mode != 0 && (s_state == CTRL_HEAT || s_state == CTRL_COOL)
                                && stuck_is(&s_stuck_body, now_ms, s_tec_on_since[0]));
+        /* S 线 i3（M09-F-09 的注入档口径）：注入源在生效的那一路读数恒等于人给的值，不判卡死。
+         * 交付档装配方不接 stuck_exempt，行为不变。*/
+        if (body_stuck && stuck_src_injected(1u)) body_stuck = 0;
+        if (tc1_stuck  && stuck_src_injected(2u)) tc1_stuck  = 0;
         if (tc1_stuck || body_stuck) {
             if (body_stuck) tcs_alarm_raise(ALM_BODY_SENSOR);
             if (tc1_stuck)  tcs_alarm_raise(ALM_SENSOR_OPEN);
@@ -708,11 +764,10 @@ void control_poll(uint32_t now_ms)
     }
 
     /* 锁存期间：任何模式都不再评估，直接停在 SAFE，并按 CTRL_SAFE_REASSERT_MS 重申 TCSW=0。
-     * R-18：M207 离线时 m207_tec 直接返回 -2（不入队），本处重发并不产生帧；
-     * 离线期的兜底是复联重同步（m207_go_online 里补发 TCSW=0）。P1-09 的彻底修法
-     * （控制核这边 P1-09 已就位：SAFE 的关断与重申走 ops.tec_force，不占普通队列；
-     *   main 把它接到 tcs_m207 的 m207_tec_force（e2 批次）之前，这里退化为 tec_sw，
-     *   离线期仍然只是"复联重同步 + 复联后 500ms 内重申"，勿据本注释认为离线已被完全覆盖。）*/
+     * P1-09（i3 收口，2026-11-26）：进入沿的关断与这里的重申都走 ops.tec_force → m207_tec_force：
+     * 不占普通队列，模块离线也受理（服务侧记保持位，复联第一帧补发，先于普通队列放行）。
+     * 离线期本处的重申不产生帧——它的作用是每 500ms 再敲一次安全关断通道，让服务侧的保持位
+     * 一直是"有关断还没送到执行器"；读回到关之后服务侧自己解除保持。*/
     /* 通信类故障自动恢复（见 COMM_AUTO_RECOVER_MS 注释）。必须放在"锁存即返回"之前，
      * 且健康判据直接取 g_tcs（s_safety_ok 在锁存期间不刷新）。
      * 计时器只在"有锁存"期间累计：无锁存时清零，避免上次锁存的时间戳让下一次一进锁存
@@ -857,6 +912,26 @@ uint32_t control_ms_from_us(int64_t us)
 uint8_t control_safety_latched(void) { return s_safety_latch; }
 void    control_safety_trip(uint8_t bit) { safety_trip(bit); }
 
+#if CONFIG_TCS_DIAG || CONFIG_TCS_SIM
+/* S 线 i3（条目 8）：体温 / 水温读数"逐位不变"的最长连续时长（毫秒；含正在进行的这一段）。
+ * which：1 = 体温、2 = 水温。只给 mstat 读，不参与判据；交付档不编译。*/
+uint32_t control_stuck_max_ms(uint8_t which, uint32_t now_ms)
+{
+    uint8_t i;
+    const stuck_src_t *c;
+    uint32_t mx;
+    if (which != 1u && which != 2u) return 0;
+    i = (which == 1u) ? 0u : 1u;
+    c = (which == 1u) ? &s_stuck_body : &s_stuck_tc1;
+    mx = s_stuck_max_ms[i];
+    if (c->last_change && now_ms > c->last_change) {
+        uint32_t cur = now_ms - c->last_change;
+        if (cur > mx) mx = cur;
+    }
+    return mx;
+}
+#endif
+
 /* m1（模式页）：快照用的"输出方向"（低半字节第一路、高半字节第二路）。
  *   通道关 → 暂停；自动模式第一路 → 状态机（COOL 制冷 / HEAT 制热）；
  *   手动模式 → 实际已下发的手动方向；通道开着但不是模式页设的（网页 / 台架的旧命令）→ TEC_DIR_EXT。*/
@@ -866,6 +941,10 @@ uint8_t control_tec_dir(uint8_t ch)
     if (ch == 1u)      on = (uint8_t)(g_tcs.tec1_on ? 1u : 0u);
     else if (ch == 2u) on = (uint8_t)(g_tcs.tec2_on ? 1u : 0u);
     else               return TEC_DIR_PAUSE;
+    /* i3（P1-09 收口，2026-11-26）：该通道的开关状态不可信（模块离线）→ 暂停。这时 g_tcs.tecN_on
+     * 只是本端的命令意图，上一次的方向还在里面，但执行器实际在做什么无从得知。屏另据快照的
+     * tec_known 位把这一路画成"未知"。M16；变异 C13。*/
+    if (!(tec_known_now() & (uint8_t)(1u << (ch - 1u)))) return TEC_DIR_PAUSE;
     if (!on) return TEC_DIR_PAUSE;
     if (g_tcs.mode != 0u && ch == 1u) {
         if (s_state == CTRL_COOL) return TEC_DIR_COOL;

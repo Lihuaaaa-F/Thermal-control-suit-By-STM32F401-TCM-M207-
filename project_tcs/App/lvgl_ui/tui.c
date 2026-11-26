@@ -437,6 +437,8 @@ static void ui_cmd_dispatch(uint32_t cmd)
 
 /* ================= 节拍 ================= */
 
+static ui_vr_t s_vr;                     /* S 线 i3（条目 11）：版本拒收计数的变化跟踪 */
+
 static void input_refresh(void)
 {
     uint32_t age, seq;
@@ -470,6 +472,9 @@ static void input_refresh(void)
         s_in.tec_valid = t.valid;
         s_in.tec_v1 = t.v1; s_in.tec_i1 = t.i1;
         s_in.tec_v2 = t.v2; s_in.tec_i2 = t.i2;
+        s_in.tec_known = t.known;                   /* S 线 i3：哪一路的开关状态可信 */
+        /* S 线 i3（条目 11）：链路不新鲜 + 版本拒收计数还在涨 -> 横幅换「主控固件与屏不匹配」*/
+        s_in.ver_mismatch = ui_vr_mismatch(&s_vr, tcs_link_snap_ver_rejects(), s_in.now_ms);
     }
     s_lv = ui_link_view(&s_in);
 }

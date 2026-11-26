@@ -27,11 +27,27 @@ int  m207_service_start(void);   /* 装 UART2 驱动+起任务（核 1）。0=ok
  * 返回 0=入队 ok；-1=参数错/队列满；-2=服务未启动或 M207 离线（丢弃计数）*/
 int  m207_set_temp(uint8_t ch, float v);             /* TCx:TCADJTEMP=%.1f（域 ±20..80）*/
 int  m207_tec(uint8_t ch, uint8_t on);               /* TCx:TCSW=0/1 */
+/* 安全关断专用入口（P1-09 的另一半，i3）：control 的 ops.tec_force 接到这里。与 m207_tec 的
+ * 差别只有一条——模块离线也受理（不回 -2）：意图记进安全关断旁路的保持位，复联第一拍补发
+ * TCSW=0，先于普通队列放行；在线时等同 m207_tec(ch, 0)，下一拍优先上线路并读回确认。
+ * 不占普通队列，离线沿的清队列碰不到它；每 500ms 的重试由 control 的锁存重申驱动。
+ * 只有"关"走这里："开"转回 m207_tec（普通队列）。返回 0=已受理；-1=通道非法。*/
+int  m207_tec_force(uint8_t ch, uint8_t on);
 int  m207_map_set(uint16_t pid, float v);            /* H10 映射表 0x100+ */
 int  m207_send_raw(const char *cmd);                 /* console 调试/COMPUSHLIST 试跑 */
 /* R1 M12-F-04：逐参数下发 `!` 保存到模块（网页"保存到模块"按钮）。返回入队条数；-1/-2=失败。
  * PCB/PCRS232 组（0x120+）语法未确认，跳过不下发（M12-F-05）。*/
 int  m207_save_all(void);
+
+/* ====== 台架注入（CONFIG_TCS_SIM）：把某一路水温钉在给定值 ======
+ * 注入值每拍写进 g_tcs.tc1_act / tc2_act（覆盖模块应答），不碰模块、不发帧。卡死判据对"注入在生效"
+ * 的那一路豁免（main.c 的 control_ops.stuck_exempt）：注入值是人给的常数，逐位不变是它的本性
+ * （M09-F-09 的注入档口径，S 线 i3）。交付档不编译这些实现（默认档 bin 里查不到）。*/
+#if CONFIG_TCS_SIM
+void    m207_sim_water(uint8_t ch, float c);   /* ch 1/2；-20..80 之外忽略 */
+void    m207_sim_water_off(uint8_t ch);        /* ch 0 = 两路都关 */
+uint8_t m207_sim_water_active(void);           /* bit0 = TC1、bit1 = TC2 */
+#endif
 
 /* ====== 状态读侧 ====== */
 uint8_t m207_online(void);                           /* 0/1（g_tcs.m207_online 同步）*/

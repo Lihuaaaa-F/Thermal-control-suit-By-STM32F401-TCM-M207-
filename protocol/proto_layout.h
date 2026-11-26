@@ -23,7 +23,7 @@ TCS_LAYOUT_ASSERT("sizeof status",     sizeof(tcs_status_pl_t) == 28);
 TCS_LAYOUT_ASSERT("sizeof param",      sizeof(tcs_param_pl_t) == 8);
 TCS_LAYOUT_ASSERT("sizeof reg_entry",  sizeof(tcs_reg_entry_t) == 100);
 TCS_LAYOUT_ASSERT("sizeof ack",        sizeof(tcs_ack_pl_t) == 8);
-TCS_LAYOUT_ASSERT("sizeof snap",       sizeof(tcs_snap_pl_t) == 56);
+TCS_LAYOUT_ASSERT("sizeof snap",       sizeof(tcs_snap_pl_t) == 60);   /* i3：56 → 60（末尾 3B + 1B 填充）*/
 TCS_LAYOUT_ASSERT("sizeof delta_src",  sizeof(tcs_delta_src_t) == 28);
 
 /* 关键字段偏移*/
@@ -40,16 +40,22 @@ TCS_LAYOUT_ASSERT("off snap.tec1_v",   offsetof(tcs_snap_pl_t, tec1_v) == 46);
 TCS_LAYOUT_ASSERT("off snap.tec1_i",   offsetof(tcs_snap_pl_t, tec1_i) == 48);
 TCS_LAYOUT_ASSERT("off snap.tec2_v",   offsetof(tcs_snap_pl_t, tec2_v) == 50);
 TCS_LAYOUT_ASSERT("off snap.tec2_i",   offsetof(tcs_snap_pl_t, tec2_i) == 52);
+TCS_LAYOUT_ASSERT("off snap.tec2_i",  offsetof(tcs_snap_pl_t, tec2_i) == 52);
+/* i3（S 线，2026-11-26）追加的字段：线上顺序 tec_cmd(49) tec_act(50) tec_known(51)；
+ * 结构体里其后有 3 字节对齐填充到 60（手工逐字节编码，不经结构体内存上线路）*/
+TCS_LAYOUT_ASSERT("off snap.tec_cmd",  offsetof(tcs_snap_pl_t, tec_cmd) == 54);
+TCS_LAYOUT_ASSERT("off snap.tec_act",  offsetof(tcs_snap_pl_t, tec_act) == 55);
+TCS_LAYOUT_ASSERT("off snap.tec_known", offsetof(tcs_snap_pl_t, tec_known) == 56);
 TCS_LAYOUT_ASSERT("off delta.tec_dir", offsetof(tcs_delta_src_t, tec_dir) == 18);
 TCS_LAYOUT_ASSERT("off delta.tec1_v",  offsetof(tcs_delta_src_t, tec1_v) == 20);
 TCS_LAYOUT_ASSERT("off reg.id",        offsetof(tcs_reg_entry_t, id) == 2);
 TCS_LAYOUT_ASSERT("off reg.key",       offsetof(tcs_reg_entry_t, key) == 20);
 
 /* 线长与版本（改这里等于改协议，必须双端同 commit）*/
-TCS_LAYOUT_ASSERT("TCS_PROTO_VER",     TCS_PROTO_VER == 2);       /* m1"模式"页：1 → 2 */
+TCS_LAYOUT_ASSERT("TCS_PROTO_VER",     TCS_PROTO_VER == 3);       /* i3（S 线）：2 → 3；此前 m1"模式"页 1 → 2 */
 TCS_LAYOUT_ASSERT("TCS_STATUS_PL_LEN", TCS_STATUS_PL_LEN == 19);
 TCS_LAYOUT_ASSERT("TCS_PARAM_PL_LEN",  TCS_PARAM_PL_LEN == 7);
 TCS_LAYOUT_ASSERT("TCS_ACK_PL_LEN",    TCS_ACK_PL_LEN == 7);
-TCS_LAYOUT_ASSERT("TCS_SNAP_PL_LEN",   TCS_SNAP_PL_LEN == 49);    /* m1"模式"页：40 → 49 */
+TCS_LAYOUT_ASSERT("TCS_SNAP_PL_LEN",   TCS_SNAP_PL_LEN == 52);    /* i3（S 线）：49 → 52；此前 m1"模式"页 40 → 49 */
 
 #endif /* TCS_PROTO_LAYOUT_H */

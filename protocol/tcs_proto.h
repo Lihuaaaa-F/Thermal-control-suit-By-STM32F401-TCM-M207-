@@ -37,8 +37,14 @@
  * （见下），靠"必须成对更新"约束，不靠版本号。要递增须连同 POST 那一项一起改。
  * 2026-11-26（m1"模式"页，用户定的新功能）递增到 2：0x20 快照末尾追加 9 字节（两路输出方向 +
  * 两路电压电流），0x21 增量多了两个 mask 位。两端必须成对更新；屏端 POST 的 VER 自检项
- * （project_tcs/App/tcs/post.c）已随本处一起改成 == 2。*/
-#define TCS_PROTO_VER       2U
+ * （project_tcs/App/tcs/post.c）已随本处一起改成 == 2。
+ * 2026-11-26（S 线 i3，P1-09 / X03-F-08 收口）递增到 3：0x20 快照末尾再追加 3 字节（命令意图 /
+ * 模块回显 / 开关状态是否可信），屏据此把"模块离线时无从得知的 TEC 状态"显示成"未知"而不是"已关"。
+ * 屏端 POST 的 VER 自检项同改成 == 3。
+ * ★ OTA 发布规则（D6 第八节的事故，2026-11-26）：主控可以经网页 OTA 升级，屏只能经探针烧录；
+ * 协议版本一变，屏就拒收全部快照，表现为"主控连接中断"。OTA 包不得改变 TCS_PROTO_VER，
+ * 除非屏固件同步升级（先烧屏、后 OTA 主控；细则见 docs 里的 OTA 发布规则）。*/
+#define TCS_PROTO_VER       3U
 
 /* ====== 方向：这一帧是谁发的（R5-01，2026-11-25）======
  *
@@ -474,9 +480,22 @@ typedef struct {
     uint16_t tec1_i;     /* TEC1 实际输出电流，0.01 A；TCS_ELEC_I_UNKNOWN = 未知 */
     int16_t  tec2_v;
     uint16_t tec2_i;
+    /* ---- i3（S 线，2026-11-26；P1-09 / X03-F-08 收口）：末尾再追加 3B。TCS_PROTO_VER 3 ----
+     * 前面的 tec1 / tec2 是新旧两种含义混用的那个字段（控制写命令意图，模块回显也会改写它），
+     * 保留给旧消费者；要分清"要它开 / 它实际开着 / 这句话可不可信"，读下面三个。*/
+    uint8_t  tec_cmd;    /* 命令意图：bit0=tec1 bit1=tec2（控制要 TEC 开关是什么）*/
+    uint8_t  tec_act;    /* 模块回显：bit0=tec1 bit1=tec2（模块上次回读的 TCSW；模块离线期是旧值）*/
+    uint8_t  tec_known;  /* 开关状态是否可信：bit0=tec1 bit1=tec2。1 = 模块在线；0 = 未知（离线）——
+                            界面必须显示"未知"，不得显示"已关"（P1-09）*/
 } tcs_snap_pl_t;
 
-#define TCS_SNAP_PL_LEN   49   /* 1+4+4+20+4+2+1+2+1+1 + 1+2+2+2+2 */
+#define TCS_SNAP_PL_LEN   52   /* 1+4+4+20+4+2+1+2+1+1 + 1+2+2+2+2 + 1+1+1 */
+
+/* 某一路的 TEC 开关状态是否可信（0x20.tec_known：bit0=tec1 bit1=tec2）。ch = 1 / 2 */
+static inline uint8_t tcs_tec_known_ch(uint8_t tec_known, int ch)
+{
+    return (uint8_t)((tec_known >> (ch == 1 ? 0 : 1)) & 1u);
+}
 
 /* 输出方向（0x20.tec_dir 的每个半字节）。屏端"模式"页据此高亮"制冷 / 暂停 / 制热" */
 #define TCS_TEC_DIR_PAUSE   0u  /* 通道关 */
@@ -559,6 +578,10 @@ static inline size_t tcs_pl_snapshot(uint8_t *out, size_t cap, const tcs_snap_pl
     tcs_put_u16(&out[o], s->tec1_i); o += 2;
     tcs_put_i16(&out[o], s->tec2_v); o += 2;
     tcs_put_u16(&out[o], s->tec2_i); o += 2;
+    /* i3（末尾追加）*/
+    out[o++] = s->tec_cmd;
+    out[o++] = s->tec_act;
+    out[o++] = s->tec_known;
     return o;                              /* == TCS_SNAP_PL_LEN */
 }
 
@@ -586,6 +609,10 @@ static inline int tcs_scan_snapshot(const uint8_t *pl, size_t len, tcs_snap_pl_t
     s->tec1_i = tcs_get_u16(&pl[o]); o += 2;
     s->tec2_v = tcs_get_i16(&pl[o]); o += 2;
     s->tec2_i = tcs_get_u16(&pl[o]); o += 2;
+    /* i3（末尾追加；长度不够在函数开头就已拒绝）*/
+    s->tec_cmd = pl[o++];
+    s->tec_act = pl[o++];
+    s->tec_known = pl[o++];
     return 0;
 }
 

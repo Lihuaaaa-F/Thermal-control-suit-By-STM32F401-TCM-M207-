@@ -44,6 +44,7 @@
 
 
 
+
 复现命令（仓库根 `/d/Espressif/ws/tcs`，Git Bash；raw 输出路径分隔符为 `\`，表内归一为 `/`）：
 
 ```bash
@@ -53,6 +54,7 @@ grep -rnE "HAL_RCC_|HAL_PWR_" project_tcs/App project_tcs/Core/Src --include=*.c
 
 vendor 域说明：`App/rtt/`（SEGGER RTT vendor 五文件）同一 pattern 单独跑=**0 命中**（无需列行）。
 补充（pattern 外，供审计）：`grep -rnE "HAL_PWREx_" project_tcs/App project_tcs/Core/Src --include=*.c` → **1 命中**：Core/Src/main.c:317 `HAL_PWREx_ConfigSupply(PWR_LDO_SUPPLY)`（前缀为 `HAL_PWREx_` 不匹配 `HAL_PWR_`，故不在 42 行内）。
+
 
 
 
@@ -97,7 +99,7 @@ vendor 域说明：`App/rtt/`（SEGGER RTT vendor 五文件）同一 pattern 单
 | 19 | project_tcs/App/tcs/console.c:460 | HAL_RCC_GPIOG_CLK_ENABLE | 重锚新增：代码摘录见左列 |
 | 20 | project_tcs/App/tcs/console.c:461 | HAL_RCC_GPIOI_CLK_ENABLE | 重锚新增：代码摘录见左列 |
 | 21 | project_tcs/App/tcs/console.c:462 | HAL_RCC_GPIOK_CLK_ENABLE | 重锚新增：代码摘录见左列 |
-| 22 | project_tcs/App/tcs/console.c:927 | __HAL_RCC_CLEAR_RESET_FLAGS() | 复位源解析打印后清全部复位标志（防下次上电误读旧源） |
+| 22 | project_tcs/App/tcs/console.c:939 | __HAL_RCC_CLEAR_RESET_FLAGS() | 复位源解析打印后清全部复位标志（防下次上电误读旧源） |
 | 23 | project_tcs/Core/Src/ft5446.c:287 | __HAL_RCC_GPIOD_CLK_ENABLE() | 触摸 bit-bang SCL/SDA（PD12/PD13）引脚时钟（ct_iic_init） |
 | 24 | project_tcs/Core/Src/ft5446.c:325 | __HAL_RCC_I2C4_CLK_ENABLE | W1a：I2C4 外设时钟 |
 | 25 | project_tcs/Core/Src/ft5446.c:343 | __HAL_RCC_GPIOD_CLK_ENABLE | W1a：I2C4 引脚组时钟（:103 PeriphCLKConfig 属 HAL_RCCEx_ 前缀不入本 grep，已注） |

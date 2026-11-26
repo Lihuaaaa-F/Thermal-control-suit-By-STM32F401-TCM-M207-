@@ -90,6 +90,11 @@ run m207elec tests/test_m207_elec.c components/tcs_m207/m207_core.c components/t
 # S-G i3（P1-09 的另一半，2026-11-26）：安全关断专用入口 m207_tec_force——模块离线也受理（记保持位）、
 # 复联第一帧补发、复联判据读命令意图不读回显；"控制 + 服务内核"按 main.c 的装配联调
 run m207force tests/test_m207_force.c components/tcs_m207/m207_core.c components/tcs_m207/m207_proto.c components/tcs_core/control.c components/tcs_core/control_manual.c components/tcs_core/param_registry.c components/tcs_core/post_pure.c components/tcs_link/proto.c
+# S-G i3（M09-F-09 的注入档口径，2026-11-26）：台架水温注入（只在 CONFIG_TCS_SIM 档编译）——注入值每拍
+# 覆盖对外读数、生效状态给 control 的卡死豁免用。这一行同时验证 SIM 档的实现体编得过、跑得对。
+EXTRA_DEF="/DCONFIG_TCS_SIM=1"
+run m207sim tests/test_m207_sim.c components/tcs_m207/m207_core.c components/tcs_m207/m207_proto.c components/tcs_core/control.c components/tcs_core/control_manual.c components/tcs_core/param_registry.c components/tcs_core/post_pure.c components/tcs_link/proto.c
+EXTRA_DEF=""
 
 # S-G l1（2026-11-25）：R5-01 / R5-10 的 ESP32 侧用例——components/tcs_link/link_task.c 原样编译
 # （IDF / FreeRTOS 用 tests/host_stubs 里的桩，按诊断档），在虚拟时钟上跑一条时间线：

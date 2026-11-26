@@ -200,7 +200,7 @@ if [ "$DO_ESP32" = 1 ] || [ "$DO_DIAG" = 1 ] || [ "$DO_SITE" = 1 ]; then
                 rm -rf build-matrix-repro sdkconfig.matrix.repro sdkconfig.matrix.repro.old build-matrix-repro.build.log
             fi
             # 干净核对：默认档不得含台架命令；诊断档必须全含（证明查得出来）；
-            # 现场档（SIM）只含 linkmute / linkloop / webtest 这三条 SIM 也有的。
+            # 现场档（SIM）只含 linkmute / linkloop / webtest / water 这几条 SIM 也有的（S 线 i3 加 water）。
             V=../project_tcs/tools/site/verify_prod_clean.py
             export PYTHONUTF8=1
             python "$V" --esp32 "build-matrix-default/$APP" || { echo "[esp32-default] 干净核对 FAIL"; exit 1; }
@@ -209,7 +209,7 @@ if [ "$DO_ESP32" = 1 ] || [ "$DO_DIAG" = 1 ] || [ "$DO_SITE" = 1 ]; then
             fi
             if [ -f "build-matrix-site/$APP" ]; then
                 python "$V" --esp32 "build-matrix-site/$APP" --esp32-expect linkmute --esp32-expect linkloop \
-                    --esp32-expect webtest || { echo "[esp32-site] 命令集与现场档不符"; exit 1; }
+                    --esp32-expect webtest --esp32-expect water || { echo "[esp32-site] 命令集与现场档不符"; exit 1; }
             fi
             echo "[esp32] 干净核对 PASS（默认档无台架命令；诊断档 / 现场档命令集相符）"
             exit 0

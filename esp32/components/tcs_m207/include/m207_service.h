@@ -39,6 +39,16 @@ int  m207_send_raw(const char *cmd);                 /* console 调试/COMPUSHLI
  * PCB/PCRS232 组（0x120+）语法未确认，跳过不下发（M12-F-05）。*/
 int  m207_save_all(void);
 
+/* ====== 台架注入（CONFIG_TCS_SIM）：把某一路水温钉在给定值 ======
+ * 注入值每拍写进 g_tcs.tc1_act / tc2_act（覆盖模块应答），不碰模块、不发帧。卡死判据对"注入在生效"
+ * 的那一路豁免（main.c 的 control_ops.stuck_exempt）：注入值是人给的常数，逐位不变是它的本性
+ * （M09-F-09 的注入档口径，S 线 i3）。交付档不编译这些实现（默认档 bin 里查不到）。*/
+#if CONFIG_TCS_SIM
+void    m207_sim_water(uint8_t ch, float c);   /* ch 1/2；-20..80 之外忽略 */
+void    m207_sim_water_off(uint8_t ch);        /* ch 0 = 两路都关 */
+uint8_t m207_sim_water_active(void);           /* bit0 = TC1、bit1 = TC2 */
+#endif
+
 /* ====== 状态读侧 ====== */
 uint8_t m207_online(void);                           /* 0/1（g_tcs.m207_online 同步）*/
 float   m207_last_temp(uint8_t ch);                  /* TCACTTEMP 最近值 */

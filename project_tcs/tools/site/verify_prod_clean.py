@@ -67,6 +67,12 @@ ESP32_STRINGS = {
     "fan": ("台架直接设定占空比；DIAG 档", ["占空比%，低=开；台架"]),
 }
 
+# ---- ESP32：只在 SIM 档编译的命令（DIAG 档没有）。默认档不得出现；--esp32-expect 可以点名要它，
+#      --esp32-expect-all 不含它们（那是 DIAG 档的清单）。S 线 i3（2026-11-26）。----
+ESP32_STRINGS_SIM = {
+    "water": ("恒定水温注入（注入在生效的那一路卡死判据豁免）；SIM 档", ["恒定水温注入"]),
+}
+
 NM = "arm-none-eabi-nm"
 
 
@@ -145,7 +151,9 @@ def check_h743(elf, expect):
 def check_esp32(path, expect_keys):
     data = open(path, "rb").read()
     bad = []
-    for key, (why, needles) in ESP32_STRINGS.items():
+    both = dict(ESP32_STRINGS)
+    both.update(ESP32_STRINGS_SIM)          # SIM 档命令同样是"默认档不得有、点名才许有"
+    for key, (why, needles) in both.items():
         present = any(n.encode("utf-8") in data for n in needles)
         if present != (key in expect_keys):
             bad.append("  [ESP32 %s（%s）]：%s" % (key, why, "在" if present else "不在"))
@@ -171,9 +179,10 @@ def main():
         if p and not os.path.isfile(p):
             print("文件不存在：%s" % p)
             return 2
-    unknown = [k for k in a.esp32_expect if k not in ESP32_STRINGS]
+    unknown = [k for k in a.esp32_expect if k not in ESP32_STRINGS and k not in ESP32_STRINGS_SIM]
     if unknown:
-        print("未知的 --esp32-expect 键：%s（可选：%s）" % (unknown, " ".join(ESP32_STRINGS)))
+        print("未知的 --esp32-expect 键：%s（可选：%s）"
+              % (unknown, " ".join(list(ESP32_STRINGS) + list(ESP32_STRINGS_SIM))))
         return 2
     expect = bool(a.expect_hooks)
     expect_keys = set(ESP32_STRINGS) if a.esp32_expect_all else set(a.esp32_expect)

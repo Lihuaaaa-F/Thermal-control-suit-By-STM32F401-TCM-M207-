@@ -67,6 +67,10 @@ typedef struct {
      *   重试的节拍由这里的锁存重申给出（服务侧不自带定时器）。
      * 只有"关"走这条通道：状态机与手动的"开"永远走 tec_sw。*/
     void    (*tec_force)(uint8_t ch, uint8_t on);
+    /* 注入源是否在生效（S 线 i3，M09-F-09 的注入档口径）：ch 1 = 体温、2 = 水温；非 0 = 这一路的读数
+     * 是注入值（人给的常数）→ 卡死判据豁免这一路，生效 / 失效各打一次 W 级日志。
+     * 交付档不接（NULL）= 行为不变：真实读数逐位不变满窗口仍然进安全态。*/
+    uint8_t (*stuck_exempt)(uint8_t ch);
 } control_ops_t;
 
 void  control_init(const control_ops_t *ops);

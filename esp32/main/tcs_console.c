@@ -113,6 +113,34 @@ static int cmd_body(int argc, char **argv)
     }
     return 0;
 }
+
+/* S 线 i3（M09-F-09 的注入档口径）：把某一路水温钉在给定值。注入在生效的那一路，卡死判据豁免
+ * （control_ops.stuck_exempt ← main.c），"逐位不变"是注入值的本性，不是传感器卡死。
+ * 只写对外读数，不碰模块、不发帧；PROD 不编译。*/
+static int cmd_water(int argc, char **argv)
+{
+    if (argc < 3) {
+        printf("water <ch 1|2> <°C|off>  (sim=0x%X；off 也可单独用： water off)\n",
+               (unsigned)m207_sim_water_active());
+        return 1;
+    }
+    if (strcmp(argv[1], "off") == 0) {          /* water off：两路都关 */
+        m207_sim_water_off(0);
+        printf("water sim OFF (both channels)\n");
+        return 0;
+    }
+    int ch = atoi(argv[1]);
+    if ((ch != 1 && ch != 2)) { printf("water <ch 1|2> <°C|off>\n"); return 1; }
+    if (strcmp(argv[2], "off") == 0) {
+        m207_sim_water_off((uint8_t)ch);
+        printf("water ch%d sim OFF (sim=0x%X)\n", ch, (unsigned)m207_sim_water_active());
+        return 0;
+    }
+    float v = strtof(argv[2], NULL);
+    m207_sim_water((uint8_t)ch, v);
+    printf("water ch%d sim %.2f (sim=0x%X)\n", ch, (double)v, (unsigned)m207_sim_water_active());
+    return 0;
+}
 #endif /* CONFIG_TCS_SIM：R1 修复 P0-06，PROD 不编译注入命令 */
 
 static int cmd_estop(int argc, char **argv)
@@ -428,6 +456,8 @@ int tcs_console_start(void)
 #if CONFIG_TCS_SIM
         { .command="body", .help="body <°C|off>（体温注入，E-21/22；仅 SIM 构建）", .hint="<v|off>",
           .func=cmd_body, .argtable=NULL },
+        { .command="water", .help="water <ch 1|2> <°C|off>（恒定水温注入；注入在生效的那一路卡死判据豁免；仅 SIM 构建）", .hint="<ch> <v|off>",
+          .func=cmd_water, .argtable=NULL },
 #endif
         { .command="estop", .help="急停", .hint=NULL,
           .func=cmd_estop, .argtable=NULL },

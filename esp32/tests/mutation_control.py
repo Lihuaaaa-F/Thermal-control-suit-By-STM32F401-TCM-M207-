@@ -208,6 +208,15 @@ MUTATIONS = [
     ("M56 模块回显回去读命令与回显混用的字段（控制一下命令，回显就跟着变）",
      [("uint8_t control_tec_act(uint8_t ch) { return (ch == 2) ? s_tec_act_on[1] : s_tec_act_on[0]; }",
        "uint8_t control_tec_act(uint8_t ch) { return (ch == 2) ? (g_tcs.tec2_on ? 1u : 0u) : (g_tcs.tec1_on ? 1u : 0u); }")], ""),
+    # ---- 2026-11-26 S 线 i3（M09-F-09 的注入档口径）：注入源在生效的那一路不判卡死。用例 K22 在
+    #      test_control_esp32.c；执行器那一侧的注入实现（water 命令 / m207_sim_water）在 SIM 档。
+    ("M57 水温注入在生效也照判卡死（恒定水温的台架流程被自己打断）",
+     [("        if (tc1_stuck  && stuck_src_injected(2u)) tc1_stuck  = 0;", "        ;")], ""),
+    ("M58 体温注入在生效也照判卡死",
+     [("        if (body_stuck && stuck_src_injected(1u)) body_stuck = 0;", "        ;")], ""),
+    ("M59 豁免恒成立（交付档也豁免：真实读数冻结判不出来）",
+     [("    uint8_t r = (uint8_t)((s_ops.stuck_exempt && s_ops.stuck_exempt(ch)) ? 1u : 0u);",
+       "    uint8_t r = 1u;")], ""),
 ]
 
 

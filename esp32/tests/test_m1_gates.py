@@ -213,6 +213,40 @@ def main():
     if mainesp.count("link_start()") != 1:
         fails.append("esp32/main/main.c：link_start 只能调一次（重入会重复安装 UART 驱动）")
 
+    # 9) S 线 i3（M09-F-09 的注入档口径）：注入源在生效的那一路不判卡死——hook 从 main.c 接，
+    #    交付档不接（NULL）。同时钉住 control.c 里那四行变异锚点的原文（i3b 的约束）。
+    if ".stuck_exempt = op_stuck_exempt," not in mainesp:
+        fails.append("esp32/main/main.c 缺（i3）：没有把注入状态接进 control_ops.stuck_exempt")
+    if "#if CONFIG_TCS_SIM" not in mainesp or "return m207_sim_water_active();" not in mainesp:
+        fails.append("esp32/main/main.c 缺（i3）：op_stuck_exempt 必须在 CONFIG_TCS_SIM 档里按路问注入源")
+    corec2 = read(CORE, "control.c")
+    coreh2 = read(CORE, "control.h")
+    for needle in (
+        "        if (body_stuck && stuck_src_injected(1u)) body_stuck = 0;",
+        "        if (tc1_stuck  && stuck_src_injected(2u)) tc1_stuck  = 0;",
+    ):
+        if needle not in corec2:
+            fails.append("tcs_core/control.c 缺（i3）：%s" % needle)
+    if "uint8_t (*stuck_exempt)(uint8_t ch);" not in coreh2:
+        fails.append("tcs_core/control.h 缺（i3）：control_ops_t 没有 stuck_exempt")
+    m207c2 = read(ESP, "components", "tcs_m207", "m207_core.c")
+    for needle in ("void m207_sim_water(uint8_t ch, float c)", "uint8_t m207_sim_water_active(void)"):
+        if needle not in m207c2:
+            fails.append("tcs_m207/m207_core.c 缺（i3）：%s" % needle)
+    con = read(ESP, "main", "tcs_console.c")
+    for needle in ('{ .command="water",', "static int cmd_water(int argc, char **argv)"):
+        if needle not in con:
+            fails.append("esp32/main/tcs_console.c 缺（i3）：%s" % needle)
+    # 变异锚点原文（i3b：这四行不许动）
+    for anchor in (
+        "tc1_stuck  = (uint8_t)(s_tec_cmd_on[0] && stuck_is(&s_stuck_tc1, now_ms, s_tec_on_since[0]));",
+        "tc1_stuck  = (uint8_t)(tc1_stuck && stuck_water_is(&s_stuck_tc1, now_ms));",
+        "#define CTRL_STUCK_WINDOW_MS    30000u",
+        "#define CTRL_STUCK_WATER_WINDOW_MS 600000u",
+    ):
+        if corec2.count(anchor) != 1:
+            fails.append("tcs_core/control.c 的变异锚点被改了（i3b 要求原文不动）：%s" % anchor)
+
     if fails:
         print("[m1gates] FAIL")
         for f in fails:

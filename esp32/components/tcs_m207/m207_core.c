@@ -250,6 +250,29 @@ static int64_t m207_now_us(void)
     return s_io.now_us ? s_io.now_us(s_io.time_ctx) : 0;
 }
 
+#if CONFIG_TCS_SIM
+/* 台架注入（S 线 i3，M09-F-09 的注入档口径）：把某一路水温钉在给定值。每拍在 tick_end 里覆盖对外读数
+ * （在 RX 之后，模块的真应答也盖得掉）；不碰模块、不发帧。 */
+static uint8_t s_wsim_mask;                  /* bit0 = TC1、bit1 = TC2 注入生效 */
+static float   s_wsim[3];
+
+void m207_sim_water(uint8_t ch, float c)
+{
+    if (ch != 1 && ch != 2) return;
+    if (!(c >= -20.0f && c <= 80.0f)) return;   /* NaN / 越界：忽略（与 TCADJTEMP 同域）*/
+    s_wsim[ch] = c;
+    s_wsim_mask = (uint8_t)(s_wsim_mask | (uint8_t)(1u << (ch - 1u)));
+}
+
+void m207_sim_water_off(uint8_t ch)
+{
+    if (ch == 0) { s_wsim_mask = 0; return; }
+    if (ch == 1 || ch == 2) s_wsim_mask = (uint8_t)(s_wsim_mask & (uint8_t)~(1u << (ch - 1u)));
+}
+
+uint8_t m207_sim_water_active(void) { return s_wsim_mask; }
+#endif
+
 /* 返回 0=已交给发送出口（计 tx）；-1=发送环满被丢（计 txdrop；调用方决定是否重发）*/
 static int m207_core_tx(const char *cmd, size_t len)
 {
@@ -1082,6 +1105,11 @@ static void m207_arbitrate(void)
 
 void m207_core_tick_end(int64_t t0_us)
 {
+#if CONFIG_TCS_SIM
+    /* 台架注入在 RX 之后覆盖对外读数：注入值恒等于人给的值（卡死判据对这一路豁免，见 control.c）*/
+    if (s_wsim_mask & 1u) g_tcs.tc1_act = s_wsim[1];
+    if (s_wsim_mask & 2u) g_tcs.tc2_act = s_wsim[2];
+#endif
     /* 1) 在途事务超时检查（重试只标记，TX 交给本拍仲裁）*/
     for (int i = 0; i < M207_PEND_MAX; i++) {
         m207_pend_t *p = &s_pend[i];
@@ -1189,6 +1217,10 @@ void m207_core_init(const m207_core_io_t *io)
     s_elec_issued_tick = 0;
     s_elec_fail = 0;
     s_elec_unsupported = 0;
+#if CONFIG_TCS_SIM
+    memset(s_wsim, 0, sizeof(s_wsim));   /* S 线 i3：台架水温注入从头开始 */
+    s_wsim_mask = 0;
+#endif
     g_tcs.m207_online = 0;               /* 上电默认值 */
     g_tcs.m207_sensor_open = 0;
     s_started = 1;

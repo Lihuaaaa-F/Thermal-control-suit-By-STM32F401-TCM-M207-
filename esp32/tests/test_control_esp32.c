@@ -49,6 +49,14 @@ static void stub_force(uint8_t ch, uint8_t on)
     if (!on) s_off_delivered_ms = s_stub_now_ms ? s_stub_now_ms : 1u;
 }
 
+/* S 线 i3（M09-F-09 的注入档口径）：装配方告诉控制核"这一路的读数来自注入"（bit0 = 体温、bit1 = 水温）。
+ * 注入值是人给的常数，卡死判据豁免这一路；交付档不接（NULL）。*/
+static uint8_t s_exempt_mask;
+static uint8_t stub_exempt(uint8_t ch)
+{
+    return (uint8_t)((ch == 1u) ? (s_exempt_mask & 1u) : ((s_exempt_mask >> 1) & 1u));
+}
+
 /* P0-08 持久化钩子桩（文件作用域：MSVC 不支持嵌套函数定义）*/
 static uint8_t s_persisted;
 static void    persist_cb(uint8_t latch) { s_persisted = latch; }
@@ -1284,6 +1292,55 @@ int main(void)
         CHECK(control_tec_act(1) == 0 && control_tec_act(2) == 0, "K19 a bad channel writes nothing");
         g_tcs.tec1_on = 1;                            /* 旧字段被别处改写，不串到回显里 */
         CHECK(control_tec_act(1) == 0, "K19 the echo field is independent of the shared g_tcs.tecN_on");
+    }
+
+    /* ====== 2026-11-26 S 线 i3（M09-F-09 的注入档口径）：注入源在生效的那一路不判卡死 ======
+     * 体温：自动 HEAT + 冻着的体温 30 秒会进 SAFE（K1–K5）；注入在生效时豁免。
+     * 水温：手动 + TEC1 开 + 冻着的水温 10 分钟会进 SAFE（K6）；注入在生效时豁免。
+     * 注入关掉之后，两条判据立刻回来（真实传感器照旧受保护；交付档不接 hook，等于恒关）。变异 M57–M59。*/
+    {
+        control_init(&(control_ops_t){
+            .fan_set = stub_fan, .tec_sw = stub_tec, .tec_temp = stub_temp, .on_state = 0,
+            .stuck_exempt = stub_exempt,
+        });
+        param_registry_init(&(param_hooks_t){0});
+        set_armed(0);
+        g_tcs.body_sensor_ok = 1; g_tcs.m207_online = 1; g_tcs.m207_sensor_open = 0;
+        g_tcs.body_temp = 30.0f; g_tcs.tc1_act = 25.0f;
+        s_now = 10000u; s_stub_now_ms = s_now;
+        (void)param_set(PARAM_ID_MODE, 1.0f, 4);       /* 自动 */
+        tick();
+        CHECK(control_state() == CTRL_HEAT && g_tcs.tec1_on == 1, "K22 precondition: auto HEAT");
+        s_exempt_mask = 1u;                             /* 体温注入在生效 */
+        for (int i = 0; i < 70; i++) tick_tc1_live();   /* 35 秒：体温冻着，水温活着 */
+        CHECK(control_state() == CTRL_HEAT && (control_safety_latched() & SAFETY_BIT_STUCK) == 0,
+              "K22 an injected body reading is exempt from the stuck check (35 s frozen, still HEAT)");
+        s_exempt_mask = 0u;                             /* 注入关掉 */
+        for (int i = 0; i < 70; i++) tick_tc1_live();   /* 又 35 秒，体温仍冻着 */
+        CHECK(control_state() == CTRL_SAFE && (control_safety_latched() & SAFETY_BIT_STUCK) != 0,
+              "K22 with the injection off a frozen body reading trips after 30 s again");
+
+        /* 水温那一半 */
+        control_init(&(control_ops_t){
+            .fan_set = stub_fan, .tec_sw = stub_tec, .tec_temp = stub_temp, .on_state = 0,
+            .stuck_exempt = stub_exempt,
+        });
+        param_registry_init(&(param_hooks_t){0});
+        set_armed(0);
+        g_tcs.body_sensor_ok = 1; g_tcs.m207_online = 1; g_tcs.m207_sensor_open = 0;
+        g_tcs.body_temp = 37.0f; g_tcs.tc1_act = 25.0f;
+        s_now = 10000u;
+        (void)param_set(PARAM_ID_MODE, 0.0f, 4);        /* 手动 */
+        tick();
+        control_manual_tec(1, 1);                       /* TEC1 开 */
+        s_exempt_mask = 2u;                             /* 水温注入在生效 */
+        for (int i = 0; i < 6300; i++) tick100();       /* 630 秒：水温冻着，超过 10 分钟窗口 */
+        CHECK(control_state() == CTRL_IDLE && (control_safety_latched() & SAFETY_BIT_STUCK) == 0 && g_tcs.tec1_on == 1,
+              "K22 an injected water reading is exempt from the stuck check (630 s frozen, still running)");
+        s_exempt_mask = 0u;
+        for (int i = 0; i < 6300; i++) tick100();
+        CHECK(control_state() == CTRL_SAFE && (control_safety_latched() & SAFETY_BIT_STUCK) != 0,
+              "K22 with the injection off a frozen water reading trips after the 10-minute window");
     }
 
     /* ====== 2026-11-26 S 线 e3a（X06-F-03）：5 条 P0 安全路径的判别性用例 ======

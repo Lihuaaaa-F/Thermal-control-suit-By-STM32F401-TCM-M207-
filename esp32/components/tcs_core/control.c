@@ -160,6 +160,32 @@ static uint8_t stuck_recovered(uint32_t now_ms, uint8_t chn)
     return 1;
 }
 
+/* S 线 i3（M09-F-09 的注入档口径，2026-11-26）：该路的注入源是否在生效（ch 1 = 体温，2 = 水温）。
+ * 注入值是人给的常数，"逐位不变"是它的本性，不代表传感器卡死——不豁免的话，仿真 / 自检 / 现场档里
+ * 恒定注入 + TEC 开 → 体温 30 秒（水温 10 分钟）必进安全态，打断台架流程。
+ * 判据由装配方给（control_ops_t.stuck_exempt；main.c 接注入源，交付档恒 0），控制核不依赖任何注入实现。
+ * 生效 / 失效各打一次 W 级日志（注入期间每拍都成立，不能每拍打）。*/
+static uint8_t stuck_src_injected(uint8_t ch)
+{
+    static uint8_t s_logged;                 /* bit0 = 体温，bit1 = 水温 */
+    uint8_t m = (uint8_t)(1u << (ch - 1u));
+    uint8_t r = (uint8_t)((s_ops.stuck_exempt && s_ops.stuck_exempt(ch)) ? 1u : 0u);
+    if (r && !(s_logged & m)) {
+        s_logged |= m;
+#ifdef ESP_PLATFORM
+        ESP_LOGW("ctrl", "stuck check exempt on %s: the reading comes from an injection (constant by design); "
+                         "real sensors stay checked", ch == 1u ? "body" : "water");
+#endif
+    } else if (!r && (s_logged & m)) {
+        s_logged &= (uint8_t)~m;
+#ifdef ESP_PLATFORM
+        ESP_LOGI("ctrl", "stuck check back on %s", ch == 1u ? "body" : "water");
+#endif
+    }
+    return r;
+}
+
+
 /* 涉事通道：锁存里有 STUCK 才有意义。调用方持有 SAFETY_LOCK（lat 就是锁里读出的那份）*/
 static uint8_t stuck_chn_latched(uint8_t lat)
 {
@@ -706,6 +732,10 @@ void control_poll(uint32_t now_ms)
         tc1_stuck  = (uint8_t)(tc1_stuck && stuck_water_is(&s_stuck_tc1, now_ms));   /* 水温窗口 10 分钟（2026-11-26）*/
         body_stuck = (uint8_t)(g_tcs.mode != 0 && (s_state == CTRL_HEAT || s_state == CTRL_COOL)
                                && stuck_is(&s_stuck_body, now_ms, s_tec_on_since[0]));
+        /* S 线 i3（M09-F-09 的注入档口径）：注入源在生效的那一路读数恒等于人给的值，不判卡死。
+         * 交付档装配方不接 stuck_exempt，行为不变。*/
+        if (body_stuck && stuck_src_injected(1u)) body_stuck = 0;
+        if (tc1_stuck  && stuck_src_injected(2u)) tc1_stuck  = 0;
         if (tc1_stuck || body_stuck) {
             if (body_stuck) tcs_alarm_raise(ALM_BODY_SENSOR);
             if (tc1_stuck)  tcs_alarm_raise(ALM_SENSOR_OPEN);

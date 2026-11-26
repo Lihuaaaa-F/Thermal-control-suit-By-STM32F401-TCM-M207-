@@ -52,6 +52,17 @@ static void op_tec_temp(uint8_t ch, float v) { (void)m207_set_temp(ch, v); }
 /* P1-09 的另一半（i3）：安全关断通道——SAFE 的关断 / 500ms 重申 / cmd 11 停机都走它。
  * 模块离线时 m207_tec 回 -2、连旁路槽都进不了；m207_tec_force 离线也记下意图，复联第一帧补发。*/
 static void op_tec_force(uint8_t ch, uint8_t on) { (void)m207_tec_force(ch, on); }
+#if CONFIG_TCS_SIM
+/* 注入源在生效的那一路（S 线 i3，M09-F-09 的注入档口径）：卡死判据豁免这一路——注入值是人给的常数，
+ * "逐位不变"是它的本性。体温 = tmp117_sim_active()（body 命令 / E-21）；水温 = m207_sim_water_active()
+ * （water 命令）。交付档不编译，op 为 NULL，行为不变。*/
+static uint8_t op_stuck_exempt(uint8_t ch)
+{
+    if (ch == 1u) return tmp117_sim_active();
+    if (ch == 2u) return m207_sim_water_active();
+    return 0;
+}
+#endif
 /* X02-F-05 / M12-F-08：参数钩子要把模块服务的结果带回来（离线 -2 / 队列满或忙 -1）。
  * 原先接的是 tcs_m207 里的 void 包装（m207_hook_*），返回值在那里就被丢了。*/
 static int op_m207_set_temp(uint8_t ch, float v) { return m207_set_temp(ch, v); }
@@ -321,6 +332,9 @@ void app_main(void)
         .tec_temp = op_tec_temp,
         /* P1-09：接上安全关断通道（i3；此前退化成 tec_sw，模块离线时关断送不到执行器）。*/
         .tec_force = op_tec_force,
+#if CONFIG_TCS_SIM
+        .stuck_exempt = op_stuck_exempt,   /* 注入源在生效的那一路不判卡死（M09-F-09 的注入档口径，i3）*/
+#endif
         .on_state = NULL,             /* 迁移沿由 post 步进日志承载 */
         .safety_persist = safety_persist_cb,   /* P0-08：锁存跨复位存活 */
         .safety_load    = safety_state_load,

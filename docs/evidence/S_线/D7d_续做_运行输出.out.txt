@@ -1,0 +1,162 @@
+=== D7d start 16:17:48 HEAD=4f4943d35 期望=4f4943d35
+----- ⓪ 当前状态 16:17:48
+tc1=22.71 tc2=29.91 body=0.00(ok=0) fan=0% mode=0 m207=1 alarm=0x0000 armed=0 state=0 sim=0 latch=0x00 heap=8496480 up=62s rst=11 prst=11 pup=104s palm=0x0000 plat=0x00 pseq=6 nvalm=0x0004 cd=0
+----- ① 屏台架档 + 模式页走查（模块在线）16:17:58
+>>> 屏台架档
+tcs v1.2.0 build=2026-11-26 05:26 UTC git=08862c9cc params=v1(8+0x100resv) proto=v2
+tc1=22.8 tc2=29.7 body=0.0 tec1=0 tec2=0 fan=0 mode=0 alarm=0x0000 m207=1 sensor=0 esp=1 ctrl=0 arm=0(0x08=0) loop=1038 drops=0
+[flash] PASS
+[16:19:22] status
+tc1=22.79 tc2=29.67 body=0.00(ok=0) fan=0% mode=0 m207=1 alarm=0x0000 armed=0 state=0 sim=0 latch=0x00 heap=8495800 up=85s rst=11 prst=11 pup=61s palm=0x0000 plat=0x00 pseq=7 nvalm=0x0004 cd=0
+ack: alarm=0x0000 armed=0 state=0
+[16:19:25] ack 之后
+tc1=22.79 tc2=29.67 body=0.00(ok=0) fan=0% mode=0 m207=1 alarm=0x0000 armed=0 state=0 sim=0 latch=0x00 heap=8495800 up=88s rst=11 prst=11 pup=61s palm=0x0000 plat=0x00 pseq=7 nvalm=0x0004 cd=0
+开始：页=首页  主控：tc1=22.79 tc2=29.66 body=0.00(ok=0) fan=0% mode=0 m207=1 alarm=0x0000 armed=0 state=0 sim=0 latch=0x00 heap=8495800 up=89s rst=11 prst=11 pup=61s palm=0x0000 plat=0x00 pseq=7 nvalm=0x0004 cd=0
+PASS  起点在首页
+  截图 01_home.png
+PASS  点模式键 → 进模式页
+  主控：tc1=22.84 tc2=29.52 body=0.00(ok=0) fan=0% mode=0 m207=1 alarm=0x0000 armed=0 state=0 sim=0 latch=0x00 heap=8495800 up=143s rst=11 prst=11 pup=61s palm=0x0000 plat=0x00 pseq=7 nvalm=0x0004 cd=0
+  截图 02_mode_manual.png
+  主控：tc1=22.88 tc2=29.38 body=0.00(ok=0) fan=0% mode=0 m207=1 alarm=0x0000 armed=0 state=0 sim=0 latch=0x00 heap=8495800 up=195s rst=11 prst=11 pup=61s palm=0x0000 plat=0x00 pseq=7 nvalm=0x0004 cd=0
+  截图 03_after_pause_tap.png
+PASS  点温度卡 → 曲线页  —— 页=曲线
+  截图 04_curve_from_mode.png
+PASS  曲线页返回 → 首页
+PASS  再进模式页
+  截图 05_switch_confirm.png
+  主控：tc1=23.01 tc2=29.00 body=0.00(ok=0) fan=0% mode=1 m207=1 alarm=0x0000 armed=0 state=0 sim=0 latch=0x00 heap=8495588 up=356s rst=11 prst=11 pup=61s palm=0x0000 plat=0x00 pseq=7 nvalm=0x0004 cd=0
+  截图 06_mode_auto.png
+  主控：tc1=23.05 tc2=28.87 body=0.00(ok=0) fan=0% mode=0 m207=1 alarm=0x0000 armed=0 state=0 sim=0 latch=0x00 heap=8493940 up=408s rst=11 prst=11 pup=61s palm=0x0000 plat=0x00 pseq=7 nvalm=0x0004 cd=0
+  截图 07_back_manual.png
+PASS  切回手动后仍在模式页
+PASS  返回 → 首页
+结束：主控：tc1=23.08 tc2=28.76 body=0.00(ok=0) fan=0% mode=0 m207=1 alarm=0x0000 armed=0 state=0 sim=0 latch=0x00 heap=8493472 up=460s rst=11 prst=11 pup=61s palm=0x0000 plat=0x00 pseq=7 nvalm=0x0004 cd=0
+>>> 主控 status（走查之后）
+tc1=23.08 tc2=28.76 body=0.00(ok=0) fan=0% mode=0 m207=1 alarm=0x0000 armed=0 state=0 sim=0 latch=0x00 heap=8493472 up=460s rst=11 prst=11 pup=61s palm=0x0000 plat=0x00 pseq=7 nvalm=0x0004 cd=0
+ack: alarm=0x0000 armed=0 state=0
+>>> ack 之后
+tc1=23.08 tc2=28.75 body=0.00(ok=0) fan=0% mode=0 m207=1 alarm=0x0000 armed=0 state=0 sim=0 latch=0x00 heap=8493456 up=462s rst=11 prst=11 pup=61s palm=0x0000 plat=0x00 pseq=7 nvalm=0x0004 cd=0
+----- ② 主控现场档 + 断链 = 急停 16:25:41
+flash site rc=0 sha256=1c96a826760d6f26
+>>> 主控 status (site)
+statusI (7533) tcs_link: REG[9/53] 0x09 tec1_manual
+tc1=23.10 tc2=28.69 body=0.00(ok=0) fan=0% mode=0 m207=1 alarm=0x0000 armed=0 state=0 sim=0 latch=0x00 heap=8477712 up=6s rst=11 prst=11 pup=11s palm=0x0000 plat=0x00 pseq=9 nvalm=0x0004 cd=0
+0 基线：主控 mode=0 alarm=0x0000 state=0 latch=0x00 fan=0 sim=0
+        注册表 {'0x0006': '0.00', '0x0009': '0.00', '0x000A': '0.00'}
+        屏     tc1=23.1 tc2=28.7 body=0.0 tec1=0 tec2=0 fan=0 mode=0 alarm=0x0000 m207=1 sensor=0 esp=1 ctrl=0 arm=0(0x08=0) loop=41945 drops=0
+FAIL  基线：手动、无报警、不在安全态、两路手动输出为暂停  —— mode=0 alarm=0x0000 state=0 latch=0x00 fan=0 sim=0
+1 linkmute 5 → linkmute 5 s (0 = resume) / note: mute >= 3 s triggers the link-loss ESTOP (user ruling 2026-11-26); acknowledge on the display after resume
+     0.5s  mode=0 alarm=0x0000 state=0 latch=0x00 fan=0 sim=0
+     1.4s  mode=0 alarm=0x0000 state=0 latch=0x00 fan=0 sim=0
+     2.2s  mode=0 alarm=0x0000 state=0 latch=0x00 fan=0 sim=0
+     3.0s  mode=0 alarm=0x0004 state=3 latch=0x08 fan=100 sim=0
+     3.9s  mode=0 alarm=0x0004 state=3 latch=0x08 fan=100 sim=0
+     4.7s  mode=0 alarm=0x0004 state=3 latch=0x08 fan=100 sim=0
+     5.6s  mode=0 alarm=0x0004 state=3 latch=0x08 fan=100 sim=0
+     6.4s  mode=0 alarm=0x0004 state=3 latch=0x08 fan=100 sim=0
+     7.1s  mode=0 alarm=0x0004 state=3 latch=0x08 fan=100 sim=0
+     7.9s  mode=0 alarm=0x0004 state=3 latch=0x08 fan=100 sim=0
+     8.8s  mode=0 alarm=0x0004 state=3 latch=0x08 fan=100 sim=0
+     9.6s  mode=0 alarm=0x0004 state=3 latch=0x08 fan=100 sim=0
+    10.5s  mode=0 alarm=0x0004 state=3 latch=0x08 fan=100 sim=0
+PASS  断链后进急停（state=3；alarm 含 0x0004）  —— 首次见到 state=3 在 3.0s
+2 之后：主控 mode=0 alarm=0x0004 state=3 latch=0x08 fan=100 sim=0
+        屏     tc1=23.1 tc2=28.6 body=0.0 tec1=0 tec2=0 fan=1 mode=0 alarm=0x0004 m207=1 sensor=0 esp=1 ctrl=0 arm=0(0x08=0) loop=43537 drops=0
+        注册表 {'0x0006': '0.00', '0x0009': '0.00', '0x000A': '0.00'}
+PASS  急停时两路 TEC 命令为关（屏侧）  —— tc1=23.1 tc2=28.6 body=0.0 tec1=0 tec2=0 fan=1 mode=0 alarm=
+PASS  风扇全开  —— fan=100
+PASS  模式被置为手动  —— mode=0
+FAIL  两路手动输出回暂停  —— {'0x0006': '0.00', '0x0009': '0.00', '0x000A': '0.00'}
+PASS  链路静默结束后仍锁存急停（没有自己解除）  —— latch=0x08
+   截图 10_estop_latched.png
+3 点横幅确认后：主控 mode=0 alarm=0x0004 state=3 latch=0x08 fan=100 sim=0
+                屏     tc1=23.1 tc2=28.5 body=0.0 tec1=0 tec2=0 fan=1 mode=0 alarm=0x0004 m207=1 sensor=0 esp=1 ctrl=0 arm=0(0x08=0) loop=49224 drops=0
+                注册表 {'0x0006': '0.00', '0x0009': '0.00', '0x000A': '0.00'}
+FAIL  确认后急停解除（state=0、alarm=0、latch=0）  —— mode=0 alarm=0x0004 state=3 latch=0x08 fan=100 sim=0
+FAIL  确认后仍是手动、两路暂停、TEC 没有自己恢复  —— tc1=23.1 tc2=28.5 body=0.0 tec1=0 tec2=0 fan=1 mode=0 alarm= {'0x0006': '0.00', '0x0009': '0.00', '0x000A': '0.00'}
+>>> webtest
+webtest base=http://192.168.4.1
+/              HTTP 200  2750 bytes  OK
+/index.html    HTTP 200  2750 bytes  OK
+/style.css     HTTP 200  3588 bytes  OK
+/app.js        HTTP 200  15445 bytes  OK
+/chart.js      HTTP 200  4101 bytes  OK
+/api/status    HTTP 200  285 bytes  OK
+/api/registry  HTTP 200  6818 bytes  OK
+/api/log       HTTP 200  626 bytes  OK
+/api/linkstats HTTP 200  249 bytes  OK
+webtest: 9/9 PASS (HTTP)
+ws loopback 192.168.4.1:80
+I (99663) tcs_ws: ws client fd=58
+handshake: 101 Switching Protocols             OK
+reg numbers carry no float32 tail              OK
+first frames in order: reg, log, st            OK
+current hyst / body_cold read back from reg    OK
+ping -> pong carries ref                       OK
+WS PING frame -> PONG frame with the same payload OK
+I (100153) tcs_ws: ws set id=0x05 v=0.200 rv=0 -> 0.200
+set (same value) -> pv ok=1 with my ref        OK
+I (100403) tcs_ws: ws set id=0x03 v=36.500 rv=-2 -> 37.500
+set (rejected by constraint) -> pv ok=0 err=-2 OK
+set id=65537 -> err bad_set (not truncated)    OK
+cmd 11 (screen-only) -> err bad_cmd            OK
+I (101163) tcs_ws: ws cmd=9 rv=0 -> state=3 alarm=0x0000
+cmd 9 (ack, nothing latched) -> ack with ref   OK
+CLOSE -> server answers CLOSE                  OK
+client table empty after CLOSE                 OK
+W (101763) httpd_uri: httpd_uri: uri handler execution failed
+plain GET /ws -> 400 (not registered as a WS client) OK
+I (101783) tcs_ws: ws client fd=58
+I (101793) tcs_ws: ws client fd=60
+I (101813) tcs_ws: ws client fd=62
+clients 1..3 handshakes accepted               OK
+client table lists all three                   OK
+W (101833) httpd_txrx: httpd_sock_err: error in recv : 104
+W (101833) httpd_ws: httpd_ws_get_frame_type: Failed to read header byte (socket FD invalid), closing socket now
+W (101833) httpd_txrx: httpd_sock_err: error in recv : 104
+W (101833) httpd_ws: httpd_ws_get_frame_type: Failed to read header byte (socket FD invalid), closing socket now
+W (101843) httpd_txrx: httpd_sock_err: error in recv : 104
+W (101843) httpd_ws: httpd_ws_get_frame_type: Failed to read header byte (socket FD invalid), closing socket now
+client table empty after abrupt disconnects    OK
+ws loopback: 17/17 PASS
+webtest: HTTP 9/9, WS 17/17 -> ALL PASS
+----- ③ 从未连上不触发 / 屏单独复位不触发 16:27:47
+[16:28:02] 屏已停住；主控（已连上过）应在 3 秒后进急停——读一次：
+tc1=23.16 tc2=28.44 body=0.00(ok=0) fan=0% mode=0 m207=1 alarm=0x0000 armed=0 state=0 sim=0 latch=0x00 heap=8477912 up=16s rst=11 prst=11 pup=101s palm=0x0000 plat=0x00 pseq=10 nvalm=0x0004 cd=0
+[16:28:03] 重启主控（屏仍停住）：
+[16:28:23] 主控启动后先确认掉上一次的急停（模块在线，应能立即解除）：
+ack: alarm=0x0000 armed=0 state=0
+tc1=23.17 tc2=28.39 body=0.00(ok=0) fan=0% mode=0 m207=1 alarm=0x0000 armed=0 state=0 sim=0 latch=0x00 heap=8477712 up=13s rst=11 prst=3 pup=6s palm=0x0000 plat=0x00 pseq=12 nvalm=0x0004 cd=0
+  [16:28:31] +20s  tc1=23.17 tc2=28.38 body=0.00(ok=0) fan=0% mode=0 m207=1 alarm=0x0000 armed=0 state=0 sim=0 latch=0x00 heap=8477712 up=18s rst=11 prst=3 pup=6s palm=0x0000 plat=0x00 pseq=12 nvalm=0x0004 cd=0
+  [16:28:37] +25s  tc1=23.17 tc2=28.36 body=0.00(ok=0) fan=0% mode=0 m207=1 alarm=0x0000 armed=0 state=0 sim=0 latch=0x00 heap=8477712 up=24s rst=11 prst=3 pup=6s palm=0x0000 plat=0x00 pseq=12 nvalm=0x0004 cd=0
+  [16:28:42] +30s  tc1=23.18 tc2=28.36 body=0.00(ok=0) fan=0% mode=0 m207=1 alarm=0x0000 armed=0 state=0 sim=0 latch=0x00 heap=8477712 up=29s rst=11 prst=3 pup=6s palm=0x0000 plat=0x00 pseq=12 nvalm=0x0004 cd=0
+  [16:28:48] +35s  tc1=23.19 tc2=28.35 body=0.00(ok=0) fan=0% mode=0 m207=1 alarm=0x0000 armed=0 state=0 sim=0 latch=0x00 heap=8477712 up=35s rst=11 prst=3 pup=6s palm=0x0000 plat=0x00 pseq=12 nvalm=0x0004 cd=0
+  [16:28:53] +40s  tc1=23.19 tc2=28.33 body=0.00(ok=0) fan=0% mode=0 m207=1 alarm=0x0000 armed=0 state=0 sim=0 latch=0x00 heap=8477712 up=40s rst=11 prst=3 pup=6s palm=0x0000 plat=0x00 pseq=12 nvalm=0x0004 cd=0
+  [16:28:59] +45s  tc1=23.19 tc2=28.32 body=0.00(ok=0) fan=0% mode=0 m207=1 alarm=0x0000 armed=0 state=0 sim=0 latch=0x00 heap=8477712 up=46s rst=11 prst=3 pup=6s palm=0x0000 plat=0x00 pseq=12 nvalm=0x0004 cd=0
+[16:29:35] 屏已放开；6 秒后：
+tc1=23.22 tc2=28.24 body=0.00(ok=0) fan=0% mode=0 m207=1 alarm=0x0000 armed=0 state=0 sim=0 latch=0x00 heap=8477712 up=89s rst=11 prst=3 pup=6s palm=0x0000 plat=0x00 pseq=12 nvalm=0x0004 cd=0
+link rx_b=20358 rx_f=449 crc=0 len=0 gap=168 dup=0 retry=11 txqdrop=9 uartdrop=0 echo=0 evict=0 verg=0 arq=1 wdir=0 txwdir=0 txfail=0
+link echo_by: 11=0 13=0 20+21=0 22=0 90=0
+[16:29:42] 屏单独复位（probe-rs reset）；逐秒读主控：
+  [16:29:43] +1s  tc1=23.21 tc2=28.24 body=0.00(ok=0) fan=0% mode=0 m207=1 alarm=0x0000 armed=0 state=0 sim=0 latch=0x00 heap=8477712 up=90s rst=11 prst=3 pup=6s palm=0x0000 plat=0x00 pseq=12 nvalm=0x0004 cd=0
+  [16:29:45] +2s  tc1=23.22 tc2=28.23 body=0.00(ok=0) fan=0% mode=0 m207=1 alarm=0x0000 armed=0 state=0 sim=0 latch=0x00 heap=8477712 up=92s rst=11 prst=3 pup=6s palm=0x0000 plat=0x00 pseq=12 nvalm=0x0004 cd=0
+  [16:29:46] +3s  tc1=23.22 tc2=28.23 body=0.00(ok=0) fan=0% mode=0 m207=1 alarm=0x0000 armed=0 state=0 sim=0 latch=0x00 heap=8477712 up=93s rst=11 prst=3 pup=6s palm=0x0000 plat=0x00 pseq=12 nvalm=0x0004 cd=0
+  [16:29:47] +4s  tc1=23.22 tc2=28.23 body=0.00(ok=0) fan=0% mode=0 m207=1 alarm=0x0000 armed=0 state=0 sim=0 latch=0x00 heap=8477712 up=95s rst=11 prst=3 pup=6s palm=0x0000 plat=0x00 pseq=12 nvalm=0x0004 cd=0
+  [16:29:49] +5s  tc1=23.22 tc2=28.22 body=0.00(ok=0) fan=0% mode=0 m207=1 alarm=0x0000 armed=0 state=0 sim=0 latch=0x00 heap=8477712 up=96s rst=11 prst=3 pup=6s palm=0x0000 plat=0x00 pseq=12 nvalm=0x0004 cd=0
+  [16:29:51] +6s  tc1=23.22 tc2=28.22 body=0.00(ok=0) fan=0% mode=0 m207=1 alarm=0x0000 armed=0 state=0 sim=0 latch=0x00 heap=8477712 up=98s rst=11 prst=3 pup=6s palm=0x0000 plat=0x00 pseq=12 nvalm=0x0004 cd=0
+----- ⑤ 两端烧回交付档 16:29:54
+>>> 主控交付档
+flash default rc=0 sha256=88988a8907bb0b57
+>>> 屏交付档
+tcs v1.2.0 build=2026-11-26 05:26 UTC git=08862c9cc params=v1(8+0x100resv) proto=v2
+tc1=23.3 tc2=28.0 body=0.0 tec1=0 tec2=0 fan=0 mode=0 alarm=0x0000 m207=1 sensor=0 esp=1 ctrl=0 arm=0(0x08=0) loop=1093 drops=0
+[flash] PASS
+[16:31:37] status
+tc1=23.26 tc2=28.00 body=0.00(ok=0) fan=0% mode=0 m207=1 alarm=0x0000 armed=0 state=0 sim=0 latch=0x00 heap=8496480 up=82s rst=11 prst=11 pup=10s palm=0x0000 plat=0x00 pseq=14 nvalm=0x0004 cd=0
+ack: alarm=0x0000 armed=0 state=0
+[16:31:40] ack 之后
+tc1=23.26 tc2=28.00 body=0.00(ok=0) fan=0% mode=0 m207=1 alarm=0x0000 armed=0 state=0 sim=0 latch=0x00 heap=8496480 up=86s rst=11 prst=11 pup=10s palm=0x0000 plat=0x00 pseq=14 nvalm=0x0004 cd=0
+tcs v1.2.0 build=2026-11-26 05:26 UTC git=08862c9cc params=v1(8+0x100resv) proto=v2
+tc1=23.3 tc2=28.0 body=0.0 tec1=0 tec2=0 fan=0 mode=0 alarm=0x0000 m207=1 sensor=0 esp=1 ctrl=0 arm=0(0x08=0) loop=3001 drops=0
+lrx=10787 snap=148 gapmax=823 gaplast=160 echo=0 wdir=0 arq=1 txfail=0
+=== D7d end 16:31:57

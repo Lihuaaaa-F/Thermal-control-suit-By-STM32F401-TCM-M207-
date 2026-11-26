@@ -218,6 +218,42 @@ else:
           "[M207P] ESP_LOGI: %d conversion specs vs %d args (must match)" % (len(specs), len(a) - 2))
 
 # ---------------------------------------------------------------------------
+# X03-F-11 任务栈水位：perf 打各任务的 high water mark（只在诊断 / 仿真档编译）
+# 审查时 6 个任务都没有栈余量观测点，"tcs_snap 栈最小"只能靠算。主机编不了（要 FreeRTOS 任务表），
+# 用源码门禁钉住：取句柄靠名字、覆盖 5 个常驻任务、这一行必须在 #if CONFIG_TCS_DIAG || CONFIG_TCS_SIM 里。
+# ---------------------------------------------------------------------------
+print("[gate] X03-F-11 perf prints per-task stack high-water marks (DIAG/SIM only)")
+check("uxTaskGetStackHighWaterMark(" in perf_cmd, "perf calls uxTaskGetStackHighWaterMark()")
+check("xTaskGetHandle(" in perf_cmd,
+      "perf resolves task handles by name (no cross-component handle tables to keep in sync)")
+for _nm in ("tcs_snap", "tcs_link", "ctrl_svc", "m207_svc", "tcs_ws"):
+    check('"%s"' % _nm in perf_cmd, "perf covers %s" % _nm)
+
+
+def _enclosing_ifs(src, needle):
+    """返回包含 needle 那一行的所有外层 #if 条件（行首指令的简化栈）。"""
+    stack = []
+    for ln in src.split("\n"):
+        s = ln.strip()
+        if s.startswith("#if"):
+            stack.append(s)
+        elif s.startswith("#endif"):
+            if stack:
+                stack.pop()
+        elif s.startswith("#elif") or s.startswith("#else"):
+            if stack:
+                stack[-1] = s
+        elif needle in s:
+            return list(stack)
+    return None
+
+
+_conds = _enclosing_ifs(console, "uxTaskGetStackHighWaterMark")
+check(_conds is not None
+      and any(("CONFIG_TCS_DIAG" in c and "CONFIG_TCS_SIM" in c) for c in _conds),
+      "the hwm print sits inside #if CONFIG_TCS_DIAG || CONFIG_TCS_SIM (delivery build has no such line)")
+
+# ---------------------------------------------------------------------------
 # M12-F-16 UART 驱动安装失败不得 abort
 # ---------------------------------------------------------------------------
 print("[gate] M12-F-16 m207_service_start: no ESP_ERROR_CHECK; every step checked; cleanup on failure")

@@ -249,6 +249,25 @@ static int cmd_perf(int argc, char **argv)
     printf("Task            Abs Time     CPU%%\n%s", lst);
     vTaskList(lst);
     printf("Task            State Prio  Stack  Num\n%s", lst);
+#if CONFIG_TCS_DIAG || CONFIG_TCS_SIM
+    /* X03-F-11：各任务栈余量（uxTaskGetStackHighWaterMark）。ESP-IDF 这一版的返回值是**字节**，
+     * 不是标准 FreeRTOS 文档里的"字"（task.h 原文 in bytes；xTaskCreate 的栈参也是字节，同单位）。
+     * 取的是任务跑起来之后的最小剩余量——"栈最小"的 tcs_snap 与链路 / 控制 / M207 / 网页几个
+     * 常驻任务一眼可比。任务没起来（启动失败 / 本档没编）打 "-"。只读，不改优先级与栈大小。
+     * vTaskList 的 Stack 列也是这个数，但和状态 / 优先级挤在一张表里，现场读不方便、也不好 grep。*/
+    {
+        static const char *const names[] = {
+            "tcs_snap", "tcs_link", "ctrl_svc", "m207_svc", "tcs_ws", "tmp117_svc", "p_persist"
+        };
+        printf("[perf] hwm(bytes):");
+        for (size_t i = 0; i < sizeof(names) / sizeof(names[0]); i++) {
+            TaskHandle_t h = xTaskGetHandle(names[i]);
+            if (h) printf(" %s=%u", names[i], (unsigned)uxTaskGetStackHighWaterMark(h));
+            else   printf(" %s=-", names[i]);
+        }
+        printf("\n");
+    }
+#endif /* CONFIG_TCS_DIAG || CONFIG_TCS_SIM：X03-F-11 栈水位 */
     return 0;
 }
 
@@ -538,7 +557,7 @@ int tcs_console_start(void)
           .func=cmd_ledblink, .argtable=NULL },
         { .command="ledtest", .help="ledtest <gpio>（红闪→黑，可视自证）", .hint="<gpio>",
           .func=cmd_ledtest, .argtable=NULL },
-        { .command="perf", .help="服务统计+vTaskList", .hint=NULL,
+        { .command="perf", .help="服务统计+vTaskList（诊断/仿真档另打各任务栈水位 hwm）", .hint=NULL,
           .func=cmd_perf, .argtable=NULL },
         { .command="linkstat", .help="链路 RX 字节/帧计数（真机方向判定）", .hint=NULL,
       .func=cmd_linkstat, .argtable=NULL },

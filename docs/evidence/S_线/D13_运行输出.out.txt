@@ -1,0 +1,17 @@
+=== D10 start 21:30:59 HEAD=a8fb54e32
+>>> 主控交付档
+flash default rc=2 sha256=25f40b77f57df320
+>>> 屏交付档
+tcs v1.2.0 build=2026-11-27 13:29 UTC git=a8fb54e32 params=v1(8+0x100resv) proto=v3
+tc1=0.0 tc2=0.0 body=0.0 tec1=0 tec2=0 fan=0 mode=0 alarm=0x0000 m207=0 sensor=1 esp=0 ctrl=0 arm=0(0x08=0) loop=1109 drops=0
+lrx=0 snap=0 gapmax=0 gaplast=0 echo=0 wdir=0 arq=1 txfail=0 vr=0 vrlast=4294967295 ackbad=0 wbad=0 wclamp=0 wbusy=0 fresh=0 bdg=0 stl=1
+[flash] PASS
+[21:33:12] status
+[esp_cmd] no echo within 4.0s: status
+[esp_cmd] no echo within 4.0s: ack
+[21:33:23] ack 之后
+[esp_cmd] no echo within 4.0s: status
+[MB] done seq=4
+tc1=0.0 tc2=0.0 body=0.0 tec1=0 tec2=0 fan=0 mode=0 alarm=0x0000 m207=0 sensor=1 esp=0 ctrl=0 arm=0(0x08=0) loop=4071 drops=0
+lrx=0 snap=0 gapmax=0 gaplast=0 echo=0 wdir=0 arq=1 txfail=0 vr=0 vrlast=4294967295 ackbad=0 wbad=0 wclamp=0 wbusy=0 fresh=0 bdg=0 stl=1
+=== D10 end 21:33:42

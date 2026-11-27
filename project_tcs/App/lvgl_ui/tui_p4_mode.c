@@ -323,6 +323,8 @@ void tui_p4_build(lv_obj_t *scr)
         ui_text24(scr, x + PAD, CARD_Y + 16, tc_name[i], TKS_TX);
         H.tc[i].val = value_label(scr, x + PAD, CARD_Y + 50, TKS_GRAY, &tcs_font_lv48, "--.-");
         H.tc[i].unit = ui_text24(scr, x + PAD, CARD_Y + 70, "°C", TKS_TX2);
+        /* 用户现场 #1 的同类：断链建页时数值停在占位 "--.-"，单位也要先摆到它后面 */
+        lv_obj_set_x(H.tc[i].unit, x + PAD + ui_text_w(&tcs_font_lv48, "--.-") + 8);
     }
 
     /* 两路 TEC */

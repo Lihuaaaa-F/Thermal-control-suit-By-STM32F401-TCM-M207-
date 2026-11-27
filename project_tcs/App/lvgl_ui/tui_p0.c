@@ -233,6 +233,11 @@ static void tc_build(int i, int cx, const char *title)
     ui_text24(s_scr, cx + CARD_PAD, 272, "设定", TKS_TX2);
     t->set_val = value_label(s_scr, cx + CARD_PAD + 56, 268, TKS_GRAY, &tcs_font_lv32, "--.-");
     t->set_unit = ui_text24(s_scr, cx + CARD_PAD + 56, 276, "°C", TKS_TX2);
+    /* 2026-11-27（用户现场 #1）：主控失联时数值不会被刷新（paint_values 在 stale 时早退），
+     * 建页时的占位 "--.-" 与单位 "°C" 都停在各自初始 x——单位会压在数值左边。这里按占位
+     * 文字宽先摆一次，任何时候断链/从未连上都不会叠在一起。*/
+    place_unit(t->val, t->unit, &tcs_font_lv96, cx + CARD_PAD, 8);
+    place_unit(t->set_val, t->set_unit, &tcs_font_lv32, cx + CARD_PAD + 56, 4);
 }
 
 void tui_p0_build(lv_obj_t *scr)
@@ -252,6 +257,7 @@ void tui_p0_build(lv_obj_t *scr)
     ui_text24(s_scr, CARD1_X + CARD_PAD, 364, "体温", TKS_TX);
     H.body_val = value_label(s_scr, CARD1_X + CARD_PAD + 96, 372, TKS_GRAY, &tcs_font_lv48, "--.-");
     H.body_unit = ui_aux20(s_scr, CARD1_X + CARD_PAD + 96, 400, "°C", TKS_TX2);
+    place_unit(H.body_val, H.body_unit, &tcs_font_lv48, CARD1_X + CARD_PAD + 96, 6);   /* 同 #1：占位时也摆单位 */
     int bw = ui_pill_width(&tcs_font_lv24, "失联", UI_PILL_DOT_R);
     H.body_badge = ui_pill(scr, CARD1_X + CARD_W - CARD_PAD - bw, 380, 40, &tcs_font_lv24);
 

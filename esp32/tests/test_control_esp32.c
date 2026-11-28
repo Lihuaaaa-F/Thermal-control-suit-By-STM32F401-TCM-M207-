@@ -26,11 +26,18 @@ static void set_armed(uint8_t a)
 static int fan_calls, tec_calls, temp_calls;
 static uint8_t last_fan; static uint8_t last_tec_on, last_tec_ch;
 static float last_temp_v; static uint8_t last_temp_ch;
+static int temp_fail;                                  /* 2026-11-28：模拟"目标写没被模块受理" */
+static int g_persist_tec_calls = -1;                   /* 落盘回调看到时，已经发出过多少条 tec 命令 */
+static int g_persist_calls;                            /* 落盘回调被调用的次数 */
+static int g_lanes_busy;                               /* 1 = m207 旁路槽还没排空 */
 
 static void stub_fan(uint8_t on)        { fan_calls++; last_fan = on; }
 static int tec_on_calls;                               /* X06-F-03：到过执行器的"开"次数 */
 static void stub_tec(uint8_t ch, uint8_t on)  { tec_calls++; last_tec_ch = ch; last_tec_on = on; if (on) tec_on_calls++; }
-static void stub_temp(uint8_t ch, float v)    { temp_calls++; last_temp_ch = ch; last_temp_v = v; }
+static int stub_temp(uint8_t ch, float v)     { temp_calls++; last_temp_ch = ch; last_temp_v = v; return temp_fail; }
+/* 2026-11-28：落盘回调里拍下"此刻已经发出过多少条 tec 命令"——判定关断是否先于落盘 */
+static void persist_order_cb(uint8_t latch)   { (void)latch; g_persist_tec_calls = tec_calls; g_persist_calls++; }
+static uint8_t lanes_busy_cb(void)             { return g_lanes_busy ? 0u : 1u; }
 
 /* P1-09 用：m207_tec 的主机模型——模块离线时"拒收"（回 -2、不出帧），不记送达 */
 static uint8_t  s_link_down;              /* 1 = M207 链路断（用例同步把 g_tcs.m207_online 置 0）*/
@@ -1811,6 +1818,183 @@ int main(void)
         CHECK(tcs_alarm_active(ALM_EEPROM) == 0, "E3 ALM_EEPROM is informational: ack clears it");
         control_poll(s_now + 100u);
         CHECK(tcs_alarm_active(ALM_EEPROM) == 1, "E3 re-raised on the next tick while the failure count stands");
+    }
+
+    /* ====== 2026-11-28 全库复核：自动目标不可被参数写入劫持；目标未受理不得开 TCSW ====== */
+    {
+        /* (0) 顺序判据：急停 / 超温进安全态时，两路 TCSW=0 必须先发出，锁存才落盘。
+         * 原实现 safety_trip() 内部同步 nvs_set_blob（页满 GC 时数百毫秒），关断命令排在后面。*/
+        {
+            control_init(&(control_ops_t){
+                .fan_set = stub_fan, .tec_sw = stub_tec, .tec_temp = stub_temp, .on_state = 0,
+                .safety_persist = persist_order_cb,
+            });
+            param_registry_init(&(param_hooks_t){
+                .on_check = control_param_check, .on_mode_change = control_on_mode_change,
+            });
+            set_armed(1);
+            g_tcs.body_sensor_ok = 1; g_tcs.m207_online = 1;
+            g_tcs.tc1_act = 25.0f; g_tcs.body_temp = 37.0f;
+            s_now = 10000u;
+            reset_stubs();
+            g_persist_tec_calls = -1;
+            tcs_emergency_stop();
+            CHECK((control_safety_latched() & SAFETY_BIT_ESTOP) != 0, "P0 order: estop latch set");
+            CHECK(g_persist_tec_calls >= 2,
+                  "P0 order: estop queues both TCSW=0 before persisting the latch");
+
+            /* 超温（control_poll 路径，进 SAFE）同一口径 */
+            control_init(&(control_ops_t){
+                .fan_set = stub_fan, .tec_sw = stub_tec, .tec_temp = stub_temp, .on_state = 0,
+                .safety_persist = persist_order_cb,
+            });
+            param_registry_init(&(param_hooks_t){
+                .on_check = control_param_check, .on_mode_change = control_on_mode_change,
+            });
+            set_armed(1);
+            g_tcs.body_sensor_ok = 1; g_tcs.m207_online = 1;
+            g_tcs.body_temp = 37.0f; g_tcs.tc1_act = 49.0f;      /* 过 48°C 硬阈值 */
+            s_now = 10000u;
+            reset_stubs();
+            g_persist_tec_calls = -1;
+            tick();
+            CHECK(control_state() == CTRL_SAFE && (control_safety_latched() & SAFETY_BIT_OVERTEMP) != 0,
+                  "P0 order: overtemp enters SAFE with the latch set");
+            CHECK(g_persist_tec_calls >= 2,
+                  "P0 order: overtemp queues both TCSW=0 before persisting the latch");
+        }
+
+        /* (0b) 2026-11-28 第二路复核：`safe_outputs()` 只登记旁路槽，帧由 m207 任务每拍发一路。
+         * 落盘必须等 lanes_idle；m207 任务死了则 500ms 兜底。*/
+        {
+            control_init(&(control_ops_t){
+                .fan_set = stub_fan, .tec_sw = stub_tec, .tec_temp = stub_temp, .on_state = 0,
+                .safety_persist = persist_order_cb, .lanes_idle = lanes_busy_cb,
+            });
+            param_registry_init(&(param_hooks_t){
+                .on_check = control_param_check, .on_mode_change = control_on_mode_change,
+            });
+            set_armed(1);
+            g_tcs.body_sensor_ok = 1; g_tcs.m207_online = 1;
+            g_tcs.body_temp = 37.0f; g_tcs.tc1_act = 25.0f;
+            s_now = 10000u;
+            control_poll(s_now);                       /* 建立时基 */
+            reset_stubs(); g_persist_calls = 0; g_lanes_busy = 1;
+            control_test_trip(SAFETY_BIT_ESTOP);
+            control_safety_persist();
+            CHECK(g_persist_calls == 0,
+                  "lanes busy: latch persist deferred until the safe-off frames are handed off");
+            g_lanes_busy = 0;
+            control_safety_persist();
+            CHECK(g_persist_calls == 1, "lanes idle: latch persisted");
+
+            /* 兜底：旁路槽一直排不空（m207 任务死了）→ pending 超过 500ms 仍要写 */
+            control_init(&(control_ops_t){
+                .fan_set = stub_fan, .tec_sw = stub_tec, .tec_temp = stub_temp, .on_state = 0,
+                .safety_persist = persist_order_cb, .lanes_idle = lanes_busy_cb,
+            });
+            param_registry_init(&(param_hooks_t){
+                .on_check = control_param_check, .on_mode_change = control_on_mode_change,
+            });
+            set_armed(1);
+            g_tcs.body_sensor_ok = 1; g_tcs.m207_online = 1;
+            g_tcs.body_temp = 37.0f; g_tcs.tc1_act = 25.0f;
+            s_now = 10000u;
+            control_poll(s_now);
+            reset_stubs(); g_persist_calls = 0; g_lanes_busy = 1;
+            control_test_trip(SAFETY_BIT_OVERTEMP);
+            control_safety_persist();
+            CHECK(g_persist_calls == 0, "lanes busy: still deferred inside the 500ms window");
+            s_now += 600u;
+            control_poll(s_now);                       /* 窗口过期：enter_safe 当拍落盘 */
+            CHECK(g_persist_calls >= 1,
+                  "lanes still busy after 500ms: persisted as a bounded fallback");
+            g_lanes_busy = 0;
+        }
+
+        /* (1) 自动 COOL 中写 tc1_set / tc2_set：拒绝（含同值重发的补发路径），且不产生目标写 */
+        control_init(&(control_ops_t){
+            .fan_set = stub_fan, .tec_sw = stub_tec, .tec_temp = stub_temp, .on_state = 0,
+        });
+        param_registry_init(&(param_hooks_t){
+            .on_check = control_param_check, .on_mode_change = control_on_mode_change,
+        });
+        set_armed(1);
+        g_tcs.body_sensor_ok = 1; g_tcs.m207_online = 1; g_tcs.tc1_act = 25.0f;
+        s_now = 10000u;
+        temp_fail = 0;
+        (void)param_set(PARAM_ID_MODE, 1.0f, PARAM_SRC_WEB);
+        g_tcs.body_temp = 40.0f;
+        reset_stubs();
+        tick();
+        CHECK(control_state() == CTRL_COOL && last_temp_v == 15.0f,
+              "P0 auto: state machine writes cool target 15");
+
+        float v0 = param_get(PARAM_ID_TC1_SET);
+        int tc0 = temp_calls;
+        CHECK(param_set(PARAM_ID_TC1_SET, 45.0f, PARAM_SRC_TOUCH) < 0,
+              "P0 auto: tc1_set write rejected while the FSM owns the target");
+        CHECK(param_get(PARAM_ID_TC1_SET) == v0 && temp_calls == tc0,
+              "P0 auto: rejected write has no registry/value side effect and no M207 target write");
+        CHECK(param_set(PARAM_ID_TC2_SET, 45.0f, PARAM_SRC_WEB) < 0,
+              "P0 auto: tc2_set write rejected as well");
+        /* M12-F-08 的同值重写会走 side_effects(redo) 再发一次 TCADJTEMP——自动模式同样必须拒绝 */
+        CHECK(param_set(PARAM_ID_TC1_SET, v0, PARAM_SRC_WEB) < 0,
+              "P0 auto: same-value redo rejected (redo path also writes TCADJTEMP)");
+        CHECK(temp_calls == tc0, "P0 auto: no TCADJTEMP write on any rejected path");
+
+        /* 手动模式放行（调参页的设定值就是手动目标） */
+        (void)param_set(PARAM_ID_MODE, 0.0f, PARAM_SRC_TOUCH);
+        CHECK(param_set(PARAM_ID_TC1_SET, 45.0f, PARAM_SRC_TOUCH) == 0,
+              "P0 manual: tc1_set still writable");
+        (void)param_set(PARAM_ID_TC1_SET, v0, PARAM_SRC_TOUCH);
+
+        /* (2) 目标没被模块受理：不开 TCSW；下一拍受理后再开（自动与手动两条路） */
+        control_init(&(control_ops_t){
+            .fan_set = stub_fan, .tec_sw = stub_tec, .tec_temp = stub_temp, .on_state = 0,
+        });
+        param_registry_init(&(param_hooks_t){
+            .on_check = control_param_check, .on_mode_change = control_on_mode_change,
+        });
+        set_armed(1);
+        g_tcs.body_sensor_ok = 1; g_tcs.m207_online = 1; g_tcs.tc1_act = 25.0f;
+        g_tcs.tec1_on = g_tcs.tec2_on = 0; g_tcs.fan_on = 0;   /* 清上一段用例留下的输出状态 */
+        s_now = 10000u;
+        (void)param_set(PARAM_ID_MODE, 1.0f, PARAM_SRC_WEB);
+        g_tcs.body_temp = 30.0f;                       /* 自动想制热 */
+        temp_fail = -2;                                /* 目标写被模块拒收 */
+        reset_stubs();
+        tick();
+        CHECK(control_state() == CTRL_IDLE && tec_on_calls == 0 && g_tcs.tec1_on == 0,
+              "P1 auto: rejected target must not open TCSW (stays IDLE)");
+        temp_fail = 0;
+        tick();
+        CHECK(control_state() == CTRL_HEAT && tec_on_calls == 1,
+              "P1 auto: next tick opens once the target is accepted");
+
+        /* 手动通道同口径 */
+        (void)param_set(PARAM_ID_MODE, 0.0f, PARAM_SRC_TOUCH);
+        reset_stubs();
+        temp_fail = -2;
+        (void)param_set(PARAM_ID_TEC1_MANUAL, 1.0f, PARAM_SRC_TOUCH);   /* 手动制冷 */
+        tick();
+        CHECK(g_tcs.tec1_on == 0 && tec_on_calls == 0,
+              "P1 manual: rejected target keeps the channel off");
+        temp_fail = 0;
+        tick();
+        CHECK(g_tcs.tec1_on == 1 && tec_on_calls == 1,
+              "P1 manual: next tick opens once the target is accepted");
+
+        /* (3) 手动 TEC 联动期间关风扇：明确拒绝，不再"回 0 → 下一拍 fan_link 又开回来" */
+        CHECK(g_tcs.fan_on == 1, "P1 fan-link precondition: linkage turned the fan on");
+        CHECK(control_apply_cmd(TCS_CMD_FAN_TOGGLE) == -2,
+              "P1 fan-link: turning the fan off while manual TEC runs is rejected");
+        CHECK(g_tcs.fan_on == 1, "P1 fan-link: fan stays on after the rejected toggle");
+        /* 红队 2026-11-28：手动通道正在被 TEC1_MANUAL 驱动时，写 tc1_set 同样会改写模块目标 */
+        CHECK(param_set(PARAM_ID_TC1_SET, 45.0f, PARAM_SRC_TOUCH) == PARAM_REJECT_TARGET_LOCKED,
+              "P0 manual: tc1_set rejected while the channel is driven by TEC1_MANUAL");
+        (void)param_set(PARAM_ID_TEC1_MANUAL, 0.0f, PARAM_SRC_TOUCH);
+        tick();                                        /* 收尾：回暂停 */
     }
 
 #if CONFIG_TCS_DIAG || CONFIG_TCS_SIM

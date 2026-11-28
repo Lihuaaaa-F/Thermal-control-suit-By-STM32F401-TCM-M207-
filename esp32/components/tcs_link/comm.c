@@ -151,6 +151,18 @@ void comm_poll_tx(comm_link_t *L)
     if (L->send_fn(tmp, tlen) != 0) L->tx_fail_cnt++;
 }
 
+void comm_poll_tx_burst(comm_link_t *L, uint8_t max)
+{
+    /* 2026-11-28：链路任务原先每 100ms 只调一次 comm_poll_tx（消费能力 10 帧/s），
+     * 而稳态生产约 11.3 帧/s（0x20 5/s + 0x21 ≤5/s + 0x11 1.25/s + 0x22 0.3/s）——
+     * 队列长期贴满，0x12/0x15 的 ACK 排到队尾超 500ms，屏侧 ARQ 重传后被判"被拒"。
+     * 每拍排空一小批，把消费能力抬到 max×10 帧/s（230400 下单帧约 3.5ms，4 帧约 14ms/100ms）。*/
+    for (uint8_t n = 0; n < max; n++) {
+        if (L->tx_count == 0 || !L->send_fn) break;
+        comm_poll_tx(L);
+    }
+}
+
 int comm_send(comm_link_t *L, const uint8_t *frame_bytes, size_t len, uint8_t msg_type,
               uint8_t *out_seq)
 {

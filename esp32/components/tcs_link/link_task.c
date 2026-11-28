@@ -151,7 +151,9 @@ static void link_task(void *arg)
         if (now - last_tick >= 100) {
             last_tick = now;
             comm_tick(&s_link);
-            comm_poll_tx(&s_link);   /* 队列串行消费 */
+            /* 2026-11-28：每 100ms 只出一帧 = 消费 10 帧/s，低于稳态生产 ~11.3 帧/s → 队列贴满、
+             * ACK 排到队尾超时、屏侧 ARQ 重传被误判"被拒"。每拍排空一小批（4 帧 ≈ 12ms 线时）。*/
+            comm_poll_tx_burst(&s_link, 4u);
         }
         /* R5-01：本端回送帧只在接线/串扰异常时出现。每 20 帧告警一次，提示查接线。*/
         if (s_link.echo_cnt != last_echo) {

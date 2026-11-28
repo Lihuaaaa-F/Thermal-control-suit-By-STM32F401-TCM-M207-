@@ -15,16 +15,19 @@
 #include <math.h>
 
 /* ====== 写路径互斥（M10-F-03）======
- * param_set 的调用方分属多个任务（控制 / httpd / 链路回调 / 控制台），param_persist_flush 在控制任务、
- * param_persist_now 在控制台任务。原先没有任何锁：
+ * param_set 的调用方分属多个任务（控制 / httpd / 链路回调 / 控制台），param_persist_flush 在 persist_worker、
+ * param_persist_now 在控制台/控制任务。原先没有任何锁：
  *   A. 控制任务在落盘的 flash 写窗口里序列化完 → 别的任务改值并置脏 → 控制任务回来把脏位全清
  *      → 新值只在 RAM，复位即丢；
  *   B. 两个任务同时写 0x03 / 0x04，各自在对方写入前通过校验 → body_cold >= body_hot。
- * 现在 param_set 的校验 / 写入 / 侧效应，与落盘的序列化 / 清脏，都在同一把（递归）互斥锁内，
- * 落盘的"序列化 → 清脏"之间不可能再插入别的写入，所以不需要"只清本次序列化覆盖的版本号"。
+ * 现在 param_set 的校验 / 写入 / 侧效应在同一把（递归）互斥锁内。
+ * 2026-11-28：落盘的 commit（NVS 写）挪到锁外——原先 persist_worker 持锁写 flash 时，控制任务在
+ * control_manual_poll 里调 param_set 会被整段挡住（页满 GC 时数百毫秒），控制节拍失真。
+ * 锁内只做"检查脏位 + 序列化一致视图 + 取代际"，commit 在锁外；提交回来只有代际未变才清脏
+ * （提交期间有人改值 → 保留脏位，下一轮再写一次）。这就是 s_write_gen 的用途。
  * 广播回调在锁外调用（它可能再去读注册表、发帧，不能让它在锁里等）。
- * 递归：flush 持锁期间会调 param_persist_now；控制任务自己也会在持锁期间走到这里。
- * PC 单测是单线程：锁退化为空——保持本模块零 HAL 依赖（与 control.c 同样的纪律）。*/
+ * 递归：param_set 内部会调 param_serialize（同锁）；PC 单测是单线程，锁退化为空
+ * ——保持本模块零 HAL 依赖（与 control.c 同样的纪律）。*/
 #ifdef ESP_PLATFORM
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
@@ -34,6 +37,18 @@ static SemaphoreHandle_t s_reg_mux;
 #else
 #define REG_LOCK()   ((void)0)
 #define REG_UNLOCK() ((void)0)
+#endif
+
+/* 值变更代际：落盘 commit 在锁外，提交回来据此判断"提交的是不是最新视图"
+ * （变了就保留脏位，下一轮再写；见文件头注释）。只在 param_set_impl 真正改值时自增。*/
+static uint32_t s_write_gen;
+/* 已经成功写进 NVS 的最大代际（单调）。锁外 commit 允许两个提交同时在飞：后取的锁可能先写，
+ * 先序列化的旧镜像后到——如果照样落盘，盘上就是旧值且脏位已被新提交清掉（永不重写）。
+ * 规则：gen 比已提交的代际旧 → 直接放弃这次写。*/
+static uint32_t s_committed_gen;
+static uint8_t  s_gen_inited;                /* 代际只在首次 init 复位（运行期重复 init 不清基准）*/
+#ifdef ESP_PLATFORM
+static SemaphoreHandle_t s_commit_mtx;      /* commit 专用串行锁（非递归；不与注册表锁嵌套）*/
 #endif
 
 /* ====== 状态快照实例 ====== */
@@ -209,8 +224,12 @@ void param_registry_init(const param_hooks_t *h)
     if (h) s_hooks = *h;
 #ifdef ESP_PLATFORM
     if (!s_reg_mux) s_reg_mux = xSemaphoreCreateRecursiveMutex();   /* M10-F-03；失败则退化为不加锁 */
+    if (!s_commit_mtx) s_commit_mtx = xSemaphoreCreateMutex();      /* 2026-11-28：commit 串行化 */
 #endif
     REG_LOCK();
+    /* 代际只在首次 init 复位：运行期重复 init 时若把 s_committed_gen 清零，在飞 commit
+     * 回来会把单调基准顶回旧值，之后新代际全被判"过期"（永不落盘）。2026-11-28 复核。*/
+    if (!s_gen_inited) { s_write_gen = 0; s_committed_gen = 0; s_gen_inited = 1; }
     param_load_defaults();
     s_image_ok = 1;
     memset(s_apply_err, 0, sizeof(s_apply_err));   /* X02-F-05：受理结果随注册表一起复位 */
@@ -324,6 +343,15 @@ static int param_set_impl(uint16_t id, float v, uint8_t src, param_desc_t **out)
             return (rc <= -3) ? rc : -2;
     }
 
+    /* 2026-11-28：tc1_set / tc2_set 的"能否写"必须在**相等短路之前**问一次。
+     * 这两个参数带 PF_M207，同值重写也会走 side_effects() 再下发一次 TCADJTEMP（M12-F-08）；
+     * 只在下面那处（值真正变化时）校验，运行中写"和现在一样的 45"仍会把闭环目标改成 45。
+     * 钩子（control_param_check）：自动模式拒绝；手动模式仅该通道暂停时放行。*/
+    if ((p->id == PARAM_ID_TC1_SET || p->id == PARAM_ID_TC2_SET) && s_hooks.on_check) {
+        int rc = s_hooks.on_check(p->id, v);
+        if (rc != 0) return (rc <= -3) ? rc : -2;
+    }
+
     /* clamp（任务书：越界返回 clamp 后值经 src 通道回显 → 返回 1 由调用方回显）*/
     float c = v;
     if (c < p->min) c = p->min;
@@ -343,11 +371,15 @@ static int param_set_impl(uint16_t id, float v, uint8_t src, param_desc_t **out)
     if (p->id == PARAM_ID_BODY_HOT && c <= param_get(PARAM_ID_BODY_COLD)) return -2;
     if (p->id == PARAM_ID_BODY_COLD && c >= param_get(PARAM_ID_BODY_HOT)) return -2;
     /* 板级写前校验（如：急停/超温锁存期间不得切自动）。所有写路径都经过这里——
-     * 网页、屏幕、控制台、链路镜像，谁都不能绕过。*/
-    if (s_hooks.on_check && !param_kernel_pause(p, c, src)
-        && s_hooks.on_check(p->id, c) != 0) return -2;
+     * 网页、屏幕、控制台、链路镜像，谁都不能绕过。
+     * 2026-11-28：钩子给出的具体原因码（≤ -3）原样上带（-6 = 目标被状态机/手动方向持有）。*/
+    if (s_hooks.on_check && !param_kernel_pause(p, c, src)) {
+        int rc = s_hooks.on_check(p->id, c);
+        if (rc != 0) return (rc <= -3) ? rc : -2;
+    }
 
     p->value = c;
+    s_write_gen++;                       /* 代际：锁外 commit 回来时判断视图是否已过期 */
     {
         int se = side_effects(p, 0);     /* X02-F-05：模块没受理（2）要盖过"clamp 生效"（1），如实上报 */
         *out = p;                        /* 值变了：外壳在锁外广播 */
@@ -462,59 +494,98 @@ void param_load_defaults(void)
     g_tcs.mode = 0;                       /* F9：上电默认手动 */
 }
 
-/* 锁内的实现（外壳 param_persist_now() 持锁）：serialize → commit → 清脏，中间不会有别的写入 */
-static int persist_now_locked(void)
+static uint32_t s_persist_fail;
+
+/* 锁外提交：img 是锁内序列化的一致视图，gen 是序列化那一刻的代际。
+ * 提交成功且代际未变 → 清脏（镜像就是最新视图）；代际变了 → 不清脏，下一轮 flush 再写一次。
+ * 并发：两个提交可以同时在飞（序列化都在锁内，commit 在锁外）。commit 专用锁串行化 flash 写，
+ * 单调 s_committed_gen 拒绝"更旧的视图后落地"（否则盘上旧值 + 脏位已被新提交清掉 = 永久丢更新）。
+ * 红队 2026-11-28 证伪的就是这个乱序（原实现只比 gen 不清脏，挡不住旧镜像覆盖新镜像）。*/
+static int persist_commit(const uint8_t img[EE_IMG_SIZE], uint32_t gen)
 {
-    uint8_t img[EE_IMG_SIZE];
-    int dirty = 0;
-    for (int i = 0; i < PARAM_N_REGISTERED; i++)
-        if (s_params[i].dirty_persist) { dirty = 1; break; }
-    if (!dirty) return 1;
-    if (param_serialize(img) != 0) return -1;
-    if (s_hooks.eeprom_commit && s_hooks.eeprom_commit(img) != 0) return -1;
-    for (int i = 0; i < PARAM_N_REGISTERED; i++) s_params[i].dirty_persist = 0;
-    s_flush_armed = 0;
-    s_armed_at_ms = 0;
-    s_image_ok = 1;                     /* 这次写进去的镜像是通过校验的值 */
-    return 0;
+    int rv = 0;
+#ifdef ESP_PLATFORM
+    if (s_commit_mtx) xSemaphoreTake(s_commit_mtx, portMAX_DELAY);
+#endif
+    if ((int32_t)(gen - s_committed_gen) < 0) goto out;   /* 更旧的视图：盘上已是更新的，放弃 */
+    if (s_hooks.eeprom_commit && s_hooks.eeprom_commit(img) != 0) { rv = -1; goto out; }
+    s_committed_gen = gen;
+    REG_LOCK();
+    if (s_write_gen == gen) {
+        for (int i = 0; i < PARAM_N_REGISTERED; i++) s_params[i].dirty_persist = 0;
+        s_flush_armed = 0;
+        s_armed_at_ms = 0;
+        s_image_ok = 1;                 /* 这次写进去的镜像是通过校验的值 */
+    }
+    REG_UNLOCK();
+out:
+#ifdef ESP_PLATFORM
+    if (s_commit_mtx) xSemaphoreGive(s_commit_mtx);
+#endif
+    return rv;
 }
 
 int param_persist_now(void)
 {
-    int rv;
+    uint8_t img[EE_IMG_SIZE];
+    uint32_t gen;
+    int dirty = 0;
+
+    /* 序列化在锁内（一致视图），commit 在锁外（NVS 写不再挡住 control_poll 的 param_set）。*/
     REG_LOCK();
-    rv = persist_now_locked();
+    for (int i = 0; i < PARAM_N_REGISTERED; i++)
+        if (s_params[i].dirty_persist) { dirty = 1; break; }
+    if (!dirty) { REG_UNLOCK(); return 1; }
+    if (param_serialize(img) != 0) { REG_UNLOCK(); return -1; }
+    gen = s_write_gen;
     REG_UNLOCK();
-    return rv;
-}
 
-static uint32_t s_persist_fail;
-
-/* 锁内的实现（外壳 param_persist_flush() 持锁）*/
-static void persist_flush_locked(uint32_t now_ms)
-{
-    if (!s_flush_armed) return;
-    if (s_armed_at_ms == 0) {             /* 窗口起点 = 置脏后首个节拍 */
-        s_armed_at_ms = now_ms ? now_ms : 1u;
-        return;
-    }
-    if (now_ms - s_armed_at_ms < PARAM_PERSIST_DEBOUNCE_MS) return;
-    int rv = param_persist_now();
-    if (rv < 0) {
-        /* R1 P1-04：失败不再每拍重试（原实现 10ms 一次），改为退避到下一个窗口；
-         * 连续失败由 control_poll 置 ALM_EEPROM，屏/网页可见。*/
-        s_persist_fail++;
-        s_armed_at_ms = now_ms ? now_ms : 1u;
-        return;
-    }
-    s_persist_fail = 0;
+    return persist_commit(img, gen);
 }
 
 void param_persist_flush(uint32_t now_ms)
 {
+    uint8_t img[EE_IMG_SIZE];
+    uint32_t gen;
+
     REG_LOCK();
-    persist_flush_locked(now_ms);
+    if (!s_flush_armed) { REG_UNLOCK(); return; }
+    {
+        int dirty = 0;
+        for (int i = 0; i < PARAM_N_REGISTERED; i++)
+            if (s_params[i].dirty_persist) { dirty = 1; break; }
+        if (!dirty) {                  /* 红队 2026-11-28：armed 不等于 dirty（上电清脏不改 armed） */
+            s_flush_armed = 0;
+            s_armed_at_ms = 0;
+            REG_UNLOCK();
+            return;
+        }
+    }
+    if (s_armed_at_ms == 0) {             /* 窗口起点 = 置脏后首个节拍 */
+        s_armed_at_ms = now_ms ? now_ms : 1u;
+        REG_UNLOCK();
+        return;
+    }
+    if (now_ms - s_armed_at_ms < PARAM_PERSIST_DEBOUNCE_MS) { REG_UNLOCK(); return; }
+    if (param_serialize(img) != 0) {
+        /* R1 P1-04：失败不再每拍重试，改为退避到下一个窗口；
+         * 连续失败由 control_poll 置 ALM_EEPROM，屏/网页可见。*/
+        s_persist_fail++;
+        s_armed_at_ms = now_ms ? now_ms : 1u;
+        REG_UNLOCK();
+        return;
+    }
+    gen = s_write_gen;
     REG_UNLOCK();
+
+    if (persist_commit(img, gen) != 0) {
+        REG_LOCK();
+        s_persist_fail++;
+        s_armed_at_ms = now_ms ? now_ms : 1u;
+        REG_UNLOCK();
+        return;
+    }
+    s_persist_fail = 0;
 }
 
 uint32_t param_persist_fail_count(void) { return s_persist_fail; }

@@ -20,7 +20,7 @@ static int n_force;                  /* 经安全关断通道进来的请求数 
 static uint32_t f_t;
 static void f_fan(uint8_t on) { (void)on; }
 static void f_tec_sw(uint8_t ch, uint8_t on) { (void)m207_tec(ch, on); }
-static void f_tec_temp(uint8_t ch, float v) { (void)m207_set_temp(ch, v); }
+static int f_tec_temp(uint8_t ch, float v) { return m207_set_temp(ch, v); }
 static void f_tec_force(uint8_t ch, uint8_t on) { n_force++; (void)m207_tec_force(ch, on); }
 
 static void f_init(void)

@@ -33,6 +33,10 @@ int  m207_tec(uint8_t ch, uint8_t on);               /* TCx:TCSW=0/1 */
  * 不占普通队列，离线沿的清队列碰不到它；每 500ms 的重试由 control 的锁存重申驱动。
  * 只有"关"走这里："开"转回 m207_tec（普通队列）。返回 0=已受理；-1=通道非法。*/
 int  m207_tec_force(uint8_t ch, uint8_t on);
+/* 安全关断旁路槽是否已排空（2026-11-28）：1 = 两路都没有待发的 TCSW 帧。
+ * 用途：安全锁存落盘必须等"关断帧真的交给 UART"之后（m207_lane_step 每拍只发一路）。
+ * 只读、可在其它任务调用（内部用队列锁）。*/
+uint8_t m207_core_lanes_idle(void);
 int  m207_map_set(uint16_t pid, float v);            /* H10 映射表 0x100+ */
 int  m207_send_raw(const char *cmd);                 /* console 调试/COMPUSHLIST 试跑 */
 /* R1 M12-F-04：逐参数下发 `!` 保存到模块（网页"保存到模块"按钮）。返回入队条数；-1/-2=失败。

@@ -55,7 +55,9 @@ typedef enum {
 typedef struct {
     void (*fan_set)(uint8_t on);
     void (*tec_sw)(uint8_t ch, uint8_t on);     /* TCx:TCSW */
-    void (*tec_temp)(uint8_t ch, float v);      /* TCx:TCADJTEMP（自动模式切目标）*/
+    /* TCx:TCADJTEMP（自动模式切目标）。返回 0 = 模块服务已受理；非 0 = 没受理（离线 / 忙 / 被拒）。
+     * 调用方必须先看到 0 才能跟着发 TCSW=1——"先设目标、后开"不能只保证入队顺序（见 control.c）。*/
+    int  (*tec_temp)(uint8_t ch, float v);
     void (*on_state)(ctrl_state_t st);          /* 迁移日志钩子，可 NULL */
     void    (*safety_persist)(uint8_t latch);   /* latch 变化时落盘，可 NULL */
     uint8_t (*safety_load)(void);               /* 启动读回 latch，可 NULL */
@@ -67,6 +69,9 @@ typedef struct {
      *   重试的节拍由这里的锁存重申给出（服务侧不自带定时器）。
      * 只有"关"走这条通道：状态机与手动的"开"永远走 tec_sw。*/
     void    (*tec_force)(uint8_t ch, uint8_t on);
+    /* 安全关断旁路是否已排空（2026-11-28）：1 = 没有待发的关断帧。安全锁存落盘要等它。
+     * NULL = 视为已排空（主机单测 / 没有 m207 服务的装配），落盘立即执行。*/
+    uint8_t (*lanes_idle)(void);
     /* 注入源是否在生效（S 线 i3，M09-F-09 的注入档口径）：ch 1 = 体温、2 = 水温；非 0 = 这一路的读数
      * 是注入值（人给的常数）→ 卡死判据豁免这一路，生效 / 失效各打一次 W 级日志。
      * 交付档不接（NULL）= 行为不变：真实读数逐位不变满窗口仍然进安全态。*/
@@ -116,8 +121,13 @@ uint8_t control_tec_act(uint8_t ch);
 /* M207 服务在收到 TCSW? 应答时写模块回显（i3）：control_tec_act() 只跟它走，不跟控制自己下的命令走。
  * ch = 1 / 2；其它通道忽略。*/
 void    control_tec_echo_set(uint8_t ch, uint8_t on);
-/* N-01：设备服务层（M207 解析等）可直接置安全锁存——超温切断不得只依赖 control 任务存活。*/
+/* N-01：设备服务层（M207 解析等）可直接置安全锁存——超温切断不得只依赖 control 任务存活。
+ * trip 只置锁存并记"待落盘"，**不写 flash**：调用方必须在执行器关断命令发出之后调
+ * control_safety_persist()（见 control.c 的 tcs_emergency_stop_src / 超温旁路 / 控制节拍末尾）。
+ * 这样最坏关断延迟不再包含一次 SPI flash 写（页满 GC 可达数百毫秒）。*/
 void    control_safety_trip(uint8_t bit);
+/* 把"待落盘"的锁存写进 NVS。幂等；没有待写内容时立即返回。只能在关断命令发出之后调用。*/
+void    control_safety_persist(void);
 
 #if CONFIG_TCS_DIAG || CONFIG_TCS_SIM
 /* 只读导出（S 线 i3，条目 8）：体温 / 水温读数"逐位不变"的最长连续时长（毫秒；含正在进行的这一段）。

@@ -46,9 +46,10 @@
 
 static const char *TAG = "TCS";
 
-/* control ops 适配（m207 API 返回 int，ops 签名 void；错误由服务内 NAK/重发计数承载）*/
+/* control ops 适配：tec_temp 的返回值要如实上带——控制内核据此决定"目标没受理就不开 TCSW"。
+ * tec_sw / tec_force 的错误仍由服务内 NAK/重发计数承载。*/
 static void op_tec_sw(uint8_t ch, uint8_t on) { (void)m207_tec(ch, on); }
-static void op_tec_temp(uint8_t ch, float v) { (void)m207_set_temp(ch, v); }
+static int  op_tec_temp(uint8_t ch, float v) { return m207_set_temp(ch, v); }
 /* P1-09 的另一半（i3）：安全关断通道——SAFE 的关断 / 500ms 重申 / cmd 11 停机都走它。
  * 模块离线时 m207_tec 回 -2、连旁路槽都进不了；m207_tec_force 离线也记下意图，复联第一帧补发。*/
 static void op_tec_force(uint8_t ch, uint8_t on) { (void)m207_tec_force(ch, on); }
@@ -346,6 +347,7 @@ void app_main(void)
         .tec_temp = op_tec_temp,
         /* P1-09：接上安全关断通道（i3；此前退化成 tec_sw，模块离线时关断送不到执行器）。*/
         .tec_force = op_tec_force,
+    .lanes_idle = m207_core_lanes_idle,   /* 2026-11-28：安全锁存等旁路槽排空后再落盘 */
 #if CONFIG_TCS_SIM
         .stuck_exempt = op_stuck_exempt,   /* 注入源在生效的那一路不判卡死（M09-F-09 的注入档口径，i3）*/
 #endif

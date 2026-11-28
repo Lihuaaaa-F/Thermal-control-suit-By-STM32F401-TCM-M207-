@@ -11,8 +11,8 @@
  * 背景（2026-11-25 上机）：屏幕打印 tcs v1.2.0（来自 ESP32 报上来的 fw_ver = 0x010200），
  * 而 ESP32 应用版本是 1.3.0-rc1——同一个固件两个版本号。
  * 说明：BCD 只能表达 主.次.修订，后缀（-rc1 之类）只在应用版本字符串里。
- * 两端共用一份：H743 侧的 fw_ver 目前仍是 project_tcs/App/tcs/param_registry.c 里的字面量，
- * 应改为包含本文件（那一处不在本批次的文件范围内）。
+ * 两端共用一份：H743 侧已改为在 project_tcs/App/tcs/param_registry.c 里相对包含本文件
+ * （2026-11-28，TCS_FW_VER_BCD），与 ESP32 同源；version_bump.py 同时校验两端。
  * =================================================================== */
 #ifndef TCS_VERSION_H
 #define TCS_VERSION_H

@@ -158,6 +158,11 @@ static void m207_task(void *arg)
         /* 2) 在途事务超时 + 3) TX 仲裁（每拍至多 1 帧）*/
         m207_core_tick_end(t0_us);
 
+        /* 2026-11-28：安全锁存放在 TX **之后**。m207_tec_force() 只登记旁路槽，关断帧是
+         * m207_core_tick_end() 里发出去的；trip 只置"待落盘"，这里才写 NVS——保证最坏关断
+         * 延迟不再包含 flash 写（控制任务卡死时 m207 任务自己也把这笔账结掉）。*/
+        control_safety_persist();
+
         /* 4) perf 统计（第八章：队列服务+节流 ≤1ms/拍，轮询状态机 ≤0.3ms）*/
         m207_core_perf_t pf;
         if (m207_core_perf_take(&pf)) {

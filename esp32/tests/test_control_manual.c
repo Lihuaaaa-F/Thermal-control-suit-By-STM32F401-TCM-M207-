@@ -31,11 +31,12 @@ static void set_armed(uint8_t a) { post_arm_commit(a ? POST_ARM_ARMED_ONLINE : P
 typedef struct { char kind; uint8_t ch; uint8_t on; float v; } rec_t;
 static rec_t  g_log[256];
 static int    g_n;
+static int    temp_fail;              /* 2026-11-28：模拟"目标写没被模块受理" */
 static uint16_t g_bc_ids[64]; static int g_bc_n;
 
 static void stub_fan(uint8_t on)        { if (g_n < 256) { g_log[g_n].kind = 'F'; g_log[g_n].on = on; g_n++; } }
 static void stub_tec(uint8_t ch, uint8_t on) { if (g_n < 256) { g_log[g_n].kind = 'S'; g_log[g_n].ch = ch; g_log[g_n].on = on; g_n++; } }
-static void stub_temp(uint8_t ch, float v)   { if (g_n < 256) { g_log[g_n].kind = 'T'; g_log[g_n].ch = ch; g_log[g_n].v = v; g_n++; } }
+static int stub_temp(uint8_t ch, float v)     { if (g_n < 256) { g_log[g_n].kind = 'T'; g_log[g_n].ch = ch; g_log[g_n].v = v; g_n++; } return temp_fail; }
 static void bcast_rec(param_desc_t *p, uint8_t src)
         { (void)src; if (g_bc_n < 64) g_bc_ids[g_bc_n] = p->id; g_bc_n++; }
 static int bc_has(uint16_t id)

@@ -107,6 +107,8 @@ run linkdir tests/test_link_dir.c components/tcs_link/link_task.c components/tcs
 EXTRA_INC=""
 # m1（模式页）：对端帧时刻只在方向闸门之后刷新——"屏链路断开 3 秒 = 急停"的计时起点（comm.c 原样编译）
 run linkpeer tests/test_link_peer.c components/tcs_link/comm.c components/tcs_link/proto.c
+# 2026-11-28：TX 队列批量排空（消费 10 帧/s < 生产 ~11.3 帧/s 的回归用例）
+run commburst tests/test_comm_burst.c components/tcs_link/comm.c components/tcs_link/proto.c
 
 # S-G e3a：tcs_core 里 control.c 之外的纯逻辑（上次运行记录、安全记录 v2，以及后面本批次补的参数用例）
 run tcscore   tests/test_tcs_core.c       components/tcs_core/boot_record.c components/tcs_core/nvs_store.c components/tcs_core/svc_status.c components/tcs_core/param_registry.c components/tcs_link/proto.c

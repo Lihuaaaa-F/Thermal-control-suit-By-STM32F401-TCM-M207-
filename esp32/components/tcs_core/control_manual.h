@@ -33,7 +33,7 @@ extern "C" {
 
 typedef struct {
     void (*tec_sw)(uint8_t ch, uint8_t on);    /* ch = 1 / 2 */
-    void (*tec_temp)(uint8_t ch, float v);
+    int  (*tec_temp)(uint8_t ch, float v);     /* 0 = 模块服务已受理；非 0 = 没受理（离线/忙/被拒）*/
     void (*fan_set)(uint8_t on);
 } control_manual_ops_t;
 

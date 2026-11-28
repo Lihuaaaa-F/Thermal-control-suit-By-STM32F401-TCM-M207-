@@ -256,11 +256,20 @@ static uint8_t stuck_chn_latched(uint8_t lat)
 #ifdef ESP_PLATFORM
 static SemaphoreHandle_t s_persist_mtx;
 
+/* 待落盘标记：trip 只置它，不写 flash。见 control_safety_persist()。
+ * 单字节写在 32 位 MCU 上原子；safety_persist_now() 在取 latch 之前先清，保证清除期间
+ * 新到的 trip 会重新置位（最多多写一次，不会漏写）。*/
+static volatile uint8_t s_safety_persist_pending;
+/* 第一次置 pending 的时刻（control_poll 的时基）。用于"旁路槽一直排不空"的兜底：
+ * m207 任务死了/卡住时，pending 超过 500ms 仍然要落盘，否则锁存跨复位丢失。*/
+static uint32_t s_safety_persist_since_ms;
+
 static void safety_persist_now(void)
 {
     uint8_t v;
-    if (!s_ops.safety_persist) return;
-    if (s_persist_mtx && xSemaphoreTake(s_persist_mtx, portMAX_DELAY) != pdTRUE) return;
+    if (!s_ops.safety_persist) { s_safety_persist_pending = 0; return; }   /* 没注入落盘：清掉，别每次进 SAFE 白跑 */
+    if (s_persist_mtx && xSemaphoreTake(s_persist_mtx, portMAX_DELAY) != pdTRUE) return;  /* 取不到锁：pending 留着 */
+    s_safety_persist_pending = 0;               /* 先清再取：取到的是"至少包含此刻"的视图 */
     SAFETY_LOCK();
     v = s_safety_latch & SAFETY_PERSIST_MASK;   /* STUCK 不落盘 */
     SAFETY_UNLOCK();
@@ -268,12 +277,16 @@ static void safety_persist_now(void)
     if (s_persist_mtx) xSemaphoreGive(s_persist_mtx);
 }
 #else
+static volatile uint8_t s_safety_persist_pending;
+static uint32_t s_safety_persist_since_ms;
+
 static void safety_persist_now(void)
 {
     uint8_t v;
-    if (!s_ops.safety_persist) return;
+    if (!s_ops.safety_persist) { s_safety_persist_pending = 0; return; }
+    s_safety_persist_pending = 0;
     SAFETY_LOCK();
-    v = s_safety_latch & SAFETY_PERSIST_MASK;   /* STUCK 不落盘 */
+    v = s_safety_latch & SAFETY_PERSIST_MASK;
     SAFETY_UNLOCK();
     s_ops.safety_persist(v);
 }
@@ -291,10 +304,28 @@ static void safety_trip(uint8_t bit)
      * 本轮 SAFE 不得复原 TEC2。在这里统一作废，调用方（poll、cmd 8/11、M207 任务里的
      * 超温置位）不必各自记，也不必等到下一拍。*/
     if (bit & (uint8_t)~SAFETY_BIT_BODY_LOST) s_restore_tec2_ok = 0;
-    /* R9-04（独立复核 R9，2026-11-26）：只在"落盘视图真的变了"时写。STUCK 不在 SAFETY_PERSIST_MASK
+    /* R9-04（独立复核 R9，2026-11-26）：只在"落盘视图真的变了"时置位。STUCK 不在 SAFETY_PERSIST_MASK
      * 里，一个只含 STUCK 的 trip 原先也会把同一个值（不变量）再写一遍 NVS——操作员连点"解除"时
-     * ack+重锁的写放大就是这么来的（每对 2 次写；10 Hz 一小时 72k 次，8 字节 blob 也在磨损均衡下）。*/
-    if (changed && (bit & SAFETY_PERSIST_MASK)) safety_persist_now();   /* 锁外取最新值落盘（N-04） */
+     * ack+重锁的写放大就是这么来的（每对 2 次写；10 Hz 一小时 72k 次，8 字节 blob 也在磨损均衡下）。
+     * 2026-11-28：只置"待落盘"，不在这里写 flash。control_safety_persist() 还要等 m207 旁路槽排空
+     * （m207_lane_step 每拍只发一路，两路同时超温时第二路要下一拍才发出）。*/
+    if (changed && (bit & SAFETY_PERSIST_MASK)) {
+        if (!s_safety_persist_pending) s_safety_persist_since_ms = s_poll_now_ms;
+        s_safety_persist_pending = 1;
+    }
+}
+
+/* 关断命令交给执行通道之后，把待落盘的锁存写进 NVS。幂等；没有待写内容时立即返回。
+ * 2026-11-28 第二路复核：`safe_outputs()`/`m207_tec_force()` 只是登记旁路槽，真正发帧在
+ * m207 任务（每拍一路）。所以这里必须等 lanes_idle；
+ * 兜底：旁路一直排不空（m207 任务死了）时，pending 超过 500ms 仍写，避免锁存跨复位丢失。*/
+void control_safety_persist(void)
+{
+    if (!s_safety_persist_pending) return;
+    if (s_ops.lanes_idle && !s_ops.lanes_idle()) {
+        if (s_poll_now_ms && (uint32_t)(s_poll_now_ms - s_safety_persist_since_ms) < 500u) return;
+    }
+    safety_persist_now();
 }
 
 static void safety_set_ok(uint8_t bit, uint8_t ok)
@@ -392,15 +423,18 @@ void control_tec_echo_set(uint8_t ch, uint8_t on)
     else if (ch == 2) s_tec_act_on[1] = on ? 1u : 0u;
 }
 
-static void out_tec_temp(uint8_t ch, float v)
+static int out_tec_temp(uint8_t ch, float v)
 {
-    if (s_ops.tec_temp) s_ops.tec_temp(ch, v);
+    /* 返回模块服务是否受理：0 = 已受理；非 0 = 离线 / 队列满 / 忙 / 被拒。
+     * 调用方必须先看到 0 才能发 TCSW=1（原先 (void) 丢掉返回值，模块没收下目标也照样通电）。*/
+    if (s_ops.tec_temp) return s_ops.tec_temp(ch, v);
+    return -1;
 }
 
 /* m1（模式页）：control_manual 的输出经这三条回到上面的封装——安全门控（out_tec_sw 把锁存期间的
  * "开"压成 0）与 g_tcs 同步仍只有这一个收敛点。*/
 static void mo_tec_sw(uint8_t ch, uint8_t on) { out_tec_sw(ch, on); }
-static void mo_tec_temp(uint8_t ch, float v)  { out_tec_temp(ch, v); }
+static int mo_tec_temp(uint8_t ch, float v)  { return out_tec_temp(ch, v); }
 static void mo_fan_set(uint8_t on)             { out_fan(on); }
 
 static void goto_state(ctrl_state_t st)
@@ -450,6 +484,8 @@ void control_init(const control_ops_t *ops)
     memset(s_water_pre_ms, 0, sizeof(s_water_pre_ms));   /* R9-03：预冻确认窗从头开始 */
     memset(s_tec_act_on, 0, sizeof(s_tec_act_on));   /* i3：模块回显从头开始，上电还没有回读过 */
     s_poll_now_ms = 0;
+    s_safety_persist_pending = 0;    /* 2026-11-28：init = 干净起点（锁存本身由 safety_load 决定）*/
+    s_safety_persist_since_ms = 0;
     control_manual_init(&(control_manual_ops_t){ mo_tec_sw, mo_tec_temp, mo_fan_set });   /* m1 */
     s_manual_reset_req = 0;                                                              /* m1 */
     g_tcs.alarm_bits = 0;
@@ -538,6 +574,7 @@ static void enter_safe(void)
 {
     if (s_state != CTRL_SAFE) safe_remember_outputs();
     safe_outputs();
+    control_safety_persist();      /* 关断先发出，再写 NVS（2026-11-28，见 safety_trip 注释）*/
     /* m1（模式页，用户 2026-11-26）：进安全态 = 两路手动输出回暂停、风扇联动解除——确认解除后
      * 不得自己恢复输出。幂等：锁存期间每 500ms 重申会再进来，参数已是 0 就什么都不做。
      * 不碰风扇：安全态风扇全开，解除时 leave_safe 复原上面记下的用户选择。*/
@@ -635,6 +672,10 @@ void tcs_emergency_stop_src(uint8_t src)
      * 分清是网页、屏幕还是控制台按的急停（原先一律记成"控制台：控制模式 改为 0"）。*/
     (void)param_set(PARAM_ID_MODE, 0.0f, src);
     safe_outputs();
+    /* 2026-11-28：锁存落盘挪到关断之后。原顺序在 safety_trip() 内部同步写 NVS（页满 GC 时数百 ms），
+     * TCSW=0 还没入队——急停/超温的最坏关断延迟被一次 flash 写撑开。trip 现在只置"待落盘"，
+     * 这里在执行器关断命令发出后才写。*/
+    control_safety_persist();
     /* r7f（独立复核 R7-02 ②，2026-11-26）：模式 = 手动必须与急停锁存一起落盘，不能等 2 秒防抖 + 500ms 冲洗。
      * 急停后这 2.5 秒内掉电重启，NVS 里就是"自动 + 急停锁存"：人工点一次解除，状态机当拍就把 TEC 开回来。
      * 放在 safe_outputs() 之后：先把两路 TCSW=0 发出去，再做这次可能阻塞几十~几百毫秒的 NVS 写。
@@ -656,6 +697,18 @@ int control_param_check(uint16_t id, float v)
 {
     if (id == PARAM_ID_MODE && v != 0.0f
         && (s_safety_latch & (uint8_t)(SAFETY_BIT_ESTOP | SAFETY_BIT_OVERTEMP))) return -2;
+    /* 2026-11-28：tc1_set / tc2_set 不是闭环目标——自动目标固定为安全常量
+     * TEC_COOL_TARGET_C / TEC_HEAT_TARGET_C，手动方向也用同一组常量（control_manual.c），
+     * 没有任何控制路径读这两个参数。它们带 PF_M207，写一次就直接改写模块 TCADJTEMP；
+     * 而状态机只在 IDLE→COOL/HEAT 迁移时重申目标、手动只在方向变化时下发——
+     * 于是"制冷（目标 15）时把设定拉到 45"会让模块目标变 45，控制侧仍认为在制冷。
+     * 规则：自动模式一律拒绝；手动模式仅当**该通道已暂停**时允许（启动时会被常量覆盖，
+     * 不会留在执行器上）。红队 2026-11-28：原实现只挡自动，手动运行中是同一个漏洞。*/
+    if (id == PARAM_ID_TC1_SET || id == PARAM_ID_TC2_SET) {
+        uint8_t ch = (id == PARAM_ID_TC1_SET) ? 1u : 2u;
+        if (g_tcs.mode != 0) return PARAM_REJECT_TARGET_LOCKED;
+        if (control_manual_dir(ch) != TEC_DIR_PAUSE) return PARAM_REJECT_TARGET_LOCKED;
+    }
     /* m1（模式页）：两路 TEC 手动输出参数——只在手动模式、且不在安全态时可写；拒绝带可区分的原因码
      *（屏端据此提示）。判据在 control_manual.c（纯逻辑，主机可测）。*/
     if (id == PARAM_ID_TEC1_MANUAL || id == PARAM_ID_TEC2_MANUAL)
@@ -694,8 +747,17 @@ int control_apply_cmd_src(uint8_t cmd, uint8_t src)
     case TCS_CMD_TEC2_OFF:      control_manual_tec(2, 0); return 0;
     case TCS_CMD_FAN_TOGGLE:
         /* r7f（独立复核 R7-03，2026-11-26）：自动模式 COOL / HEAT 下风扇是"TEC 在输出"的一部分——
-         * 拒绝"关风扇"（回与安全态同一个拒绝码；只有真要关的时候才拒，风扇不知为何关着时"开"照收）。*/
-        if (g_tcs.fan_on && g_tcs.mode != 0 && (s_state == CTRL_COOL || s_state == CTRL_HEAT)) return -2;
+         * 拒绝"关风扇"（回与安全态同一个拒绝码；只有真要关的时候才拒，风扇不知为何关着时"开"照收）。
+         * 2026-11-28：手动模式两路 TEC 联动期间同样拒绝。原来这里回 0，下一拍 fan_link 又把风扇
+         * 开回来、s_fan_user 也不更新——用户看到的是"点了没反应、自己跳回来"，与自动模式
+         * 明确拒绝的口径自相矛盾。*/
+        {
+            uint8_t manual_tec = (uint8_t)((control_manual_dir(1) != TEC_DIR_PAUSE)
+                                           || (control_manual_dir(2) != TEC_DIR_PAUSE));
+            if (g_tcs.fan_on
+                && ((g_tcs.mode != 0 && (s_state == CTRL_COOL || s_state == CTRL_HEAT)) || manual_tec))
+                return -2;
+        }
         control_manual_fan(g_tcs.fan_on ? 0 : 1); return 0;
     /* 改模式：来源原样带进参数表（事件日志据此写"网页/屏幕/控制台"）；被安全校验拒绝
      * （急停/超温锁存期间切自动）时 param_set 返回 -2，这里如实往上带 */
@@ -712,6 +774,7 @@ int control_apply_cmd_src(uint8_t cmd, uint8_t src)
         tcs_alarm_raise(ALM_OVERTEMP);
         out_tec_sw_ex(1, 0, 1);                  /* P1-09：停机请求的安全关断同样走专门通道 */
         out_tec_sw_ex(2, 0, 1);
+        control_safety_persist();                /* 关断已发出，再落盘（见 safety_trip 注释） */
         return 0;
     default:                    return -1;
     }
@@ -753,15 +816,20 @@ static void auto_evaluate(uint32_t now_ms)
     switch (s_state) {
     case CTRL_IDLE:
         if (body > hot + hyst) {
-            out_tec_temp(1, TEC_COOL_TARGET_C);
-            out_tec_sw(1, 1);
-            out_fan(1);
-            goto_state(CTRL_COOL);
+            /* 先设目标、后开：目标没被模块受理就不开（离线 / 忙时下一拍重试）。
+             * 原先只保证入队顺序，(void) 丢掉返回值——目标没写进去，TCSW=1 照样发出，
+             * 模块带着上一次的方向通电。*/
+            if (out_tec_temp(1, TEC_COOL_TARGET_C) == 0) {
+                out_tec_sw(1, 1);
+                out_fan(1);
+                goto_state(CTRL_COOL);
+            }
         } else if (body < cold - hyst) {
-            out_tec_temp(1, TEC_HEAT_TARGET_C);
-            out_tec_sw(1, 1);
-            out_fan(1);
-            goto_state(CTRL_HEAT);
+            if (out_tec_temp(1, TEC_HEAT_TARGET_C) == 0) {
+                out_tec_sw(1, 1);
+                out_fan(1);
+                goto_state(CTRL_HEAT);
+            }
         }
         break;
     case CTRL_COOL:

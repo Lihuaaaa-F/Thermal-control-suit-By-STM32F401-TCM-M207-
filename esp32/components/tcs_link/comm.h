@@ -190,6 +190,13 @@ void comm_txq_push(comm_link_t *L, const uint8_t *frame, size_t len);
 void comm_poll_tx(comm_link_t *L);
 
 /**
+ * 一次排空（最多 max 帧；队列空或 send_fn 为空时提前返回）。
+ * 杠杆：单拍消费能力 = max；链路任务的 100ms 节拍配 max=4 → 40 帧/s，覆盖稳态 ~11.3 帧/s
+ * 的生产速率（0x20/0x21/0x11/0x22 合计）。只为 ESP32 这一份提供（H743 主循环节拍不同）。
+ */
+void comm_poll_tx_burst(comm_link_t *L, uint8_t max);
+
+/**
  * 定时 tick（本文件对应的固件里由链路任务每 100ms 调）。遍历 pending：
  *   超时未达 max_retries → 重传入队（§0E，不 send_fn）
  *   已达 max_retries → 清该 pending；全部失败 → link_ok=False + 调 on_link_down

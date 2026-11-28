@@ -87,6 +87,7 @@ esp32/tests/mutation_core.py
 esp32/tests/mutation_m207_force.py
 esp32/tests/mutation_web.py
 esp32/tests/shim_h7/m207.h
+esp32/tests/test_comm_burst.c
 esp32/tests/test_control_esp32.c
 esp32/tests/test_control_manual.c
 esp32/tests/test_fan_pure.c
@@ -283,6 +284,7 @@ project_tcs/tools/proto_ref.py
 project_tcs/tools/qr_verify.py
 project_tcs/tools/reanchor_study_cards.py
 project_tcs/tools/regen_ext_fonts.py
+project_tcs/tools/regen_font_cells.py
 project_tcs/tools/rehearsal.py
 project_tcs/tools/site/dlg_timing.py
 project_tcs/tools/site/esp_bridge.py

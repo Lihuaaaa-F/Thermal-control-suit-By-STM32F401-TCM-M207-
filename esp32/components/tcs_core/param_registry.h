@@ -61,6 +61,9 @@ typedef enum {
 #define PARAM_REJECT_NOT_MANUAL  (-3)   /* 不在手动模式 */
 #define PARAM_REJECT_SAFE       (-4)    /* 安全态 / 急停 / 超温未解除 */
 #define PARAM_REJECT_RANGE      (-5)    /* 取值不是 0 / 1 / 2 */
+/* 该通道的目标由状态机（自动 15/45）或手动方向常量持有：写参数会直接改写模块 TCADJTEMP，
+ * 而控制侧不会重申 → 拒绝。屏端按通用提示显示（rv < 0 且不是 -2）。*/
+#define PARAM_REJECT_TARGET_LOCKED (-6)
 
 #define PARAM_CAPACITY      64    /* 注册表数组容量（条数不再手写：见 param_registry.c 的 PARAM_N_REGISTERED 与 _Static_assert）*/
 #define PARAM_EEPROM_MAX    31    /* EEPROM count 字段上限（u8 纪录数；物理布局另限 30，见 param_serialize）*/

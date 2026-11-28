@@ -53,7 +53,7 @@ def raw_drag(x_points, y=TY):
         send("sim touchraw %d %d" % (y, x))
         time.sleep(0.3)
     send("sim touchrawr")
-    time.sleep(0.7)
+    time.sleep(1.6)                     # K4b：松手后 1s 防抖才落值（2026-11-28），留 0.6s 余量
 
 
 # px2val 实测锚定（K4b 基线）：含旋钮半径内缩——有效区 x0=TRACK_X0+40、宽=TRACK_W-80

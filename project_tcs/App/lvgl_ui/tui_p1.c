@@ -25,7 +25,6 @@
 #define KEY_XP      (ROW_X + 872)
 #define KEY_Y       12
 #define KEY_WH      64
-#define DRAG_PERIOD_MS  100u             /* 拖动落值的最小间隔 */
 
 static const uint16_t s_ids[4] = {
     PARAM_ID_TC1_SET, PARAM_ID_TC2_SET, PARAM_ID_BODY_HOT, PARAM_ID_BODY_COLD
@@ -55,7 +54,10 @@ static uint8_t   s_built;
 static ui_button_t s_big_minus, s_big_plus, s_step_btn;
 static int       s_drag_row = -1;    /* 正在拖动的行，-1 = 无 */
 static float     s_drag_v;           /* 拖动中的待落值 */
+static float     s_drag_start_v;     /* 按下时的权威值（拖出轨道 / PRESS_LOST 时回弹用）*/
 static uint32_t  s_drag_last_ms;
+static int       s_pending_row = -1; /* 松手后等 1s 防抖的行，-1 = 无 */
+static lv_timer_t *s_commit_timer;   /* 1s 防抖的一次性 timer */
 
 static int row_y(int i) { return ROW_Y0 + i * (ROW_H + ROW_GAP); }
 static const param_desc_t *pd(int i) { return param_find(s_ids[i]); }
@@ -124,7 +126,7 @@ static void select_paint(void)
 
 /* ============ 落值 ============ */
 
-#define HINT_ON  "拖滑条或按加减键，改动立即生效"
+#define HINT_ON  "拖滑条后自动生效，加减键立即生效"
 #define HINT_OFF "主控连接中断，现在不能调参"
 
 /* 主控在线才能改参：屏端注册表只是镜像，帧发不出去时 param_set 照样返回 0，本地值
@@ -149,43 +151,113 @@ static void apply_value(int i, float v)
     row_refresh(i);
 }
 
-/* ============ 滑条拖动 ============ */
+/* ============ 滑条拖动（K4b：跟手显示 ≤20Hz；松手 1s 防抖后生效；拖出轨道 ±32px 取消回弹）============
+ * 2026-11-28：v1.1 落地的 K4b 在 LVGL 重写里退化了——拖动按 100ms 直接写参数、松手立即下发、
+ * 没有取消回弹。拖一次 3 秒 ≈ 30 次写 PF_M207|PF_PERSIST 参数，灌 M207 队列和 NVS 冲刷。
+ * 现在拖动过程只更新显示（不改注册表），松手后由一次性 timer 落值；任何后续操作（±/步进/翻页）
+ * 取消未生效的拖动。*/
 
-static void slider_point(int i, int final)
+#define SLIDER_DISPLAY_MS   50u    /* 跟手显示节流：20Hz */
+#define SLIDER_COMMIT_MS    1000u  /* 松手 1s 防抖（K4b） */
+#define SLIDER_CANCEL_PX    32     /* 拖出轨道 ±32px = 取消回弹（K4b） */
+
+static void slider_commit_cancel(void)
+{
+    if (s_commit_timer) { lv_timer_del(s_commit_timer); s_commit_timer = NULL; }
+    s_pending_row = -1;
+}
+
+static float drag_value(int i)
 {
     lv_indev_t *in = lv_indev_active();
     const param_desc_t *p = pd(i);
-    if (!in || !p) return;
+    if (!in || !p) return s_drag_v;
     lv_point_t pt;
     lv_indev_get_point(in, &pt);
     float f = (float)(pt.x - (TRACK_X + THUMB_D / 2)) / (float)(TRACK_W - THUMB_D);
     if (f < 0.0f) f = 0.0f;
     if (f > 1.0f) f = 1.0f;
-    s_drag_v = quantize(p, p->min + f * (p->max - p->min));
+    return quantize(p, p->min + f * (p->max - p->min));
+}
+
+static void slider_point(int i)
+{
+    const param_desc_t *p = pd(i);
+    if (!p) return;
+    s_drag_v = drag_value(i);
     uint32_t now = lv_tick_get();
-    if (final || now - s_drag_last_ms >= DRAG_PERIOD_MS) {
+    if (s_drag_v != s_shown[i] && now - s_drag_last_ms >= SLIDER_DISPLAY_MS) {
         s_drag_last_ms = now;
-        apply_value(i, s_drag_v);
-    } else if (s_drag_v != s_shown[i]) {
-        row_show(i, s_drag_v);            /* 先跟手显示，到了节流点再落值 */
+        row_show(i, s_drag_v);              /* 只跟手显示，松手防抖到点才写 */
     }
+}
+
+static void slider_commit_cb(lv_timer_t *tm)
+{
+    int i = (int)(intptr_t)lv_timer_get_user_data(tm);
+    s_commit_timer = NULL;
+    s_pending_row = -1;
+    /* 2026-11-28 红队：走查键/别的入口能在 1s 内翻页（tui_goto 会 lv_obj_clean 本页对象），
+     * 回调里必须先确认页面还在，否则 row_refresh 打在已释放对象上（use-after-free）。*/
+    if (s_built && tui_current() == TUI_TUNE && i >= 0 && i < 4) apply_value(i, s_drag_v);
+    lv_timer_del(tm);                       /* 删除自身 timer 由 LVGL 延后安全处理 */
+}
+
+/* 松手点是否在轨道外 ±32px */
+static int slider_cancelled(int i)
+{
+    lv_indev_t *in = lv_indev_active();
+    if (!in || !s_row[i].slider) return 0;
+    lv_point_t pt;
+    lv_area_t a;
+    lv_indev_get_point(in, &pt);
+    lv_obj_get_coords(s_row[i].slider, &a);
+    int cy = (a.y1 + a.y2) / 2;
+    return (pt.y < cy - SLIDER_CANCEL_PX || pt.y > cy + SLIDER_CANCEL_PX) ? 1 : 0;
 }
 
 static void slider_event(lv_event_t *e)
 {
     int i = (int)(intptr_t)lv_event_get_user_data(e);
     switch (lv_event_get_code(e)) {
-        case LV_EVENT_PRESSED:  s_drag_row = i; s_drag_last_ms = lv_tick_get() - DRAG_PERIOD_MS; slider_point(i, 0); break;
-        case LV_EVENT_PRESSING: if (s_drag_row == i) slider_point(i, 0); break;
-        case LV_EVENT_RELEASED: if (s_drag_row == i) slider_point(i, 1); s_drag_row = -1; break;
-        case LV_EVENT_PRESS_LOST: if (s_drag_row == i) row_refresh(i); s_drag_row = -1; break;
+        case LV_EVENT_PRESSED: {
+            const param_desc_t *p = pd(i);
+            slider_commit_cancel();                   /* 新拖动取消上一次未生效的 */
+            s_drag_row = i;
+            s_drag_v = p ? p->value : 0.0f;
+            s_drag_start_v = s_drag_v;
+            s_drag_last_ms = lv_tick_get() - SLIDER_DISPLAY_MS;
+            slider_point(i);
+            break;
+        }
+        case LV_EVENT_PRESSING:
+            if (s_drag_row == i) slider_point(i);
+            break;
+        case LV_EVENT_RELEASED:
+            if (s_drag_row == i) {
+                s_drag_v = drag_value(i);
+                if (slider_cancelled(i)) {
+                    row_show(i, s_drag_start_v);      /* 取消：回弹，不写参数 */
+                } else {
+                    row_show(i, s_drag_v);            /* 松手后的最终显示 */
+                    s_pending_row = i;
+                    s_commit_timer = lv_timer_create(slider_commit_cb, SLIDER_COMMIT_MS,
+                                                     (void *)(intptr_t)i);
+                }
+            }
+            s_drag_row = -1;
+            break;
+        case LV_EVENT_PRESS_LOST:
+            if (s_drag_row == i) row_show(i, s_drag_start_v);
+            s_drag_row = -1;
+            break;
         default: break;
     }
 }
 
 /* ============ 点击 ============ */
 
-static void clk_back(lv_event_t *e) { LV_UNUSED(e); tui_request(TUI_HOME); }
+static void clk_back(lv_event_t *e) { LV_UNUSED(e); slider_commit_cancel(); tui_request(TUI_HOME); }
 
 static void select_row(int i)
 {
@@ -201,6 +273,7 @@ static void clk_key(lv_event_t *e)
     intptr_t ud = (intptr_t)lv_event_get_user_data(e);
     int i = (int)(ud >> 4);
     int dir = (int)(ud & 0xF) ? 1 : -1;
+    slider_commit_cancel();                     /* K4b：后到操作取消未生效的拖动 */
     select_row(i);
     const param_desc_t *p = pd(i);
     if (p) apply_value(i, p->value + (float)dir * s_step);
@@ -209,6 +282,7 @@ static void clk_key(lv_event_t *e)
 static void clk_big(lv_event_t *e)
 {
     int dir = (int)(intptr_t)lv_event_get_user_data(e);
+    slider_commit_cancel();
     const param_desc_t *p = pd(s_sel);
     if (p) apply_value(s_sel, p->value + (float)dir * s_step);
 }
@@ -223,6 +297,7 @@ static void step_button_text(void)
 static void clk_step(lv_event_t *e)
 {
     LV_UNUSED(e);
+    slider_commit_cancel();
     tui_step_toggle();
     step_button_text();
 }
@@ -296,6 +371,7 @@ void tui_p1_build(lv_obj_t *scr)
     for (int i = 0; i < 4; i++) s_shown[i] = NAN;
     if (s_sel < 0 || s_sel > 3) s_sel = 0;
     s_drag_row = -1;
+    slider_commit_cancel();        /* 重建页面：旧行对象即将被删，未生效的拖动一起作废 */
     s_built = 0;
     s_room = 0;
 
@@ -351,7 +427,7 @@ int tui_p1_update(void)
 {
     if (!s_built) return 1;
     for (int i = 0; i < 4; i++) {
-        if (s_drag_row == i) continue;                 /* 拖动中的行由滑条事件自己刷新 */
+        if (s_drag_row == i || s_pending_row == i) continue;   /* 拖动中 / 等防抖的行由滑条自己刷新 */
         const param_desc_t *p = pd(i);
         if (p && p->value != s_shown[i]) row_refresh(i);
     }
@@ -374,16 +450,18 @@ void tui_step_param(int dir)
     if (!s_built || tui_current() != TUI_TUNE) return;
     const param_desc_t *p = pd(s_sel);
     if (!p) return;
+    slider_commit_cancel();
     float step = (p->step > 0.0f) ? p->step : 0.1f;
     if (step < s_step) step = s_step;
     apply_value(s_sel, p->value + (float)dir * step);
 }
 
-void tui_sel_next(void)    { if (!s_built || tui_current() != TUI_TUNE) return; s_sel = (s_sel + 1) % 4; select_paint(); }
+void tui_sel_next(void)    { if (!s_built || tui_current() != TUI_TUNE) return; slider_commit_cancel(); s_sel = (s_sel + 1) % 4; select_paint(); }
 
 void tui_slider_center(void)
 {
     if (!s_built || tui_current() != TUI_TUNE) return;
+    slider_commit_cancel();
     const param_desc_t *p = pd(s_sel);
     if (p) apply_value(s_sel, p->min + (p->max - p->min) * 0.5f);
 }

@@ -64,6 +64,14 @@ def check():
         bad.append("esp32 的 g_tcs.fw_ver 不是从 TCS_FW_VER_BCD 推导")
     if re.search(r"\.fw_ver\s*=\s*0x[0-9A-Fa-f]+", reg):
         bad.append("esp32 的 g_tcs.fw_ver 仍是手写的 BCD 字面量")
+    # 2026-11-28：H743 侧也必须从同一头文件推导（此前是手写 0x010200，两端版本对不上）
+    h743 = rd(os.path.join(ROOT, "project_tcs", "App", "tcs", "param_registry.c"))
+    if ".fw_ver = TCS_FW_VER_BCD" not in h743:
+        bad.append("H743 的 g_tcs.fw_ver 不是从 TCS_FW_VER_BCD 推导")
+    if re.search(r"\.fw_ver\s*=\s*0x[0-9A-Fa-f]+", h743):
+        bad.append("H743 的 g_tcs.fw_ver 仍是手写的 BCD 字面量")
+    if "tcs_version.h" not in h743:
+        bad.append("H743 的 param_registry.c 没有 include protocol/tcs_version.h")
     for b in bad:
         print("version FAIL: " + b)
     # 文档漂移：只报告

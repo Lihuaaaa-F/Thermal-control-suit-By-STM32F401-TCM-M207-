@@ -801,6 +801,9 @@ static void m207_handle_line(const char *line)
                  * r7f（R7-11）：锁存之后进 SAFE 会停两路；控制任务不在 / 卡死时这里也把两路都停掉。*/
                 (void)m207_tec_force(1, 0);
                 (void)m207_tec_force(2, 0);
+                /* 2026-11-28 红队：m207_tec_force() 只登记旁路槽，真正发帧在同一任务的
+                 * m207_core_tick_end()（RX 之后，50ms 拍）。所以这里**不能**落盘——
+                 * 落盘由 m207_service 在 tick_end 之后统一做（control_safety_persist）。*/
             }
         }
         else {
@@ -813,6 +816,7 @@ static void m207_handle_line(const char *line)
                 tcs_alarm_raise(ALM_OVERTEMP);
                 (void)m207_tec_force(2, 0);
                 (void)m207_tec_force(1, 0);
+                /* TC2 超温同一口径：落盘在 m207_service 的 tick_end 之后（帧先发出）。*/
             }
         }
         m207_go_online(s_ever_online ? "recover" : "first");
@@ -1310,6 +1314,17 @@ int m207_tec_force(uint8_t ch, uint8_t on)
     if (s_online) s_lane[ch].pending = 1;
     M207_Q_UNLOCK();
     return 0;
+}
+
+/* 2026-11-28：旁路槽是否已排空。m207_lane_step() 每拍只发一路，超温同时 force 两路时
+ * 第二路的帧要到下一拍才发出；安全锁落后写必须等两路都交出去，否则 flash 写会把第二路的
+ * 关断推迟 50ms+。模块离线时 force 不置 pending（没有帧要发）→ 立即算排空。*/
+uint8_t m207_core_lanes_idle(void)
+{
+    M207_Q_LOCK();
+    uint8_t busy = (uint8_t)(s_lane[1].pending || s_lane[2].pending);
+    M207_Q_UNLOCK();
+    return busy ? 0u : 1u;
 }
 
 int m207_map_set(uint16_t pid, float v)

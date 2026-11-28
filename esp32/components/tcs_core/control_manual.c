@@ -52,11 +52,23 @@ void control_manual_poll(void)
         uint8_t req = (uint8_t)param_get(pid_of(i));
         if (req > TEC_DIR_HEAT) req = TEC_DIR_PAUSE;      /* 防御：表里只会有 0..2 */
         if (req != s_applied[i]) {
-            /* 只在参数变化时下发：先设目标再开（与自动状态机同一顺序）；暂停只发关 */
+            /* 只在参数变化时下发：先设目标再开（与自动状态机同一顺序）；暂停只发关。
+             * 2026-11-28：目标没被模块受理就不开（离线 / 排队满 / 被拒）。原先 (void) 丢掉返回值，
+             * 目标没写进去也照样 TCSW=1；方向切换时模块还带着旧目标通电。
+             * 失败时先把本通道关掉（fail-safe），s_applied 保持暂停 → 下一拍重试。*/
             if (req != TEC_DIR_PAUSE) {
+                int tr = 0;
                 if (s_ops.tec_temp)
-                    s_ops.tec_temp((uint8_t)(i + 1u),
-                                   (req == TEC_DIR_COOL) ? TEC_COOL_TARGET_C : TEC_HEAT_TARGET_C);
+                    tr = s_ops.tec_temp((uint8_t)(i + 1u),
+                                        (req == TEC_DIR_COOL) ? TEC_COOL_TARGET_C : TEC_HEAT_TARGET_C);
+                if (tr != 0) {
+                    /* 目标没受理：本通道发关（不能只看 s_applied——通道可能是自动模式/外部命令
+                     * 开着的，此刻正带着旧目标运行）。只在"命令意图还是开"时发一次，避免每拍
+                     * 灌一条 TCSW=0。s_applied 置回暂停 → 下一拍重试目标。*/
+                    if (tec_on(i) && s_ops.tec_sw) s_ops.tec_sw((uint8_t)(i + 1u), 0);
+                    s_applied[i] = TEC_DIR_PAUSE;
+                    continue;
+                }
                 if (s_ops.tec_sw) s_ops.tec_sw((uint8_t)(i + 1u), 1);
             } else {
                 if (s_ops.tec_sw) s_ops.tec_sw((uint8_t)(i + 1u), 0);

@@ -40,17 +40,29 @@
   // "what to do" is a function of safe (= the device is in its safe state). 通信类故障在未布防时不进安全态
   // （设备照常按手动设定运行），所以"已停止温控"只在 safe 时说，否则是吓唬人。
   const stopped = (safe) => (safe ? '已停止温控并进入安全态。' : '自动温控不会启动。');
+  // 顶栏报警条只放短名（W-01），卡片里仍用完整标题。
+  const ALARM_SHORT = { estop: '急停', overtemp: '超温', body: '体温失联', m207: '模块失联', probe: '探头断线', eeprom: '参数校验', service: '功能启动失败', proto: '版本不匹配' };
+  // 顺序 = 严重度顺序（2026-11-28 视觉盘点 W-03）：急停 / 超温永远排最前，多报警时最先看到。
   const ALARMS = [
-    [1, 'body', '体温传感器失联', (z) => stopped(z) + '请插紧体温传感器接头；接好后自动恢复。', 0],
-    [2, 'm207', '温控模块通信中断', (z) => stopped(z) + '请检查温控模块的通信线与供电；接好后自动恢复。', 0],
     [4, 'estop', '急停已触发', () => 'TEC 已全部停止、风扇全速，设备已切到手动模式。确认安全后点「解除」。', 1],
     [8, 'overtemp', '水温过高', () => '水温超过 48 °C，已停止温控。等水温回落到 48 °C 以下再点「解除」。', 1],
-    [16, 'eeprom', '参数存储校验失败', () => '已恢复默认参数。请重新核对各参数后点「确认恢复」。', 1],
+    [1, 'body', '体温传感器失联', (z) => stopped(z) + '请插紧体温传感器接头；接好后自动恢复。', 0],
+    [2, 'm207', '温控模块通信中断', (z) => stopped(z) + '请检查温控模块的通信线与供电；接好后自动恢复。', 0],
     [32, 'probe', '水温探头断线', (z) => stopped(z) + '请检查水温探头接线；接好后自动恢复。', 0],
+    [16, 'eeprom', '参数存储校验失败', () => '已恢复默认参数。请重新核对各参数后点「确认恢复」。', 1],
     // 提示位（不参与安全判定、没有可确认的动作）：ALM_SERVICE=64 要断电重启；ALM_PROTO=128 要两端同版本。
     [64, 'service', '功能启动失败', () => '部分功能不可用（后台服务没能启动）。请断电重启设备。', 0, '需断电重启'],
     [128, 'proto', '屏幕与主控版本不匹配', () => '屏幕与主控的协议版本不一致，屏幕收不到数据。请把两端升级到同一版本。', 0, '升级后恢复']];
   const LEVELS = { info: '● ', warn: '■ ', alarm: '▲ ' };
+  // 日志右侧的事件码给中文短名（W-14）；未知事件保留原始码，便于排查。
+  const EV = {
+    boot: '上电', ws_open: '网页连接', estop_on: '急停', estop_off: '急停解除', safe_in: '进安全态', safe_out: '出安全态',
+    tec1_on: '贴身TEC开', tec1_off: '贴身TEC关', tec2_on: '环境TEC开', tec2_off: '环境TEC关',
+    fan_on: '风扇开', fan_off: '风扇关', mode: '模式', body_lost: '体温失联', body_ok: '体温恢复',
+    m207_offline: '模块离线', m207_online: '模块回线', sens_open: '水温探头断线', sens_closed: '水温探头恢复',
+    screen_down: '屏链路断', screen_up: '屏链路恢复', overtemp_on: '超温', overtemp_off: '超温解除',
+    web_cmd: '网页命令', m207_save: '模块保存'
+  };
   const store = {
     conn: 'wait', retry: 0, nextAt: 0, ever: false, reconn: 0, timer: 0,
     st: null, stAt: 0, rxAt: 0, stale: false, boot: NaN, rtt: null, pingAt: 0,
@@ -243,8 +255,9 @@
   const tank = (on, ok) => (ok ? [on ? 'on' : 'off', on ? '▶ TEC 运行' : '○ TEC 停止'] : ['bad', '● 模块离线']);
   // 源不在线时固件给的是最后一次有效值：不当作实时值显示，给"—"（卡片第三行写着原因）
   const FIELDS = [
-    ['v-tc1', (s) => (s.m207 ? fix(s.tc1, 2) : '—')], ['v-tc2', (s) => (s.m207 ? fix(s.tc2, 2) : '—')], ['v-body', (s) => (s.body_ok ? fix(s.body, 2) : '—')],
-    ['sub-tc1', (s) => '设定 ' + fix(s.tc1_set, 1)], ['sub-tc2', (s) => '设定 ' + fix(s.tc2_set, 1)],
+    ['v-tc1', (s) => (s.m207 ? fix(s.tc1, 1) : ['na', '—'])], ['v-tc2', (s) => (s.m207 ? fix(s.tc2, 1) : ['na', '—'])],
+    ['v-body', (s) => (s.body_ok ? fix(s.body, 1) : ['na', '—'])],
+    ['sub-tc1', (s) => '设定 ' + fix(s.tc1_set, 1) + ' °C'], ['sub-tc2', (s) => '设定 ' + fix(s.tc2_set, 1) + ' °C'],
     ['sub-body', (s) => '阈值 ' + fix(val(4, 36.5), 1) + ' – ' + fix(val(3, 37.5), 1)],
     ['state-tc1', (s) => tank(s.tec1, s.m207)], ['state-tc2', (s) => tank(s.tec2, s.m207)],
     ['state-body', (s) => (!s.body_ok ? ['bad', '● 传感器失联'] : s.body > val(3, 37.5) ? ['warn', '▲ 高于阈值'] : s.body < val(4, 36.5) ? ['warn', '▲ 低于阈值'] : ['on', '▶ 在阈值带内'])]
@@ -259,8 +272,18 @@
       b.setAttribute('aria-pressed', !!w[1]);
       txt(b.lastElementChild, (w[1] ? '● ' : '○ ') + (w[0] === 'mode' ? (w[1] ? '自动' : '手动') : lock ? (w[0] === 'fan' ? '全速' : '强制关') : (w[1] ? '开' : '关')));
     });
+    renderEstopBtn();
     const key = [s.alarm, s.latch, s.body_ok, s.m207, s.sens_open, num(s.tc1) > T.hardCutC, num(s.state) === 3, store.stale].join();
     if (key !== almKey) { almKey = key; renderAlarms(); }
+  }
+
+  // the big red button reflects the latch: grey "已急停" (the way out is 解除 in the alarm card), grey while offline.
+  function renderEstopBtn() {
+    const b = $('btn-estop'), latched = !!(num(store.st && store.st.alarm) & 4), down = store.conn !== 'open';
+    b.dataset.state = latched ? 'latched' : down ? 'down' : '';
+    b.disabled = latched || down;
+    txt(b, latched ? '已急停' : '急停');
+    b.title = latched ? '设备已急停：在总览页点「解除」' : down ? '连接断开：请用设备屏幕上的急停' : '';
   }
 
   function buildAlarms() {
@@ -293,6 +316,20 @@
     txt($('no-alarm'), unknown ? '○ 报警状态未知：数据没有更新'
       : lost ? '○ 没有需要确认的报警 · ' + lost + '失联中，自动温控不会启动' : '● 无报警，运行正常');
     $('no-alarm').classList.toggle('watch', !!(unknown || lost));
+    renderAlarmChip(alm);
+  }
+
+  // W-01: the same alarm must be visible on every tab — a compact header chip + a red dot on 总览.
+  function renderAlarmChip(alm) {
+    const active = ALARMS.filter((a) => alm & a[0]);
+    const chip = $('alarmchip');
+    vis(chip, !!active.length);
+    $('tab-overview').classList.toggle('has-alarm', !!active.length);
+    if (!active.length) return;
+    const top = active[0];
+    txt(chip, '▲ ' + (ALARM_SHORT[top[1]] || top[2]) + (active.length > 1 ? ' +' + (active.length - 1) : ''));
+    chip.dataset.lvl = (top[0] & (4 | 8)) ? 'alarm' : 'warn';
+    chip.title = active.map((a) => a[2]).join('、') + '（点这里去总览）';
   }
 
   // chart and CSV export
@@ -345,15 +382,14 @@
 
   function rowHtml(p) {
     const id = p.id, t = (s) => ' data-testid="param-' + id + (s ? '-' + s : '') + '"';
-    const head = '<div class="prow" data-id="' + id + '"' + t() + '><label>' + esc(nameOf(p)) + (p.flags & 32 ? '<span class="tag danger">保护类</span>' : '') + '</label>';
+    const head = '<div class="prow" data-id="' + id + '"' + t() + '><label>' + esc(nameOf(p)) + (p.flags & 32 ? '<span class="tag danger">保护类</span>' : '') + '<span class="prow-range"></span></label>';
     if (ENUM[id]) {
-      return head + '<span class="prow-range"></span><div class="seg">' +
+      return head + '<div class="seg">' +
         ENUM[id].map((x, v) => '<button type="button" data-v="' + v + '"' + t('opt-' + v) + '>' + x + '</button>').join('') + '</div></div>';
     }
     return head +
-      '<input class="num" type="text" inputmode="decimal"' + t('input') + '>' +
-      '<span class="u">' + esc(p.unit) + '</span>' +
-      '<span class="prow-range"></span>' +
+      '<span class="val"><input class="num" type="text" inputmode="decimal"' + t('input') + '>' +
+      '<span class="u">' + esc(p.unit) + '</span></span>' +
       '<div class="prow-body">' +
         '<button type="button" class="step" data-d="-1"' + t('minus') + '>－</button>' +
         '<input type="range" min="' + p.min + '" max="' + p.max + '" step="' + p.step + '"' + t('slider') + '>' +
@@ -452,7 +488,7 @@
     $('log-list').innerHTML = list.reverse().map((e) => {
       const t = store.boot + e.ts;
       return '<li data-lvl="' + e.lvl + '"><span class="lt">' + (isFinite(t) ? hms(t) : '--:--:--') + '</span><span class="lm">' + LEVELS[e.lvl] + esc(e.msg) +
-        '</span><span class="le">' + esc(e.ev) + '</span></li>';
+        '</span><span class="le" title="' + esc(e.ev) + '">' + esc(EV[e.ev] || e.ev) + '</span></li>';
     }).join('');
     txt($('log-count'), list.length + ' 条');
     vis($('log-paused'), store.logPause);
@@ -473,8 +509,8 @@
   const DEV = [
     ['ESP32 固件', (s) => s.fw || '—'],
     ['屏间协议', (s) => (isFinite(num(s.ver)) ? 'v' + s.ver : '—')],
-    ['屏幕固件', () => '—（屏幕固件暂未上报版本）'],
-    ['温控模块固件', () => { const v = val(0x135, NaN); return isFinite(v) ? '原始码 ' + v : '—'; }],
+    ['屏幕固件', () => '未上报'],
+    ['温控模块固件', () => { const v = val(0x135, NaN); return isFinite(v) && v > 0 ? '版本码 ' + v : '未读取'; }],
     ['运行时长', (s) => { const t = num(s.up_s); return isFinite(t) ? (t >= 86400 ? Math.floor(t / 86400) + ' 天 ' + Math.floor(t / 3600) % 24 + ' 小时' : new Date(t * 1000).toISOString().slice(11, 19)) : '—'; }],
     ['复位原因', (s) => { const c = num(s.reset); return isFinite(c) ? RESET[c] || '复位代码 ' + c : '—'; }],
     ['空闲内存', (s) => { const b = num(s.heap); return isFinite(b) ? (b >= 1048576 ? (b / 1048576).toFixed(1) + ' MB' : Math.round(b / 1024) + ' KB') : '—'; }],
@@ -522,9 +558,10 @@
 
   // connection: WS, backoff, staleness
   function renderConn() {
-    const down = store.conn === 'down';
-    $('conn').dataset.conn = store.conn;
-    txt($('conn'), (down || store.conn === 'open' ? '● ' : '○ ') + (store.conn === 'open' ? '已连接' : down ? '连接断开' : '连接中…'));
+    const down = store.conn === 'down', open = store.conn === 'open', stale = open && store.stale;
+    $('conn').dataset.conn = stale ? 'stale' : store.conn;
+    txt($('conn'), open ? (stale ? '◐ 连接在 · 数据过期' : '● 已连接') : down ? '● 连接断开' : '○ 连接中…');
+    renderEstopBtn();
     vis($('offline'), down);
     vis($('offline-sub'), down);
     txt($('offline-title'), store.ever ? '连接断开' : '无法连接设备');
@@ -532,8 +569,9 @@
   }
   function setStale(on) {
     store.stale = on;
-    vis($('stale'), on);
+    vis($('stale'), on && store.conn !== 'open');   // open+stale is already spelled out in the conn chip
     $('page').classList.toggle('stale', on);
+    renderConn();
   }
   const ago = (ms) => (ms < 1000 ? '刚刚更新' : ms < 60000 ? Math.round(ms / 1000) + ' 秒前' : Math.round(ms / 60000) + ' 分钟前');
   function tick() {
@@ -600,6 +638,13 @@
     chart = TCSChart.create($('chart'));
     chart.setData(store.series);
     TABS.forEach((t) => on('tab-' + t, 'click', () => setTab(t)));
+    const jump = (sel) => { setTab('overview'); const n = document.querySelector(sel); if (n) n.scrollIntoView({ behavior: 'smooth', block: 'start' }); };
+    on('alarmchip', 'click', () => jump('#alarms'));
+    on('alarmchip', 'keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); jump('#alarms'); } });
+    document.querySelectorAll('.vcard').forEach((c) => {
+      c.addEventListener('click', () => jump('.chart-card'));
+      c.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); jump('.chart-card'); } });
+    });
     Object.keys(SW_CMD).forEach((k) => on('sw-' + k, 'click', () => {
       const c = SW_CMD[k][k !== 'fan' && store.st && store.st[k] ? 0 : 1];
       if (cmdPending(c)) return;                     // still on its way: a second tap would toggle the device twice

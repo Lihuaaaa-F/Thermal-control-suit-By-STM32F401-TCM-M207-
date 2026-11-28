@@ -235,7 +235,7 @@ class Sim:
 
     def status(self):                                 # 一条 st（seq 由 broadcast 填）
         f, now, tc = self.fault, self.ms(), self.tc
-        return {"t": "st", "seq": self.seq, "ts": now, "ver": 1, "fw": FW,
+        return {"t": "st", "seq": self.seq, "ts": now, "ver": 3, "fw": FW,
                 "tc1": round(tc[0], 2), "tc2": round(tc[1], 2), "body": round(self.body, 2),
                 "age": 65535 if f["m207_off"] else min(65535, now - self.sample_t),
                 "tc1_set": self.pv(1), "tc2_set": self.pv(2),

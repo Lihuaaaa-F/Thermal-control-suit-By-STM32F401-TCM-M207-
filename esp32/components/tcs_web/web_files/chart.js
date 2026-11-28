@@ -12,6 +12,7 @@
   const GAP = 2500;                                 // a step wider than this between neighbouring raw points breaks the line
   const DASH = [[], [8, 4], [2, 3]];                // line style per series, same as the legend swatches
   const MIN = [1, 2, 5, 10, 15, 30];                // x tick candidates (minutes)
+  const HARD_C = 48;                                // over-temperature hard cut-off (control.h)
   const C = { s: ['#2563EB', '#44506B', '#D97706'], grid: '#E3E7EC', text: '#44506B', tip: '#FFFFFF', bd: '#D8DEE6', cross: '#1F2937' };
   const FONT = '11px system-ui, -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif';
 
@@ -61,6 +62,8 @@
       const step = nice(Math.max(hi - lo, 0.5) * 1.2, 4), pad = (hi - lo) * 0.1;
       lo = Math.floor((lo - pad) / step) * step;    // snapped to ticks: the axis does not jitter as samples enter or leave
       hi = Math.ceil((hi + pad) / step) * step;
+      // 48 °C 硬切断阈值必须始终在纵轴上（W-23，与屏端一致）：只向上扩到最近的刻度，不重算步长。
+      if (hi < HARD_C + 0.5) hi = Math.ceil((HARD_C + 0.5) / step) * step;
       if (hi - lo < step * 1e-6) { lo -= step; hi += step; }   // a flat line sitting exactly on a tick: give it a band
       return {
         x0, x1, y0, y1, t0, now, vis, empty, step, lo, hi,
@@ -85,6 +88,19 @@
         ctx.beginPath(); ctx.moveTo(x, G.y0); ctx.lineTo(x, G.y1); ctx.stroke();
         ctx.fillText(clock(t), Math.min(Math.max(x, G.x0 + 18), G.x1 - 18), G.y1 + 6);
       }
+    }
+
+    /* 48 C reference line (W-23): drawn only when the auto range includes it. */
+    function drawThreshold(G) {
+      if (HARD_C < G.lo || HARD_C > G.hi) return;
+      const y = Math.round(G.Y(HARD_C)) + 0.5;
+      ctx.save();
+      ctx.strokeStyle = '#DC2626'; ctx.lineWidth = 1.5; ctx.setLineDash([6, 4]);
+      ctx.beginPath(); ctx.moveTo(G.x0, y); ctx.lineTo(G.x1, y); ctx.stroke();
+      ctx.setLineDash([]);
+      ctx.font = FONT; ctx.fillStyle = '#B45309'; ctx.textAlign = 'right'; ctx.textBaseline = 'bottom';
+      ctx.fillText('48 °C 阈值', G.x1, y - 3);
+      ctx.restore();
     }
 
     /* series: points outside the window are skipped; at most about one point per pixel */
@@ -112,6 +128,14 @@
         ctx.beginPath();
         for (let i = from; i < len; i++) plot(pts[i], (i - from) % stride === 0 || i === len - 1);
         ctx.stroke();
+        // dot on the newest point inside the window: "now" is readable without hovering
+        for (let i = len - 1; i >= from; i--) {
+          if (isFinite(pts[i][1]) && pts[i][0] >= G.t0) {
+            ctx.beginPath(); ctx.arc(G.X(pts[i][0]), G.Y(pts[i][1]), 3, 0, 7);
+            ctx.fillStyle = C.s[k % 3]; ctx.fill();
+            break;
+          }
+        }
       });
       ctx.setLineDash([]);
     }
@@ -163,6 +187,7 @@
         ctx.fillText('暂无数据', (G.x0 + G.x1) / 2, (G.y0 + G.y1) / 2);
         return;
       }
+      drawThreshold(G);
       drawSeries(G);
       drawCrosshair(G);
     }

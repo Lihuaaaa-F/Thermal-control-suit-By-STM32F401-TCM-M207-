@@ -11,7 +11,7 @@
 
 <!-- disconnect overlay: stops above the bottom bar, so 急停 stays reachable on every tab -->
 <div id="offline" class="mask hidden" data-testid="overlay">
-  <div>
+  <div class="offline-card">
     <div id="offline-title">连接断开</div>
     <div id="offline-sub">重连中，还有 <b id="offline-count" data-testid="reconnect-count">–</b> 秒</div>
     <div id="offline-hint">断连期间设备仍按原设定独立控温</div>
@@ -21,6 +21,7 @@
 
 <header class="top">
   <span class="chip" id="conn" data-testid="conn-state" data-conn="wait">○ 连接中…</span>
+  <span class="chip alarm hidden" id="alarmchip" data-testid="alarm-chip" role="button" tabindex="0"></span>
   <span class="chip warn hidden" id="stale" data-testid="stale-badge">▲ 数据过期</span>
   <span class="muted" id="age" data-testid="data-age" style="margin-left:auto">—</span>
 </header>
@@ -30,21 +31,21 @@
   <!-- 1 overview: value cards / actuator switches / alarms / chart -->
   <section class="view" id="view-overview">
     <div class="cards">
-      <div class="card vcard">
-        <div class="vhead"><span>贴身水箱</span><span>°C</span></div>
-        <div class="vbig" id="v-tc1" data-testid="val-tc1">—</div>
+      <div class="card vcard" role="button" tabindex="0" aria-label="贴身水箱，查看温度曲线">
+        <div class="vhead"><span>贴身水箱</span></div>
+        <div class="vline"><span class="vbig" id="v-tc1" data-testid="val-tc1">—</span><span class="vunit">°C</span></div>
         <div class="vsub" id="sub-tc1" data-testid="sub-tc1">设定 —</div>
         <div class="vstate" id="state-tc1" data-testid="state-tc1">—</div>
       </div>
-      <div class="card vcard">
-        <div class="vhead"><span>环境水箱</span><span>°C</span></div>
-        <div class="vbig" id="v-tc2" data-testid="val-tc2">—</div>
+      <div class="card vcard" role="button" tabindex="0" aria-label="环境水箱，查看温度曲线">
+        <div class="vhead"><span>环境水箱</span></div>
+        <div class="vline"><span class="vbig" id="v-tc2" data-testid="val-tc2">—</span><span class="vunit">°C</span></div>
         <div class="vsub" id="sub-tc2" data-testid="sub-tc2">设定 —</div>
         <div class="vstate" id="state-tc2" data-testid="state-tc2">—</div>
       </div>
-      <div class="card vcard">
-        <div class="vhead"><span>体温</span><span>°C</span></div>
-        <div class="vbig" id="v-body" data-testid="val-body">—</div>
+      <div class="card vcard" role="button" tabindex="0" aria-label="体温，查看温度曲线">
+        <div class="vhead"><span>体温</span></div>
+        <div class="vline"><span class="vbig" id="v-body" data-testid="val-body">—</span><span class="vunit">°C</span></div>
         <div class="vsub" id="sub-body" data-testid="sub-body">阈值 —</div>
         <div class="vstate" id="state-body" data-testid="state-body">—</div>
       </div>
@@ -56,14 +57,14 @@
         <button class="sw" id="sw-tec1" data-testid="sw-tec1" aria-pressed="false"><span>贴身 TEC</span><b>—</b></button>
         <button class="sw" id="sw-tec2" data-testid="sw-tec2" aria-pressed="false"><span>环境 TEC</span><b>—</b></button>
         <button class="sw" id="sw-fan" data-testid="sw-fan" aria-pressed="false"><span>风扇</span><b>—</b></button>
-        <button class="sw" id="sw-mode" data-testid="sw-mode" aria-pressed="false"><span>自动模式</span><b>—</b></button>
+        <button class="sw" id="sw-mode" data-testid="sw-mode" aria-pressed="false"><span>模式</span><b>—</b></button>
       </div>
     </div>
 
     <div class="card allok hidden" id="no-alarm" data-testid="no-alarm">● 无报警，运行正常</div>
     <div class="view" id="alarms" data-testid="alarms"></div>
 
-    <div class="card">
+    <div class="card chart-card">
       <div class="card-head">
         <h2>温度曲线 <span class="muted">°C</span></h2>
         <div class="seg">
@@ -92,7 +93,7 @@
         <h2>高级参数（温控模块）</h2>
         <button class="btn outline" id="btn-save" data-testid="btn-save">保存到模块</button>
       </div>
-      <p class="hint">改动即时生效，点「保存到模块」后才掉电保持。<span class="tag danger">保护类</span>参数修改前需确认。</p>
+      <p class="hint">改动即时生效，点「保存到模块」后才掉电保持。<span class="keep"><span class="tag danger">保护类</span>参数修改前需确认。</span></p>
       <div id="adv" data-testid="adv"></div>
     </div>
     <div class="card">

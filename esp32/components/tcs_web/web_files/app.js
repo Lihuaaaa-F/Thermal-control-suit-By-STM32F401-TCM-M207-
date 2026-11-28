@@ -24,11 +24,19 @@
   };
   const CMD = { 1: '贴身 TEC 开', 2: '贴身 TEC 关', 3: '环境 TEC 开', 4: '环境 TEC 关', 5: '风扇切换', 6: '切到自动', 7: '切到手动', 8: '急停', 9: '解除报警', 10: '保存到模块' };
   const SW_CMD = { tec1: [2, 1], tec2: [4, 3], fan: [5, 5], mode: [7, 6] };
+  // WS err 帧是"设备拒绝执行"而不是"解析失败"（例如屏链路断开期间点"解除"）。按 code 给人话；
+  // 未知 code 用设备自带的 msg，再不行才落到通用文案（前端冻结解除，2026-11-28）。
+  const ERR_TEXT = {
+    link_down: '屏链路断开，急停只能在屏上确认',
+    bad_set: '参数指令格式不对（需要整数 id 与数值 v）',
+    bad_cmd: '命令编号不合法（只接受 1..10）'
+  };
   // parameters shown as labelled segments instead of a number: id => label per value
   const ENUM = { 6: ['手动', '自动'], 8: ['自动', '强制布防', '强制不布防'] };
   const GROUPS = [[0x100, 0x102, 'PID（贴身）'], [0x110, 0x112, 'PID（环境）'], [0x103, 0x10A, '保护（贴身）'], [0x113, 0x11A, '保护（环境）'],
     [0x10B, 0x10F, '输出/温度选项（贴身）'], [0x11B, 0x11F, '输出/温度选项（环境）'], [0x120, 0x126, '系统/PCB']];
-  // alarm bit => [bit, key, title, what to do, latched]. latched: needs 解除; otherwise it clears by itself about 2 s after its source recovers.
+  // alarm bit => [bit, key, title, what to do, latched, foot-tag?]. latched: needs 解除; otherwise it clears by itself about 2 s after its source recovers
+  // （64/128 是提示位：不自动 2 s 恢复——64 要断电重启、128 要两端版本一致；没有可点的确认动作）。
   // "what to do" is a function of safe (= the device is in its safe state). 通信类故障在未布防时不进安全态
   // （设备照常按手动设定运行），所以"已停止温控"只在 safe 时说，否则是吓唬人。
   const stopped = (safe) => (safe ? '已停止温控并进入安全态。' : '自动温控不会启动。');
@@ -38,7 +46,10 @@
     [4, 'estop', '急停已触发', () => 'TEC 已全部停止、风扇全速，设备已切到手动模式。确认安全后点「解除」。', 1],
     [8, 'overtemp', '水温过高', () => '水温超过 48 °C，已停止温控。等水温回落到 48 °C 以下再点「解除」。', 1],
     [16, 'eeprom', '参数存储校验失败', () => '已恢复默认参数。请重新核对各参数后点「确认恢复」。', 1],
-    [32, 'probe', '水温探头断线', (z) => stopped(z) + '请检查水温探头接线；接好后自动恢复。', 0]];
+    [32, 'probe', '水温探头断线', (z) => stopped(z) + '请检查水温探头接线；接好后自动恢复。', 0],
+    // 提示位（不参与安全判定、没有可确认的动作）：ALM_SERVICE=64 要断电重启；ALM_PROTO=128 要两端同版本。
+    [64, 'service', '功能启动失败', () => '部分功能不可用（后台服务没能启动）。请断电重启设备。', 0, '需断电重启'],
+    [128, 'proto', '屏幕与主控版本不匹配', () => '屏幕与主控的协议版本不一致，屏幕收不到数据。请把两端升级到同一版本。', 0, '升级后恢复']];
   const LEVELS = { info: '● ', warn: '■ ', alarm: '▲ ' };
   const store = {
     conn: 'wait', retry: 0, nextAt: 0, ever: false, reconn: 0, timer: 0,
@@ -155,7 +166,12 @@
       else if (msg.t === 'reg') onReg(msg);
       else if (msg.t === 'log') onLog(msg.list);
       else if (msg.t === 'pong') { if (store.pingAt) store.rtt = Date.now() - store.pingAt; store.pingAt = 0; renderStatus(); }
-      else if (msg.t === 'err') toast('设备无法解析上一条指令', 'warn');
+      else if (msg.t === 'err') {
+        // 解除被拒（link_down）：把在途的 c=9 立刻结束——否则 ackMs 到点还会再弹一句"设备未确认 解除"，
+        // 而真实原因（屏链路断开）已经由下面的 toast 说清楚。
+        if (msg.code === 'link_down') store.pending.forEach((p) => { if (p.c === 9) drop(p); });
+        toast(ERR_TEXT[msg.code] || msg.msg || '设备返回了错误', 'warn');
+      }
     } catch (e) {
       console.error('bad frame', msg, e);
     }
@@ -252,7 +268,7 @@
       const head = '<div class="alarm' + (a[4] ? '' : ' auto') + '" data-testid="alarm-' + a[1] + '"><div class="alarm-head">' + a[2] + '</div>';
       const act = '<div class="alarm-act">' + a[3](false) + '</div>';
       const foot = '<div class="alarm-foot">' + (a[4] ? '<button type="button" class="btn primary" data-ack="1">' + (a[1] === 'eeprom' ? '确认恢复' : '解除') + '</button>'
-        : '<span class="tag">将自动恢复</span>') + '</div>';
+        : '<span class="tag">' + (a[5] || '将自动恢复') + '</span>') + '</div>';
       return head + act + foot + '</div>';
     }).join('');
   }

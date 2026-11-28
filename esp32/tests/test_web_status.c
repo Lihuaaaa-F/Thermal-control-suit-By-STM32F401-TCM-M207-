@@ -85,7 +85,7 @@ int main(void)
 {
     char buf[16384];
 
-    /* ====== A. st 消息：22 个业务字段，名称/类型/取值逐项对契约 ====== */
+    /* ====== A. st 消息：30 个业务字段，名称/类型/取值逐项对契约 ====== */
     {
         web_status_t s = demo_status(14815234u);
         cJSON *root = cJSON_CreateObject();
@@ -94,7 +94,7 @@ int main(void)
         cJSON *o = parse(j);
         CHECK(o != NULL, "A st JSON 可解析");
         if (o) {
-            CHECK(cJSON_GetArraySize(o) == 22, "A st 共 22 个业务字段");
+            CHECK(cJSON_GetArraySize(o) == 30, "A st 共 30 个业务字段");
             CHECK(num_is(o, "ts", 14815234), "A ts");
             CHECK(num_is(o, "tc1", 18.47), "A tc1 两位小数");
             CHECK(num_is(o, "tc2", 21.51), "A tc2");

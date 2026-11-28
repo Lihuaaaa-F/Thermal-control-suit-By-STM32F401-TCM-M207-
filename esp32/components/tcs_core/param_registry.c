@@ -81,9 +81,9 @@ static param_desc_t s_params[] = {
     /* ====== m1（模式页，2026-11-26）：两路 TEC 的手动输出。0=暂停 1=制冷 2=制热，上电一律暂停。
      * 不持久化（无 PF_PERSIST）、不带 PF_WEB（网页端这次不改）。输出映射在 control_manual.c。====== */
     { 0x09, "tec1_manual",  "TEC1 手动输出",   "",   PARAM_TYPE_U8,
-      PF_RW|PF_SCREEN,                                        0.0f,  2.0f,  1.0f, 0.0f, 0 },
+      PF_RW|PF_SCREEN|PF_WEB,                                 0.0f,  2.0f,  1.0f, 0.0f, 0 },
     { 0x0A, "tec2_manual",  "TEC2 手动输出",   "",   PARAM_TYPE_U8,
-      PF_RW|PF_SCREEN,                                        0.0f,  2.0f,  1.0f, 0.0f, 0 },
+      PF_RW|PF_SCREEN|PF_WEB,                                 0.0f,  2.0f,  1.0f, 0.0f, 0 },
     /* ====== H10 映射全表（v1.2 §2.5；所有权矩阵=模块 EEPROM 唯一真值，本地不持久）======
      * flags：PF_RW|PF_WEB|PF_M207（无 PF_SCREEN=屏不显红线；无 PF_PERSIST=不落本地 EEPROM）。
      * 值域/默认按《现行M207协议_v1.md》字典；危险参数加 PF_DANGER（网页二次确认）。

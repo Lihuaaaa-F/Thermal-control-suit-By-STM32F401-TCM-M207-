@@ -23,16 +23,18 @@
     rttWarnMs: 100, rttBadMs: 400
   };
   const CMD = { 1: '贴身 TEC 开', 2: '贴身 TEC 关', 3: '环境 TEC 开', 4: '环境 TEC 关', 5: '风扇切换', 6: '切到自动', 7: '切到手动', 8: '急停', 9: '解除报警', 10: '保存到模块' };
-  const SW_CMD = { tec1: [2, 1], tec2: [4, 3], fan: [5, 5], mode: [7, 6] };
+  const SW_CMD = { fan: [5, 5], mode: [7, 6] };
   // WS err 帧是"设备拒绝执行"而不是"解析失败"（例如屏链路断开期间点"解除"）。按 code 给人话；
   // 未知 code 用设备自带的 msg，再不行才落到通用文案（前端冻结解除，2026-11-28）。
   const ERR_TEXT = {
     link_down: '屏链路断开，急停只能在屏上确认',
     bad_set: '参数指令格式不对（需要整数 id 与数值 v）',
-    bad_cmd: '命令编号不合法（只接受 1..10）'
+    bad_cmd: '命令编号不合法（只接受 1..10）',
+    wifi_auth: '当前热点口令不对，未修改',
+    wifi: '热点设置无效：名称 1–32 字、口令 8–63 位'
   };
   // parameters shown as labelled segments instead of a number: id => label per value
-  const ENUM = { 6: ['手动', '自动'], 8: ['自动', '强制布防', '强制不布防'] };
+  const ENUM = { 6: ['手动', '自动'], 8: ['自动', '强制布防', '强制不布防'], 9: ['暂停', '制冷', '制热'], 10: ['暂停', '制冷', '制热'] };
   const GROUPS = [[0x100, 0x102, 'PID（贴身）'], [0x110, 0x112, 'PID（环境）'], [0x103, 0x10A, '保护（贴身）'], [0x113, 0x11A, '保护（环境）'],
     [0x10B, 0x10F, '输出/温度选项（贴身）'], [0x11B, 0x11F, '输出/温度选项（环境）'], [0x120, 0x126, '系统/PCB']];
   // alarm bit => [bit, key, title, what to do, latched, foot-tag?]. latched: needs 解除; otherwise it clears by itself about 2 s after its source recovers
@@ -66,7 +68,7 @@
   const store = {
     conn: 'wait', retry: 0, nextAt: 0, ever: false, reconn: 0, timer: 0,
     st: null, stAt: 0, rxAt: 0, stale: false, boot: NaN, rtt: null, pingAt: 0,
-    sig: '', tab: '', win: 300000, hidden: [], last: 0,
+    sig: '', tab: '', win: 300000, hidden: [], last: 0, logLevel: 'all', ota: false,
     reg: new Map(),
     pending: new Map(),
     logs: [], logFrom: 0, logTo: 0, logPause: false,
@@ -178,6 +180,7 @@
       else if (msg.t === 'reg') onReg(msg);
       else if (msg.t === 'log') onLog(msg.list);
       else if (msg.t === 'pong') { if (store.pingAt) store.rtt = Date.now() - store.pingAt; store.pingAt = 0; renderStatus(); }
+      else if (msg.t === 'wifi_ok') { toast('热点已更新：请用新名称和新口令重新连接', 'info'); }
       else if (msg.t === 'err') {
         // 解除被拒（link_down）：把在途的 c=9 立刻结束——否则 ackMs 到点还会再弹一句"设备未确认 解除"，
         // 而真实原因（屏链路断开）已经由下面的 toast 说清楚。
@@ -267,14 +270,39 @@
   function renderStatus() {
     const s = store.st || {}, safe = num(s.state) === 3;
     FIELDS.forEach((f) => set(f[0], f[1](s)));
-    [['tec1', s.tec1], ['tec2', s.tec2], ['fan', s.fan], ['mode', s.mode]].forEach((w) => {
-      const b = $('sw-' + w[0]), lock = safe && w[0] !== 'mode';
+    [['fan', s.fan], ['mode', s.mode]].forEach((w) => {
+      const b = $('sw-' + w[0]), lock = safe;
       b.setAttribute('aria-pressed', !!w[1]);
-      txt(b.lastElementChild, (w[1] ? '● ' : '○ ') + (w[0] === 'mode' ? (w[1] ? '自动' : '手动') : lock ? (w[0] === 'fan' ? '全速' : '强制关') : (w[1] ? '开' : '关')));
+      txt(b.lastElementChild, (w[1] ? '● ' : '○ ') + (w[0] === 'mode' ? (w[1] ? '自动' : '手动') : lock ? '全速' : (w[1] ? '开' : '关')));
     });
+    /* F3/F4：两路方向高亮 + 功率（0.01 V/A 原始值 → W）*/
+    const d1 = num(s.tec_dir) & 0x0F, d2 = (num(s.tec_dir) >> 4) & 0x0F;
+    [['dir-tec1', d1], ['dir-tec2', d2]].forEach(([id, dir]) => {
+      const box = $(id);
+      if (box) box.querySelectorAll('button').forEach((b) => b.setAttribute('aria-pressed', +b.dataset.v === dir));
+    });
+    const pw = (id, ok, v, i) => {
+      let t = '—';
+      if (ok && isFinite(num(v, NaN)) && isFinite(num(i, NaN))) t = (Math.abs(num(v)) / 100 * num(i) / 100).toFixed(1) + ' W';
+      txt($(id), t);
+    };
+    pw('pwr-tec1', num(s.tec1_ok) === 1, s.tec1_v, s.tec1_i);
+    pw('pwr-tec2', num(s.tec2_ok) === 1, s.tec2_v, s.tec2_i);
+    /* F10：屏链路断开时顶栏有提示（不用去设备页找）*/
+    vis($('screenchip'), !!store.st && num(s.screen, 1) === 0);
     renderEstopBtn();
+    setLocked(safe || store.stale || store.conn !== 'open');
     const key = [s.alarm, s.latch, s.body_ok, s.m207, s.sens_open, num(s.tc1) > T.hardCutC, num(s.state) === 3, store.stale].join();
     if (key !== almKey) { almKey = key; renderAlarms(); }
+  }
+
+  /* F2/F7：安全态 / 数据过期 / 连接断开时锁住执行器与参数（急停键另行处理）*/
+  function setLocked(on) {
+    document.body.classList.toggle('locked', on);
+    vis($('lockhint'), on);
+    const sel = '.sw, .tec-dir button, #params .step, #params .num, #params input[type=range], #params .seg button,'
+      + ' #adv .step, #adv .num, #adv input[type=range], #adv .seg button, #btn-save, #btn-defaults';
+    document.querySelectorAll(sel).forEach((n) => { n.disabled = on; });
   }
 
   // the big red button reflects the latch: grey "已急停" (the way out is 解除 in the alarm card), grey while offline.
@@ -316,20 +344,25 @@
     txt($('no-alarm'), unknown ? '○ 报警状态未知：数据没有更新'
       : lost ? '○ 没有需要确认的报警 · ' + lost + '失联中，自动温控不会启动' : '● 无报警，运行正常');
     $('no-alarm').classList.toggle('watch', !!(unknown || lost));
+    vis($('btn-ack-all'), shown > 1 && !!(alm & (4 | 8 | 16)));
     renderAlarmChip(alm);
   }
 
   // W-01: the same alarm must be visible on every tab — a compact header chip + a red dot on 总览.
   function renderAlarmChip(alm) {
     const active = ALARMS.filter((a) => alm & a[0]);
-    const chip = $('alarmchip');
+    const chip = $('alarmchip'), tab = $('tab-overview');
     vis(chip, !!active.length);
-    $('tab-overview').classList.toggle('has-alarm', !!active.length);
-    if (!active.length) return;
+    tab.classList.toggle('has-alarm', !!(active.length && (active[0][0] & (4 | 8))));
+    tab.classList.toggle('has-warn', !!(active.length && !(active[0][0] & (4 | 8))));
+    if (!active.length) { vis($('alarmack'), false); return; }
     const top = active[0];
     txt(chip, '▲ ' + (ALARM_SHORT[top[1]] || top[2]) + (active.length > 1 ? ' +' + (active.length - 1) : ''));
     chip.dataset.lvl = (top[0] & (4 | 8)) ? 'alarm' : 'warn';
     chip.title = active.map((a) => a[2]).join('、') + '（点这里去总览）';
+    const canAck = !!(alm & (4 | 8 | 16));
+    vis($('alarmack'), canAck);
+    $('alarmack').disabled = store.conn !== 'open';
   }
 
   // chart and CSV export
@@ -455,6 +488,7 @@
   }
 
   async function requestSet(id, raw) {
+    if (document.body.classList.contains('locked')) { toast('当前不可操作：安全态 / 数据过期 / 连接断开', 'warn'); return; }
     const p = store.reg.get(id);
     if (!p || !isFinite(raw)) return;
     const clamped = Math.min(p.max, Math.max(p.min, raw));
@@ -483,12 +517,18 @@
     if (cut > 0) { store.logs.splice(0, cut); store.logFrom = Math.max(0, store.logFrom - cut); store.logTo = Math.max(0, store.logTo - cut); }
     if (store.tab === 'log') renderLog();
   }
+  function logFiltered(list) {
+    const lv = store.logLevel;
+    if (lv === 'warn') return list.filter((e) => e.lvl === 'warn' || e.lvl === 'alarm');
+    if (lv === 'alarm') return list.filter((e) => e.lvl === 'alarm');
+    return list;
+  }
   function renderLog() {
-    const to = store.logPause ? store.logTo : store.logs.length, list = store.logs.slice(store.logFrom, to);
-    $('log-list').innerHTML = list.reverse().map((e) => {
+    const to = store.logPause ? store.logTo : store.logs.length, list = logFiltered(store.logs.slice(store.logFrom, to));
+    $('log-list').innerHTML = list.slice().reverse().map((e) => {
       const t = store.boot + e.ts;
-      return '<li data-lvl="' + e.lvl + '"><span class="lt">' + (isFinite(t) ? hms(t) : '--:--:--') + '</span><span class="lm">' + LEVELS[e.lvl] + esc(e.msg) +
-        '</span><span class="le" title="' + esc(e.ev) + '">' + esc(EV[e.ev] || e.ev) + '</span></li>';
+      return '<li data-lvl="' + e.lvl + '" title="' + esc(e.ev) + '"><span class="lt">' + (isFinite(t) ? hms(t) : '--:--:--') + '</span><span class="lm">' +
+        LEVELS[e.lvl] + esc(e.msg) + '</span></li>';
     }).join('');
     txt($('log-count'), list.length + ' 条');
     vis($('log-paused'), store.logPause);
@@ -509,7 +549,7 @@
   const DEV = [
     ['ESP32 固件', (s) => s.fw || '—'],
     ['屏间协议', (s) => (isFinite(num(s.ver)) ? 'v' + s.ver : '—')],
-    ['屏幕固件', () => '未上报'],
+    ['屏幕固件', (s) => { const f = num(s.screen_fw, 0); return f > 0 ? 'v' + ((f >> 4) & 0xF) + '.' + (f & 0xF) : '未上报'; }],
     ['温控模块固件', () => { const v = val(0x135, NaN); return isFinite(v) && v > 0 ? '版本码 ' + v : '未读取'; }],
     ['运行时长', (s) => { const t = num(s.up_s); return isFinite(t) ? (t >= 86400 ? Math.floor(t / 86400) + ' 天 ' + Math.floor(t / 3600) % 24 + ' 小时' : new Date(t * 1000).toISOString().slice(11, 19)) : '—'; }],
     ['复位原因', (s) => { const c = num(s.reset); return isFinite(c) ? RESET[c] || '复位代码 ' + c : '—'; }],
@@ -560,8 +600,10 @@
   function renderConn() {
     const down = store.conn === 'down', open = store.conn === 'open', stale = open && store.stale;
     $('conn').dataset.conn = stale ? 'stale' : store.conn;
-    txt($('conn'), open ? (stale ? '◐ 连接在 · 数据过期' : '● 已连接') : down ? '● 连接断开' : '○ 连接中…');
+    txt($('conn'), open ? (stale ? '◐ 数据过期' : '● 已连接') : down ? '● 连接断开' : '○ 连接中…');
+    $('conn').title = stale ? '与主控的连接在，但数据没有更新' : '';
     renderEstopBtn();
+    setLocked(store.stale || !open || num(store.st && store.st.state) === 3);
     vis($('offline'), down);
     vis($('offline-sub'), down);
     txt($('offline-title'), store.ever ? '连接断开' : '无法连接设备');
@@ -645,10 +687,20 @@
       c.addEventListener('click', () => jump('.chart-card'));
       c.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); jump('.chart-card'); } });
     });
-    Object.keys(SW_CMD).forEach((k) => on('sw-' + k, 'click', () => {
-      const c = SW_CMD[k][k !== 'fan' && store.st && store.st[k] ? 0 : 1];
+    Object.keys(SW_CMD).forEach((k) => on('sw-' + k, 'click', async () => {
+      if (document.body.classList.contains('locked')) { toast('当前不可操作：安全态 / 数据过期 / 连接断开', 'warn'); return; }
+      const on = !!(store.st && store.st[k]);
+      const c = SW_CMD[k][k !== 'fan' && on ? 0 : 1];
+      /* F1：切到自动与屏端同口径，先确认（自动模式会自己开停 TEC）。*/
+      if (k === 'mode' && c === 6 && !(await confirmDialog('切到自动模式？', '自动模式会按体温/水温自动开停 TEC。', '切到自动'))) return;
       if (cmdPending(c)) return;                     // still on its way: a second tap would toggle the device twice
       send({ t: 'cmd', c: c }, CMD[c], $('sw-' + k));
+    }));
+    /* F3/F4：两路方向键（写 0x09/0x0A；高亮与功率由 renderStatus 刷新）*/
+    document.querySelectorAll('.tec-dir').forEach((box) => box.addEventListener('click', (e) => {
+      const b = e.target.closest('button');
+      if (!b) return;
+      requestSet(+box.dataset.id, +b.dataset.v);
     }));
     /* 急停与设备屏幕同一口径：先确认再执行（手机在口袋里误触、小孩乱点都不该直接把设备停掉）。
        确认页不挡底栏；真要急停时多一次点击换来的是不误停。*/
@@ -657,6 +709,105 @@
         cmd(8, null, '请改用设备屏幕上的急停');
     });
     on('alarms', 'click', (e) => { if (e.target.hasAttribute('data-ack')) cmd(9); });   // every 解除 is cmd 9; the device decides what clears
+    /* F6/F15：顶栏与总览的"全部解除"（设备一次清掉所有已恢复的锁存）*/
+    const ackAll = async () => {
+      if (!(await confirmDialog('解除报警？', '清除所有"源已恢复"的锁存；源仍不健康的不会被清掉。', '解除'))) return;
+      cmd(9, null);
+    };
+    on('alarmack', 'click', ackAll);
+    on('btn-ack-all', 'click', ackAll);
+    /* F11：点"设定 xx °C"直接去参数页对应行 */
+    const jumpParam = (id) => {
+      setTab('params');
+      setTimeout(() => {
+        const row = document.querySelector('.prow[data-id="' + id + '"]');
+        if (!row) return;
+        row.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        row.classList.add('flash');
+        setTimeout(() => row.classList.remove('flash'), 1200);
+      }, 80);
+    };
+    [['sub-tc1', 1], ['sub-tc2', 2]].forEach(([id, pid]) => {
+      const n = $(id);
+      if (!n) return;
+      /* 点设定要去参数页；事件不能再冒泡到 .vcard（那会把页面切回总览+滚去曲线）*/
+      n.addEventListener('click', (e) => { e.stopPropagation(); jumpParam(pid); });
+      n.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); e.stopPropagation(); jumpParam(pid); }
+      });
+    });
+    /* F8：参数搜索 */
+    const search = $('param-search');
+    const applySearch = () => {
+      const q = (search.value || '').trim().toLowerCase();
+      document.querySelectorAll('#view-params .prow').forEach((row) => {
+        const p = store.reg.get(+row.dataset.id);
+        const hit = !q || (p && (((p.name || '') + ' ' + (p.key || '')).toLowerCase().indexOf(q) >= 0));
+        row.classList.toggle('hidden', !hit);
+      });
+      document.querySelectorAll('#adv .group').forEach((g) => {
+        const hits = Array.from(g.querySelectorAll('.prow')).filter((r) => !r.classList.contains('hidden')).length;
+        g.classList.toggle('hidden', !hits);
+        if (q && hits) g.open = true;
+      });
+    };
+    if (search) search.addEventListener('input', applySearch);
+    /* F13：恢复默认（前端按注册表默认值逐条下发；保护类参数只确认一次）*/
+    on('btn-defaults', 'click', async () => {
+      if (document.body.classList.contains('locked')) { toast('当前不可操作', 'warn'); return; }
+      const list = [];
+      store.reg.forEach((p) => { if ((p.flags & 1) && (p.flags & 4) && p.type !== 3 && isFinite(num(p.def, NaN))) list.push(p); });
+      if (!list.length) return;
+      if (!(await confirmDialog('恢复默认参数？', '网页可改的 ' + list.length + ' 个参数将恢复为出厂默认值（保护类也在内）。', '恢复默认', true))) return;
+      toast('正在恢复 ' + list.length + ' 个参数…');
+      for (const p of list) {
+        send({ t: 'set', id: p.id, v: p.def }, nameOf(p));
+        await new Promise((r) => setTimeout(r, 60));
+      }
+      toast('已下发恢复默认，以设备回读为准');
+    });
+    /* F9：日志等级过滤 + CSV 导出 */
+    on('log-level', 'change', () => { store.logLevel = $('log-level').value; renderLog(); });
+    on('btn-log-csv', 'click', () => {
+      const rows = ['time,level,event,message'];
+      logFiltered(store.logs).forEach((e) => {
+        const t = store.boot + e.ts, d = new Date(t);
+        const p2 = (n) => ('0' + n).slice(-2);
+        const ts = isFinite(t) ? d.getFullYear() + '-' + p2(d.getMonth() + 1) + '-' + p2(d.getDate()) + ' ' + hms(t) : '';
+        rows.push([ts, e.lvl, e.ev, '"' + String(e.msg).replace(/"/g, '""') + '"'].join(','));
+      });
+      const a = document.createElement('a'), url = URL.createObjectURL(new Blob([rows.join('\n')], { type: 'text/csv' }));
+      a.href = url; a.download = 'tcs_log.csv'; document.body.appendChild(a).click(); a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+      toast('已导出 ' + (rows.length - 1) + ' 条日志');
+    });
+    /* F12：修改热点（需当前口令；保存后所有客户端断开重连）*/
+    on('btn-wifi', 'click', async () => {
+      const cur = $('wifi-cur').value, ssid = $('wifi-ssid').value.trim(), pass = $('wifi-pass').value;
+      if (!cur || !ssid || pass.length < 8) { toast('请填写当前口令、新名称和至少 8 位新口令', 'warn'); return; }
+      if (!(await confirmDialog('修改热点？', '保存后热点立即改名/改口令，所有手机都会断开，请用新名称和新口令重连。', '保存并应用', true))) return;
+      send({ t: 'wifi', cur: cur, ssid: ssid, pass: pass }, '热点设置');
+      toast('已下发，热点重启后请用新名称/口令重连');
+      $('wifi-pass').value = '';
+    });
+    /* F5：诊断档维护（/api/ota 只在诊断档注册；GET 405/400 说明路由存在）*/
+    (async () => {
+      try {
+        /* 诊断档的 /api/ota 只注册了 POST：GET 会得到 405 Method Not Allowed；
+         * 交付档没有该路由 → 404。两者都不触发任何动作。*/
+        const r = await fetch('/api/ota', { method: 'GET' });
+        if (r.status === 405 || r.status === 400) { store.ota = true; vis($('maint-card'), true); }
+      } catch (e) { /* 没有该功能 */ }
+    })();
+    const ota = async (m) => {
+      if (!(await confirmDialog('固件维护', m ? '回滚到上一版并重启？' : '把当前固件自拷贝到另一分区并重启？', '继续', true))) return;
+      try {
+        const r = await fetch('/api/ota?m=' + m, { method: 'POST' });
+        txt($('ota-msg'), r.status + ' ' + (await r.text()).slice(0, 120));
+      } catch (e) { txt($('ota-msg'), '请求失败：' + e); }
+    };
+    on('btn-ota-apply', 'click', () => ota(0));
+    on('btn-ota-rollback', 'click', () => ota(1));
     on('btn-save', 'click', () => cmd(10, $('btn-save')));
     on('btn-csv', 'click', exportCsv);
     on('btn-retry', 'click', connect);
@@ -670,6 +821,7 @@
     const onParam = (e) => {
       const t = e.target, row = t.closest('.prow'), p = row && store.reg.get(+row.dataset.id), r = rows.get(p && p.id);
       if (!r || !p) return;
+      if (document.body.classList.contains('locked')) { toast('当前不可操作：安全态 / 数据过期 / 连接断开', 'warn'); return; }
       if (e.type === 'click') {
         if (t.classList.contains('step')) requestSet(p.id, shownVal(p.id) + +t.dataset.d * p.step);
         else if (t.parentNode.classList.contains('seg')) requestSet(p.id, +t.dataset.v);
@@ -719,7 +871,9 @@
   window.TCS = {
     version: VERSION,
     getState: () => ({ conn: store.conn, retry: store.retry, stale: store.stale, tab: store.tab, rtt: store.rtt, reconn: store.reconn, windowMs: store.win,
-      hidden: store.hidden, pending: Array.from(store.pending.values(), (p) => p.label), logCount: store.logs.length, st: store.st }),
+      hidden: store.hidden, pending: Array.from(store.pending.values(), (p) => p.label), logCount: store.logs.length, st: store.st,
+      series: store.series.map((sr) => ({ id: sr.id, n: sr.points.length, last: sr.points.slice(-2) })),
+      chart: chart && chart.debug ? chart.debug() : null }),
     handleMessage, send, setTab,
     lastFrames: (n) => frames.slice(-(n || 20))
   };

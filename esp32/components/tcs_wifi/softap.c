@@ -71,6 +71,37 @@ void softap_start(void)
     }
 }
 
+int softap_set_credentials(const char *ssid, const char *pass)
+{
+    if (!s_ready || !ssid || !pass) return -1;
+    size_t sl = strlen(ssid), pl = strlen(pass);
+    if (sl < 1 || sl > 32 || pl < 8 || pl > 63) return -2;
+
+    nvs_handle_t h;
+    if (nvs_open("tcs", NVS_READWRITE, &h) != ESP_OK) return -3;
+    esp_err_t e = nvs_set_str(h, "ssid", ssid);
+    if (e == ESP_OK) e = nvs_set_str(h, "pass", pass);
+    if (e == ESP_OK) e = nvs_commit(h);
+    nvs_close(h);
+    if (e != ESP_OK) return -3;
+
+    wifi_config_t ap = {0};
+    strncpy((char *)ap.ap.ssid, ssid, sizeof(ap.ap.ssid));
+    ap.ap.ssid_len = (uint8_t)sl;
+    strncpy((char *)ap.ap.password, pass, sizeof(ap.ap.password));
+    ap.ap.authmode = WIFI_AUTH_WPA2_PSK;
+    ap.ap.max_connection = 4;
+    ap.ap.channel = 6;
+    if (esp_wifi_set_config(WIFI_IF_AP, &ap) != ESP_OK) return -4;
+
+    strncpy(s_ssid, ssid, sizeof(s_ssid) - 1);
+    s_ssid[sizeof(s_ssid) - 1] = 0;
+    strncpy(s_pass, pass, sizeof(s_pass) - 1);
+    s_pass[sizeof(s_pass) - 1] = 0;
+    ESP_LOGI(TAG, "AP credentials changed (ssid=%s, len=%u), clients will reconnect", ssid, (unsigned)sl);
+    return 0;
+}
+
 int softap_credentials(char *ssid, size_t ssid_cap, char *pass, size_t pass_cap)
 {
     if (!s_ready || !ssid || !pass || ssid_cap < 2 || pass_cap < 2) return -1;

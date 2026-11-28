@@ -243,6 +243,10 @@ class Sim:
                 "state": self.state, "alarm": self.alarm, "latch": self.latch, "armed": self.armed,
                 "m207": 1 - f["m207_off"], "body_ok": 1 - f["body_lost"], "sens_open": f["sens_open"],
                 "screen": f["screen"], "up_s": now // 1000, "reset": 1,
+                "tec_dir": (int(self.pv(9)) & 0x0F) | ((int(self.pv(10)) & 0x0F) << 4),
+                "tec1_ok": 1, "tec1_v": (-823 if self.tec[0] else 0), "tec1_i": (310 if self.tec[0] else 0),
+                "tec2_ok": 1, "tec2_v": (0 if not self.tec[1] else 812), "tec2_i": (0 if not self.tec[1] else 295),
+                "screen_fw": 0x13,
                 "heap": int(8500000 + 12000 * math.sin(now / 7000.0))}
 
     def cmd(self, c):
@@ -438,6 +442,9 @@ def on_frame(text, sock):
             code = "bad_cmd"
             c = _int(_num(msg["c"]), 1, 10)            # 网页只放行 1..10（11 是屏链路的内部命令）
             push({"t": "ack", "c": c, "rv": SIM.cmd(c), "ref": _int(_num(msg.get("ref", 0)), 0, 4294967295)}, sock)
+        elif msg["t"] == "wifi":
+            push({"t": "wifi_ok"}, sock)
+            return
         elif msg["t"] == "ping":
             ref = _int(_num(msg.get("ref", 0)), 0, 4294967295) if "ref" in msg else 0
             push({"t": "pong", "ts": SIM.ms(), "ref": ref}, sock)

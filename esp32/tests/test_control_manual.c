@@ -156,9 +156,12 @@ int main(void)
         const param_desc_t *a = param_find(PARAM_ID_TEC1_MANUAL);
         const param_desc_t *b = param_find(PARAM_ID_TEC2_MANUAL);
         CHECK(a && b && a->type == PARAM_TYPE_U8 && b->type == PARAM_TYPE_U8, "M01 both registered as U8");
-        CHECK(a && (a->flags & PF_RW) && (a->flags & PF_SCREEN), "M01 TEC1: RW + SCREEN");
-        CHECK(a && !(a->flags & PF_PERSIST) && !(a->flags & PF_WEB), "M01 TEC1: not persisted, not on web");
-        CHECK(b && !(b->flags & PF_PERSIST) && !(b->flags & PF_WEB), "M01 TEC2: not persisted, not on web");
+        CHECK(a && (a->flags & PF_RW) && (a->flags & PF_SCREEN) && (a->flags & PF_WEB),
+              "M01 TEC1: RW + SCREEN + WEB (web direction control, F3)");
+        CHECK(a && !(a->flags & PF_PERSIST), "M01 TEC1: not persisted");
+        CHECK(b && (b->flags & PF_RW) && (b->flags & PF_SCREEN) && (b->flags & PF_WEB),
+              "M01 TEC2: RW + SCREEN + WEB (web direction control, F3)");
+        CHECK(b && !(b->flags & PF_PERSIST), "M01 TEC2: not persisted");
         CHECK(a && a->min == 0.0f && a->max == 2.0f, "M01 range 0..2");
     }
     CHECK(control_manual_dir(1) == TEC_DIR_PAUSE && control_manual_dir(2) == TEC_DIR_PAUSE,

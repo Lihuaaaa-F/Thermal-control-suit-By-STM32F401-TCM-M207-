@@ -81,6 +81,7 @@ void link_dispatch_frame(const uint8_t *payload, size_t len)
             st->mode = s.mode;
             st->alarm = s.alarm;
             st->online = s.online;
+            st->peer_fw = s.rfu;        /* 屏固件版本码（0=未上报）*/
             st->last_status_us = esp_timer_get_time();
         }
         link_internal_unlock();

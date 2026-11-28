@@ -230,6 +230,22 @@ static void gather(web_status_t *s)
     s->body_ok    = st.body_sensor_ok;
     s->sens_open  = st.m207_sensor_open;
     s->screen  = link_alive() ? 1u : 0u;
+    /* F3/F4：两路方向与电参（m1 起模块应答里有电压/电流；不支持或过期按未知）*/
+    s->tec_dir = tcs_tec_dir_pack(control_tec_dir(1), control_tec_dir(2));
+    {
+        m207_elec_t e;
+        if (m207_elec_get(1, &e) == 0 && e.valid) {
+            s->tec1_ok = 1; s->tec1_v = tcs_elec_pack_v(e.volt); s->tec1_i = tcs_elec_pack_i(e.cur);
+        } else { s->tec1_v = TCS_ELEC_V_UNKNOWN; s->tec1_i = TCS_ELEC_I_UNKNOWN; }
+        if (m207_elec_get(2, &e) == 0 && e.valid) {
+            s->tec2_ok = 1; s->tec2_v = tcs_elec_pack_v(e.volt); s->tec2_i = tcs_elec_pack_i(e.cur);
+        } else { s->tec2_v = TCS_ELEC_V_UNKNOWN; s->tec2_i = TCS_ELEC_I_UNKNOWN; }
+    }
+    {   /* F14：屏固件版本（STATUS.rfu；旧屏=0 → 未上报）*/
+        link_status_t ls;
+        link_status_copy(&ls);
+        s->screen_fw = ls.peer_fw;
+    }
     s->up_s    = (uint32_t)(us / 1000000LL);
     s->reset   = (uint8_t)esp_reset_reason();
     s->heap    = esp_get_free_heap_size();
@@ -725,6 +741,24 @@ esp_err_t ws_on_recv(httpd_req_t *req)
         handle_set(root, fd);
     } else if (strcmp(ts, "cmd") == 0) {
         handle_cmd(root, fd);
+    } else if (strcmp(ts, "wifi") == 0) {
+        /* 热点改名/改口令：必须带当前口令（cur）才能改；成功后 AP 立即应用，所有客户端断线重连。*/
+        const cJSON *ssid = cJSON_GetObjectItem(root, "ssid");
+        const cJSON *pass = cJSON_GetObjectItem(root, "pass");
+        const cJSON *cur  = cJSON_GetObjectItem(root, "cur");
+        char cs[33], cp[65];
+        if (!cJSON_IsString(ssid) || !cJSON_IsString(pass) || !cJSON_IsString(cur) ||
+            softap_credentials(cs, sizeof cs, cp, sizeof cp) != 0 ||
+            strcmp(cp, cur->valuestring) != 0) {
+            ws_send_str("{\"t\":\"err\",\"code\":\"wifi_auth\",\"msg\":\"当前热点口令不对\"}", fd);
+        } else {
+            int rv = softap_set_credentials(ssid->valuestring, pass->valuestring);
+            if (rv != 0) {
+                ws_send_str("{\"t\":\"err\",\"code\":\"wifi\",\"msg\":\"热点名称 1-32、口令 8-63；保存失败\"}", fd);
+            } else {
+                ws_send_str("{\"t\":\"wifi_ok\"}", fd);
+            }
+        }
     } else if (strcmp(ts, "ping") == 0) {
         char buf[80];
         int n = snprintf(buf, sizeof buf, "{\"t\":\"pong\",\"ts\":%lu,\"ref\":%lu}",

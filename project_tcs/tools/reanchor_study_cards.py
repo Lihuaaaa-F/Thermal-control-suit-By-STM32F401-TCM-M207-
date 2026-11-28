@@ -42,7 +42,8 @@ def load_baseline():
 
 def grep_matches(dirs, pat):
     out = subprocess.run([GREP, "-rnE", pat] + dirs + ["--include=*.c"],
-                         cwd=ROOT, capture_output=True, text=True).stdout
+                         cwd=ROOT, capture_output=True, text=True,
+                         encoding="utf-8", errors="replace").stdout
     rows = []
     for ln in out.splitlines():
         if not ln:

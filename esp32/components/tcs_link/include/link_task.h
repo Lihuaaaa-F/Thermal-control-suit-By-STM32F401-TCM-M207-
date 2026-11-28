@@ -24,6 +24,7 @@ typedef struct {
     uint8_t  tec1, tec2, fan, mode;
     uint16_t alarm;
     uint8_t  online;
+    uint8_t  peer_fw;            /* 屏固件版本码（STATUS.rfu：0=未上报；高半字节 major、低半字节 minor）*/
     int64_t  last_status_us;    /* 断链 3s 判定（esp_timer）*/
 } link_status_t;
 

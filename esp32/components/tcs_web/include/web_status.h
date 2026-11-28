@@ -34,6 +34,11 @@ typedef struct {
     uint8_t  latch;            /* SAFETY_BIT_* 位 */
     uint8_t  armed;            /* post_arm_t：0 未布防 / 1 已布防 / 2 丢失报警中 */
     uint8_t  m207, body_ok, sens_open, screen;   /* 模块在线 / 体温传感器有效 / 水温探头断线 / 屏幕链路存活 */
+    uint8_t  tec_dir;          /* 两路输出方向：低半字节 ch1、高半字节 ch2（TCS_TEC_DIR_*）*/
+    uint8_t  tec1_ok, tec2_ok; /* 该路电压/电流读数是否有效（模块支持且数据不陈旧）*/
+    int16_t  tec1_v, tec2_v;   /* 0.01 V；TCS_ELEC_V_UNKNOWN=未知 */
+    uint16_t tec1_i, tec2_i;   /* 0.01 A；TCS_ELEC_I_UNKNOWN=未知 */
+    uint8_t  screen_fw;        /* 屏固件版本码：0=未上报；高半字节 major、低半字节 minor */
     uint32_t up_s;             /* 开机秒数 */
     uint8_t  reset;            /* esp_reset_reason_t 原始值 */
     uint32_t heap;             /* 空闲堆字节 */

@@ -32,6 +32,7 @@
 #include "link_send.h"
 #include "link_snap.h"   /* m1（模式页）：tcs_link_tec_copy 在本文件实现（与 tcs_link_snap_info 同一处）*/
 #include "tcs_proto.h"   /* R5-01：链路帧带方向位，两端固件必须成对更新（见该文件"方向"一节）*/
+#include "../../../protocol/tcs_version.h"   /* F14：STATUS.rfu 带屏固件版本码 */
 #include "ltdc.h"
 #include "ft5446.h"
 #include "param_registry.h"
@@ -749,7 +750,7 @@ static void status_tx(uint32_t now)
         .online = (uint8_t)((g_tcs.m207_online ? TCS_ONLINE_M207 : 0)
                           | (g_tcs.body_sensor_ok ? TCS_ONLINE_BODY_SENSOR : 0)
                           | (g_tcs.esp_link_ok ? TCS_ONLINE_ESP_LINK : 0)),
-        .rfu = 0,
+        .rfu = (uint8_t)((TCS_VER_MAJOR << 4) | (TCS_VER_MINOR & 0x0F)),   /* F14：0x13=v1.3；旧网页/旧主控忽略 */
     };
     uint8_t pl[TCS_STATUS_PL_LEN];
     size_t n = tcs_pl_status(pl, sizeof(pl), &s);

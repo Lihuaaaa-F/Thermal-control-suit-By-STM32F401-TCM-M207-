@@ -21,7 +21,9 @@
 
 <header class="top">
   <span class="chip" id="conn" data-testid="conn-state" data-conn="wait">○ 连接中…</span>
+  <span class="chip warn hidden" id="screenchip" data-testid="screen-chip">屏链路断开</span>
   <span class="chip alarm hidden" id="alarmchip" data-testid="alarm-chip" role="button" tabindex="0"></span>
+  <button class="chip ack hidden" id="alarmack" data-testid="alarm-ack" type="button" aria-label="解除报警" title="解除报警">解除</button>
   <span class="chip warn hidden" id="stale" data-testid="stale-badge">▲ 数据过期</span>
   <span class="muted" id="age" data-testid="data-age" style="margin-left:auto">—</span>
 </header>
@@ -34,13 +36,13 @@
       <div class="card vcard" role="button" tabindex="0" aria-label="贴身水箱，查看温度曲线">
         <div class="vhead"><span>贴身水箱</span></div>
         <div class="vline"><span class="vbig" id="v-tc1" data-testid="val-tc1">—</span><span class="vunit">°C</span></div>
-        <div class="vsub" id="sub-tc1" data-testid="sub-tc1">设定 —</div>
+        <div class="vsub link" id="sub-tc1" data-testid="sub-tc1" role="button" tabindex="0" title="打开参数页修改设定">设定 —</div>
         <div class="vstate" id="state-tc1" data-testid="state-tc1">—</div>
       </div>
       <div class="card vcard" role="button" tabindex="0" aria-label="环境水箱，查看温度曲线">
         <div class="vhead"><span>环境水箱</span></div>
         <div class="vline"><span class="vbig" id="v-tc2" data-testid="val-tc2">—</span><span class="vunit">°C</span></div>
-        <div class="vsub" id="sub-tc2" data-testid="sub-tc2">设定 —</div>
+        <div class="vsub link" id="sub-tc2" data-testid="sub-tc2" role="button" tabindex="0" title="打开参数页修改设定">设定 —</div>
         <div class="vstate" id="state-tc2" data-testid="state-tc2">—</div>
       </div>
       <div class="card vcard" role="button" tabindex="0" aria-label="体温，查看温度曲线">
@@ -53,15 +55,35 @@
 
     <div class="card">
       <h2>执行器</h2>
+      <div class="tec-list">
+        <div class="tec-row">
+          <span class="tec-name">贴身 TEC</span>
+          <div class="seg tec-dir" id="dir-tec1" data-id="9" data-testid="dir-tec1">
+            <button type="button" data-v="1" data-testid="dir-tec1-cool">制冷</button>
+            <button type="button" data-v="0" data-testid="dir-tec1-pause">暂停</button>
+            <button type="button" data-v="2" data-testid="dir-tec1-heat">制热</button>
+          </div>
+          <span class="tec-pwr" id="pwr-tec1" data-testid="pwr-tec1">—</span>
+        </div>
+        <div class="tec-row">
+          <span class="tec-name">环境 TEC</span>
+          <div class="seg tec-dir" id="dir-tec2" data-id="10" data-testid="dir-tec2">
+            <button type="button" data-v="1" data-testid="dir-tec2-cool">制冷</button>
+            <button type="button" data-v="0" data-testid="dir-tec2-pause">暂停</button>
+            <button type="button" data-v="2" data-testid="dir-tec2-heat">制热</button>
+          </div>
+          <span class="tec-pwr" id="pwr-tec2" data-testid="pwr-tec2">—</span>
+        </div>
+      </div>
       <div class="switches">
-        <button class="sw" id="sw-tec1" data-testid="sw-tec1" aria-pressed="false"><span>贴身 TEC</span><b>—</b></button>
-        <button class="sw" id="sw-tec2" data-testid="sw-tec2" aria-pressed="false"><span>环境 TEC</span><b>—</b></button>
         <button class="sw" id="sw-fan" data-testid="sw-fan" aria-pressed="false"><span>风扇</span><b>—</b></button>
         <button class="sw" id="sw-mode" data-testid="sw-mode" aria-pressed="false"><span>模式</span><b>—</b></button>
       </div>
+      <p class="hint hidden" id="lockhint" data-testid="lock-hint">安全态 / 数据过期 / 连接断开：控制已锁定</p>
     </div>
 
-    <div class="card allok hidden" id="no-alarm" data-testid="no-alarm">● 无报警，运行正常</div>
+    <div class="allok hidden" id="no-alarm" data-testid="no-alarm">● 无报警，运行正常</div>
+    <button class="btn wide hidden" id="btn-ack-all" data-testid="btn-ack-all">全部解除（已恢复项）</button>
     <div class="view" id="alarms" data-testid="alarms"></div>
 
     <div class="card chart-card">
@@ -85,7 +107,13 @@
   <!-- 2 parameters: basic / advanced (collapsible groups) / read-only telemetry; the rows are built by app.js -->
   <section class="view hidden" id="view-params">
     <div class="card">
-      <h2>常用参数</h2>
+      <div class="card-head">
+        <h2>常用参数</h2>
+        <div class="btns">
+          <input class="param-search" id="param-search" data-testid="param-search" type="search" placeholder="搜索参数…" aria-label="搜索参数">
+          <button class="btn" id="btn-defaults" data-testid="btn-defaults">恢复默认</button>
+        </div>
+      </div>
       <div id="params" data-testid="params"></div>
     </div>
     <div class="card">
@@ -112,6 +140,14 @@
         <dt>网页地址</dt><dd id="dev-url">—</dd>
       </dl>
       <p class="hint">别的手机要用这个控制台：先连上上面的 Wi-Fi，再用浏览器打开网页地址。设备不连互联网，手机若提示"无网络"请选择保持连接。</p>
+      <div class="wifi-form">
+        <h2>修改热点</h2>
+        <label>当前口令 <input id="wifi-cur" type="password" autocomplete="current-password"></label>
+        <label>新名称 <input id="wifi-ssid" maxlength="32" autocomplete="off"></label>
+        <label>新口令 <input id="wifi-pass" type="password" minlength="8" maxlength="63" autocomplete="new-password"></label>
+        <button class="btn" id="btn-wifi" data-testid="btn-wifi">保存热点设置</button>
+        <p class="hint">保存后热点立即改名/改口令，所有手机都会断开，请用新名称和新口令重新连接。</p>
+      </div>
     </div>
     <div class="card">
       <h2>版本与运行</h2>
@@ -131,6 +167,15 @@
       </dl>
       <p class="hint">校验出错、回声丢弃持续增长，说明屏幕与主控之间的接线接触不良。</p>
     </div>
+    <div class="card hidden" id="maint-card" data-testid="maint-card">
+      <h2>固件维护（仅诊断档）</h2>
+      <p class="hint">两个按钮都会重启设备；TEC 必须都处于停止。回滚会把启动分区切回上一版。</p>
+      <div class="btns">
+        <button class="btn" id="btn-ota-apply" data-testid="btn-ota-apply">应用升级（自拷贝）</button>
+        <button class="btn" id="btn-ota-rollback" data-testid="btn-ota-rollback">回滚上一版</button>
+      </div>
+      <p class="hint" id="ota-msg" data-testid="ota-msg"></p>
+    </div>
   </section>
 
   <!-- 4 log: event timeline, newest first -->
@@ -139,6 +184,12 @@
       <div class="card-head">
         <h2>事件日志 <span class="muted" id="log-count" data-testid="log-count">0 条</span></h2>
         <div class="btns">
+          <select class="log-filter" id="log-level" data-testid="log-level" aria-label="日志级别">
+            <option value="all">全部</option>
+            <option value="warn">警告及以上</option>
+            <option value="alarm">仅报警</option>
+          </select>
+          <button class="btn" id="btn-log-csv" data-testid="btn-log-csv">导出 CSV</button>
           <button class="btn" id="btn-log-pause" data-testid="btn-log-pause" aria-pressed="false">暂停</button>
           <button class="btn" id="btn-log-clear" data-testid="btn-log-clear">清空视图</button>
         </div>

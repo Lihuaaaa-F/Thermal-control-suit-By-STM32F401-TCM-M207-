@@ -56,6 +56,14 @@ int web_status_fill_json(const web_status_t *s, cJSON *root)
     ADDN("body_ok",   s->body_ok ? 1 : 0);
     ADDN("sens_open", s->sens_open ? 1 : 0);
     ADDN("screen",    s->screen ? 1 : 0);
+    ADDN("tec_dir",   s->tec_dir);
+    ADDN("tec1_ok",   s->tec1_ok ? 1 : 0);
+    ADDN("tec1_v",    s->tec1_v);
+    ADDN("tec1_i",    s->tec1_i);
+    ADDN("tec2_ok",   s->tec2_ok ? 1 : 0);
+    ADDN("tec2_v",    s->tec2_v);
+    ADDN("tec2_i",    s->tec2_i);
+    ADDN("screen_fw", s->screen_fw);
     ADDN("up_s",      s->up_s);
     ADDN("reset",     s->reset);
     ADDN("heap",      s->heap);
@@ -74,7 +82,11 @@ int web_status_changed(const web_status_t *a, const web_status_t *b)
             a->mode != b->mode || a->state != b->state ||
             a->alarm != b->alarm || a->latch != b->latch || a->armed != b->armed ||
             a->m207 != b->m207 || a->body_ok != b->body_ok ||
-            a->sens_open != b->sens_open || a->screen != b->screen);
+            a->sens_open != b->sens_open || a->screen != b->screen ||
+            a->tec_dir != b->tec_dir || a->screen_fw != b->screen_fw ||
+            a->tec1_ok != b->tec1_ok || a->tec2_ok != b->tec2_ok ||
+            a->tec1_v != b->tec1_v || a->tec1_i != b->tec1_i ||
+            a->tec2_v != b->tec2_v || a->tec2_i != b->tec2_i);
 }
 
 /* ============ 事件日志 ============ */

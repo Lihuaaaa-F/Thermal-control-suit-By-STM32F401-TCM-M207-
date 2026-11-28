@@ -62,8 +62,6 @@
       const step = nice(Math.max(hi - lo, 0.5) * 1.2, 4), pad = (hi - lo) * 0.1;
       lo = Math.floor((lo - pad) / step) * step;    // snapped to ticks: the axis does not jitter as samples enter or leave
       hi = Math.ceil((hi + pad) / step) * step;
-      // 48 °C 硬切断阈值必须始终在纵轴上（W-23，与屏端一致）：只向上扩到最近的刻度，不重算步长。
-      if (hi < HARD_C + 0.5) hi = Math.ceil((HARD_C + 0.5) / step) * step;
       if (hi - lo < step * 1e-6) { lo -= step; hi += step; }   // a flat line sitting exactly on a tick: give it a band
       return {
         x0, x1, y0, y1, t0, now, vis, empty, step, lo, hi,
@@ -90,16 +88,26 @@
       }
     }
 
-    /* 48 C reference line (W-23): drawn only when the auto range includes it. */
+    /* 48 °C reference line (W-23)。V1 修正：不为了它把纵轴撑到 50（会把水温线压到底）；
+     * 阈值在视图外时只在顶/底边画三角标记+文字，不画整条虚线——虚线贴着 40 刻度会
+     * 被读成"阈值=40"（第二轮复测）。*/
     function drawThreshold(G) {
-      if (HARD_C < G.lo || HARD_C > G.hi) return;
-      const y = Math.round(G.Y(HARD_C)) + 0.5;
+      const out = HARD_C > G.hi ? '↑' : HARD_C < G.lo ? '↓' : '';
       ctx.save();
-      ctx.strokeStyle = '#DC2626'; ctx.lineWidth = 1.5; ctx.setLineDash([6, 4]);
-      ctx.beginPath(); ctx.moveTo(G.x0, y); ctx.lineTo(G.x1, y); ctx.stroke();
-      ctx.setLineDash([]);
-      ctx.font = FONT; ctx.fillStyle = '#B45309'; ctx.textAlign = 'right'; ctx.textBaseline = 'bottom';
-      ctx.fillText('48 °C 阈值', G.x1, y - 3);
+      ctx.font = FONT; ctx.fillStyle = '#B45309';
+      if (out) {
+        /* 标记放左上/左下：右侧是"现在"的数据点，放右边会压住端点圆点 */
+        const y = out === '↑' ? G.y0 + 3 : G.y1 - 3;
+        ctx.textAlign = 'left'; ctx.textBaseline = out === '↑' ? 'top' : 'bottom';
+        ctx.fillText((out === '↑' ? '▲' : '▼') + ' 48 °C 阈值' + out + '（图外）', G.x0 + 6, y);
+      } else {
+        const y = Math.round(G.Y(HARD_C)) + 0.5;
+        ctx.strokeStyle = '#DC2626'; ctx.lineWidth = 1.5; ctx.setLineDash([6, 4]);
+        ctx.beginPath(); ctx.moveTo(G.x0, y); ctx.lineTo(G.x1, y); ctx.stroke();
+        ctx.setLineDash([]);
+        ctx.textAlign = 'right'; ctx.textBaseline = 'bottom';
+        ctx.fillText('48 °C 阈值', G.x1, y - 3);
+      }
       ctx.restore();
     }
 
@@ -230,6 +238,11 @@
       setData: (series) => { S.series = series || []; },
       setHidden: (ids) => { S.hidden = {}; (ids || []).forEach((id) => { S.hidden[id] = true; }); },
       setWindow: (ms) => { if (ms > 0) S.win = ms; },
+      debug: () => {
+        const g = geometry(Date.now());
+        return { series: S.series.map((sr) => ({ id: sr.id, n: sr.points.length, last: sr.points.slice(-1) })), hidden: S.hidden, win: S.win,
+                 geom: { lo: g.lo, hi: g.hi, vis: g.vis.map((x) => x.id) } };
+      },
       render
     };
   }

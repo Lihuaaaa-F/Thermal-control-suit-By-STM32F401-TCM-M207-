@@ -54,15 +54,17 @@
 
 
 
+
 复现命令（仓库根 `/d/Espressif/ws/tcs`，Git Bash；raw 输出路径分隔符为 `\`，表内归一为 `/`）：
 
 ```bash
 grep -rnE "HAL_RCC_|HAL_PWR_" project_tcs/App project_tcs/Core/Src --include=*.c
-# → 61 命中（2026-11-27 重锚），下表 61 行逐一对应
+# → 61 命中（2026-11-28 重锚），下表 61 行逐一对应
 ```
 
 vendor 域说明：`App/rtt/`（SEGGER RTT vendor 五文件）同一 pattern 单独跑=**0 命中**（无需列行）。
 补充（pattern 外，供审计）：`grep -rnE "HAL_PWREx_" project_tcs/App project_tcs/Core/Src --include=*.c` → **1 命中**：Core/Src/main.c:317 `HAL_PWREx_ConfigSupply(PWR_LDO_SUPPLY)`（前缀为 `HAL_PWREx_` 不匹配 `HAL_PWR_`，故不在 42 行内）。
+
 
 
 
@@ -143,19 +145,19 @@ vendor 域说明：`App/rtt/`（SEGGER RTT vendor 五文件）同一 pattern 单
 | 45 | project_tcs/Core/Src/ltdc.c:457 | __HAL_RCC_GPIOA_CLK_ENABLE() | RGB 数据引脚组 GPIOA（PA2/PA8）时钟 |
 | 46 | project_tcs/Core/Src/ltdc.c:458 | __HAL_RCC_GPIOE_CLK_ENABLE() | RGB 数据引脚组 GPIOE（PE5/6）时钟 |
 | 47 | project_tcs/Core/Src/ltdc.c:459 | __HAL_RCC_GPIOH_CLK_ENABLE() | RGB 数据引脚组 GPIOH（PH8-15）时钟 |
-| 48 | project_tcs/Core/Src/main.c:769 | __HAL_PWR_VOLTAGESCALING_CONFIG(PWR_REGULATOR_VOLTAGE_SCALE0) | 电压档设 VOS0（480MHz 必需档；位于 ConfigSupply 之后） |
-| 49 | project_tcs/Core/Src/main.c:782 | HAL_RCC_OscConfig(&RCC_OscInitStruct) | HSE+LSI 双振开启+PLL1（HSE 25M/5×192/2=480MHz，Q=240M 给 SDMMC），返值≠HAL_OK→Error_Handler |
-| 50 | project_tcs/Core/Src/main.c:794 | HAL_RCC_ClockConfig(&RCC_ClkInitStruct, FLASH_LATENCY_4) | SYSCLK=PLL1、HCLK=240M、APB1-4=120M 全分频树+Flash 等待 4，返值检查 |
-| 51 | project_tcs/Core/Src/main.c:815 | __HAL_RCC_GPIOB_CLK_ENABLE() | LED1/LED2（GPIOB）时钟（gpio_init） |
-| 52 | project_tcs/Core/Src/main.c:816 | __HAL_RCC_GPIOA_CLK_ENABLE() | KILL_KEY（GPIOA）时钟（gpio_init） |
-| 53 | project_tcs/Core/Src/main.c:875 | __HAL_RCC_USART1_CLK_ENABLE() | 控制台 USART1 内核时钟（MspInit） |
-| 54 | project_tcs/Core/Src/main.c:876 | __HAL_RCC_GPIOA_CLK_ENABLE() | USART1 引脚（GPIOA）时钟 |
-| 55 | project_tcs/Core/Src/main.c:884 | __HAL_RCC_USART2_CLK_ENABLE() | 链路 USART2 内核时钟（MspInit） |
-| 56 | project_tcs/Core/Src/main.c:885 | __HAL_RCC_GPIOD_CLK_ENABLE() | USART2 引脚（GPIOD）时钟 |
-| 57 | project_tcs/Core/Src/main.c:898 | __HAL_RCC_USART3_CLK_ENABLE() | m207 USART3 内核时钟（MspInit） |
-| 58 | project_tcs/Core/Src/main.c:899 | __HAL_RCC_GPIOB_CLK_ENABLE() | USART3 引脚（GPIOB）时钟 |
-| 59 | project_tcs/Core/Src/main.c:910 | __HAL_RCC_I2C1_CLK_ENABLE() | 温度 I2C1 内核时钟（HAL_I2C_MspInit） |
-| 60 | project_tcs/Core/Src/main.c:911 | __HAL_RCC_GPIOB_CLK_ENABLE() | I2C1 引脚 PB8/PB9（GPIOB）时钟 |
+| 48 | project_tcs/Core/Src/main.c:770 | __HAL_PWR_VOLTAGESCALING_CONFIG(PWR_REGULATOR_VOLTAGE_SCALE0) | 电压档设 VOS0（480MHz 必需档；位于 ConfigSupply 之后） |
+| 49 | project_tcs/Core/Src/main.c:783 | HAL_RCC_OscConfig(&RCC_OscInitStruct) | HSE+LSI 双振开启+PLL1（HSE 25M/5×192/2=480MHz，Q=240M 给 SDMMC），返值≠HAL_OK→Error_Handler |
+| 50 | project_tcs/Core/Src/main.c:795 | HAL_RCC_ClockConfig(&RCC_ClkInitStruct, FLASH_LATENCY_4) | SYSCLK=PLL1、HCLK=240M、APB1-4=120M 全分频树+Flash 等待 4，返值检查 |
+| 51 | project_tcs/Core/Src/main.c:816 | __HAL_RCC_GPIOB_CLK_ENABLE() | LED1/LED2（GPIOB）时钟（gpio_init） |
+| 52 | project_tcs/Core/Src/main.c:817 | __HAL_RCC_GPIOA_CLK_ENABLE() | KILL_KEY（GPIOA）时钟（gpio_init） |
+| 53 | project_tcs/Core/Src/main.c:876 | __HAL_RCC_USART1_CLK_ENABLE() | 控制台 USART1 内核时钟（MspInit） |
+| 54 | project_tcs/Core/Src/main.c:877 | __HAL_RCC_GPIOA_CLK_ENABLE() | USART1 引脚（GPIOA）时钟 |
+| 55 | project_tcs/Core/Src/main.c:885 | __HAL_RCC_USART2_CLK_ENABLE() | 链路 USART2 内核时钟（MspInit） |
+| 56 | project_tcs/Core/Src/main.c:886 | __HAL_RCC_GPIOD_CLK_ENABLE() | USART2 引脚（GPIOD）时钟 |
+| 57 | project_tcs/Core/Src/main.c:899 | __HAL_RCC_USART3_CLK_ENABLE() | m207 USART3 内核时钟（MspInit） |
+| 58 | project_tcs/Core/Src/main.c:900 | __HAL_RCC_GPIOB_CLK_ENABLE() | USART3 引脚（GPIOB）时钟 |
+| 59 | project_tcs/Core/Src/main.c:911 | __HAL_RCC_I2C1_CLK_ENABLE() | 温度 I2C1 内核时钟（HAL_I2C_MspInit） |
+| 60 | project_tcs/Core/Src/main.c:912 | __HAL_RCC_GPIOB_CLK_ENABLE() | I2C1 引脚 PB8/PB9（GPIOB）时钟 |
 | 61 | project_tcs/Core/Src/stm32h7xx_hal_msp.c:17 | __HAL_RCC_SYSCFG_CLK_ENABLE() | HAL_MspInit 内开 SYSCFG 时钟（系统配置域，EXTI/补偿依赖） |
 
 ## ④ 对照结论
@@ -171,4 +173,4 @@ vendor 域说明：`App/rtt/`（SEGGER RTT vendor 五文件）同一 pattern 单
 | 宏 vs 函数混用面 | `__HAL_RCC_GET_FLAG/CLEAR_RESET_FLAGS/CLK_ENABLE` 宏与 `HAL_RCC_OscConfig/ClockConfig` 函数分层使用——**符合官方 API 设计意图 ✓**（寄存器位操作用宏、流程配置用函数），无整改项 |
 | 行号时效 | ltdc.c 域 17 行（#31-47）行号=G 线未提交工作区快照；**G 线合入后本卡 ltdc.c 域需复核** |
 
-——研学卡完（61/61，2026-11-27 重锚）。
+——研学卡完（61/61，2026-11-28 重锚）。
